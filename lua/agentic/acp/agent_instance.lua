@@ -74,6 +74,7 @@ function AgentInstance.get_instance(provider_name, on_ready)
         error("Unsupported ACP provider: " .. provider_name)
     end
 
+    client.provider_name = provider_name
     AgentInstance._instances[provider_name] = client
 
     return client

@@ -20,11 +20,11 @@ description:
 ## ACP Providers
 
 The plugin spawns external CLI tools as subprocesses and talks ACP over stdio.
-The full list of supported providers and their CLI requirements lives in
-`Config.acp_providers` (`lua/agentic/config_default.lua`) — `Config.provider`
-selects one of those keys. Per-provider quirks (message shape, missing fields,
-non-standard `kind` values, etc.) are absorbed by an adapter in
-`lua/agentic/acp/adapters/`. Install instructions live in `doc/agentic.txt`
+Supported providers and their CLI requirements live in
+`Config.acp_providers` (`lua/agentic/config_default.lua`). A session's provider
+is `agent.provider_name`; `SessionRegistry.create` defaults it to the current
+session's, else `Config.provider`. An adapter in `lua/agentic/acp/adapters/`
+absorbs per-provider quirks. Install instructions live in `doc/agentic.txt`
 § Requirements, whose pinned `claude-agent-acp` version is the single record of
 which bridge the plugin is developed against — bump it on `dev` when updating
 the bridge, and let the merge to `main` mark that the pin survived real use.

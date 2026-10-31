@@ -54,6 +54,7 @@ describe("SessionRestore", function()
             session_id = opts.session_id or "current-session",
             chat_history = opts.chat_history or { messages = {} },
             agent = {
+                provider_name = opts.provider_name or Config.provider,
                 cancel_session = spy.new(function() end),
                 -- Default to no-load support so tests that want the history
                 -- fallback work; tests that want the ACP load path override.
@@ -819,38 +820,93 @@ describe("SessionRestore", function()
             )
         end)
 
+        --- List one saved session whose provider is `provider`.
+        --- @param provider string
+        local function list_session_with_provider(provider)
+            chat_history_list_stub:invokes(function(_cwd, callback)
+                callback({
+                    {
+                        session_id = "session-1",
+                        title = "Other provider",
+                        timestamp = 1704067200,
+                        provider = provider,
+                        model = "minimax",
+                    },
+                })
+            end)
+        end
+
         it(
-            "switches Config.provider and destroys existing session when saved provider differs",
+            "creates a session on the saved provider, then destroys the current one",
             function()
                 local mock_session = session_with_load_support()
-                chat_history_list_stub:invokes(function(_cwd, callback)
-                    callback({
-                        {
-                            session_id = "session-1",
-                            title = "Other provider",
-                            timestamp = 1704067200,
-                            provider = "opencode-acp",
-                            model = "minimax",
-                        },
-                    })
+                list_session_with_provider("opencode-acp")
+                local replacement = session_with_load_support({
+                    provider_name = "opencode-acp",
+                })
+                local order = {}
+                session_registry_stub:invokes(function()
+                    table.insert(order, "create")
+                    return replacement
                 end)
-                local replacement = session_with_load_support()
-                setup_registry_stub(replacement)
                 local destroy_stub = spy.stub(SessionRegistry, "destroy")
-                local original_provider = Config.provider
+                MiniTest.finally(function()
+                    destroy_stub:revert()
+                end)
+                destroy_stub:invokes(function()
+                    table.insert(order, "destroy")
+                end)
+                local default_provider = Config.provider
 
                 SessionRestore.show_picker(
                     mock_session --[[@as agentic.SessionManager]]
                 )
 
-                assert.equal("opencode-acp", Config.provider)
-                assert.spy(destroy_stub).was.called(1)
+                assert.equal("opencode-acp", session_registry_stub.calls[1][1])
+                assert.same({ "create", "destroy" }, order)
                 assert.equal(mock_session, destroy_stub.calls[1][1])
+                assert.equal(default_provider, Config.provider)
                 assert.spy(replacement.load_acp_session).was.called(1)
                 assert.spy(mock_session.load_acp_session).was.called(0)
+            end
+        )
 
-                Config.provider = original_provider
+        it("keeps the current session when create fails", function()
+            local mock_session = session_with_load_support()
+            list_session_with_provider("opencode-acp")
+            setup_registry_stub(nil)
+            local destroy_stub = spy.stub(SessionRegistry, "destroy")
+            MiniTest.finally(function()
                 destroy_stub:revert()
+            end)
+
+            SessionRestore.show_picker(
+                mock_session --[[@as agentic.SessionManager]]
+            )
+
+            assert.spy(destroy_stub).was.called(0)
+            assert.spy(mock_session.load_acp_session).was.called(0)
+        end)
+
+        it(
+            "warns with the session's provider for an unconfigured saved provider",
+            function()
+                local mock_session = session_with_load_support({
+                    provider_name = "gemini-acp",
+                })
+                list_session_with_provider("not-configured")
+
+                SessionRestore.show_picker(
+                    mock_session --[[@as agentic.SessionManager]]
+                )
+
+                local warning = logger_notify_stub.calls[1][1]
+                assert.truthy(
+                    warning:find("'not-configured' is not configured", 1, true)
+                )
+                assert.truthy(warning:find("provider 'gemini-acp'", 1, true))
+                assert.spy(session_registry_stub).was.called(0)
+                assert.spy(mock_session.load_acp_session).was.called(1)
             end
         )
 

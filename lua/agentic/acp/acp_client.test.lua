@@ -989,6 +989,7 @@ describe("agentic.acp.ACPClient", function()
                 _children = {},
                 _loading_sessions = {},
                 _session_roots = {},
+                provider_config = {},
                 agent_capabilities = { loadSession = true },
                 _send_request = function(_this, method, p)
                     params[method] = p
@@ -1063,6 +1064,7 @@ describe("agentic.acp.ACPClient", function()
                     _loading_sessions = {},
                     _session_roots = {},
                     _tool_call_kinds = ToolCallKinds:new(),
+                    provider_config = {},
                 }, overrides),
                 { __index = ACPClient }
             )

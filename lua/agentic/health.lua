@@ -42,7 +42,7 @@ function M.check()
         )
     end
 
-    -- Check current provider
+    -- Check default provider
     vim_health.start("ACP Provider Configuration")
     local provider_name = Config.provider
     local provider_config = Config.acp_providers[provider_name]
@@ -56,7 +56,7 @@ function M.check()
     else
         vim_health.ok(
             string.format(
-                "Current provider: %s",
+                "Default provider: %s",
                 provider_config.name or provider_name
             )
         )
@@ -76,7 +76,7 @@ function M.check()
         end
     end
 
-    -- Check all configured providers (excluding current one)
+    -- Check all configured providers (excluding the default one)
     vim_health.start(
         "Other ACP Providers (optional, if don't intend to use them)"
     )

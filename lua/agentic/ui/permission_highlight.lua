@@ -90,7 +90,8 @@ end
 --- @param bufnr integer chat buffer
 --- @param ns integer highlight namespace
 --- @param block agentic.ui.MessageWriter.ToolCallBlock
-function M.apply(bufnr, ns, block)
+--- @param config_dir string Claude's config directory, whose settings.json rules count as approval
+function M.apply(bufnr, ns, block, config_dir)
     if not vim.api.nvim_buf_is_valid(bufnr) then
         return
     end
@@ -109,7 +110,8 @@ function M.apply(bufnr, ns, block)
         return
     end
 
-    local ranges = PermissionRules.tally_unapproved(table.concat(body, "\n"))
+    local ranges =
+        PermissionRules.tally_unapproved(table.concat(body, "\n"), config_dir)
 
     if ranges == nil then
         for i, line in ipairs(body) do

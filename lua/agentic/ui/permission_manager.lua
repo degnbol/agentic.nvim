@@ -53,17 +53,25 @@ local PERMISSION_KIND_PRIORITY = {
 --- @field _tmp_roots string[] Temp roots, each in literal and resolved form
 --- @field _edit_records table<string, agentic.utils.GrantSafety.EditRecord> Post-edit line ranges of completed Edits, keyed by tool_call_id
 --- @field _pending_edits table<string, { path: string, start_line: integer, new_lines: string[] }> Range data captured at tool_call time, promoted to _edit_records on completion
+--- @field _get_config_dir fun(): string Returns Claude's config directory. A getter, because the directory can change during this manager's life
 local PermissionManager = {}
 PermissionManager.__index = PermissionManager
 
 --- @param message_writer agentic.ui.MessageWriter
 --- @param buf_nrs agentic.ui.ChatWidget.BufNrs
 --- @param writer_for? fun(tool_call_id: string): agentic.ui.MessageWriter Resolver for the writer owning a tool call (main vs subagent)
+--- @param get_config_dir fun(): string Returns Claude's config directory, called at each use
 --- @return agentic.ui.PermissionManager
-function PermissionManager:new(message_writer, buf_nrs, writer_for)
+function PermissionManager:new(
+    message_writer,
+    buf_nrs,
+    writer_for,
+    get_config_dir
+)
     local instance = setmetatable({
         message_writer = message_writer,
         _writer_for = writer_for,
+        _get_config_dir = get_config_dir,
         _buf_nrs = buf_nrs or { agent = message_writer.bufnr },
         permission_float = PermissionFloat:new(message_writer, buf_nrs),
         queue = {},
@@ -351,7 +359,8 @@ function PermissionManager:decide(kind, tool_call, diff)
 
     local command = tool_call.rawInput and tool_call.rawInput.command
     if command then
-        local rejected, source = PermissionRules.should_auto_reject(command)
+        local rejected, source =
+            PermissionRules.should_auto_reject(command, self._get_config_dir())
         if rejected then
             return "deny", { decider_word(source) }
         end
@@ -372,8 +381,11 @@ function PermissionManager:decide(kind, tool_call, diff)
     end
 
     if command then
-        local ok, effects, sources =
-            PermissionRules.evaluate(command, self:_remembered_leaf_patterns())
+        local ok, effects, sources = PermissionRules.evaluate(
+            command,
+            self._get_config_dir(),
+            self:_remembered_leaf_patterns()
+        )
         if ok and self:_bash_effects_clear(effects) then
             --- @type agentic.PermissionDecider[]
             local deciders = {}
@@ -996,7 +1008,12 @@ function PermissionManager:_apply_unapproved_highlight(request)
     end
     local bufnr = self:_writer(tool_call.toolCallId).bufnr
     if bufnr then
-        PermissionHighlight.apply(bufnr, NS_PERMISSION_HIGHLIGHT, tracker)
+        PermissionHighlight.apply(
+            bufnr,
+            NS_PERMISSION_HIGHLIGHT,
+            tracker,
+            self._get_config_dir()
+        )
     end
 end
 
@@ -1053,8 +1070,10 @@ function PermissionManager:_complete_request(option_id)
         if selected == "allow_always" then
             local command = self:_request_command(current.request)
             if command then
-                local _, leaves, complete =
-                    PermissionRules.tally_unapproved(command)
+                local _, leaves, complete = PermissionRules.tally_unapproved(
+                    command,
+                    self._get_config_dir()
+                )
                 for _, leaf in ipairs(leaves) do
                     self._execute_leaf_allow[leaf] = true
                 end

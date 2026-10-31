@@ -1,6 +1,5 @@
 local Logger = require("agentic.utils.logger")
 local Config = require("agentic.config")
-local DefaultConfig = require("agentic.config_default")
 local ACPHealth = require("agentic.acp.acp_health")
 
 --- @class agentic.SessionRegistry
@@ -43,17 +42,23 @@ function SessionRegistry.target_win()
     return vim.api.nvim_get_current_win()
 end
 
---- Create, register and activate a new session. Nil when no provider is
---- configured or creation fails.
+--- Create, register and activate a new session on `provider`. Nil when the
+--- provider is not configured or creation fails.
+--- @param provider agentic.UserConfig.ProviderName|nil Default: the provider of `current()`, else `Config.provider`
 --- @return agentic.SessionManager|nil
-function SessionRegistry.create()
-    if not ACPHealth.check_configured_provider() then
-        Logger.debug("Session creation aborted: No configured ACP provider")
+function SessionRegistry.create(provider)
+    if not provider then
+        local current = SessionRegistry.current()
+        provider = current and current.agent.provider_name or Config.provider
+    end
+
+    if not ACPHealth.check_configured_provider(provider) then
+        Logger.debug("Session creation aborted: provider not available")
         return nil
     end
 
     local SessionManager = require("agentic.session_manager")
-    local session = SessionManager:new() --[[@as agentic.SessionManager|nil]]
+    local session = SessionManager:new(provider) --[[@as agentic.SessionManager|nil]]
     if session then
         SessionRegistry.by_id[session.id] = session
         SessionRegistry.set_active(session)
@@ -107,8 +112,9 @@ function SessionRegistry.session_for_acp_id(session_id)
     return nil
 end
 
+--- @param current agentic.UserConfig.ProviderName Provider to mark "(current)"
 --- @param on_selected fun(provider_name: agentic.UserConfig.ProviderName|nil) Callback that will be called with the selected provider name, if any
-function SessionRegistry.select_provider(on_selected)
+function SessionRegistry.select_provider(current, on_selected)
     local available_providers = ACPHealth.get_default_provider_names()
 
     --- @class _ProviderStatus
@@ -145,18 +151,21 @@ function SessionRegistry.select_provider(on_selected)
         prompt = "Select ACP provider",
         --- @param item _ProviderStatus
         format_item = function(item)
-            local label = item.name
-
-            if label == Config.provider then
-                label = label .. " (current)"
-            elseif label == DefaultConfig.provider then
-                label = label .. " (default)"
+            local marks = {}
+            if item.name == current then
+                marks[#marks + 1] = "current"
+            end
+            if item.name == Config.provider then
+                marks[#marks + 1] = "default"
             end
 
-            label = label
-                .. (item.installed and " ✓ available" or " ✗ not installed")
+            local label = item.name
+            if #marks > 0 then
+                label = label .. " (" .. table.concat(marks, ", ") .. ")"
+            end
 
             return label
+                .. (item.installed and " ✓ available" or " ✗ not installed")
         end,
     }, function(selected_provider)
         on_selected(selected_provider and selected_provider.name)

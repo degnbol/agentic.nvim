@@ -1700,10 +1700,8 @@ describe("agentic.SessionManager", function()
         local get_instance_stub
         --- @type TestStub
         local schedule_stub
-        local original_provider
 
         before_each(function()
-            original_provider = Config.provider
             notify_stub = spy.stub(Logger, "notify")
             schedule_stub = spy.stub(vim, "schedule")
             schedule_stub:invokes(function(fn)
@@ -1712,7 +1710,6 @@ describe("agentic.SessionManager", function()
         end)
 
         after_each(function()
-            Config.provider = original_provider
             schedule_stub:revert()
             notify_stub:revert()
             if get_instance_stub then
@@ -1727,7 +1724,7 @@ describe("agentic.SessionManager", function()
                 switch_provider = SessionManager.switch_provider,
             } --[[@as agentic.SessionManager]]
 
-            session:switch_provider()
+            session:switch_provider("new-provider")
 
             assert.spy(notify_stub).was.called(1)
             local msg = notify_stub.calls[1][1]
@@ -1762,8 +1759,7 @@ describe("agentic.SessionManager", function()
                     messages = original_messages,
                     session_id = "old-session",
                 }
-
-                Config.provider = "new-provider"
+                local default_provider = Config.provider
 
                 local session = {
                     is_generating = false,
@@ -1787,8 +1783,10 @@ describe("agentic.SessionManager", function()
                     switch_provider = SessionManager.switch_provider,
                 } --[[@as agentic.SessionManager]]
 
-                session:switch_provider()
+                session:switch_provider("new-provider")
 
+                assert.equal("new-provider", get_instance_stub.calls[1][1])
+                assert.equal(default_provider, Config.provider)
                 assert.spy(cancel_spy).was.called(1)
                 assert.is_nil(session.session_id)
                 assert.spy(perm_cancel_spy).was.called(1)
@@ -1832,8 +1830,6 @@ describe("agentic.SessionManager", function()
                     session_id = "old",
                 }
 
-                Config.provider = "new-provider"
-
                 local session = {
                     is_generating = false,
                     session_id = "old-session",
@@ -1859,7 +1855,7 @@ describe("agentic.SessionManager", function()
                     switch_provider = SessionManager.switch_provider,
                 } --[[@as agentic.SessionManager]]
 
-                session:switch_provider()
+                session:switch_provider("new-provider")
 
                 assert.is_not_nil(captured_on_created)
 
@@ -1914,7 +1910,7 @@ describe("agentic.SessionManager", function()
                 switch_provider = SessionManager.switch_provider,
             } --[[@as agentic.SessionManager]]
 
-            session:switch_provider()
+            session:switch_provider("new-provider")
 
             assert.is_nil(session._usage_reset_epoch)
         end)
@@ -1932,8 +1928,6 @@ describe("agentic.SessionManager", function()
                 return mock_agent
             end)
 
-            Config.provider = "some-provider"
-
             local session = {
                 is_generating = false,
                 session_id = nil,
@@ -1950,7 +1944,7 @@ describe("agentic.SessionManager", function()
                 switch_provider = SessionManager.switch_provider,
             } --[[@as agentic.SessionManager]]
 
-            session:switch_provider()
+            session:switch_provider("some-provider")
 
             assert.spy(mock_agent.cancel_session).was.called(0)
             assert.spy(session.permission_manager.cancel_requests).was.called(1)
@@ -1996,7 +1990,7 @@ describe("agentic.SessionManager", function()
                 switch_provider = SessionManager.switch_provider,
             } --[[@as agentic.SessionManager]]
 
-            session:switch_provider()
+            session:switch_provider("new-provider")
             captured_on_created()
 
             assert.spy(notice_spy).was.called(1)
@@ -4469,9 +4463,14 @@ describe("agentic.SessionManager", function()
                 spy.stub(SlashCommands, "setCommands"),
             }
             bufnr = vim.api.nvim_create_buf(false, true)
+            local config_dir = vim.fn.tempname()
             local pm = PermissionManager:new(
                 MessageWriter:new(bufnr),
-                { agent = bufnr }
+                { agent = bufnr },
+                nil,
+                function()
+                    return config_dir
+                end
             )
             table.insert(stubs, spy.stub(pm.permission_float, "open"))
             table.insert(stubs, spy.stub(pm.permission_float, "close"))
@@ -4541,7 +4540,15 @@ describe("agentic.SessionManager", function()
             deferred = Deferred.capture()
             bufnr = vim.api.nvim_create_buf(false, true)
             local writer = MessageWriter:new(bufnr)
-            local pm = PermissionManager:new(writer, { agent = bufnr })
+            local config_dir = vim.fn.tempname()
+            local pm = PermissionManager:new(
+                writer,
+                { agent = bufnr },
+                nil,
+                function()
+                    return config_dir
+                end
+            )
             local noop = function() end
             session = {
                 message_writer = writer,
@@ -5609,12 +5616,24 @@ describe("agentic.SessionManager", function()
         local function make_session(agent_info, recorded_version)
             return {
                 chat_history = { provider_version = recorded_version },
-                agent = { agent_info = agent_info },
+                agent = {
+                    agent_info = agent_info,
+                    provider_name = "opencode-acp",
+                },
                 file_activity = { serialize = function() end },
                 config_options = { current_model_id = function() end },
                 _sync_history_context = SessionManager._sync_history_context,
             } --[[@as agentic.SessionManager]]
         end
+
+        it("records the session's provider, not the default", function()
+            local session = make_session(nil)
+            assert.are_not.equal("opencode-acp", Config.provider)
+
+            session:_sync_history_context(session.chat_history)
+
+            assert.equal("opencode-acp", session.chat_history.provider)
+        end)
 
         it("records the version the agent reported", function()
             local session = make_session({ name = "acp", version = "0.66.0" })

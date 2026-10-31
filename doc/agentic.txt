@@ -120,8 +120,9 @@ All options with defaults are in `lua/agentic/config_default.lua`.
 
                                                 *agentic-config-provider-name*
 `provider` string (default: `"claude-agent-acp"`)
-    Name of the ACP provider to use. Must match a key in `acp_providers`;
-    the keys are listed in |agentic-requirements|.
+    Provider of a new session when no session is current. A session started
+    from another runs that session's provider. Must match a key in
+    `acp_providers`; the keys are listed in |agentic-requirements|.
 
                                                *agentic-config-acp_providers*
 `acp_providers` table
@@ -497,7 +498,8 @@ when the chat's window is not in the current tabpage.
 agentic.new_session({opts})
     Start another chat session and show it as |agentic.open()| does. The
     previous sessions stay alive. Takes the `opts` of |agentic.open()| and
-    `provider`.
+    `provider`. `provider` runs the new session on that provider. Without
+    it, the new session runs the current session's provider.
 
                                                   *agentic.load_acp_session()*
 agentic.load_acp_session({session_id}, {cwd}, {model})
@@ -585,7 +587,7 @@ Applied to all buffers in the widget (chat, prompt, panels).
     `<localLeader>m`   `change_mode`         n/v     Switch agent mode
     `<C-c>`            `stop_generation`     n/i     Stop generation
     `<localLeader>R`   `restore_session`     n       Restore session
-    `<localLeader>p`   `switch_provider`     n       Switch provider
+    `<localLeader>p`   `switch_provider`     n       Switch this session's provider
     `<localLeader>M`   `switch_model`        n       Switch model
     `<localLeader>!`   `restart_session`     n       Restart session
     `<localLeader>f`   `toggle_activity`     n       Toggle file activity panel (|agentic-file-activity|)

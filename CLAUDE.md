@@ -11,7 +11,7 @@ Fork of [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim
 ## You are running through this plugin
 
 When working in this repo, you are hosted by agentic.nvim itself via ACP
-(Agent Client Protocol). The provider is configured in `Config.provider` —
+(Agent Client Protocol). The session's provider (`agent.provider_name`) is
 not necessarily Claude. Anything that depends on the host (slash command
 interception, permission flow, `environment_info`, what's forwarded in
 `available_commands_update`) follows the ACP path, not the TUI path.

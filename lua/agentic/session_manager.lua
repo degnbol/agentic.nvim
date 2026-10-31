@@ -199,7 +199,7 @@ end
 --- @param history agentic.ui.ChatHistory
 function SessionManager:_sync_history_context(history)
     history.file_activity = self.file_activity:serialize()
-    history.provider = Config.provider
+    history.provider = self.agent.provider_name
     -- Guarded: a provider that reports no agentInfo, or whose initialize is
     -- still in flight, must not erase the version a restored session recorded.
     local agent_info = self.agent.agent_info
@@ -340,7 +340,8 @@ end
 --- Last `SessionManager.id` handed out.
 local last_id = 0
 
-function SessionManager:new()
+--- @param provider agentic.UserConfig.ProviderName
+function SessionManager:new(provider)
     Bootstrap.ensure()
 
     local AgentInstance = require("agentic.acp.agent_instance")
@@ -381,7 +382,7 @@ function SessionManager:new()
         _announced_model_id = nil,
     }, self)
 
-    local agent = AgentInstance.get_instance(Config.provider, function(_client)
+    local agent = AgentInstance.get_instance(provider, function(_client)
         vim.schedule(function()
             if self.destroyed then
                 return
@@ -438,6 +439,9 @@ function SessionManager:new()
         self.widget.buf_nrs,
         function(tool_call_id)
             return self:_writer_for(tool_call_id)
+        end,
+        function()
+            return self.agent:claude_config_dir()
         end
     )
     self.permission_manager.on_hidden = function(badge_bufnr, anchor_bufnr)
@@ -730,12 +734,14 @@ end
 function SessionManager:_bind_owner_keymaps(bufnr)
     local keymaps = Config.keymaps.widget
     BufHelpers.multi_keymap_set(keymaps.switch_provider, bufnr, function()
-        SessionRegistry.select_provider(function(provider_name)
-            if provider_name then
-                Config.provider = provider_name
-                self:switch_provider()
+        SessionRegistry.select_provider(
+            self.agent.provider_name,
+            function(provider_name)
+                if provider_name then
+                    self:switch_provider(provider_name)
+                end
             end
-        end)
+        )
     end, { desc = "Agentic: Switch provider" })
 
     BufHelpers.multi_keymap_set(keymaps.stop_generation, bufnr, function()
@@ -4040,11 +4046,12 @@ function SessionManager:new_session(opts)
         self._cwd = vim.fn.getcwd()
     end
     self.agent:create_session(self._cwd, handlers, function(response, err)
-        -- Provider-switch restore: this SessionManager may have been destroyed
-        -- (by align_provider_for_restore) while session/new was in flight on
-        -- the outgoing provider. Its agent and widget are gone but the
-        -- callback closure still holds a reference to self. Continuing would
-        -- fall through to _handle_new_config_options etc. on wiped buffers.
+        -- This SessionManager may have been destroyed (for example by a
+        -- restore onto another provider) while session/new was in flight.
+        -- Its agent and widget are gone but the callback closure still holds
+        -- a reference to self.
+        -- Continuing would fall through to _handle_new_config_options etc. on
+        -- wiped buffers.
         if self.destroyed then
             if response and response.sessionId and self.agent then
                 self.agent:unsubscribe(response.sessionId)
@@ -4331,7 +4338,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
             end
 
             local provider_label = self.agent.provider_config.name
-                or Config.provider
+                or self.agent.provider_name
             local model_label = model or opts:current_model_id()
             self.message_writer:write_notice({
                 glyph = Glyphs.RESUME,
@@ -4452,10 +4459,10 @@ function SessionManager:_cancel_session()
 end
 
 --- Switch to a different ACP provider while preserving chat UI and history.
---- Reads Config.provider (already set by caller) for the target provider.
 --- Cancels any auto-continue timer — the outgoing provider's usage limit does
 --- not apply to the new one.
-function SessionManager:switch_provider()
+--- @param provider_name agentic.UserConfig.ProviderName
+function SessionManager:switch_provider(provider_name)
     if self.is_generating then
         Logger.notify(
             "Cannot switch provider while generating. Stop generation first.",
@@ -4480,29 +4487,26 @@ function SessionManager:switch_provider()
     local old_session_id = self.session_id
 
     -- Get new agent instance BEFORE tearing down the current session
-    local new_agent = AgentInstance.get_instance(
-        Config.provider,
-        function(client)
-            vim.schedule(function()
-                self.agent = client
+    local new_agent = AgentInstance.get_instance(provider_name, function(client)
+        vim.schedule(function()
+            self.agent = client
 
-                self:new_session({
-                    restore_mode = true,
-                    on_created = function()
-                        -- Nothing else names the new provider: the welcome
-                        -- header takes it and discards it, and restore_mode
-                        -- skips the model announce.
-                        self.message_writer:write_notice({
-                            glyph = Glyphs.PROVIDER,
-                            title = self.agent.provider_config.name,
-                        })
+            self:new_session({
+                restore_mode = true,
+                on_created = function()
+                    -- Nothing else names the new provider: the welcome
+                    -- header takes it and discards it, and restore_mode
+                    -- skips the model announce.
+                    self.message_writer:write_notice({
+                        glyph = Glyphs.PROVIDER,
+                        title = self.agent.provider_config.name,
+                    })
 
-                        self:_adopt_history(saved_history)
-                    end,
-                })
-            end)
-        end
-    )
+                    self:_adopt_history(saved_history)
+                end,
+            })
+        end)
+    end)
 
     if not new_agent then
         return

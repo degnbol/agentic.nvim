@@ -39,7 +39,10 @@ describe("agentic.ui.PermissionManager", function()
         })
 
         writer = MessageWriter:new(bufnr)
-        pm = PermissionManager:new(writer, { agent = bufnr })
+        local config_dir = vim.fn.tempname()
+        pm = PermissionManager:new(writer, { agent = bufnr }, nil, function()
+            return config_dir
+        end)
 
         open_stub = spy.stub(pm.permission_float, "open")
         open_stub:invokes(function(_, options)

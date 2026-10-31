@@ -30,11 +30,11 @@ Three race conditions can overwrite `self.session_id` during ACP
    `session/new` response then arrives — `_restoring` is false, so the callback
    overwrites `session_id` with the stale new-session ID.
 
-3. **Cross-provider restore, two linked hazards.** Picking a saved session
-   whose provider differs from `Config.provider` requires destroying the
-   picker's `current_session`, flipping `Config.provider`, and letting
-   `SessionRegistry.create()` spawn a replacement bound to the new agent.
-   This sequence surfaces two races that don't affect same-provider restore:
+3. **Cross-provider restore, two linked hazards.** A saved session on
+   another provider restores into a new session from
+   `SessionRegistry.create(provider)`; the picker's `current_session` is
+   destroyed afterwards, in the same synchronous call (a cached agent's
+   `on_ready` is `vim.schedule`d, so it runs after the destroy). Two races that same-provider restore avoids:
 
    a. **Capability check during agent init.** `agent_supports_load` is called
       synchronously inside the picker callback. A freshly-spawned agent has
@@ -43,7 +43,7 @@ Three race conditions can overwrite `self.session_id` during ACP
       Treat nil as "support-assumed" — `load_acp_session` already queues via
       `_pending_load_session_id` until on_ready fires.
 
-   b. **Stale `session/new` callback from the outgoing provider.** The
+   b. **Stale `session/new` callback from the destroyed session.** The
       original SessionManager's `create_session` RPC may still be in flight
       when it's destroyed. The callback closure holds a reference to the
       destroyed `self`; when the response arrives it would run
@@ -75,8 +75,7 @@ Three race conditions can overwrite `self.session_id` during ACP
   replaced while the RPC was in flight.
 - `_do_load_acp_session` must feed `result.configOptions` through
   `_handle_new_config_options` on success (mirrors the `new_session` path) —
-  otherwise the config options stay on the previous provider's after a
-  cross-provider restore.
+  otherwise a restored session has no config options.
 
 ## The in-flight counter
 

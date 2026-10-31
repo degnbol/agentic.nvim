@@ -32,11 +32,11 @@ function ACPHealth.get_default_provider_names()
     return available_providers
 end
 
---- Check if the configured ACP provider is available
---- Shows a warning window if not available
+--- Check that `provider_name` is configured and installed. Shows a
+--- warning window if not.
+--- @param provider_name agentic.UserConfig.ProviderName
 --- @return boolean available
-function ACPHealth.check_configured_provider()
-    local provider_name = Config.provider
+function ACPHealth.check_configured_provider(provider_name)
     local provider_config = Config.acp_providers[provider_name]
 
     --- Markdown formatted lines to be shown in the warning window

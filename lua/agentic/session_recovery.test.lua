@@ -652,6 +652,7 @@ describe("agentic.session_recovery", function()
             return {
                 session_id = "old",
                 destroyed = false,
+                agent = { provider_name = "opencode-acp" },
                 chat_history = {
                     session_id = "old",
                     timestamp = 1,
@@ -701,6 +702,19 @@ describe("agentic.session_recovery", function()
 
             assert.equal("old", session.chat_history.session_id)
             assert.is_nil(session._history_to_send)
+        end)
+
+        it("respawns the session's provider, not the default", function()
+            local session = make_session()
+            assert.are_not.equal(
+                "opencode-acp",
+                require("agentic.config").provider
+            )
+
+            Recovery.respawn_preserving_history(session)
+
+            assert.equal("opencode-acp", invalidate_stub.calls[1][1])
+            assert.equal("opencode-acp", get_instance_stub.calls[1][1])
         end)
     end)
 

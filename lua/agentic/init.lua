@@ -167,11 +167,7 @@ end
 --- @return agentic.SessionManager|nil session Nil when none could be created
 function Agentic.new_session(opts)
     opts = opts or {}
-    if opts.provider then
-        Config.provider = opts.provider
-    end
-
-    local session = SessionRegistry.create()
+    local session = SessionRegistry.create(opts.provider)
     if session then
         if opts.auto_add_to_context ~= false then
             session:add_selection_or_file_to_session()

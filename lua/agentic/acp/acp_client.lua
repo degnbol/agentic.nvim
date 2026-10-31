@@ -1,4 +1,5 @@
 local AcpKind = require("agentic.utils.acp_kind")
+local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
 local LogLine = require("agentic.utils.log_line")
@@ -33,6 +34,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field subscribers table<string, agentic.acp.ClientHandlers>
 
 --- @class agentic.acp.ACPClient : agentic.acp.ACPClientData
+--- @field provider_name agentic.UserConfig.ProviderName Config key of the provider this client runs
 --- @field _on_ready fun(client: agentic.acp.ACPClient)
 --- @field _notified_output table<string, true> Process output summaries already shown as a notification by this client
 --- @field _loading_sessions table<string, boolean> Session IDs currently being loaded via session/load
@@ -227,6 +229,13 @@ end
 --- @return table|nil meta
 function ACPClient:session_meta(_additional_dirs)
     return nil
+end
+
+--- Claude's config directory for the environment this client runs with:
+--- the directory whose settings.json holds the permission rules.
+--- @return string
+function ACPClient:claude_config_dir()
+    return ClaudeUtils.config_dir(self.provider_config.env)
 end
 
 --- The plan file a permission request asks approval for.
@@ -1231,7 +1240,8 @@ end
 --- @param handlers agentic.acp.ClientHandlers
 --- @param callback fun(result: agentic.acp.SessionCreationResponse|nil, err: agentic.acp.ACPError|nil)
 function ACPClient:create_session(cwd, handlers, callback)
-    local additional_dirs = PermissionRules.get_additional_directories()
+    local additional_dirs =
+        PermissionRules.get_additional_directories(self:claude_config_dir())
 
     self:_send_request("session/new", {
         cwd = cwd,
@@ -1300,7 +1310,8 @@ function ACPClient:load_session(
     self:_subscribe(session_id, handlers)
     self._loading_sessions[session_id] = true
 
-    local additional_dirs = PermissionRules.get_additional_directories()
+    local additional_dirs =
+        PermissionRules.get_additional_directories(self:claude_config_dir())
     -- Before the request: the bridge replays the session's tool calls as
     -- notifications, which must not outrun the roots they resolve against.
     self._session_roots[session_id] = SkillPath.roots(cwd, additional_dirs)

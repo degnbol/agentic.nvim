@@ -51,57 +51,48 @@ local function agent_supports_load(session)
     return session.agent.agent_capabilities.loadSession == true
 end
 
---- If the session's saved provider differs from the active one, destroy
---- `current_session` and switch Config.provider so a session created next
---- runs the right agent.
---- @param current_session agentic.SessionManager|nil
---- @param provider? agentic.UserConfig.ProviderName config key from the saved session
---- @return boolean changed true if Config.provider was updated
-local function align_provider_for_restore(current_session, provider)
-    if not provider or provider == Config.provider then
-        return false
-    end
-
-    if not Config.acp_providers[provider] then
-        Logger.notify(
-            "Saved provider '"
-                .. provider
-                .. "' is not configured — restoring with current provider '"
-                .. Config.provider
-                .. "'.",
-            vim.log.levels.WARN
-        )
-        return false
-    end
-
-    if current_session then
-        SessionRegistry.destroy(current_session)
-    end
-    Config.provider = provider
-    return true
-end
-
 --- Restore `item` into `current_session`, or into a new session when there
---- is none or the saved provider differs.
+--- is none or the saved provider differs. Destroys a replaced
+--- `current_session`, but keeps it when no new session could be created.
 --- @param item agentic.SessionRestore.PickerItem
 --- @param current_session agentic.SessionManager|nil
 --- @param has_conflict boolean
 --- @return agentic.SessionManager|nil session The session restored into, nil when none could be created
 local function do_restore(item, current_session, has_conflict)
-    -- Not `get_or_create`: after a destroy, `current()` can return another
-    -- live session.
-    local changed = align_provider_for_restore(current_session, item.provider)
-    local session = (not changed and current_session)
-        or SessionRegistry.create()
+    --- @type agentic.UserConfig.ProviderName|nil Saved provider, when configured
+    local saved = nil
+    if item.provider and Config.acp_providers[item.provider] then
+        saved = item.provider
+    end
+
+    local reuse = current_session ~= nil
+        and (not saved or current_session.agent.provider_name == saved)
+    -- Not `get_or_create`: a nil `current_session` asks for a new session,
+    -- and `current()` can return a live one.
+    local session = reuse and current_session or SessionRegistry.create(saved)
     if not session then
         return nil
+    end
+    if not reuse and current_session then
+        SessionRegistry.destroy(current_session)
+    end
+
+    if item.provider and not saved then
+        Logger.notify(
+            "Saved provider '"
+                .. item.provider
+                .. "' is not configured — restoring with provider '"
+                .. session.agent.provider_name
+                .. "'.",
+            vim.log.levels.WARN
+        )
     end
 
     if agent_supports_load(session) then
         if not item.provider then
             Logger.notify(
-                "Session has no saved provider — restoring with current provider '"
-                    .. Config.provider
+                "Session has no saved provider — restoring with provider '"
+                    .. session.agent.provider_name
                     .. "'. May fail if the session was created with a different provider.",
                 vim.log.levels.WARN
             )

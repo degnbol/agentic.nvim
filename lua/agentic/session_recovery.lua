@@ -192,7 +192,7 @@ function M.login(sm, arg, on_done)
         sm.message_writer:write_error_action(
             string.format(
                 "%s is not connected yet.",
-                agent.provider_config.name or Config.provider
+                agent.provider_config.name or agent.provider_name
             )
         )
         on_done()
@@ -425,7 +425,7 @@ end
 --- @param on_created fun()|nil Runs after the replacement session is created
 function M.respawn_preserving_history(sm, on_created)
     local AgentInstance = require("agentic.acp.agent_instance")
-    local provider_name = Config.provider
+    local provider_name = sm.agent.provider_name
 
     local saved_history = sm.chat_history
 

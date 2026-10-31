@@ -1,4 +1,3 @@
-local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
@@ -73,13 +72,14 @@ end
 
 --- @alias agentic.utils.PermissionRules.SettingsList "allow"|"deny"|"ask"
 
---- Compiled settings.json patterns, keyed by permissions list
---- @type table<agentic.utils.PermissionRules.SettingsList, agentic.utils.PermissionRules.CompiledPattern[]>|nil
-local cached_settings_patterns
+--- Settings.json patterns of one Claude config directory.
+--- @class agentic.utils.PermissionRules.SettingsCache
+--- @field patterns table<agentic.utils.PermissionRules.SettingsList, agentic.utils.PermissionRules.CompiledPattern[]> Compiled, keyed by permissions list
+--- @field mtimes table<string, number> mtime of each settings.json when `patterns` was loaded, keyed by path. Per entry, because every config directory shares the project settings.json
 
---- mtime of each settings.json at last load, keyed by path
---- @type table<string, number>
-local cached_mtimes = {}
+--- Keyed by Claude config directory
+--- @type table<string, agentic.utils.PermissionRules.SettingsCache>
+local cached_settings_patterns = {}
 
 --- @type agentic.StructuredEntries|nil
 local cached_plugin_structured_entries
@@ -192,20 +192,22 @@ local function read_json_if_present(path)
 end
 
 --- Paths of the global and the project Claude settings.json.
---- @return string global_path In Claude's config directory for the configured provider's `env`
+--- @param config_dir string Claude's config directory
+--- @return string global_path In `config_dir`
 --- @return string project_path Relative to the cwd
-function M.settings_paths()
-    local provider = Config.acp_providers[Config.provider]
-    local config_dir = ClaudeUtils.config_dir(provider and provider.env)
+function M.settings_paths(config_dir)
     return config_dir .. "/settings.json", ".claude/settings.json"
 end
 
---- Check if any settings.json has changed since last load.
+--- Check if any settings.json has changed since the cached load for
+--- `config_dir`.
+--- @param config_dir string Claude's config directory
 --- @return boolean
-local function settings_changed()
-    local global_path, project_path = M.settings_paths()
-    return get_mtime(global_path) ~= (cached_mtimes[global_path] or 0)
-        or get_mtime(project_path) ~= (cached_mtimes[project_path] or 0)
+local function settings_changed(config_dir)
+    local mtimes = cached_settings_patterns[config_dir].mtimes
+    local global_path, project_path = M.settings_paths(config_dir)
+    return get_mtime(global_path) ~= mtimes[global_path]
+        or get_mtime(project_path) ~= mtimes[project_path]
 end
 
 --- Compiled `Bash(...)` patterns of one list, merged from the global and
@@ -213,21 +215,30 @@ end
 --- `Config.permissions.use_claude_settings` is off. Re-reads the files when
 --- their mtimes change.
 --- @param list_key agentic.utils.PermissionRules.SettingsList
+--- @param config_dir string Claude's config directory
 --- @return agentic.utils.PermissionRules.CompiledPattern[] patterns shared with the cache; do not mutate
-function M.get_settings_patterns(list_key)
-    if not cached_settings_patterns or settings_changed() then
-        local global_path, project_path = M.settings_paths()
-        cached_mtimes[global_path] = get_mtime(global_path)
-        cached_mtimes[project_path] = get_mtime(project_path)
+function M.get_settings_patterns(list_key, config_dir)
+    if
+        not cached_settings_patterns[config_dir]
+        or settings_changed(config_dir)
+    then
+        local global_path, project_path = M.settings_paths(config_dir)
+        local patterns = { allow = {}, deny = {}, ask = {} }
+        cached_settings_patterns[config_dir] = {
+            patterns = patterns,
+            mtimes = {
+                [global_path] = get_mtime(global_path),
+                [project_path] = get_mtime(project_path),
+            },
+        }
 
-        cached_settings_patterns = { allow = {}, deny = {}, ask = {} }
         if Config.permissions.use_claude_settings then
             for _, path in ipairs({ global_path, project_path }) do
                 local settings = read_json_if_present(path)
                 if settings and settings.permissions then
-                    for key, patterns in pairs(cached_settings_patterns) do
+                    for key, list in pairs(patterns) do
                         vim.list_extend(
-                            patterns,
+                            list,
                             M.extract_bash_patterns(settings.permissions, key)
                         )
                     end
@@ -235,16 +246,17 @@ function M.get_settings_patterns(list_key)
             end
         end
     end
-    return cached_settings_patterns[list_key]
+    return cached_settings_patterns[config_dir].patterns[list_key]
 end
 
 --- `permissions.additionalDirectories` of the global settings.json, with a
 --- `~` or `~/` home prefix expanded and other entries as written. Skips
 --- entries that are not non-empty strings. Empty when the file is missing or
 --- not valid JSON.
+--- @param config_dir string Claude's config directory
 --- @return string[] dirs
-function M.get_additional_directories()
-    local global_path = M.settings_paths()
+function M.get_additional_directories(config_dir)
+    local global_path = M.settings_paths(config_dir)
     local settings = read_json_if_present(global_path)
     if
         not settings
@@ -2631,10 +2643,11 @@ end
 --- non-parse path `leaves` is empty and `complete` is false. Pure analysis — it
 --- never grants anything.
 --- @param command string
+--- @param config_dir string Claude's config directory
 --- @return agentic.utils.PermissionRules.Range[]|nil ranges
 --- @return string[] leaves
 --- @return boolean complete
-function M.tally_unapproved(command)
+function M.tally_unapproved(command, config_dir)
     if type(command) ~= "string" or command == "" then
         return nil, {}, false
     end
@@ -2647,9 +2660,9 @@ function M.tally_unapproved(command)
         return nil, {}, false
     end
 
-    local allow = M.get_settings_patterns("allow")
-    local deny = M.get_settings_patterns("deny")
-    local ask = M.get_settings_patterns("ask")
+    local allow = M.get_settings_patterns("allow", config_dir)
+    local deny = M.get_settings_patterns("deny", config_dir)
+    local ask = M.get_settings_patterns("ask", config_dir)
     local structured_entries = M.get_structured_entries()
     local run = walk_until_shadowed_settles(function(shadowed)
         --- @type agentic.utils.PermissionRules.TallyCtx
@@ -2810,9 +2823,10 @@ end
 --- a parse error, or an over-long command returns false so the command prompts
 --- rather than silently rejecting.
 --- @param command string
+--- @param config_dir string Claude's config directory
 --- @return boolean rejected
 --- @return "deny"|"glob_deny"|nil source The rejecting leaf's match: a structured deny gate (`"deny"`) or a settings.json deny pattern (`"glob_deny"`); nil unless rejected
-function M.should_auto_reject(command)
+function M.should_auto_reject(command, config_dir)
     if type(command) ~= "string" or command == "" then
         return false
     end
@@ -2820,7 +2834,7 @@ function M.should_auto_reject(command)
         return false
     end
 
-    local deny = M.get_settings_patterns("deny")
+    local deny = M.get_settings_patterns("deny", config_dir)
     local structured_entries = M.get_structured_entries()
     if #deny == 0 and next(structured_entries) == nil then
         return false
@@ -2914,20 +2928,21 @@ end
 --- `extra_allow` injects session-remembered leaf patterns on top of the
 --- configured allow rules; they widen approval only, never override a deny/ask.
 --- @param command string
+--- @param config_dir string Claude's config directory
 --- @param extra_allow agentic.utils.PermissionRules.CompiledPattern[]|nil
 --- @return boolean ok
 --- @return agentic.utils.PermissionRules.Effect[] effects
 --- @return table<agentic.utils.PermissionRules.Source, true> sources
-function M.evaluate(command, extra_allow)
+function M.evaluate(command, config_dir, extra_allow)
     -- Remembered leaves count even when `auto_approve_tier` is nil, because the
     -- user approved each one.
     return run_walk(command, {
         allow_settings = Config.permissions.auto_approve_tier
-                and M.get_settings_patterns("allow")
+                and M.get_settings_patterns("allow", config_dir)
             or {},
         allow_remembered = extra_allow or {},
-        deny = M.get_settings_patterns("deny"),
-        ask = M.get_settings_patterns("ask"),
+        deny = M.get_settings_patterns("deny", config_dir),
+        ask = M.get_settings_patterns("ask", config_dir),
         tier = Config.permissions.auto_approve_tier,
         read_scripts = true,
     })
@@ -2965,10 +2980,11 @@ end
 --- is structurally approvable AND produces no file-mutating effects (a redirect
 --- write or an `rm`, see `evaluate`).
 --- @param command string
+--- @param config_dir string Claude's config directory
 --- @param extra_allow agentic.utils.PermissionRules.CompiledPattern[]|nil session-remembered leaf patterns (forwarded to `evaluate`)
 --- @return boolean
-function M.should_auto_approve(command, extra_allow)
-    local ok, effects = M.evaluate(command, extra_allow)
+function M.should_auto_approve(command, config_dir, extra_allow)
+    local ok, effects = M.evaluate(command, config_dir, extra_allow)
     return ok and #effects == 0
 end
 
@@ -2987,12 +3003,11 @@ end
 
 --- Invalidate cached patterns (forces re-read on next check).
 function M.invalidate_cache()
-    cached_settings_patterns = nil
+    cached_settings_patterns = {}
     cached_plugin_structured_entries = nil
     cached_plugin_structured_mtime = 0
     cached_config_structured_ref = nil
     cached_config_structured_entries = {}
-    cached_mtimes = {}
 end
 
 return M
