@@ -1,6 +1,5 @@
 local MiniTest = require("mini.test")
 local assert = require("tests.helpers.assert")
-local NS_CHAR_COUNT = require("agentic.ui.folds").NS_CHAR_COUNT
 local NS_TITLED = require("agentic.ui.folds").NS_TITLED
 
 describe("agentic.ui.folds", function()
@@ -685,44 +684,6 @@ describe("agentic.ui.folds", function()
                 return vim.fn.foldtextresult(first)
             end)
         end
-
-        it("adds a character count when the fence row is marked", function()
-            -- The mark on the row above the fold asks for the count; the
-            -- count is read back out of the folded rows.
-            fill_lines(20)
-            vim.api.nvim_buf_set_extmark(bufnr, NS_CHAR_COUNT, 3, 0, {})
-
-            -- "line 5".."line 9" are 6 characters, "line 10".."line 11" are 7,
-            -- plus the 6 newlines rejoining them.
-            assert.equal(
-                "    ··· 7 lines · 50 chars ···",
-                foldtext_of(5, 11)
-            )
-        end)
-
-        it("counts characters, not bytes", function()
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
-                "above",
-                "—·—·—",
-                "—·—·—",
-                "below",
-            })
-            vim.api.nvim_buf_set_extmark(bufnr, NS_CHAR_COUNT, 0, 0, {})
-
-            -- 10 dashes and middots plus the newline; by bytes it would be 31.
-            assert.equal(
-                "    ··· 2 lines · 11 chars ···",
-                foldtext_of(2, 3)
-            )
-        end)
-
-        it("leaves an unmarked fold's summary alone", function()
-            fill_lines(20)
-            -- A mark on the first body row, not the fence row, asks nothing.
-            vim.api.nvim_buf_set_extmark(bufnr, NS_CHAR_COUNT, 4, 0, {})
-
-            assert.equal("    ··· 7 lines ···", foldtext_of(5, 11))
-        end)
 
         describe("of a fold titled by its first row", function()
             before_each(function()

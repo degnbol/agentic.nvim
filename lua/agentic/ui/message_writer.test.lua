@@ -582,25 +582,6 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         describe("fold body", function()
-            --- 0-indexed rows marked to have their fold's characters counted.
-            local function char_count_rows()
-                local rows = {}
-                for _, mark in
-                    ipairs(
-                        vim.api.nvim_buf_get_extmarks(
-                            bufnr,
-                            Folds.NS_CHAR_COUNT,
-                            0,
-                            -1,
-                            {}
-                        )
-                    )
-                do
-                    table.insert(rows, mark[2])
-                end
-                return rows
-            end
-
             it("writes no region when empty", function()
                 writer:write_notice({
                     glyph = GLYPH,
@@ -628,57 +609,50 @@ describe("agentic.ui.MessageWriter", function()
                     { "## t", "````markdown-fold", "```lua", "````", "", "" },
                     buffer_lines()
                 )
-                assert.same({}, char_count_rows())
                 assert.same({}, writer._pending_fold_ops)
                 assert.equal("m1", writer:notice_at(2))
             end)
 
-            it(
-                "folds a longer body closed and counts its characters",
-                function()
-                    writer:write_notice({
-                        glyph = GLYPH,
-                        title = "t",
-                        detail = "path",
-                        fold_body = { "one", "two" },
-                        id = "m1",
-                    })
+            it("folds a longer body closed", function()
+                writer:write_notice({
+                    glyph = GLYPH,
+                    title = "t",
+                    detail = "path",
+                    fold_body = { "one", "two" },
+                    id = "m1",
+                })
 
-                    assert.same({
-                        "## t",
-                        "path",
-                        "```markdown-fold",
-                        "one",
-                        "two",
-                        "```",
-                        "",
-                        "",
-                    }, buffer_lines())
-                    assert.same({ 2 }, char_count_rows())
-                    assert.equal(1, #writer._pending_fold_ops)
-                    assert.is_false(writer._pending_fold_ops[1].open)
-                    -- The fold is anchored on its first body row, not the fence.
-                    assert.equal(
-                        3,
-                        vim.api.nvim_buf_get_extmark_by_id(
-                            bufnr,
-                            vim.api.nvim_create_namespace(
-                                "agentic_fold_anchors"
-                            ),
-                            writer._pending_fold_ops[1].id,
-                            {}
-                        )[1]
-                    )
-                    assert.same({
-                        { 1, "│ " },
-                        { 2, "│ " },
-                        { 3, "│ " },
-                        { 4, "╰─" },
-                    }, rail())
-                    assert.equal("m1", writer:notice_at(5))
-                    assert.is_nil(writer:notice_at(6))
-                end
-            )
+                assert.same({
+                    "## t",
+                    "path",
+                    "```markdown-fold",
+                    "one",
+                    "two",
+                    "```",
+                    "",
+                    "",
+                }, buffer_lines())
+                assert.equal(1, #writer._pending_fold_ops)
+                assert.is_false(writer._pending_fold_ops[1].open)
+                -- The fold is anchored on its first body row, not the fence.
+                assert.equal(
+                    3,
+                    vim.api.nvim_buf_get_extmark_by_id(
+                        bufnr,
+                        vim.api.nvim_create_namespace("agentic_fold_anchors"),
+                        writer._pending_fold_ops[1].id,
+                        {}
+                    )[1]
+                )
+                assert.same({
+                    { 1, "│ " },
+                    { 2, "│ " },
+                    { 3, "│ " },
+                    { 4, "╰─" },
+                }, rail())
+                assert.equal("m1", writer:notice_at(5))
+                assert.is_nil(writer:notice_at(6))
+            end)
         end)
 
         it("leaves a heading-only notice unbracketed", function()
@@ -837,20 +811,6 @@ describe("agentic.ui.MessageWriter", function()
             assert.same({ { 1, G_THINK }, { 2, "╰─" } }, rail())
             assert.same({ { 1, 3 } }, dim_ranges())
             assert_one_sign_per_row()
-            -- The fence row asks the foldtext for a character count.
-            local marks = vim.api.nvim_buf_get_extmarks(
-                bufnr,
-                Folds.NS_CHAR_COUNT,
-                0,
-                -1,
-                {}
-            )
-            assert.same(
-                { 0 },
-                vim.tbl_map(function(m)
-                    return m[2]
-                end, marks)
-            )
         end)
 
         it("widens the fence past backticks in the thinking", function()

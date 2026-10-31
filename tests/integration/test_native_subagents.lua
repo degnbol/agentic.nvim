@@ -342,7 +342,7 @@ _G.message("toolu_send", "root", "c1", "Look in lib/ too.\nAnd tests/.")
         end
     )
 
-    it("a longer message folds its rest closed with a char count", function()
+    it("a longer message folds its rest closed", function()
         child.lua([[
 _G.spawn("c1")
 _G.message("toolu_send", "root", "c1", "Next step.\none\ntwo")
@@ -360,7 +360,7 @@ _G.row = _G.s.message_writer:notice_row("toolu_send") + 1
             child.lua_get("vim.fn.foldclosed(_G.row + 3)")
         )
         assert.equal(
-            "    ··· 2 lines · 7 chars ···",
+            "    ··· 2 lines ···",
             child.lua_get("vim.fn.foldtextresult(_G.row + 3)")
         )
     end)

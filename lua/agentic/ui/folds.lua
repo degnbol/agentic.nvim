@@ -443,10 +443,6 @@ function M.foldexpr()
 end
 
 --- Namespace in which a writer marks a fold's opening fence row to have the
---- foldtext count the body's characters.
-M.NS_CHAR_COUNT = vim.api.nvim_create_namespace("agentic_fold_char_count")
-
---- Namespace in which a writer marks a fold's opening fence row to have the
 --- foldtext lead with the first body row.
 M.NS_TITLED = vim.api.nvim_create_namespace("agentic_fold_titled")
 
@@ -479,10 +475,8 @@ local FOLDTEXT_HL = "Comment"
 --- A joined fold, and one whose opening fence row is marked in `NS_TITLED`,
 --- lead with their first row, cut so the fold text fits the window's text
 --- width: a closed execute block shows which command ran, and a titled body
---- what it is. A fold whose opening fence row is marked in `NS_CHAR_COUNT`
---- adds the body's character count. All figures are read back out of the
---- folded rows rather than recorded at write time, so they describe what `zo`
---- will actually show.
+--- what it is. The line count is read back out of the folded rows rather than
+--- recorded at write time, so it describes what `zo` will actually show.
 --- @return {[1]: string, [2]: string}[] chunks
 function M.foldtext()
     local bufnr = vim.api.nvim_get_current_buf()
@@ -507,17 +501,6 @@ function M.foldtext()
         summary = TextWrap.truncate_to_width(row, text_width - frame)
             .. " · "
             .. summary
-    end
-
-    if is_marked(bufnr, M.NS_CHAR_COUNT, fence_row) then
-        local body = vim.api.nvim_buf_get_lines(bufnr, first - 1, last, false)
-        -- strchars, not `#`: thought text is full of dashes, middots and
-        -- box-drawing, whose byte counts overstate it by a third.
-        local chars = vim.fn.strchars(table.concat(body, "\n"))
-        summary = summary
-            .. " · "
-            .. TextWrap.abbreviate_count(chars)
-            .. " chars"
     end
 
     return { { FOLDTEXT_LEAD .. summary .. FOLDTEXT_TAIL, FOLDTEXT_HL } }

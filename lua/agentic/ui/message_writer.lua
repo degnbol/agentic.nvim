@@ -1064,7 +1064,6 @@ end
 --- @class agentic.ui.MessageWriter.CollapsedRegionOpts
 --- @field titled? boolean The body's first row names it, and the foldtext leads with that row
 --- @field open? boolean Leave the fold open
---- @field count_chars? boolean The fold's foldtext counts the body's characters
 --- @field table_row_ends? integer[] 1-based indices into the body of lines to highlight as table row ends
 
 --- Stamp a collapsed region already in the buffer: `sign` on its first body
@@ -1089,15 +1088,6 @@ function MessageWriter:_decorate_collapsed_region(
     -- fence, and so no fold to set.
     if body_end > body_start then
         local fence_row = body_start - 1
-        if opts.count_chars then
-            vim.api.nvim_buf_set_extmark(
-                bufnr,
-                Folds.NS_CHAR_COUNT,
-                fence_row,
-                0,
-                {}
-            )
-        end
         if opts.titled then
             vim.api.nvim_buf_set_extmark(
                 bufnr,
@@ -1336,10 +1326,7 @@ function MessageWriter:flush_thought_run()
         vim.split(vim.trim(text), "\n", { plain = true }),
         Config.windows.wrap_width
     )
-    -- Count characters: lines are a weak proxy for how much thinking happened,
-    -- and no provider reports thinking tokens.
     self:_write_collapsed_region(body, Glyphs.THINKING_SIGN, {
-        count_chars = true,
         table_row_ends = table_row_ends,
     })
 end
@@ -1697,15 +1684,7 @@ function MessageWriter:write_notice(notice)
         end
         -- Vim cannot close a one-line fold.
         if fold_offset and #fold_body > 1 then
-            local fold_start = heading_row + fold_offset
-            vim.api.nvim_buf_set_extmark(
-                bufnr,
-                Folds.NS_CHAR_COUNT,
-                fold_start - 1,
-                0,
-                {}
-            )
-            self:_queue_fold(fold_start, false)
+            self:_queue_fold(heading_row + fold_offset, false)
         end
 
         render_region_rail(bufnr, heading_row, heading_row + #lines - 1)

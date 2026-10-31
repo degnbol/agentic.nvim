@@ -168,8 +168,7 @@ read them in this order when changing fold behaviour:
 
 `folds.lua` provides the `··· N lines ···` foldtext, led by the body's first
 row for a `-foldnext` fold and where the writer marks the fence row in
-`Folds.NS_TITLED`, plus a character count where it marks the fence row in
-`Folds.NS_CHAR_COUNT`.
+`Folds.NS_TITLED`.
 
 Adding a new foldable kind:
 
