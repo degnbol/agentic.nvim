@@ -37,6 +37,54 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
         end)
     end)
 
+    describe("list_agents_result", function()
+        local PEERS = {
+            "Peer sessions (2):",
+            "  other-01 [aa11]  idle",
+        }
+
+        it("splits off this session's line", function()
+            local token, rest = ClaudeUtils.list_agents_result({
+                "This session is agentic-nvim-06 [da37b0] — the name other sessions use to message it (…).",
+                "",
+                PEERS[1],
+                PEERS[2],
+            })
+            assert.equal("agentic-nvim-06 [da37b0]", token)
+            assert.same(PEERS, rest)
+        end)
+
+        it("reads the form a subagent gets", function()
+            local token, rest = ClaudeUtils.list_agents_result({
+                "This process's main session is agentic-nvim-06 [da37b0] — the name OTHER sessions use to message it (…).",
+                PEERS[1],
+            })
+            assert.equal("agentic-nvim-06 [da37b0]", token)
+            assert.same({ PEERS[1] }, rest)
+        end)
+
+        it("returns no rest when only the self line is there", function()
+            local token, rest = ClaudeUtils.list_agents_result({
+                "This session is agentic-nvim-06 [da37b0] — the name other sessions use to message it (…).",
+                "",
+            })
+            assert.equal("agentic-nvim-06 [da37b0]", token)
+            assert.is_nil(rest)
+        end)
+
+        it("returns nothing without a self line", function()
+            local token, rest = ClaudeUtils.list_agents_result(PEERS)
+            assert.is_nil(token)
+            assert.is_nil(rest)
+        end)
+
+        it("returns nothing for no body", function()
+            local token, rest = ClaudeUtils.list_agents_result(nil)
+            assert.is_nil(token)
+            assert.is_nil(rest)
+        end)
+    end)
+
     describe("send_message_update", function()
         it(
             "heads the call with addressee and summary, bodies the message",

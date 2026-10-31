@@ -212,6 +212,29 @@ function M.message_result(body)
     return vim.split(decoded.message, "\n", { plain = true }), delivered
 end
 
+--- This session's name and the rest of a `ListAgents` result. The first line
+--- names the calling session as `This session is <token> — …`, or from a
+--- subagent `This process's main session is <token> — …`. The CLI leaves
+--- the line out when it withholds the name.
+--- @param body string[]|nil Lines of a `ListAgents` result
+--- @return string|nil self_token Name and ref, e.g. `agentic-nvim-06 [da37b0]`; nil without a self line
+--- @return string[]|nil rest The lines after the self line and the blank lines that follow it; nil when none are left or there is no self line
+function M.list_agents_result(body)
+    if not body or not body[1] then
+        return nil, nil
+    end
+    local token = body[1]:match("^This .-session is (%S.-) — ")
+    if not token then
+        return nil, nil
+    end
+    local i = 2
+    while body[i] == "" do
+        i = i + 1
+    end
+    local rest = vim.list_slice(body, i)
+    return token, #rest > 0 and rest or nil
+end
+
 --- The head and body a `SendMessage` call shows, from its input: the
 --- addressee and summary as head, the message as body.
 --- @param tool_call_id string

@@ -427,6 +427,7 @@ function ClaudeAgentACPAdapter:__build_tool_call_message(update, session_id)
     self:__apply_tool_identity(message, update)
     self:__apply_message_result(message)
     self:__apply_raw_input(message, update, session_id)
+    self:__apply_list_agents_result(message)
     self:__apply_edit_diff(message, update)
     -- The bridge reports a compaction as a synthetic call of this name.
     message.is_compaction = ClaudeUtils.tool_name(update) == "compact" or nil
@@ -460,6 +461,7 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update, session_id)
     self:__apply_tool_identity(message, update)
     self:__apply_message_result(message)
     self:__apply_raw_input(message, update, session_id)
+    self:__apply_list_agents_result(message)
     self:__apply_edit_diff(message, update)
 
     return message
@@ -538,6 +540,26 @@ function ClaudeAgentACPAdapter:__apply_tool_identity(message, update)
     message.kind = kind
 
     set_head(message, ClaudeUtils.tool_head(kind, {}, tool_name))
+end
+
+--- Head a `ListAgents` call with the session its result names, and drop that
+--- line from the body. Any other call, or a result without the line, is left
+--- as it is.
+---
+--- Must run after `__apply_raw_input`: a `ListAgents` call can carry
+--- `rawInput = { channel = "" }`, whose empty head would overwrite this one.
+--- @protected
+--- @param message agentic.ui.MessageWriter.ToolCallBase
+function ClaudeAgentACPAdapter:__apply_list_agents_result(message)
+    if message.kind ~= "ListAgents" then
+        return
+    end
+    local token, rest = ClaudeUtils.list_agents_result(message.body)
+    if not token then
+        return
+    end
+    set_head(message, token)
+    message.body = rest
 end
 
 --- Enrich a tool-call message from claude-agent-acp's rawInput fields (file

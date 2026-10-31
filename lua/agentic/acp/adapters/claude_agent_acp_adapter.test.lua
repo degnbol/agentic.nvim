@@ -755,7 +755,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             assert.equal("select:Read,Edit", msg.argument)
         end)
 
-        it("leaves ListAgents bare through both phases", function()
+        it("heads ListAgents with the session its result names", function()
             local adapter, calls = make_capturing_adapter()
 
             adapter:__handle_tool_call("s-1", {
@@ -772,15 +772,54 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                 kind = "other",
                 status = "completed",
                 rawInput = { channel = "" },
+                content = {
+                    {
+                        type = "content",
+                        content = {
+                            type = "text",
+                            text = table.concat({
+                                "This session is agentic-nvim-06 [da37b0] — the name other sessions use to message it (…).",
+                                "",
+                                "Peer sessions (1):",
+                                "  other-01 [aa11]  idle",
+                            }, "\n"),
+                        },
+                    },
+                },
                 _meta = { claudeCode = { toolName = "ListAgents" } },
             })
 
             assert.equal("ListAgents", calls[1].kind)
             assert.equal("", calls[1].argument)
             assert.equal("ListAgents", msg.kind)
-            -- Nothing to clear on an update, so the head the initial call
-            -- established stands through the merge.
-            assert.is_nil(msg.argument)
+            assert.equal("agentic-nvim-06 [da37b0]", msg.argument)
+            assert.equal("Peer sessions (1):", msg.body[1])
+        end)
+
+        it("heads a subagent's ListAgents from its initial call", function()
+            local adapter, calls = make_capturing_adapter()
+
+            adapter:__handle_tool_call("s-1", {
+                sessionUpdate = "tool_call",
+                toolCallId = "tc-agents-sub",
+                kind = "other",
+                status = "completed",
+                title = "ListAgents",
+                rawInput = { channel = "" },
+                content = {
+                    {
+                        type = "content",
+                        content = {
+                            type = "text",
+                            text = "This process's main session is agentic-nvim-06 [da37b0] — the name OTHER sessions use to message it (…).",
+                        },
+                    },
+                },
+                _meta = { claudeCode = { toolName = "ListAgents" } },
+            })
+
+            assert.equal("agentic-nvim-06 [da37b0]", calls[1].argument)
+            assert.is_nil(calls[1].body)
         end)
 
         -- The refined head has to survive the terminal update, which carries
