@@ -6,6 +6,17 @@ local mini_path = deps_path .. "/mini.nvim"
 if not vim.uv.fs_stat(mini_path) then
     vim.fn.mkdir(deps_path, "p")
 
+    -- Git hooks export repo-local variables such as GIT_INDEX_FILE; an
+    -- inherited one makes the clone write its index into the hooked repo.
+    local local_env_vars = assert(
+        vim.system({ "git", "rev-parse", "--local-env-vars" }, { text = true })
+            :wait().stdout,
+        "git rev-parse --local-env-vars returned no stdout"
+    )
+    for name in local_env_vars:gmatch("%S+") do
+        vim.env[name] = nil
+    end
+
     local result = vim.system({
         "git",
         "clone",
