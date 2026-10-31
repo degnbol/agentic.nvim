@@ -22,7 +22,7 @@ Lines are in `lua/agentic/session_manager.lua` (SM) unless another file is named
   - `lua/agentic/ui/todo_list.test.lua`
   - `tests/integration/test_native_subagents.lua`
   - `tests/integration/test_subagent_inputs.lua`
-- Consumers: `notes/PLAN-rfd-subagents.md` (Step 1 item 2, the config_option_update table) and `notes/feature-thought-level-display.md`.
+- Consumer: `notes/feature-thought-level-display.md`.
 - Skills: `session-lifecycle` (header pipeline), `follow` (writes go through `_schedule_follow`/`_own_edit`; attention badges), `rendering`, `provider-system`, `lua-class`.
 - Rule: `.claude/rules/provider-specific.md`.
 
@@ -121,7 +121,6 @@ Provider-specific code: none moves. `subagent_task_id`, `subagent_record` and fr
 7. **Docs.**
    - `doc/agentic.txt` § `agentic-subagents`: the transcript shows the model line, plus its own todos once step 6 lands.
    - `session-lifecycle` skill: `_announced_model_id` moves to AgentView.
-   - Update the table in `notes/PLAN-rfd-subagents.md` to point at AgentView.
 
 ## Tests
 - New `lua/agentic/ui/agent_view.test.lua`:
@@ -150,7 +149,6 @@ Provider-specific code: none moves. `subagent_task_id`, `subagent_record` and fr
 ## Non-goals
 - Adding anything to the header (`vim.b.agentic_header`).
 - Thought-level display (`notes/feature-thought-level-display.md`). Once it lands, both windows get it through `AgentView`.
-- The RFD wire change (`notes/PLAN-rfd-subagents.md`).
 - Changing the subagent block in the main chat.
 
 ## Open questions
