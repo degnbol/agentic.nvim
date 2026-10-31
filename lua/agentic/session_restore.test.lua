@@ -1008,9 +1008,6 @@ describe("SessionRestore", function()
             local writer = {
                 write_notice = notice_spy,
                 flush_thought_run = spy.new(function() end),
-                _get_wrap_width = function()
-                    return 0
-                end,
             }
             SessionRestore.replay_messages(
                 writer --[[@as agentic.ui.MessageWriter]],

@@ -431,12 +431,7 @@ function SessionManager:new()
     end
 
     self.status_indicator = StatusIndicator:new(self.widget.buf_nrs.agent)
-    self.message_writer = MessageWriter:new(
-        self.widget.buf_nrs.agent,
-        function()
-            return self.widget:home_win()
-        end
-    )
+    self.message_writer = MessageWriter:new(self.widget.buf_nrs.agent)
 
     self.permission_manager = PermissionManager:new(
         self.message_writer,
@@ -3753,14 +3748,12 @@ function SessionManager:_handle_input_submit_inner(input_text)
         local diagnostics = self.diagnostics_list:take() --[[@as agentic.ui.DiagnosticsList.Diagnostic[] ]]
         consumed.diagnostics = diagnostics
 
-        local home = self.widget:home_win()
-        local chat_width = home and vim.api.nvim_win_get_width(home)
-            or vim.o.columns
-
         local DiagnosticsContext = require("agentic.ui.diagnostics_context")
 
-        local formatted_diagnostics =
-            DiagnosticsContext.format_diagnostics(diagnostics, chat_width)
+        local formatted_diagnostics = DiagnosticsContext.format_diagnostics(
+            diagnostics,
+            Config.windows.wrap_width
+        )
 
         for _, prompt_entry in ipairs(formatted_diagnostics.prompt_entries) do
             table.insert(prompt, prompt_entry)

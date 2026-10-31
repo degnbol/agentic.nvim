@@ -185,7 +185,6 @@ end
 --- @field _next_window_to_user? boolean Set by `hand_next_window_to_user` until the next scheduled callbacks run
 --- @field _newly_shown table<integer, true> Following windows that newly show the buffer, whose next scroll starts from the top: vim restores such a window's cursor from its history after BufWinEnter, possibly below the follow target, and `BufHelpers.scroll_down` never scrolls up. Cleared by that scroll, or when the window goes to user control.
 --- @field _pending_fold_ops { id: integer, open: boolean }[] Fold ops (anchor extmark id in NS_FOLD_ANCHORS + desired state) for `*-fold`/`-difffold` fences rendered while no chat window was visible. Flushed by the BufWinEnter of a window that shows the buffer again. `open=false` closes (sidecars, rejected edits); `open=true` opens (applied edit diffs) — the explicit open both honours the diff's open-by-default and neutralises the foldexpr leak whereby a fold created after a closed one inherits the closed state.
---- @field _home_window? fun(): integer|nil The window hard wrap measures while it shows the buffer
 --- @field _fold_states table<integer, boolean> Applied fold ops, anchor extmark id in NS_FOLD_ANCHORS -> open. Replayed in each window that starts showing the buffer (see `replay_folds`).
 --- @field _pending_section_break? boolean Set by `_mark_section_break` when a tool call interrupts a prose run mid-turn; makes the next prose chunk emit the empty `###` boundary that closes the interrupting section. Cleared by that chunk and at the turn boundary.
 --- @field _notices table<string, { mark: integer, height: integer }> Notice id -> the heading's mark in NS_USER_ACTIONS, and the number of rows of heading and body
@@ -235,16 +234,14 @@ function MessageWriter:reset()
 end
 
 --- @param bufnr integer
---- @param home_window (fun(): integer|nil)|nil The window hard wrap measures whenever it shows the buffer (see `_wrap_window`)
 --- @return agentic.ui.MessageWriter
-function MessageWriter:new(bufnr, home_window)
+function MessageWriter:new(bufnr)
     if not vim.api.nvim_buf_is_valid(bufnr) then
         error("Invalid buffer number: " .. tostring(bufnr))
     end
 
     local instance = setmetatable({
         bufnr = bufnr,
-        _home_window = home_window,
         tool_call_blocks = {},
         _thought_run = nil,
         _rebuild_armed = false,
@@ -731,59 +728,8 @@ function MessageWriter:_own_edit(fn)
     return result
 end
 
---- The window hard wrap measures, the one width the buffer's text can have:
---- the home window while it shows the buffer, else the first window showing
---- it in the current tabpage. A narrow window opened elsewhere then does not
---- narrow the wrap for good.
---- @return integer|nil winid
-function MessageWriter:_wrap_window()
-    local home = self._home_window and self._home_window()
-    if
-        home
-        and vim.api.nvim_win_is_valid(home)
-        and vim.api.nvim_win_get_buf(home) == self.bufnr
-    then
-        return home
-    end
-    local winid = vim.fn.bufwinid(self.bufnr)
-    return winid ~= -1 and winid or nil
-end
-
---- Returns the text area width of the wrap window (excluding sign column),
---- or 80 when there is none (see `_wrap_window`). The chat window
---- always has signcolumn=yes:1 (2 columns).
---- Clamped to `Config.windows.{min,max}_wrap_width` (either 0 disables that
---- bound). The floor wins against a narrow *window* — prose keeps wrapping at
---- `min_wrap_width` and is clipped at the window edge (the chat window is
---- `nowrap`) rather than being shredded into two-word lines — but never against
---- a configured `max_wrap_width`, which stays an absolute ceiling.
---- Returns 0 when the chat window has soft wrap enabled (no hard wrapping needed).
---- @return integer
-function MessageWriter:_get_wrap_width()
-    local winid = self:_wrap_window()
-    if winid and vim.wo[winid].wrap then
-        return 0
-    end
-    local width
-    if winid then
-        width = vim.api.nvim_win_get_width(winid) - 2
-    else
-        width = 80
-    end
-    local max = Config.windows.max_wrap_width
-    local min = Config.windows.min_wrap_width
-    if max > 0 then
-        width = math.min(width, max)
-        min = math.min(min, max)
-    end
-    if min > 0 then
-        width = math.max(width, min)
-    end
-    return width
-end
-
 --- Writes a full message to the chat buffer and append two blank lines after.
---- Prose lines are hard-wrapped to the chat window width; code blocks are untouched.
+--- Prose lines are hard-wrapped at `wrap_width`; code blocks are untouched.
 --- @param update agentic.acp.SessionUpdateMessage
 function MessageWriter:write_message(update)
     local text = update.content
@@ -801,7 +747,7 @@ function MessageWriter:write_message(update)
     local lines = vim.split(text, "\n", { plain = true })
     close_fence(lines)
     local wrapped, table_row_ends =
-        TextWrap.wrap_prose(lines, self:_get_wrap_width())
+        TextWrap.wrap_prose(lines, Config.windows.wrap_width)
 
     self:_schedule_follow()
 
@@ -939,10 +885,9 @@ end
 --- Only a run holding more than one paragraph is bracketed: a rail over a
 --- one-line aside between tool calls groups nothing, and those asides are a
 --- third of every run written. The measure is a blank row inside the run rather
---- than a row count, which is a property of the window instead of the text —
---- `_get_wrap_width` returns 0 under `wrap`, where a paragraph of any length is
---- one row, so a row count would have the same reply bracket in one split width
---- and not in another.
+--- than a row count, which is a property of the wrap width instead of the
+--- text — under `wrap_width` 0 a paragraph of any length is one row, so a row
+--- count would have the same reply bracket at one width and not at another.
 ---
 --- `run_start` is where the chunk writer began appending, which sits a row or
 --- two above the first word: the run can open on a blank or on the `###`
@@ -1389,7 +1334,7 @@ function MessageWriter:flush_thought_run()
 
     local body, table_row_ends = TextWrap.wrap_prose(
         vim.split(vim.trim(text), "\n", { plain = true }),
-        self:_get_wrap_width()
+        Config.windows.wrap_width
     )
     -- Count characters: lines are a weak proxy for how much thinking happened,
     -- and no provider reports thinking tokens.
@@ -1429,7 +1374,7 @@ function MessageWriter:write_hook_block(block)
     local wrapped, table_row_ends = block.body, nil
     if not block.preformatted then
         wrapped, table_row_ends =
-            TextWrap.wrap_prose(block.body, self:_get_wrap_width())
+            TextWrap.wrap_prose(block.body, Config.windows.wrap_width)
     end
     if #wrapped == 0 then
         return
@@ -1591,7 +1536,7 @@ function MessageWriter:write_user_prompt(text, extra_lines)
     -- the prompt's own code block.
     close_fence(flat)
     local table_row_ends
-    flat, table_row_ends = TextWrap.wrap_prose(flat, self:_get_wrap_width())
+    flat, table_row_ends = TextWrap.wrap_prose(flat, Config.windows.wrap_width)
 
     self:_schedule_follow()
 
@@ -1654,7 +1599,7 @@ end
 --- @field title string Heading text. Raw, not backtick-wrapped: an underscore or stray backtick in it can corrupt the heading through markdown inline parsing, the same exposure a user prompt's heading already carries.
 --- @field detail? string One dimmed line under the heading
 --- @field body? string[] Already-formatted markdown lines placed under the heading, after `detail`
---- @field fold_body? string[] Markdown lines placed prose-wrapped in a fence after `body`. Longer than one line, the fence is folded closed and its foldtext counts their characters
+--- @field fold_body? string[] Markdown lines placed prose-wrapped in a fence after `body`. Longer than one line, the fence is folded closed
 --- @field glyph_hl? string Highlight group for the sign; defaults to Theme's GLYPH_USER
 --- @field mid_turn? boolean True when a turn is running. Decides whether the notice closes the turn — see write_notice.
 --- @field id? string Id to find the notice by. Must be unique per writer
@@ -1685,13 +1630,13 @@ function MessageWriter:write_notice(notice)
 
     -- Never wrapped or truncated: an ATX heading has to stay on one row, and
     -- the title is the notice's whole record of the command — for `/grant` the
-    -- part that would be cut is the scope path it exists to report. A title
-    -- wider than the (nowrap) chat window runs past its edge and is reached by
-    -- scrolling horizontally.
+    -- part that would be cut is the scope path it exists to report. Under
+    -- `nowrap`, a title wider than the chat window runs past its edge and is
+    -- reached by scrolling horizontally.
     local lines = { "## " .. notice.title, notice.detail }
     vim.list_extend(lines, notice.body or {})
     local fold_body, table_row_ends =
-        TextWrap.wrap_prose(notice.fold_body or {}, self:_get_wrap_width())
+        TextWrap.wrap_prose(notice.fold_body or {}, Config.windows.wrap_width)
     --- @type integer|nil 0-indexed offset of the fenced body's first row in `lines`
     local fold_offset
     if #fold_body > 0 then
@@ -2100,7 +2045,7 @@ function MessageWriter:write_error_message(err)
     local all_lines = { HEADING }
     vim.list_extend(
         all_lines,
-        (TextWrap.wrap_prose(body_lines, self:_get_wrap_width()))
+        (TextWrap.wrap_prose(body_lines, Config.windows.wrap_width))
     )
 
     self:_release_prose_pin()
@@ -2225,7 +2170,7 @@ end
 function MessageWriter:write_error_action(text)
     self:_schedule_follow()
 
-    local lines = TextWrap.wrap_prose({ text }, self:_get_wrap_width())
+    local lines = TextWrap.wrap_prose({ text }, Config.windows.wrap_width)
 
     self:_own_edit(function(bufnr)
         local block = self._error_block
@@ -2415,7 +2360,7 @@ function MessageWriter:_reflow_chunks(bufnr, flush_all)
 
     local raw = vim.api.nvim_buf_get_lines(bufnr, start, reflow_end, false)
     local wrapped, table_row_ends =
-        TextWrap.wrap_prose(raw, self:_get_wrap_width())
+        TextWrap.wrap_prose(raw, Config.windows.wrap_width)
 
     if not vim.deep_equal(raw, wrapped) then
         vim.api.nvim_buf_set_lines(bufnr, start, reflow_end, false, wrapped)
@@ -2431,7 +2376,7 @@ function MessageWriter:_reflow_chunks(bufnr, flush_all)
     if flush_all then
         -- Same job as `close_fence`, but appended to the buffer: reflow_end is
         -- the end of the buffer here, and extending `wrapped` would also extend
-        -- `raw`, which wrap_prose returns unchanged when the window soft-wraps.
+        -- `raw`, which wrap_prose returns unchanged at `wrap_width` 0.
         local fence = TextWrap.unclosed_fence(wrapped)
         if fence then
             self:_append_lines({ fence })
@@ -2583,8 +2528,8 @@ function MessageWriter:write_message_chunk(update, starts_response)
 
         -- Wrap the last line immediately if it overflows, so the user sees
         -- wrapping during streaming instead of after the line completes.
-        -- Skip when wrap_width is 0 (soft wrap enabled on the window).
-        local wrap_width = self:_get_wrap_width()
+        -- Skip when wrap_width is 0 (the chat soft-wraps).
+        local wrap_width = Config.windows.wrap_width
         local end_line = vim.api.nvim_buf_line_count(bufnr) - 1
         local tail = vim.api.nvim_buf_get_lines(
             bufnr,
@@ -3090,7 +3035,7 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         self:_end_prose_run(bufnr)
 
         local layout =
-            ToolCallLayout.build(tool_call_block, self:_get_wrap_width())
+            ToolCallLayout.build(tool_call_block, Config.windows.wrap_width)
         if layout.diff_blocks then
             tool_call_block.cached_diff_blocks = layout.diff_blocks
         end
@@ -3275,7 +3220,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             return false
         end
 
-        local layout = ToolCallLayout.build(tracker, self:_get_wrap_width())
+        local layout = ToolCallLayout.build(tracker, Config.windows.wrap_width)
         if layout.diff_blocks then
             tracker.cached_diff_blocks = layout.diff_blocks
         end

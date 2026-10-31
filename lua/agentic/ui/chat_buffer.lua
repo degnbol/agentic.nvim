@@ -30,7 +30,9 @@ local ChatBuffer = {}
 --- @return table<string, any>
 function ChatBuffer.win_opts()
     return {
-        wrap = false,
+        -- Prose is hard-wrapped at `wrap_width`, or left to the window at 0.
+        wrap = Config.windows.wrap_width == 0,
+        linebreak = true,
         scrolloff = 4,
         signcolumn = "yes:1",
         foldmethod = "expr",

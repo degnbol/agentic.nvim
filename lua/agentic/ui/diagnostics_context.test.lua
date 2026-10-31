@@ -67,6 +67,24 @@ describe("agentic.ui.DiagnosticsContext", function()
         assert.equal("…", result.summary_lines[1]:sub(-3))
     end)
 
+    it("keeps a long summary whole at width 0", function()
+        local message = string.rep("long ", 40) .. "end"
+        local diagnostics = {
+            {
+                bufnr = 1,
+                lnum = 0,
+                col = 0,
+                severity = vim.diagnostic.severity.ERROR,
+                message = message,
+                file_path = "",
+            },
+        }
+
+        local result = DiagnosticsContext.format_diagnostics(diagnostics, 0)
+
+        assert.truthy(result.summary_lines[1]:find(message, 1, true))
+    end)
+
     it("handles nil file_path as unnamed buffer", function()
         local diagnostics = {
             {

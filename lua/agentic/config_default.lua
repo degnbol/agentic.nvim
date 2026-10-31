@@ -210,8 +210,7 @@ local ConfigDefault = {
 
     --- @class agentic.UserConfig.Windows
     --- @field stack agentic.ui.ChatWidget.StackPanel[] Top-to-bottom order of the panels below the chat, each listed once
-    --- @field max_wrap_width integer
-    --- @field min_wrap_width integer
+    --- @field wrap_width integer Hard-wrap width of chat prose, or 0 to soft-wrap instead
     --- @field agent agentic.UserConfig.Windows.Agent
     --- @field input agentic.UserConfig.Windows.Input
     --- @field code agentic.UserConfig.Windows.Code
@@ -231,8 +230,7 @@ local ConfigDefault = {
             "info",
             "input",
         },
-        max_wrap_width = 80,
-        min_wrap_width = 40,
+        wrap_width = 80,
         agent = { win_opts = {} },
         input = { height = 10, win_opts = {} },
         code = { max_height = 15, win_opts = {} },

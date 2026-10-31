@@ -61,6 +61,20 @@ describe("agentic.utils.TextWrap", function()
             end
         end)
 
+        it("keeps an over-wide line's leading whitespace", function()
+            local result = TextWrap.wrap_prose({
+                "  - a nested list item long enough to wrap at forty columns",
+            }, 40)
+            assert.is_true(#result > 1)
+            assert.equal("  - a", result[1]:sub(1, 5))
+            for i = 2, #result do
+                assert.is_true(
+                    result[i]:match("^    %S") ~= nil,
+                    "continuation should align after the marker: " .. result[i]
+                )
+            end
+        end)
+
         it("handles multiple code blocks", function()
             local lines = {
                 "intro text that is fairly short",

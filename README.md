@@ -40,7 +40,7 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
 - Markdown tables aligned column-by-column
 - Native vim folding for long tool output
 - Sign-column block decorations
-- Prose stream formatting when using nowrap.
+- Prose hard-wrapped at a fixed `wrap_width`, as it streams.
 
 ### Permissions
 

@@ -6,9 +6,9 @@ local MarkdownTable = require("agentic.utils.markdown_table")
 --- @class agentic.utils.TextWrap
 local M = {}
 
---- Wrap a single line of prose at word boundaries. Continuation lines are
---- indented to align after the line's leading whitespace and list or quote
---- marker.
+--- Wrap a single line of prose at word boundaries. The first line keeps the
+--- line's leading whitespace; continuation lines are indented to align after
+--- it and any list or quote marker.
 --- @param line string
 --- @param width integer
 --- @return string[] sub_lines
@@ -68,7 +68,9 @@ local function wrap_line(line, width)
 
     for _, word in ipairs(words) do
         if current == "" then
-            current = (#result == 0 and "" or continuation_indent) .. word
+            current = (
+                #result == 0 and line:match("^%s*") or continuation_indent
+            ) .. word
         elseif #current + 1 + #word <= width then
             current = current .. " " .. word
         else

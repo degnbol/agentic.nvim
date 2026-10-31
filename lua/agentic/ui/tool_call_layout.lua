@@ -150,9 +150,8 @@ local CODE_KINDS = {
 ---
 --- When `truncate` is set, `name` is clamped to `wrap_width` (or 80 when
 --- soft-wrapping) minus everything the rendered line spends on the frame, and
---- one cell for the ellipsis. That is a single screen line only while
---- `wrap_width` fits the window — `min_wrap_width` can hold it above the width
---- of a narrow chat window.
+--- one cell for the ellipsis. That is a single screen line only while the
+--- window's text area is at least `wrap_width` wide.
 --- @param kind string normalised kind
 --- @param name string
 --- @param wrap_width integer
@@ -886,7 +885,7 @@ end
 
 --- Lay out a tool call block. Does not modify `block` and writes no buffer.
 --- @param block agentic.ui.MessageWriter.ToolCallBlock
---- @param wrap_width integer chat window text width; 0 = soft wrap
+--- @param wrap_width integer Hard-wrap width; 0 = soft wrap
 --- @return agentic.ui.ToolCallLayout.Layout
 function M.build(block, wrap_width)
     local failure = block.failure_reason

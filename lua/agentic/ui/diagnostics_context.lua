@@ -44,9 +44,9 @@ local function severity_to_label(severity)
 end
 
 --- @param diagnostics agentic.ui.DiagnosticsList.Diagnostic[]
---- @param chat_width integer
+--- @param width integer Display width the summary lines are truncated to, or below 4 (such as 0) to leave them whole
 --- @return agentic.ui.DiagnosticsContext.FormatResult format_result
-function DiagnosticsContext.format_diagnostics(diagnostics, chat_width)
+function DiagnosticsContext.format_diagnostics(diagnostics, width)
     --- @type agentic.acp.TextContent[]
     local prompt_entries = {}
     --- @type string[]
@@ -107,10 +107,7 @@ function DiagnosticsContext.format_diagnostics(diagnostics, chat_width)
             single_line_message
         )
 
-        table.insert(
-            summary_lines,
-            TextWrap.truncate_to_width(summary, chat_width)
-        )
+        table.insert(summary_lines, TextWrap.truncate_to_width(summary, width))
     end
 
     --- @type agentic.ui.DiagnosticsContext.FormatResult

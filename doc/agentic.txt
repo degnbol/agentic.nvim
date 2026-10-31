@@ -177,16 +177,13 @@ All options with defaults are in `lua/agentic/config_default.lua`.
 
     `stack`             list (default: `{ "todos", "code", "files",`
                         `"diagnostics", "activity", "info", "input" }`)
-    `max_wrap_width`    integer (default: 80)
-    `min_wrap_width`    integer (default: 40)
+    `wrap_width`        integer (default: 80)
 
     `stack` is the top-to-bottom order of the panels below the chat's
     window (|agentic-buffers|). It must list each of the seven exactly once.
 
-    Chat prose is hard-wrapped to the chat window width, clamped between
-    `min_wrap_width` and `max_wrap_width`. Setting either to 0 drops that
-    bound. `max_wrap_width` also caps `min_wrap_width`. Wrapped lines run
-    past the edge of a window narrower than `min_wrap_width`.
+    Chat prose is hard-wrapped at `wrap_width` columns. 0 turns hard wrap
+    off and sets 'wrap' in the chat windows.
 
     Sub-tables for individual panels:
       `agent`         `{ win_opts = {} }`

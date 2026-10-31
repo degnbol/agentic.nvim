@@ -25,14 +25,18 @@ describe("agentic.ui.MessageWriter", function()
     --- @type agentic.UserConfig.Follow|nil
     local original_follow
     local original_tool_call_display
+    local original_windows
 
     before_each(function()
         -- Re-acquire in case a prior test replaced the module in package.loaded
         Config = require("agentic.config")
         original_follow = Config.follow
         original_tool_call_display = vim.deepcopy(Config.tool_call_display)
+        original_windows = vim.deepcopy(Config.windows)
         -- Disable external formatter for deterministic fallback tests
         Config.tool_call_display.execute_formatter = false
+        -- No hard wrap unless a spec sets a width.
+        Config.windows.wrap_width = 0
         MessageWriter = require("agentic.ui.message_writer")
 
         bufnr = vim.api.nvim_create_buf(false, true)
@@ -52,6 +56,7 @@ describe("agentic.ui.MessageWriter", function()
     after_each(function()
         Config.follow = original_follow --- @diagnostic disable-line: assign-type-mismatch
         Config.tool_call_display = original_tool_call_display
+        Config.windows = original_windows
         if winid and vim.api.nvim_win_is_valid(winid) then
             vim.api.nvim_win_close(winid, true)
         end
@@ -161,45 +166,32 @@ describe("agentic.ui.MessageWriter", function()
         end
     end
 
-    describe("_get_wrap_width", function()
-        local original_windows
+    describe("wrap_width", function()
+        local PARAGRAPH = string.rep("word ", 30) .. "end"
 
-        before_each(function()
-            original_windows = vim.deepcopy(Config.windows)
-            Config.windows.min_wrap_width = 40
-            Config.windows.max_wrap_width = 80
-            vim.wo[winid].wrap = false
-        end)
+        --- @return string[]
+        local function write_paragraph()
+            writer:write_message(make_message_update(PARAGRAPH))
+            return vim.tbl_filter(function(line)
+                return line ~= ""
+            end, vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
+        end
 
-        after_each(function()
-            Config.windows = original_windows
-        end)
-
-        it("returns the window text width when between the bounds", function()
-            vim.api.nvim_win_set_width(winid, 62)
-            assert.equal(writer:_get_wrap_width(), 60)
-        end)
-
-        it("clamps down to max_wrap_width", function()
-            Config.windows.max_wrap_width = 50
-            vim.api.nvim_win_set_width(winid, 62)
-            assert.equal(writer:_get_wrap_width(), 50)
-        end)
-
-        it("clamps up to min_wrap_width", function()
+        it("wraps prose at wrap_width whatever the window width", function()
+            Config.windows.wrap_width = 40
             vim.api.nvim_win_set_width(winid, 20)
-            assert.equal(writer:_get_wrap_width(), 40)
+
+            local rows = write_paragraph()
+
+            assert.is_true(#rows > 1)
+            for _, row in ipairs(rows) do
+                assert.is_true(#row <= 40)
+            end
+            assert.is_true(#rows[1] > 20)
         end)
 
-        it("does not widen past a max_wrap_width below the floor", function()
-            Config.windows.max_wrap_width = 30
-            vim.api.nvim_win_set_width(winid, 20)
-            assert.equal(writer:_get_wrap_width(), 30)
-        end)
-
-        it("returns 0 when the window soft-wraps", function()
-            vim.wo[winid].wrap = true
-            assert.equal(writer:_get_wrap_width(), 0)
+        it("leaves a paragraph on one row at 0", function()
+            assert.same({ PARAGRAPH }, write_paragraph())
         end)
     end)
 
@@ -527,19 +519,9 @@ describe("agentic.ui.MessageWriter", function()
 
     describe("write_notice", function()
         local GLYPH = Glyphs.COMMAND.grant
-        local original_windows
 
         before_each(function()
-            -- Hard-wrap at the window width, so the over-wide case can set it.
-            original_windows = vim.deepcopy(Config.windows)
-            Config.windows.min_wrap_width = 0
-            Config.windows.max_wrap_width = 0
-            vim.wo[winid].wrap = false
-        end)
-
-        after_each(function()
-            Config.windows = original_windows
-            vim.wo[winid].wrap = true
+            Config.windows.wrap_width = 58
         end)
 
         local function buffer_lines()
@@ -715,21 +697,18 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(Theme.HL_GROUPS.GLYPH_OFF, action_marks()[1][3])
         end)
 
-        it(
-            "keeps a title too wide for the window on one heading row",
-            function()
-                vim.api.nvim_win_set_width(winid, 30)
-                local title = string.rep("wide ", 6) .. "tail"
+        it("keeps a title wider than wrap_width on one heading row", function()
+            Config.windows.wrap_width = 28
+            local title = string.rep("wide ", 6) .. "tail"
 
-                writer:write_notice({ glyph = GLYPH, title = title })
+            writer:write_notice({ glyph = GLYPH, title = title })
 
-                assert.same({ "## " .. title, "", "" }, buffer_lines())
-                assert.same(
-                    { { 0, GLYPH .. " ", Theme.HL_GROUPS.GLYPH_USER } },
-                    action_marks()
-                )
-            end
-        )
+            assert.same({ "## " .. title, "", "" }, buffer_lines())
+            assert.same(
+                { { 0, GLYPH .. " ", Theme.HL_GROUPS.GLYPH_USER } },
+                action_marks()
+            )
+        end)
 
         it("keeps ## and no turn boundary mid-turn", function()
             writer:write_message_chunk(make_message_update("streaming prose"))
@@ -1045,9 +1024,7 @@ describe("agentic.ui.MessageWriter", function()
 
         it("wraps the body but not the title", function()
             local title = "`/hooks/a-very-long-hook-name.sh` · 61 ms"
-            writer._get_wrap_width = function()
-                return 20
-            end
+            Config.windows.wrap_width = 20
             writer:write_hook_block({
                 body = { "one two three four five six seven" },
                 title = title,
@@ -1098,9 +1075,7 @@ describe("agentic.ui.MessageWriter", function()
 
         it("keeps a preformatted block's rows whole", function()
             local row = "`/hooks/a-very-long-hook-name.sh` · 61 ms"
-            writer._get_wrap_width = function()
-                return 20
-            end
+            Config.windows.wrap_width = 20
             writer:write_hook_block({
                 body = { row, "`/h.sh` · 2.8 s" },
                 preformatted = true,
@@ -2008,23 +1983,6 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
-    describe("_wrap_window", function()
-        it(
-            "measures no window outside the current tabpage but its home",
-            function()
-                setup_buffer(50, 1)
-
-                vim.cmd("tabnew")
-                local tab2 = vim.api.nvim_get_current_tabpage()
-
-                assert.is_nil(writer:_wrap_window())
-
-                vim.api.nvim_set_current_tabpage(tab2)
-                vim.cmd("tabclose")
-            end
-        )
-    end)
-
     describe("_schedule_follow", function()
         it("owes a scroll", function()
             local schedule_stub = spy.stub(vim, "schedule")
@@ -2088,9 +2046,6 @@ describe("agentic.ui.MessageWriter", function()
                 end)
 
                 setup_buffer(20, 20)
-                writer._home_window = function()
-                    return winid
-                end
 
                 local new_lines = {}
                 for i = 1, 30 do
@@ -4561,8 +4516,8 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_true(found_body)
         end)
 
-        it("wraps the body to the chat window width", function()
-            vim.wo[winid].wrap = false
+        it("wraps the body at wrap_width", function()
+            Config.windows.wrap_width = 58
 
             --- @type agentic.acp.ACPError
             local err = {
@@ -4574,12 +4529,11 @@ describe("agentic.ui.MessageWriter", function()
 
             writer:write_error_message(err)
 
-            local width = writer:_get_wrap_width()
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             assert.equal("## Error", lines[1])
             assert.is_true(#lines > 3)
             for i = 2, #lines do
-                assert.is_true(#lines[i] <= width)
+                assert.is_true(#lines[i] <= Config.windows.wrap_width)
             end
         end)
 
@@ -4637,7 +4591,7 @@ describe("agentic.ui.MessageWriter", function()
                 .. " your session limit resets 7:20pm (Europe/London)"
 
             before_each(function()
-                vim.wo[winid].wrap = false
+                Config.windows.wrap_width = 58
             end)
 
             --- @param text string
@@ -4886,8 +4840,8 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_nil(signs_by_row()[action_row])
         end)
 
-        it("wraps a long action to the chat window width", function()
-            vim.wo[winid].wrap = false
+        it("wraps a long action at wrap_width", function()
+            Config.windows.wrap_width = 58
             writer:write_error_message({ code = 1, message = "out of credit" })
 
             writer:write_error_action(
@@ -4895,11 +4849,10 @@ describe("agentic.ui.MessageWriter", function()
                     .. " manually when usage resets."
             )
 
-            local width = writer:_get_wrap_width()
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             assert.is_true(#lines > 4)
             for _, line in ipairs(lines) do
-                assert.is_true(#line <= width)
+                assert.is_true(#line <= Config.windows.wrap_width)
             end
         end)
     end)
@@ -6308,8 +6261,7 @@ describe("agentic.ui.MessageWriter wrapped table rows", function()
 
     before_each(function()
         original_windows = vim.deepcopy(Config.windows)
-        Config.windows.min_wrap_width = 0
-        Config.windows.max_wrap_width = 20
+        Config.windows.wrap_width = 20
         bufnr = vim.api.nvim_create_buf(false, true)
         winid = vim.api.nvim_open_win(bufnr, true, {
             relative = "editor",
@@ -6318,7 +6270,6 @@ describe("agentic.ui.MessageWriter wrapped table rows", function()
             row = 0,
             col = 0,
         })
-        vim.wo[winid].wrap = false
         writer = MessageWriter:new(bufnr)
     end)
 

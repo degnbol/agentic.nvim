@@ -25,7 +25,7 @@ immediately when it overflows, so the user sees wrapping during streaming
 rather than after the line completes. It has no notion of fences:
 
 ```lua
-local wrap_width = self:_get_wrap_width()
+local wrap_width = Config.windows.wrap_width
 local end_line = vim.api.nvim_buf_line_count(bufnr) - 1
 local tail = ...
 if wrap_width > 0 and #tail > wrap_width then
