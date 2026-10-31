@@ -28,7 +28,7 @@ Reports, each getting a plan:
 - 0.9 (failed execute row offset) → `bug-failed-execute-body-offset.md`
 - 0.12 (`$5 and $10` as math) → `bug-inline-math-dollar-pairing.md`
 - 0.13 (deny gate over the flag cap) → `bug-deny-gate-flag-cap.md`
-- 0.14 (completion reads the current buffer) → `bug-completion-current-buf.md`
+- 0.14 (completion reads the current buffer) → fixed: `lsp_server.lua` takes the buffer from the request's `textDocument.uri`.
 - 0.16 (errors only in the debug log) → `bug-silent-errors.md`
 
 Questions for the user:

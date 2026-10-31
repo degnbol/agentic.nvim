@@ -305,7 +305,7 @@ function M._make_handlers()
                 -- built-in vim.lsp.completion → complete()) runs outside
                 -- the <C-x><C-o> textlock that would otherwise raise E565.
                 vim.schedule(function()
-                    local bufnr = vim.api.nvim_get_current_buf()
+                    local bufnr = vim.uri_to_bufnr(params.textDocument.uri)
                     local line = params.position.line
                     local col = params.position.character
                     local lines =

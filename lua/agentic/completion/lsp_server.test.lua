@@ -14,13 +14,11 @@ local LspServer = require("agentic.completion.lsp_server")
 --- @param trigger_char string|nil
 --- @return table response { isIncomplete, items }
 local function complete(handlers, bufnr, line, col, trigger_char)
-    -- Set current buffer so the handler reads from the right one
-    vim.api.nvim_set_current_buf(bufnr)
-
     local result
     local deferred = Deferred.capture()
     MiniTest.finally(deferred.revert)
     handlers.request("textDocument/completion", {
+        textDocument = { uri = vim.uri_from_bufnr(bufnr) },
         position = { line = line, character = col },
         context = trigger_char and { triggerCharacter = trigger_char } or nil,
     }, function(_err, res)
@@ -37,7 +35,7 @@ describe("agentic.completion.LspServer", function()
 
     before_each(function()
         bufnr = vim.api.nvim_create_buf(false, true)
-        vim.api.nvim_set_current_buf(bufnr)
+        vim.api.nvim_buf_set_name(bufnr, "agentic://test/input")
         handlers = LspServer._make_handlers()
     end)
 
@@ -76,8 +74,6 @@ describe("agentic.completion.LspServer", function()
 
         it("returns items when typing / on first line", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "/c" })
-            vim.api.nvim_win_set_cursor(0, { 1, 2 })
-
             local result = complete(handlers, bufnr, 0, 2, "/")
 
             assert.is_not_nil(result)
@@ -94,8 +90,6 @@ describe("agentic.completion.LspServer", function()
 
         it("returns items with textEdit covering from col 0", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "/con" })
-            vim.api.nvim_win_set_cursor(0, { 1, 4 })
-
             local result = complete(handlers, bufnr, 0, 4, nil)
 
             local context_item
@@ -119,8 +113,6 @@ describe("agentic.completion.LspServer", function()
                 false,
                 { "first line", "/p" }
             )
-            vim.api.nvim_win_set_cursor(0, { 2, 2 })
-
             local result = complete(handlers, bufnr, 1, 2, "/")
 
             assert.is_true(#result.items > 0)
@@ -133,8 +125,6 @@ describe("agentic.completion.LspServer", function()
 
         it("returns items when / is after whitespace mid-line", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "Load /py" })
-            vim.api.nvim_win_set_cursor(0, { 1, 8 })
-
             local result = complete(handlers, bufnr, 0, 8, nil)
 
             assert.is_true(#result.items > 0)
@@ -149,8 +139,6 @@ describe("agentic.completion.LspServer", function()
             "returns bare word items (not slash) when / has spaces after",
             function()
                 vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "/plan arg" })
-                vim.api.nvim_win_set_cursor(0, { 1, 9 })
-
                 local result = complete(handlers, bufnr, 0, 9, nil)
 
                 -- Bare word "arg" triggers word completion, not slash completion
@@ -163,8 +151,6 @@ describe("agentic.completion.LspServer", function()
 
         it("returns no slash items when typing a path (/tmp/)", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "/tmp/" })
-            vim.api.nvim_win_set_cursor(0, { 1, 5 })
-
             local result = complete(handlers, bufnr, 0, 5, "/")
 
             -- Slash items insert "/" .. word; a path must produce none
@@ -175,8 +161,6 @@ describe("agentic.completion.LspServer", function()
 
         it("returns no slash items mid-line path (foo /tmp/bar)", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "foo /tmp/bar" })
-            vim.api.nvim_win_set_cursor(0, { 1, 12 })
-
             local result = complete(handlers, bufnr, 0, 12, nil)
 
             for _, item in ipairs(result.items) do
@@ -187,15 +171,40 @@ describe("agentic.completion.LspServer", function()
         it("returns empty items when no commands stored", function()
             -- Use a fresh buffer with no commands
             local buf2 = vim.api.nvim_create_buf(false, true)
-            vim.api.nvim_set_current_buf(buf2)
+            vim.api.nvim_buf_set_name(buf2, "agentic://test/input2")
             vim.api.nvim_buf_set_lines(buf2, 0, -1, false, { "/p" })
-            vim.api.nvim_win_set_cursor(0, { 1, 2 })
-
             local result = complete(handlers, buf2, 0, 2, "/")
 
             assert.equal(0, #result.items)
 
             vim.api.nvim_buf_delete(buf2, { force = true })
+        end)
+
+        it("reads the requested buffer when focus moves first", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "/" })
+            local result
+            local deferred = Deferred.capture()
+            MiniTest.finally(deferred.revert)
+            handlers.request("textDocument/completion", {
+                textDocument = { uri = vim.uri_from_bufnr(bufnr) },
+                position = { line = 0, character = 1 },
+                context = { triggerCharacter = "/" },
+            }, function(_err, res)
+                result = res
+            end)
+
+            local scratch = vim.api.nvim_create_buf(false, true)
+            MiniTest.finally(function()
+                vim.api.nvim_buf_delete(scratch, { force = true })
+            end)
+            vim.api.nvim_set_current_buf(scratch)
+            deferred.drain()
+
+            local labels = vim.tbl_map(function(item)
+                return item.label
+            end, result.items)
+            assert.is_true(vim.tbl_contains(labels, "context"))
+            assert.is_true(vim.tbl_contains(labels, "plan"))
         end)
     end)
 
@@ -212,8 +221,6 @@ describe("agentic.completion.LspServer", function()
 
         it("returns items when typing bare word", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "Load py" })
-            vim.api.nvim_win_set_cursor(0, { 1, 7 })
-
             local result = complete(handlers, bufnr, 0, 7, nil)
 
             assert.is_true(#result.items > 0)
@@ -226,8 +233,6 @@ describe("agentic.completion.LspServer", function()
 
         it("inserts bare word via textEdit (no slash prefix)", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "Load py" })
-            vim.api.nvim_win_set_cursor(0, { 1, 7 })
-
             local result = complete(handlers, bufnr, 0, 7, nil)
 
             local pymol_item
@@ -245,8 +250,6 @@ describe("agentic.completion.LspServer", function()
 
         it("requires at least 2 characters", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "p" })
-            vim.api.nvim_win_set_cursor(0, { 1, 1 })
-
             local result = complete(handlers, bufnr, 0, 1, nil)
 
             assert.equal(0, #result.items)
@@ -255,8 +258,6 @@ describe("agentic.completion.LspServer", function()
         it("included alongside slash items when both match", function()
             -- "use /py" has both a slash token and a bare word "use"
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "use /py" })
-            vim.api.nvim_win_set_cursor(0, { 1, 7 })
-
             local result = complete(handlers, bufnr, 0, 7, "/")
 
             -- Slash items come from "/py", bare word items would need
@@ -312,8 +313,6 @@ describe("agentic.completion.LspServer", function()
             })
 
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@" })
-            vim.api.nvim_win_set_cursor(0, { 1, 1 })
-
             local result = complete(handlers, bufnr, 0, 1, "@")
 
             assert.equal(2, #result.items)
@@ -328,8 +327,6 @@ describe("agentic.completion.LspServer", function()
             })
 
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@src/" })
-            vim.api.nvim_win_set_cursor(0, { 1, 5 })
-
             local result = complete(handlers, bufnr, 0, 5, "/")
 
             assert.equal(2, #result.items)
@@ -343,8 +340,6 @@ describe("agentic.completion.LspServer", function()
             stub_dir_entries({ { "file.txt", "file" } })
 
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "add this @fi" })
-            vim.api.nvim_win_set_cursor(0, { 1, 12 })
-
             local result = complete(handlers, bufnr, 0, 12, "@")
 
             assert.is_true(#result.items > 0)
@@ -354,8 +349,6 @@ describe("agentic.completion.LspServer", function()
             stub_dir_entries({ { "src", "directory" } })
 
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@sr" })
-            vim.api.nvim_win_set_cursor(0, { 1, 3 })
-
             local result = complete(handlers, bufnr, 0, 3, "@")
 
             local first = result.items[1]
@@ -372,8 +365,6 @@ describe("agentic.completion.LspServer", function()
             })
 
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@" })
-            vim.api.nvim_win_set_cursor(0, { 1, 1 })
-
             local result = complete(handlers, bufnr, 0, 1, "@")
 
             local dir_item, file_item
@@ -403,8 +394,6 @@ describe("agentic.completion.LspServer", function()
             })
 
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@" })
-            vim.api.nvim_win_set_cursor(0, { 1, 1 })
-
             local result = complete(handlers, bufnr, 0, 1, "@")
 
             local sort_keys = vim.tbl_map(function(item)
@@ -431,8 +420,6 @@ describe("agentic.completion.LspServer", function()
             })
 
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@" })
-            vim.api.nvim_win_set_cursor(0, { 1, 1 })
-
             local result = complete(handlers, bufnr, 0, 1, "@")
 
             assert.equal(2, #result.items)
@@ -450,8 +437,6 @@ describe("agentic.completion.LspServer", function()
             end)
 
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@" })
-            vim.api.nvim_win_set_cursor(0, { 1, 1 })
-
             local result = complete(handlers, bufnr, 0, 1, "@")
 
             assert.equal(1, #result.items)
@@ -461,8 +446,6 @@ describe("agentic.completion.LspServer", function()
 
         it("returns empty when @ is mid-word (no whitespace before)", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "foo@bar" })
-            vim.api.nvim_win_set_cursor(0, { 1, 7 })
-
             local result = complete(handlers, bufnr, 0, 7, "@")
 
             assert.equal(0, #result.items)
@@ -472,8 +455,6 @@ describe("agentic.completion.LspServer", function()
             fs_scandir_stub:returns(nil)
 
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "@nonexistent/" })
-            vim.api.nvim_win_set_cursor(0, { 1, 14 })
-
             local result = complete(handlers, bufnr, 0, 14, "/")
 
             assert.equal(0, #result.items)
@@ -491,6 +472,7 @@ describe("agentic.completion.LspServer", function()
             child.setup()
             child.lua([[
                 local input = vim.api.nvim_get_current_buf()
+                vim.api.nvim_buf_set_name(input, "agentic://test/input")
                 local chat = vim.api.nvim_create_buf(false, true)
                 vim.api.nvim_buf_set_lines(chat, 0, -1, false, {
                     "the structure is here",
