@@ -225,34 +225,21 @@ properties.
 
 ## Adapter override points
 
-Each provider adapter can override these **protected** methods on `ACPClient`:
+The override points are the `ACPClient` methods that only return a default
+(from `subagent_record` to `subagent_message_instruction` in `acp_client.lua`,
+plus `ignores_output`) and its protected `__` message handlers. Their
+docstrings give each contract and default. Provider-specific behaviour is read
+through these overrides, never from shared code.
 
-| Method                        | Default behavior                          |
-| ----------------------------- | ----------------------------------------- |
-| `__handle_tool_call`          | Builds ToolCallBlock from standard fields |
-| `__build_tool_call_update`    | Builds ToolCallBase with status + body    |
-| `__handle_tool_call_update`   | Calls build then notifies subscriber      |
-| `__handle_request_permission` | Sends result back to provider             |
-
-Override when the provider sends data in non-standard fields (e.g. `rawInput`,
-`rawOutput`), needs synthetic events (Gemini synthesizes `tool_call` from
-permission request), or skips events (Gemini doesn't send cancel updates on
-rejection).
+Override a `__` handler when the provider sends data in non-standard fields
+(e.g. `rawInput`, `rawOutput`), needs synthetic events (Gemini synthesizes
+`tool_call` from permission request), or skips events (Gemini doesn't send
+cancel updates on rejection).
 
 An adapter whose provider has a plan mode sets `exits_plan` on the block of the
 call that leaves it, and overrides `plan_file(request)` (default nil) to name
 the plan file; `SessionManager` then offers "Clear context & implement plan"
 on that call's permission request.
-
-Provider-specific behaviour is read through overrides, never from shared code:
-`session_meta(additional_dirs)` (the `_meta` of session/new and session/load,
-default nil), `budget_windows(update)` (default nil) and
-`auto_continue_on_usage_limit()` (default false).
-`drain_side_records(session_id, child_id)` returns what the provider recorded
-outside the ACP feed since the last call, for the session or, given
-`child_id`, one of its subagents (default `{}`).
-`sender_session(sender_id, child_ids)` picks which of `child_ids` sent a
-received message (default: `sender_id` if listed, else nil).
 
 `__build_tool_call_message` and `__build_tool_call_update` take the session id
 as a trailing argument, for overrides needing session-scoped state — currently

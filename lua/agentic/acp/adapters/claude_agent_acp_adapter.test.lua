@@ -1669,22 +1669,33 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
     end)
 
     describe("new", function()
-        --- Construct through a subclass that stubs out the subprocess, and
-        --- report the provider config the transport would have spawned with.
+        --- Construct through a subclass that stubs out the subprocess.
+        --- @param provider_config agentic.acp.ClaudeProviderConfig
+        --- @return agentic.acp.ClaudeAgentACPAdapter
+        local function construct(provider_config)
+            local Stub = setmetatable({}, { __index = ClaudeAgentACPAdapter })
+            Stub.__index = Stub
+            function Stub:_setup_transport() end
+            function Stub:_connect() end
+
+            return Stub:new(provider_config, function() end) --[[@as agentic.acp.ClaudeAgentACPAdapter]]
+        end
+
+        --- The provider config the transport would have spawned with.
         --- @param provider_config agentic.acp.ClaudeProviderConfig
         --- @return agentic.acp.ClaudeProviderConfig
         local function spawn_config(provider_config)
-            local captured
-            local Stub = setmetatable({}, { __index = ClaudeAgentACPAdapter })
-            Stub.__index = Stub
-            function Stub:_setup_transport()
-                captured = self.provider_config
-            end
-            function Stub:_connect() end
-
-            Stub:new(provider_config, function() end)
-            return captured
+            return construct(provider_config).provider_config
         end
+
+        it("opts into subagent-transcript", function()
+            local client = construct({ command = "claude-agent-acp" })
+
+            assert.same(
+                { ["subagent-transcript"] = true },
+                client.capabilities["_meta"]
+            )
+        end)
 
         it("enables the todo tools in the provider env", function()
             local config = spawn_config({

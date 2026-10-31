@@ -67,22 +67,16 @@ function Parent:new(name)
 end
 
 function Child:new(name, extra)
-    -- Call parent constructor with Parent class
-    local instance = Parent.new(Parent, name)
-
-    -- Add child-specific state
+    local instance = Parent.new(self, name)
     instance.child_state = extra
-
-    -- Re-metatable to child class for proper inheritance chain
-    return setmetatable(instance, Child)
+    return instance
 end
 ```
 
 **Critical rules:**
 
-- **Always pass parent class explicitly:** `Parent.new(Parent, ...)` not
-  `Parent.new(self, ...)`
-- **Re-assign metatable to child class** after parent initialization
+- **Pass `self` to the parent constructor:** `Parent.new(self, ...)`, so
+  methods it calls resolve on the child class
 - **Inheritance chain:** `instance → Child → Parent`
 
 **Calling parent methods:**

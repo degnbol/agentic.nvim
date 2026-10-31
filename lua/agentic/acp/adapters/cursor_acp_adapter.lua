@@ -10,9 +10,9 @@ local CursorACPAdapter = ACPClient.extend()
 --- @param on_ready fun(client: agentic.acp.ACPClient)
 --- @return agentic.acp.CursorACPAdapter
 function CursorACPAdapter:new(config, on_ready)
-    local instance = ACPClient.new(ACPClient, config, on_ready)
+    local instance = ACPClient.new(self, config, on_ready) --[[@as agentic.acp.CursorACPAdapter]]
     instance._available_commands_updates = {}
-    return setmetatable(instance, CursorACPAdapter) --[[@as agentic.acp.CursorACPAdapter]]
+    return instance
 end
 
 --- Overloading create_session to handle slash commands, as cursor sends them before session starts

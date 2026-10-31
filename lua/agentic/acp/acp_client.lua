@@ -87,10 +87,7 @@ function ACPClient:new(config, on_ready)
             },
             terminal = false,
             auth = { terminal = true },
-            -- Opt into claude-agent-acp forwarding subagent (Task) assistant
-            -- text/thinking as parentToolUseId-tagged notifications (bridge
-            -- filters them out for clients that don't advertise this).
-            _meta = { ["subagent-transcript"] = true },
+            _meta = self:capability_meta(),
             -- Each subagent becomes a child session, announced and tracked by
             -- `subagent_update`, its messages sent as `session_message`.
             subagents = vim.empty_dict(),
@@ -248,6 +245,14 @@ end
 --- @param _additional_dirs string[] Directories the session may reach beyond its cwd
 --- @return table|nil meta
 function ACPClient:session_meta(_additional_dirs)
+    return nil
+end
+
+--- Provider-specific `_meta` of the client capabilities sent in initialize.
+--- Called on the class, not an instance, so overrides must not read
+--- instance fields.
+--- @return table|nil meta
+function ACPClient:capability_meta()
     return nil
 end
 
@@ -1435,7 +1440,7 @@ return ACPClient
 --- @field fs agentic.acp.FileSystemCapability
 --- @field terminal boolean
 --- @field auth { terminal: boolean } `terminal`: the client runs `terminal` auth methods
---- @field _meta? { ["subagent-transcript"]?: boolean }
+--- @field _meta? table
 --- @field subagents? table Empty object that opts into native subagent sessions, unstable in the ACP schema
 
 --- @class agentic.acp.InitializeParams

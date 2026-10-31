@@ -165,6 +165,14 @@ function ClaudeAgentACPAdapter:session_meta(additional_dirs)
     }
 end
 
+--- Opts into the bridge forwarding subagent (Task) assistant text and
+--- thinking as parentToolUseId-tagged notifications. Without this opt-in the
+--- bridge drops them.
+--- @return table meta
+function ClaudeAgentACPAdapter:capability_meta()
+    return { ["subagent-transcript"] = true }
+end
+
 --- Creates a session and opens a transcript reader for it.
 --- @param cwd string
 --- @param handlers agentic.acp.ClientHandlers

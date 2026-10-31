@@ -759,6 +759,29 @@ describe("agentic.acp.ACPClient", function()
             assert.is_true(client.capabilities.auth.terminal)
         end)
 
+        it("advertises its class's capability_meta", function()
+            local setup_stub = spy.stub(ACPClient, "_setup_transport")
+            local connect_stub = spy.stub(ACPClient, "_connect")
+            MiniTest.finally(function()
+                setup_stub:revert()
+                connect_stub:revert()
+            end)
+            local Child = ACPClient.extend()
+            function Child:capability_meta()
+                return { vendor = true }
+            end
+
+            local base = ACPClient:new({ command = "x" }, function() end)
+            local child = ACPClient.new(
+                Child,
+                { command = "x" },
+                function() end
+            )
+
+            assert.is_nil(base.capabilities._meta)
+            assert.same({ vendor = true }, child.capabilities._meta)
+        end)
+
         it("authenticates a configured agent method", function()
             local client = connect("key", {
                 { id = "key", name = "Key" },
