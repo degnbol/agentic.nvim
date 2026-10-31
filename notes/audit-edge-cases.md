@@ -65,7 +65,7 @@ Questions for the user:
 | 1.24 | SM:3333-3353 | `_warn_unadvertised_command` (opencode drops unknown commands; the rationale sits in general code) | cosmetic | reach | silent drop on opencode | 21 | 944b6d6 obs |
 | 1.25 | SM:1533-1553, 3641 | `_refresh` manual unwedge + `math.max(0, …)` floor | race | reach (keypress) | no manual unwedge | 20 | e8da343, 19fa6d6 |
 | 1.26 | SM:2276-2295 | pcall around permission notify/hook | safety | ? | lockup could return if it throws | 12 | 03c775d obs |
-| 1.27 | SM:2756-2801 | `announce_model_loaded` dedupe on `_announced_model_id` (planned for removal in `PLAN-restore-model.md`) | cosmetic | reach | duplicate model line | ~10 | a4c8974 |
+| 1.27 | SM:2756-2801 | `announce_model_loaded` dedupe on `_announced_model_id` (planned for removal in `PLAN-reapply-model.md`) | cosmetic | reach | duplicate model line | ~10 | a4c8974 |
 
 ## 2. Chat rendering
 

@@ -59,15 +59,15 @@ A child's stored messages are keyed by `_task_of(child_id)` in `subagent_message
   - A relabel (`title` on the grandchild) updates the block in `c1`'s transcript; while `c1`'s transcript is wiped, it updates the history and does not remake the transcript.
   - Wiping `c1`'s transcript and reopening it shows the block once.
   - A load whose file holds the nested block shows it once in `c1`'s transcript and adds no history message; a load whose file lacks it adds it once; either leaves `c1`'s transcript unloaded.
-  - A restore (`restore_from_history`) rewrites the nested block's `argument`, so `gf` opens the new transcript.
+  - A re-create from history (`restore_from_history`) rewrites the nested block's `argument`, so `gf` opens the new transcript.
 - `make validate`.
 
 ## Expected outcome
-- The main chat shows only the main agent's own subagent launches. A nested launch shows in the transcript of the subagent that made it, live and after a reload, load or restore.
-- A restore's context (`prepend_restored_messages`, which reads only the main messages) no longer names nested launches.
+- The main chat shows only the main agent's own subagent launches. A nested launch shows in the transcript of the subagent that made it, live and after a reload, a load or a re-create from history.
+- The history a re-created session sends (`prepend_restored_messages`, which reads only the main messages) no longer names nested launches.
 
 ## Non-goals
-- Moving nested blocks that a session file saved before this change holds in the main messages: a restore of such a file shows them in the chat.
+- Moving nested blocks that a session file saved before this change holds in the main messages: a resume of such a file shows them in the chat.
 
 ## Open questions
 None.

@@ -51,10 +51,10 @@ no rendering work and left for the note that owns the submit paths.
    per turn, no longer anchored on the empty `###`, and no longer drawn from
    `finalize_turn`.
 
-   Restored sessions carry no prose bracket at all: `replay_messages` writes
+   Replayed chats carry no prose bracket at all: `replay_messages` writes
    agent prose through `write_message`, which starts no run, and finalizes no
-   turn. Prompt and tool-block regions do survive a restore, so this is the one
-   bracket that a resumed buffer is missing — the same gap unit 1's notices
+   turn. Prompt and tool-block regions do survive a replay, so this is the one
+   bracket that a replayed buffer is missing — the same gap unit 1's notices
    accept, and the fix is the same shape: replay would have to bracket at each
    user→agent boundary.
 

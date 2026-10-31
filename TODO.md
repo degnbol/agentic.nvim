@@ -9,21 +9,34 @@ minor").
 Plans in `notes/`. Within a track, each plan needs the ones above it.
 Tracks are independent unless a note says otherwise.
 
-**Session restore**
-1. [`PLAN-per-session-provider.md`](notes/PLAN-per-session-provider.md)
-2. [`PLAN-restore-picker.md`](notes/PLAN-restore-picker.md) and
-   [`PLAN-unify-history-restore.md`](notes/PLAN-unify-history-restore.md),
-   one commit (if split: unify first)
-3. [`PLAN-session-manager-dedup.md`](notes/PLAN-session-manager-dedup.md),
-   which also needs `PLAN-usage-limit-queue.md`. Needs only to come before 4;
-   it can land earlier.
-4. [`PLAN-load-file-first.md`](notes/PLAN-load-file-first.md)
-5. [`PLAN-side-record-history.md`](notes/PLAN-side-record-history.md).
+**Session resume**
+1. [`PLAN-load-file-first.md`](notes/PLAN-load-file-first.md)
+2. [`PLAN-side-record-history.md`](notes/PLAN-side-record-history.md).
    After `PLAN-discovered-skills.md` only to avoid a rebase.
-6. [`PLAN-split-subagents.md`](notes/PLAN-split-subagents.md)
+3. [`PLAN-subagent-task-id.md`](notes/PLAN-subagent-task-id.md). Before 4
+   only to avoid a rebase; it can land earlier.
+4. [`PLAN-split-subagents.md`](notes/PLAN-split-subagents.md)
 
-**Claude code behind the adapter:** the order is in
-[§ Claude-specific code behind the adapter](#claude-specific-code-behind-the-adapter).
+**Resume terminology:** a mechanical rename: a plan that lands after it
+renames its references first.
+1. [`PLAN-resume-terminology.md`](notes/PLAN-resume-terminology.md)
+
+**Reapply model:** after Session resume 1 (it rewrites the resume paths
+this plan edits and adds the `_render_history` it builds on).
+1. [`PLAN-reapply-model.md`](notes/PLAN-reapply-model.md). Before
+   `PLAN-agent-view-consolidation.md`.
+
+**Session log:** after Session resume 2 (it relies on the load and re-create
+paths 1 leaves, and saves 2's `side_records` type).
+1. [`PLAN-append-session-log.md`](notes/PLAN-append-session-log.md)
+
+**Subagents**
+1. [`PLAN-agent-view-consolidation.md`](notes/PLAN-agent-view-consolidation.md).
+   After `PLAN-reapply-model.md`, which deletes the model-line dedupe this
+   plan would otherwise move. After Session resume 4 only to avoid a rebase.
+- [`PLAN-cancel-subagent-session.md`](notes/PLAN-cancel-subagent-session.md)
+  and [`PLAN-nested-subagent-blocks.md`](notes/PLAN-nested-subagent-blocks.md):
+  any order.
 
 **Harness context in chat:**
 - [`PLAN-discovered-skills.md`](notes/PLAN-discovered-skills.md)
@@ -34,8 +47,9 @@ Tracks are independent unless a note says otherwise.
 3. [`PLAN-executed-code.md`](notes/PLAN-executed-code.md)
 
 **Tool call rendering**
-1. [`PLAN-json-body-format.md`](notes/PLAN-json-body-format.md)
-2. [`PLAN-tool-block-layout.md`](notes/PLAN-tool-block-layout.md)
+1. [`PLAN-silent-errors.md`](notes/PLAN-silent-errors.md)
+2. [`PLAN-failed-execute-body-offset.md`](notes/PLAN-failed-execute-body-offset.md):
+   the offset is fixed; open question 2 stays.
 
 **Input and queue:** either order.
 [`PLAN-chat-widget-dedup.md`](notes/PLAN-chat-widget-dedup.md),
@@ -48,17 +62,29 @@ needs the fix in
    (phase 1 done)
 2. [`PLAN-auto-mode-fix.md`](notes/PLAN-auto-mode-fix.md), which extends it
 
+**Budget:** merge branch `shared-budget`.
+
+**Peer name:** after Session resume 1 and `PLAN-usage-limit-queue.md` only
+to avoid a rebase (they rewrite the `new_session` and `_do_load_acp_session`
+sites it adds calls to).
+1. [`PLAN-peer-session-name.md`](notes/PLAN-peer-session-name.md)
+
 **No ordering:**
 [`PLAN-split-modules.md`](notes/PLAN-split-modules.md),
-[`PLAN-conflicting-restore-reset.md`](notes/PLAN-conflicting-restore-reset.md),
+[`PLAN-widget-clear-chat.md`](notes/PLAN-widget-clear-chat.md),
 [`PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md),
-[`PLAN-heading-command-flag.md`](notes/PLAN-heading-command-flag.md) (on hold),
+[`PLAN-heading-command-flag.md`](notes/PLAN-heading-command-flag.md) (on hold;
+after `PLAN-placeholder-titles.md`),
 [`PLAN-terminal-streaming.md`](notes/PLAN-terminal-streaming.md),
 [`PLAN-updated-input-display.md`](notes/PLAN-updated-input-display.md),
+[`PLAN-completion-current-buf.md`](notes/PLAN-completion-current-buf.md),
+[`PLAN-deny-gate-flag-cap.md`](notes/PLAN-deny-gate-flag-cap.md),
 [`PLAN-exec-action-walk.md`](notes/PLAN-exec-action-walk.md) (either order
 with Executed code 1 and `PLAN-split-modules.md`; it edits the same
 `permission_rules.lua` walkers and `shell_parse.lua` `collect_command`/`inner_source`,
-outside move 5's parser range, so the second to land rebases).
+outside move 5's parser range, so the second to land rebases),
+[`PLAN-inline-math-dollar-pairing.md`](notes/PLAN-inline-math-dollar-pairing.md),
+[`PLAN-placeholder-titles.md`](notes/PLAN-placeholder-titles.md).
 
 ## Bugs
 
@@ -128,13 +154,6 @@ rg -n ""todowrite"|@alias|@class.*ToolCall" lua/agentic/ui/message_writer.lua
   injects a heading. Same happens with colours breaking in rare cases from the
   ACP's side. Fix: always put contents in a protected block, or detect special
   characters before pasting and protect more targeted.
-
-- **Markdown table column alignment**: subtle misalignment when the table is
-  wider than the chat buffer *and* there's conceal involved on a row, visible
-  as we scroll. `conceallevel=2` hides e.g. ticks `` ``` ``, but when scrolled
-  out of view they are not concealed anymore. A fix besides `conceallevel=1`
-  might be extmark/virtual text tricks, or an autocommand updating visuals on
-  scroll (probably overkill).
 
 - **Streamed code lines get hard-wrapped**: a code line inside a prose ` ``` `
   fence that outgrows the wrap width mid-stream is split into two buffer lines
@@ -227,38 +246,21 @@ scoping decision: [`notes/refactor-acp-kind-normalisation.md`](notes/refactor-ac
 
 ### Claude-specific code behind the adapter
 
-General modules still hold claude-agent-acp knowledge. Each plan moves one part
-behind a neutral `ACPClient` default that `ClaudeAgentACPAdapter` overrides. No
-plan needs another to land first. The order below only avoids conflicts:
-plans 1 and 2 both change `create_session`/`load_session`, and plan 2 wraps
-the result of plan 1.
+General modules still hold claude-agent-acp knowledge. Move each part behind a
+neutral `ACPClient` default that `ClaudeAgentACPAdapter` overrides:
 
-1. [`PLAN-adapter-session-options.md`](notes/PLAN-adapter-session-options.md)
-2. [`PLAN-adapter-hook-records.md`](notes/PLAN-adapter-hook-records.md)
+- `ACPClient:claude_config_dir()`, called for every provider by
+  `create_session`, `load_session` and `SessionManager`.
+- `_session_roots` and `SkillPath` in `acp_client.lua`, used only by the
+  Claude adapter.
+- `AGENTIC_SOCK` in `acp_transport.lua`, exported to every provider; only the
+  Claude hooks read it.
 
 ## Feature ideas
 
 ### TUI parity — missing slash commands
 
 Full comparison is in `doc/agentic.txt §12.4`. Ordered by value-to-effort.
-
-**Worth doing**
-
-- **Session dashboard** — a dedicated window (*not* `:checkhealth`,
-  which is reserved for setup validation) showing live session runtime
-  state: model, provider, mode, context %, prompt count, accumulated
-  input/output token usage, proximity to limits. Data is already in
-  `usage_update` notifications plus local session state. Subsumes the
-  TUI's `/status`, `/cost`, `/stats`, `/usage` — none of which are
-  forwarded over ACP.
-
-  Auth identity belongs here too, read from `ACPClient.auth_status`:
-  `kind` (`account`/`api_key`/`gateway`/`external`/`none`, reporting
-  which credential Claude Code's precedence resolved to), `label`,
-  optional `detail`, and `account.{email,organization,plan}`. Too noisy
-  for the chat or the header; fine in a panel. A nil status must render
-  as unknown rather than as logged out — an agent that cannot read its
-  identity stays silent, while `none` arrives as a payload.
 
 **Already works — just undocumented**
 
@@ -303,8 +305,8 @@ so typing them in the input buffer runs the TUI flow via the LLM.
   `/skills`, `/config`, `/bug`, `/memory`, `/hooks`, `/bashes`,
   `/pr-comments`, `/vim`, `/ide`**: not advertised by the bridge at all
   (verified absent from `available_commands_update`). These rely on TUI
-  interactive I/O that doesn't map to the ACP chat stream. A **Session
-  dashboard** (above) would cover the runtime-state subset.
+  interactive I/O that doesn't map to the ACP chat stream. The session
+  info panel (`:h agentic-info-panel`) covers the runtime-state subset.
 
 - **`/diff`, `/rewind`, `/branch`, `/teleport`**: provider-level features
   or conversation-state primitives not exposed through ACP.
@@ -354,9 +356,6 @@ screen so we can read it.
   cancel-all keymap.
 
 ### Session / workflow
-
-- **Session dashboard**: see TUI parity above — runtime state (model,
-  provider, mode, context %, token usage, limit proximity) in one window.
 
 - **Per-message token cost & session profiler**: surface how expensive
   each prompt/turn is and which messages dominate the running context.
@@ -415,13 +414,6 @@ screen so we can read it.
   session_id, so archival requires a parallel naming scheme or a
   marker field inside the JSON. Related to the "Resume after
   compacting" bug above (showing full history alongside the summary).
-
-- **Show the agent's peer address in chat**: other Claude sessions address
-  this one by its agent name and ref (e.g. `agentic-nvim-fc` / `7ef7d7` in
-  `ListAgents`), not by the ACP session ID. Neither appears in the chat, so
-  the user cannot tell which peer is which window. Write the name and ref into
-  the chat when the agent starts. Open question: does the bridge expose them
-  over ACP (`session/new` result, `_meta`), or must they be derived?
 
 - **Session retention**: session files are never deleted. Add a config
   option, e.g. `sessions.max_age_days` (default 60), that deletes session

@@ -1,6 +1,8 @@
 # Plan: one display path for main agent and subagent windows
 Status: draft
 
+After `PLAN-reapply-model.md`, which deletes the `_announced_model_id` dedupe. Line numbers below are from before it.
+
 ## Relevant files
 Lines are in `lua/agentic/session_manager.lua` (SM) unless another file is named.
 - `lua/agentic/session_manager.lua` (SM)
@@ -75,12 +77,11 @@ One per agent window: the main chat and each transcript. It holds:
 - `response_boundary`
 - `config_options` (`AgentConfigOptions`)
 - `todo_list` (`TodoList`, or nil until it has a panel buffer)
-- `_announced_model_id`
 
 Methods. These are moves of existing code plus one extraction, with no change in what they print:
 - `AgentView:new(bufnr, opts)`. `opts.home_win` is passed to `MessageWriter:new` as SM:412-414 does today.
 - `resolve_model_display(model_id)` ← SM:2727-2740.
-- `announce_model(model_id)` ← SM:2756-2770, including the dedupe.
+- `announce_model(model_id)` ← SM:2756-2770.
 - `notice_model_switched(model_id, mid_turn)` ← SM:2781-2801.
 - `notice_mode_switched(mode_id, mid_turn)` ← SM:2807-2823.
 - `mode_label()` → `string|nil` ← SM:2655-2661, the non-default rule.
@@ -110,22 +111,19 @@ Provider-specific code: none moves. `subagent_task_id`, `subagent_record` and fr
 1. **Add `AgentView`** with the methods above, as a class per the `lua-class` skill. Main only: build `self.main_view` in `SessionManager:new` from the existing chat buffer.
    - Make `self.message_writer`, `self.status_indicator`, `self._response_boundary`, `self.config_options` and `self.todo_list` refer to the view's fields. Existing callers and tests keep working.
    - Move `announce_model_loaded`, `_notice_model_switched`, `_notice_mode_switched` and `_resolve_model_display` to the view. Keep thin SM wrappers, because `session_manager.test.lua:1126-1282` binds these names.
-   - SM:3817 resets `main_view._announced_model_id`.
 2. **SubagentTranscript owns an AgentView.** Replace the fields at `subagent_transcript.lua:68-75`. The view's `config_options` is a new `AgentConfigOptions`. Its callbacks depend on Open question 1; until it is answered, pass callbacks that log via `Logger.debug` and change nothing.
 3. **One chunk path.** SM:1361-1421 calls `self:_view_of(child_id):write_chunk(...)`. History writes and `_sync_modified`/`_history_changed` stay in SM as now. Merge `_writer_for`/`_indicator_for` through `_view_of`. `_reload_chat` and `_replay_transcript` share `reset_turn_display`.
 4. **Route by source session.** `plan` (SM:1357), `config_option_update` (SM:1491), `current_mode_update` (SM:1482) and `usage_update` (SM:1493) resolve the agent with `_agent_of(source_session_id, self.agent:subagent_task_id(update))`. A subagent's update goes to its view; the main agent's to `main_view`.
    - Before writing this step, check bridge 0.95.0 for how a child's TodoWrite arrives (`plan` on the child session, or on the root with `parentToolUseId`). The established fact is only that the list is the child's own.
    - A child `usage_update`: keep it off the main header. What, if anything, shows it is Open question 6.
-5. **Subagent model line.** When a subagent view's options first carry a model, call `view:announce_model(id)`. On a later change, call `view:notice_model_switched(id, true)`. This is the same body text as the main chat.
+5. **Subagent model line.** When a subagent view's options first carry a model, call `view:announce_model(id)`. `announce_model` has no dedupe, so this step needs its own first-time check. On a later change, call `view:notice_model_switched(id, true)`. This is the same body text as the main chat.
 6. **Subagent todos.** A subagent view gets a `TodoList` on its own todos buffer, which goes with the subagent's windows. Creating the buffer and showing it depend on Open question 3. TodoList itself needs no change: it is already per-buffer (`todo_list.lua:19`).
 7. **Docs.**
    - `doc/agentic.txt` § `agentic-subagents`: the transcript shows the model line, plus its own todos once step 6 lands.
-   - `session-lifecycle` skill: `_announced_model_id` moves to AgentView.
 
 ## Tests
 - New `lua/agentic/ui/agent_view.test.lua`:
-  - `announce_model` writes `**Loaded <name>** · <id>` plus the description line, and dedupes a repeat.
-  - `notice_model_switched` does not dedupe and updates the announced id.
+  - `announce_model` writes `**Loaded <name>** · <id>` plus the description line.
   - `notice_mode_switched` uses the mode description.
   - `mode_label` hides `default`/`build` and strips ` Mode`.
   - Port the cases at `session_manager.test.lua:1120-1290` here. Keep one SM test per wrapper.
