@@ -618,7 +618,6 @@ describe("agentic.session_recovery", function()
 
     describe("respawn_preserving_history", function()
         local AgentInstance = require("agentic.acp.agent_instance")
-        local SessionManager = require("agentic.session_manager")
 
         --- @type TestStub
         local invalidate_stub
@@ -662,24 +661,15 @@ describe("agentic.session_recovery", function()
                     cancel_requests = function() end,
                 },
                 todo_list = { clear = function() end },
-                widget = { buf_nrs = {} },
-                _adopt_history = SessionManager._adopt_history,
-                _sync_modified = SessionManager._sync_modified,
-                _agents = {},
-                _set_prompt_pending = SessionManager._set_prompt_pending,
-                new_session = function(this, opts)
-                    this.chat_history = {
-                        session_id = "new",
-                        timestamp = 2,
-                        messages = {},
-                    }
+                new_session = spy.new(function(_, opts)
                     opts.on_created()
-                end,
+                end),
             } --[[@as agentic.SessionManager]]
         end
 
         it("carries the conversation into the new session", function()
             local session = make_session()
+            local former_history = session.chat_history
             local created = false
 
             Recovery.respawn_preserving_history(session, function()
@@ -687,9 +677,9 @@ describe("agentic.session_recovery", function()
             end)
             fire_ready({ state = "ready" })
 
-            assert.equal("new", session.chat_history.session_id)
-            assert.equal(1, #session.chat_history.messages)
-            assert.equal(1, #session._history_to_send)
+            local opts = session.new_session.calls[1][2]
+            assert.equal(former_history, opts.history)
+            assert.is_true(opts.quiet_welcome)
             assert.is_true(created)
         end)
 
@@ -700,8 +690,7 @@ describe("agentic.session_recovery", function()
             session.destroyed = true
             fire_ready({ state = "ready" })
 
-            assert.equal("old", session.chat_history.session_id)
-            assert.is_nil(session._history_to_send)
+            assert.spy(session.new_session).was.called(0)
         end)
 
         it("respawns the session's provider, not the default", function()

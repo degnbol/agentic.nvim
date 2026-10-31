@@ -1028,20 +1028,69 @@ describe("agentic.SessionManager", function()
             assert.is_nil(session:_submit_defer_reason("hello"))
         end)
 
-        it("a failed load unsubscribes the session", function()
+        for outcome, err in pairs({
+            succeeded = false,
+            failed = { message = "x" },
+        }) do
+            it(
+                "ignores a load that /new superseded and that " .. outcome,
+                function()
+                    local session = make_load_session()
+                    --- @type fun(result: table|nil, err: table|nil)|nil
+                    local create_cb
+                    session.agent.create_session = function(_, _, _, cb)
+                        create_cb = cb
+                    end
+                    session.new_session = SessionManager.new_session
+                    session.config_options.set_initial_mode = function() end
+                    local fallback = spy.new(function() end)
+                    session._fallback_restore_from_local = fallback
+
+                    session:_do_load_acp_session("loaded-sid", "/tmp")
+                    local load_cb = captured_load_cb
+                    session:new_session({ quiet_welcome = true })
+                    assert.is_not_nil(create_cb)
+                    --- @cast create_cb fun(result: table|nil, err: table|nil)
+                    create_cb({ sessionId = "new-sid" }, nil)
+                    session.agent.subscribers["loaded-sid"] = {}
+                    --- @cast load_cb fun(result: table|nil, err: table|nil)
+                    load_cb(nil, err or nil)
+
+                    assert.equal("new-sid", session.session_id)
+                    assert.spy(fallback).was.called(0)
+                    if not err then
+                        assert.is_nil(session.agent.subscribers["loaded-sid"])
+                    end
+                end
+            )
+        end
+
+        it("falls back quietly when the agent cannot load", function()
             local session = make_load_session()
+            session.agent.agent_capabilities = { loadSession = false }
+            session.agent.load_session = ACPClient.load_session
+            session.agent.ERROR_CODES = ACPClient.ERROR_CODES
+            local send = spy.new(function() end)
+            session.agent._send_request = send
+            local read_stub = spy.stub(ChatHistory, "read_saved")
+            read_stub:returns({
+                session_id = "test-session-id",
+                title = "",
+                timestamp = 0,
+                messages = { { type = "user", text = "hi" } },
+            })
             local notify_stub = spy.stub(Logger, "notify")
-            session._fallback_restore_from_local = function() end
-            local unsubscribe = spy.on(session.agent, "unsubscribe")
+            local fallback = spy.new(function() end)
+            session._fallback_restore_from_local = fallback
 
             session:_do_load_acp_session("test-session-id", "/tmp")
-            unsubscribe:reset()
-            captured_load_cb(nil, { message = "not found" })
+            read_stub:revert()
             notify_stub:revert()
 
-            assert
-                .spy(unsubscribe).was
-                .called_with(session.agent, "test-session-id")
+            assert.spy(send).was.called(0)
+            assert.spy(notify_stub).was.called(0)
+            assert.equal("test-session-id", fallback.calls[1][2])
+            assert.equal("hi", fallback.calls[1][3].messages[1].text)
         end)
 
         it("clears the load gate when the load fails", function()
@@ -1162,10 +1211,8 @@ describe("agentic.SessionManager", function()
             session.agent.provider_config = {}
             local created = false
 
-            -- restore_from_history sets _restoring, then creates
-            session._restoring = true
             session:new_session({
-                restore_mode = true,
+                history = ChatHistory:new(),
                 quiet_welcome = true,
                 on_created = function()
                     created = true
@@ -1205,11 +1252,37 @@ describe("agentic.SessionManager", function()
                 assert.equal("/project/b", session._cwd)
             end)
 
-            it("new_session in restore mode keeps the session cwd", function()
-                local session = moved_session()
-                session:new_session({ restore_mode = true })
-                assert.equal("/project/a", session._cwd)
-            end)
+            it(
+                "new_session with a history adopts it and keeps the session cwd",
+                function()
+                    local session = moved_session()
+                    --- @type fun(result: table|nil, err: table|nil)|nil
+                    local create_cb
+                    session.agent.create_session = function(_, _, _, cb)
+                        create_cb = cb
+                    end
+                    session.config_options.set_initial_mode = function() end
+                    session._is_first_message = false
+                    local history = ChatHistory:new()
+                    history.timestamp = 1
+                    history:add_message({ type = "user", text = "hi" })
+
+                    session:new_session({
+                        history = history,
+                        quiet_welcome = true,
+                    })
+                    assert.is_not_nil(create_cb)
+                    --- @cast create_cb fun(result: table|nil, err: table|nil)
+                    create_cb({ sessionId = "new-sid" }, nil)
+
+                    assert.equal(history, session.chat_history)
+                    assert.equal("new-sid", history.session_id)
+                    assert.are_not.equal(1, history.timestamp)
+                    assert.equal(history.messages, session._history_to_send)
+                    assert.is_true(session._is_first_message)
+                    assert.equal("/project/a", session._cwd)
+                end
+            )
 
             it(
                 "restart_session with no messages keeps the session cwd",
@@ -1800,80 +1873,55 @@ describe("agentic.SessionManager", function()
 
                 assert.spy(new_session_spy).was.called(1)
                 local opts = new_session_spy.calls[1][2]
-                assert.is_true(opts.restore_mode)
+                assert.equal(mock_chat_history, opts.history)
                 assert.equal("function", type(opts.on_created))
             end
         )
 
-        it(
-            "schedules history resend and sets _is_first_message in on_created",
-            function()
-                local AgentInstance = require("agentic.acp.agent_instance")
-                local mock_new_agent = {
-                    provider_config = { name = "New Provider" },
-                    create_session = spy.new(function() end),
-                }
-                get_instance_stub = spy.stub(AgentInstance, "get_instance")
-                get_instance_stub:invokes(function(_provider, on_ready)
-                    on_ready(mock_new_agent)
-                    return mock_new_agent
-                end)
+        it("passes the history to new_session", function()
+            local AgentInstance = require("agentic.acp.agent_instance")
+            local mock_new_agent = {
+                provider_config = { name = "New Provider" },
+                create_session = spy.new(function() end),
+            }
+            get_instance_stub = spy.stub(AgentInstance, "get_instance")
+            get_instance_stub:invokes(function(_provider, on_ready)
+                on_ready(mock_new_agent)
+                return mock_new_agent
+            end)
 
-                local captured_on_created
-                local new_session_spy = spy.new(function(_self, opts)
-                    captured_on_created = opts.on_created
-                end)
+            local new_session_spy = spy.new(function() end)
+            local saved_history = {
+                messages = { { type = "user", text = "hello" } },
+                session_id = "old",
+            }
+            local write_notice = spy.new(function() end)
 
-                local original_messages = { { type = "user", text = "hello" } }
-                local saved_history = {
-                    messages = original_messages,
-                    session_id = "old",
-                }
+            local session = {
+                is_generating = false,
+                session_id = "old-session",
 
-                local session = {
-                    is_generating = false,
-                    session_id = "old-session",
+                agent = {
+                    cancel_session = spy.new(function() end),
+                    provider_config = { name = "Old" },
+                },
+                permission_manager = {
+                    cancel_requests = function() end,
+                },
+                todo_list = { clear = function() end },
+                message_writer = { write_notice = write_notice },
+                chat_history = saved_history,
+                new_session = new_session_spy,
+                switch_provider = SessionManager.switch_provider,
+            } --[[@as agentic.SessionManager]]
 
-                    agent = {
-                        cancel_session = spy.new(function() end),
-                        provider_config = { name = "Old" },
-                    },
-                    permission_manager = {
-                        cancel_requests = function() end,
-                    },
-                    todo_list = { clear = function() end },
-                    message_writer = { write_notice = spy.new(function() end) },
-                    widget = { buf_nrs = {} },
-                    chat_history = saved_history,
-                    _is_first_message = false,
-                    _history_to_send = nil,
-                    new_session = new_session_spy,
-                    _adopt_history = SessionManager._adopt_history,
-                    _sync_modified = SessionManager._sync_modified,
-                    _agents = {},
-                    _set_prompt_pending = SessionManager._set_prompt_pending,
-                    switch_provider = SessionManager.switch_provider,
-                } --[[@as agentic.SessionManager]]
+            session:switch_provider("new-provider")
 
-                session:switch_provider("new-provider")
-
-                assert.is_not_nil(captured_on_created)
-
-                local new_timestamp = os.time()
-                session.chat_history = {
-                    messages = {},
-                    session_id = "new",
-                    timestamp = new_timestamp,
-                }
-                captured_on_created()
-
-                assert.same(original_messages, session.chat_history.messages)
-                assert.equal("new", session.chat_history.session_id)
-                assert.equal(new_timestamp, session.chat_history.timestamp)
-                assert.same(original_messages, session._history_to_send)
-                assert.is_true(session._is_first_message)
-            end
-        )
+            local opts = new_session_spy.calls[1][2]
+            assert.equal(saved_history, opts.history)
+            opts.on_created()
+            assert.equal("New Provider", write_notice.calls[1][2].title)
+        end)
 
         -- A usage limit is the main reason to switch provider at all. Carrying
         -- the outgoing provider's reset time over would defer every submit to
@@ -1983,7 +2031,6 @@ describe("agentic.SessionManager", function()
                 new_session = spy.new(function(_self, opts)
                     captured_on_created = opts.on_created
                 end),
-                _adopt_history = SessionManager._adopt_history,
                 _sync_modified = SessionManager._sync_modified,
                 _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
@@ -5988,36 +6035,6 @@ describe("agentic.SessionManager", function()
             session:_persist_history(session.chat_history)
 
             assert.equal(0, #saves)
-        end)
-    end)
-
-    describe("_adopt_history", function()
-        it("keeps the new session's id and timestamp", function()
-            local saved_history = {
-                session_id = "old",
-                timestamp = 100,
-                messages = { { type = "user", text = "hi" } },
-            }
-            local session = {
-                chat_history = {
-                    session_id = "new",
-                    timestamp = 200,
-                    messages = {},
-                },
-                widget = { buf_nrs = {} },
-                _adopt_history = SessionManager._adopt_history,
-                _sync_modified = SessionManager._sync_modified,
-                _agents = {},
-                _set_prompt_pending = SessionManager._set_prompt_pending,
-            } --[[@as agentic.SessionManager]]
-
-            session:_adopt_history(saved_history)
-
-            assert.equal("new", session.chat_history.session_id)
-            assert.equal(200, session.chat_history.timestamp)
-            assert.equal(1, #session.chat_history.messages)
-            assert.same(saved_history.messages, session._history_to_send)
-            assert.is_true(session._is_first_message)
         end)
     end)
 

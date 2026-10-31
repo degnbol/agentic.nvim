@@ -109,7 +109,7 @@ end
 --- @field _response_boundary agentic.acp.ResponseBoundary The chat's. Each transcript has its own. Never reset: every session starts with the writer's prose run closed and history ending on a user message, where a stale verdict writes no break
 --- @field _title_user_set? boolean Set once the user picks a title via /rename; blocks the provider's auto-summary from overriding it
 --- @field _history_to_send? agentic.ui.ChatHistory.Message[] Messages to prepend on next prompt submit
---- @field _restoring boolean Flag to prevent auto-new_session during restore
+--- @field _restoring boolean True while a load of a saved session is deferred or in flight. Stops the constructor's on-ready from starting a new session
 --- @field _session_epoch integer Monotonic counter incremented on each new_session/load; guards stale create_session callbacks
 --- @field _pending_load_session_id? string Deferred session/load until agent is ready
 --- @field _pending_load_cwd? string CWD for the deferred session/load
@@ -319,26 +319,6 @@ function SessionManager:_history_changed(history)
     end
 end
 
---- Carry `saved_history` into the current session, keeping that session's own
---- id and timestamp, and queue its messages to be prepended to the next submit
---- — the session is empty provider-side, so that is the only way the
---- conversation reaches the agent again.
---- @param saved_history agentic.ui.ChatHistory
-function SessionManager:_adopt_history(saved_history)
-    local new_session_id = self.chat_history.session_id
-    local new_timestamp = self.chat_history.timestamp
-
-    self.chat_history = saved_history
-    self.chat_history.session_id = new_session_id
-    self.chat_history.timestamp = new_timestamp
-    -- Its `dirty` stands: the new id has no file yet, but nothing is lost
-    -- unless the history is unsaved under the id it was saved by.
-    self:_sync_modified(self.chat_history)
-
-    self._history_to_send = saved_history.messages
-    self._is_first_message = true
-end
-
 --- Last `SessionManager.id` handed out.
 local last_id = 0
 
@@ -402,7 +382,7 @@ function SessionManager:new(provider)
                 self._pending_load_model = nil
                 self:_do_load_acp_session(sid, pending_cwd, pending_model)
             elseif not self._restoring then
-                -- Skip auto-new_session if restore_from_history was called
+                -- Skip auto-new_session while a load is in flight
                 self:new_session({ keep_cwd = true })
             end
         end)
@@ -764,8 +744,8 @@ function SessionManager:_bind_owner_keymaps(bufnr)
     end, { desc = "Agentic: Restart session (cancel and restore)" })
 
     BufHelpers.multi_keymap_set(keymaps.restore_session, bufnr, function()
-        SessionRestore.show_picker(self)
-    end, { desc = "Agentic: Restore previous session" })
+        SessionRestore.pick(nil, { marked_id = self.session_id })
+    end, { desc = "Agentic: Pick a saved session" })
 end
 
 --- Write the history to the session file. Warns and writes nothing before
@@ -4130,11 +4110,16 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
     end)
 end
 
---- Create a new session, optionally cancelling any existing one
---- @param opts {restore_mode?: boolean, keep_cwd?: boolean, quiet_welcome?: boolean, on_created?: fun()}|nil `keep_cwd` keeps `_cwd` instead of taking the editor cwd. `restore_mode` implies it
+--- Create a new ACP session. Without `history`, first cancel the current
+--- session and keep its selected model. With `history`, carry that
+--- conversation into the new session: it becomes the session's history under
+--- the new id and timestamp, and its messages are prepended to the next
+--- submit. The agent's session is empty, so that is the only way they reach
+--- the agent.
+--- @param opts {history?: agentic.ui.ChatHistory, keep_cwd?: boolean, quiet_welcome?: boolean, on_created?: fun()}|nil `keep_cwd` keeps the session's working directory instead of taking the editor cwd. `history` implies it
 function SessionManager:new_session(opts)
     opts = opts or {}
-    local restore_mode = opts.restore_mode or false
+    local history = opts.history
     local quiet_welcome = opts.quiet_welcome or false
     local on_created = opts.on_created
 
@@ -4142,7 +4127,7 @@ function SessionManager:new_session(opts)
     -- session/new response carries its default configOptions, which would
     -- otherwise revert the model to the provider default.
     local preserved_model
-    if not restore_mode then
+    if not history then
         preserved_model = self.config_options:current_model_id()
         self:_cancel_session()
     end
@@ -4160,12 +4145,12 @@ function SessionManager:new_session(opts)
     self:_advance_session_epoch()
     local epoch = self._session_epoch
 
-    if not (restore_mode or opts.keep_cwd) then
+    if not (history or opts.keep_cwd) then
         self._cwd = vim.fn.getcwd()
     end
     self.agent:create_session(self._cwd, handlers, function(response, err)
-        -- This SessionManager may have been destroyed (for example by a
-        -- restore onto another provider) while session/new was in flight.
+        -- This SessionManager may have been destroyed (for example the
+        -- unused session a resume replaces) while session/new was in flight.
         -- Its agent and widget are gone but the callback closure still holds
         -- a reference to self.
         -- Continuing would fall through to _handle_new_config_options etc. on
@@ -4185,8 +4170,8 @@ function SessionManager:new_session(opts)
             return
         end
 
-        -- A load or another new_session started while this create was in
-        -- flight (race 2 of the session-lifecycle skill).
+        -- A load or another new_session superseded this create while it was
+        -- in flight.
         --
         -- Only remove the subscriber — do NOT send session/cancel. Sending
         -- cancel for the stale session while session/load is active or just
@@ -4198,6 +4183,13 @@ function SessionManager:new_session(opts)
             return
         end
 
+        if history then
+            self.chat_history = history
+            self._history_to_send = history.messages
+            -- Its `dirty` stands: the new id has no file yet, but nothing is
+            -- lost unless the history is unsaved under the id it was saved by.
+            self:_sync_modified(history)
+        end
         self.session_id = response.sessionId
         self.chat_history.session_id = response.sessionId
         self.chat_history.timestamp = os.time()
@@ -4234,10 +4226,7 @@ function SessionManager:new_session(opts)
         )
         self:render_info()
 
-        -- Reset first message flag for new session (skip when restoring)
-        if not restore_mode then
-            self._is_first_message = true
-        end
+        self._is_first_message = true
 
         -- Add initial welcome message after session is created
         -- Defer to avoid fast event context issues
@@ -4260,7 +4249,7 @@ function SessionManager:new_session(opts)
                 -- default) is being switched in asynchronously via the flush
                 -- above; name it here so the marker shows the model the
                 -- session will actually use, not the transient default.
-                if not restore_mode then
+                if not history then
                     self:announce_model_loaded(
                         preserved_model
                             or self.config_options:current_model_id()
@@ -4299,36 +4288,18 @@ function SessionManager:load_acp_session(session_id, cwd, model)
     end
 end
 
---- The contents of the newest saved file of `session_id`. Notifies when a
---- file exists but cannot be read.
---- @param session_id string
---- @return agentic.ui.ChatHistory.StorageData|nil data nil when there is no readable file
-local function read_saved_session(session_id)
-    local path = ChatHistory.find_files(session_id)[1]
-    if not path then
-        return nil
-    end
-    local data, err = FileSystem.read_json(path)
-    if not data then
-        Logger.notify(
-            "Failed to read saved session: " .. err,
-            vim.log.levels.WARN
-        )
-    end
-    return data
-end
-
 --- Internal: actually send session/load after the agent is ready.
 --- @param session_id string
 --- @param cwd? string Original working directory for the session. When nil,
 ---   the cwd recorded in the saved session file, else vim.fn.getcwd().
 --- @param model? string Model id to reapply after load (queued until options arrive).
 function SessionManager:_do_load_acp_session(session_id, cwd, model)
-    -- Races 1 and 2 of the session-lifecycle skill: `_restoring` stops the
-    -- constructor's deferred new_session, the epoch rejects an in-flight one.
+    -- `_restoring` stops the constructor's deferred new_session, the epoch
+    -- rejects an in-flight one.
     self._restoring = true
     self._loading = true
     self:_advance_session_epoch()
+    local epoch = self._session_epoch
 
     -- Clean up the old session's UI state and subscriber, but do NOT send
     -- session/cancel to the provider. Sending cancel immediately before
@@ -4346,7 +4317,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     self.session_id = session_id
     self.chat_history.session_id = session_id
     self.chat_history.timestamp = os.time()
-    local saved_data = read_saved_session(session_id)
+    local saved_data = ChatHistory.read_saved(session_id)
     self._cwd = cwd and FileSystem.canonical_path(cwd)
         or saved_data and saved_data.cwd
         or vim.fn.getcwd()
@@ -4409,23 +4380,36 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
         -- this one must run whole before any notification sent after the
         -- response, each of which is scheduled once.
         function(result, err)
+            -- `/new` (exempt from the load gate) or a destroy superseded this
+            -- load: the session belongs to them now. An error has already
+            -- unsubscribed the loaded id.
+            if self.destroyed or epoch ~= self._session_epoch then
+                if not err then
+                    self.agent:unsubscribe(session_id)
+                end
+                return
+            end
             if err then
-                local details = err.data and err.data.details
-                    or err.message
-                    or "Unknown error"
-                Logger.notify(
-                    string.format(
-                        "session/load failed: %s — falling back to local history",
-                        details
-                    ),
-                    vim.log.levels.WARN
-                )
+                -- An agent that never advertised `session/load` fails it as
+                -- expected.
+                local capabilities = self.agent.agent_capabilities
+                if capabilities and capabilities.loadSession == true then
+                    local details = err.data and err.data.details
+                        or err.message
+                        or "Unknown error"
+                    Logger.notify(
+                        string.format(
+                            "session/load failed: %s — falling back to local history",
+                            details
+                        ),
+                        vim.log.levels.WARN
+                    )
+                end
                 self._restoring = false
                 self._loading = false
                 -- Held for a replay that will not come; the local
                 -- fallback reads the deciders from the history.
                 self.permission_manager:drop_deciders()
-                self.agent:unsubscribe(session_id)
                 self:_fallback_restore_from_local(session_id, saved_history)
                 return
             end
@@ -4470,11 +4454,12 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                 },
             })
 
-            -- The only drain on this path: new_session's is skipped by the
-            -- _restoring early return, and restore_from_history does not
-            -- run. Placed after the welcome write, never at the top of the
-            -- callback — the error branch above reaches a drain of its own
-            -- and a top-of-callback one would double-send.
+            -- The only drain on this path: `_restoring` keeps the
+            -- constructor's on-ready from running new_session, and
+            -- restore_from_history does not run. Placed after the welcome
+            -- write, never at the top of the callback — the error branch
+            -- above reaches a drain of its own and a top-of-callback one
+            -- would double-send.
             --
             -- set_pending_initial_model applies the saved model
             -- asynchronously, so a drained turn may run on the provider
@@ -4484,21 +4469,30 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     )
 end
 
---- Fallback: restore a session from its local history when ACP session/load
---- fails. Creates a new ACP session and replays the saved messages.
+--- Fallback when ACP session/load fails: drop what the partial replay showed,
+--- then re-create the session from `history`. Without a history, warn, leave
+--- the queue as draft and start an empty session in the same working
+--- directory.
 --- @param session_id string
 --- @param history agentic.ui.ChatHistory|nil The session's file, nil when it could not be read
 function SessionManager:_fallback_restore_from_local(session_id, history)
+    -- What the replay wrote. Context the user added meanwhile stays. Clearing
+    -- the failed id keeps `new_session` from sending `session/cancel` for it.
+    self.session_id = nil
+    self:clear_chat()
+    self.todo_list:clear()
+    self.file_activity:clear()
     if not history then
-        self.status_indicator:stop()
         Logger.notify(
             "No local history found for session " .. session_id:sub(1, 8),
             vim.log.levels.WARN
         )
+        -- Queued for the conversation that failed to load, not for an empty
+        -- agent.
+        self.widget:cancel_queue()
+        self:new_session({ keep_cwd = true })
         return
     end
-
-    self.session_id = nil -- clear stale ID so restore_from_history creates a new ACP session
     self:restore_from_history(history)
 end
 
@@ -4610,17 +4604,15 @@ function SessionManager:switch_provider(provider_name)
             self.agent = client
 
             self:new_session({
-                restore_mode = true,
+                history = saved_history,
                 on_created = function()
                     -- Nothing else names the new provider: the welcome
-                    -- header takes it and discards it, and restore_mode
-                    -- skips the model announce.
+                    -- header takes it and discards it, and a session
+                    -- carrying a history skips the model announce.
                     self.message_writer:write_notice({
                         glyph = Glyphs.PROVIDER,
                         title = self.agent.provider_config.name,
                     })
-
-                    self:_adopt_history(saved_history)
                 end,
             })
         end)
@@ -4785,41 +4777,23 @@ function SessionManager:destroy()
     self.widget:destroy()
 end
 
---- Restore session from loaded chat history
---- Creates a new ACP session (agent doesn't know old session_id)
---- and replays messages to UI. History is sent on first prompt submit.
+--- Replace the conversation with `history` in a new ACP session: clear the
+--- chat, take the history's title and file tally, and once the session is
+--- created, replay the messages into the chat. The history is sent with the
+--- first prompt.
 --- @param history agentic.ui.ChatHistory
---- @param opts {reuse_session?: boolean}|nil If reuse_session=true, replay into current session without creating new one
-function SessionManager:restore_from_history(history, opts)
-    opts = opts or {}
-
-    -- Prevent constructor's auto-new_session from running
-    self._restoring = true
-    self._history_to_send = history.messages
-    self._is_first_message = false
-    self:_reset_subagents()
-
-    -- Update existing chat_history with loaded data, keeping current session_id.
-    -- Assigned directly and left clean: the data is a session file's.
-    if opts.reuse_session then
-        self.chat_history.messages = vim.deepcopy(history.messages)
-        self.chat_history.subagent_messages =
-            vim.deepcopy(history.subagent_messages)
-        self.chat_history.subagents = vim.deepcopy(history.subagents)
-        self.chat_history.title = history.title or ""
-        self.chat_history.file_activity = history.file_activity
-    else
-        self.chat_history = history
-    end
-    self.chat_history.dirty = false
-    self:_sync_modified(self.chat_history)
+function SessionManager:restore_from_history(history)
+    self:clear_chat()
+    -- Held while session/new is in flight, and kept if it fails.
+    self.chat_history = history
+    self:_sync_modified(history)
 
     -- Replaying the saved messages writes tool-call blocks straight to the
     -- chat buffer, bypassing the handlers that record ops, so the tally has to
-    -- come off disk. Cleared first: `load` deliberately keeps ops recorded
-    -- before it ran (the session/load replay race), but this path can arrive
-    -- from `SessionRestore` with a live tally belonging to the conversation
-    -- being replaced, and that one must not follow the user into the new one.
+    -- come from the history. Cleared first: `load` deliberately keeps ops
+    -- recorded before it ran (the session/load replay race), but the tally of
+    -- the conversation being replaced must not follow the user into the new
+    -- one.
     self.file_activity:clear()
     self.file_activity:load(self.chat_history.file_activity)
 
@@ -4830,39 +4804,22 @@ function SessionManager:restore_from_history(history, opts)
         self.widget:set_chat_title(restored_title)
     end
 
-    -- Replays the history's own messages, not `_history_to_send`: restoring
-    -- the transcripts points the blocks at their new names in the history.
-    if opts.reuse_session and self.session_id then
-        -- Reuse existing ACP session, replay messages to UI
-        self._restoring = false
-        self:_restore_transcripts()
-        SessionRestore.replay_messages(
-            self.message_writer,
-            self.chat_history.messages,
-            function(id)
-                return self:_buffer_name(id)
-            end
-        )
-        -- Keep _history_to_send: the ACP provider doesn't have these messages
-        -- (they came from disk, not the current session). They'll be prepended
-        -- to the first user prompt so the provider has conversation context.
-    else
-        -- Create fresh ACP session, then replay messages after session is ready
-        self:new_session({
-            restore_mode = true,
-            on_created = function()
-                self._restoring = false
-                self:_restore_transcripts()
-                SessionRestore.replay_messages(
-                    self.message_writer,
-                    self.chat_history.messages,
-                    function(id)
-                        return self:_buffer_name(id)
-                    end
-                )
-            end,
-        })
-    end
+    self:new_session({
+        history = history,
+        on_created = function()
+            -- Replays the history's own messages, not `_history_to_send`:
+            -- restoring the transcripts points the blocks at their new names
+            -- in the history.
+            self:_restore_transcripts()
+            SessionRestore.replay_messages(
+                self.message_writer,
+                self.chat_history.messages,
+                function(id)
+                    return self:_buffer_name(id)
+                end
+            )
+        end,
+    })
 end
 
 --- Restart the current session: cancel it and restore from chat history.

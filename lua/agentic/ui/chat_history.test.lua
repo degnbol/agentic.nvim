@@ -230,6 +230,147 @@ describe("ChatHistory", function()
         end)
     end)
 
+    describe("read_saved", function()
+        --- @type TestStub
+        local notify_stub
+
+        before_each(function()
+            use_disk()
+            notify_stub = spy.stub(require("agentic.utils.logger"), "notify")
+        end)
+
+        after_each(function()
+            notify_stub:revert()
+        end)
+
+        it("gives nil and no warning without a file", function()
+            assert.is_nil(ChatHistory.read_saved("sid-none"))
+            assert.spy(notify_stub).was.called(0)
+        end)
+
+        it("decodes the newer of two files", function()
+            local older = history_with_id("sid-r")
+            older.title = "older"
+            assert.is_nil(older:save("/project/a"))
+            local newer = history_with_id("sid-r")
+            newer.title = "newer"
+            assert.is_nil(newer:save("/project/b"))
+            local path_a = ChatHistory.get_file_path("sid-r", "/project/a")
+            vim.uv.fs_utime(path_a, 1000, 1000)
+
+            local data = ChatHistory.read_saved("sid-r")
+
+            assert.equal("newer", data and data.title)
+        end)
+
+        it("gives nil and one warning for an undecodable file", function()
+            assert.is_nil(history_with_id("sid-bad"):save(TEST_CWD))
+            vim.fn.writefile(
+                { "not json {{{" },
+                ChatHistory.get_file_path("sid-bad", TEST_CWD)
+            )
+
+            assert.is_nil(ChatHistory.read_saved("sid-bad"))
+            assert.spy(notify_stub).was.called(1)
+            assert.equal(vim.log.levels.WARN, notify_stub.calls[1][2])
+        end)
+    end)
+
+    describe("match_sessions", function()
+        --- @param id string
+        --- @param title string
+        --- @return agentic.ui.ChatHistory.SessionMeta
+        local function meta(id, title)
+            return {
+                session_id = id,
+                title = title,
+                timestamp = 0,
+                file_path = id,
+            }
+        end
+
+        local function ids(sessions)
+            return vim.tbl_map(function(s)
+                return s.session_id
+            end, sessions)
+        end
+
+        local sessions = {
+            meta("abc-1", "Fix bug"),
+            meta("abd-2", "abc"),
+            meta("abc-3", "Other"),
+            meta("xyz-4", "fix BUG"),
+        }
+
+        it("matches one id prefix", function()
+            assert.same(
+                { "abd-2" },
+                ids(ChatHistory.match_sessions(sessions, "abd"))
+            )
+        end)
+
+        it("matches several id prefixes in order, before titles", function()
+            assert.same(
+                { "abc-1", "abc-3" },
+                ids(ChatHistory.match_sessions(sessions, "abc"))
+            )
+        end)
+
+        it("matches titles case-insensitively when no id matches", function()
+            assert.same(
+                { "abc-1", "xyz-4" },
+                ids(ChatHistory.match_sessions(sessions, "FIX bug"))
+            )
+        end)
+
+        it("matches nothing", function()
+            assert.same({}, ChatHistory.match_sessions(sessions, "nope"))
+        end)
+    end)
+
+    describe("list_all_sessions", function()
+        before_each(use_disk)
+
+        it("keeps one row per id, the file with the newer mtime", function()
+            --- @param cwd string
+            --- @param last_activity integer
+            --- @param mtime integer
+            local function write(cwd, last_activity, mtime)
+                local path = ChatHistory.get_file_path("sid-d", cwd)
+                vim.fn.mkdir(vim.fs.dirname(path), "p")
+                vim.fn.writefile({
+                    vim.json.encode({
+                        session_id = "sid-d",
+                        title = cwd,
+                        timestamp = 0,
+                        last_activity = last_activity,
+                        cwd = cwd,
+                        messages = {},
+                    }),
+                }, path)
+                vim.uv.fs_utime(path, mtime, mtime)
+            end
+            write("/project/a", 9000, 1000)
+            write("/project/b", 10, 2000)
+            assert.is_nil(history_with_id("sid-other"):save("/project/a"))
+
+            local sessions = {} --- @type agentic.ui.ChatHistory.SessionMeta[]
+            ChatHistory.list_all_sessions(function(result)
+                sessions = result
+            end)
+
+            local rows = vim.tbl_filter(function(s)
+                return s.session_id == "sid-d"
+            end, sessions)
+            assert.equal(1, #rows)
+            assert.equal(
+                ChatHistory.get_file_path("sid-d", "/project/b"),
+                rows[1].file_path
+            )
+            assert.equal(2, #sessions)
+        end)
+    end)
+
     describe("prepend_restored_messages", function()
         --- @param subagent agentic.ui.MessageWriter.SubagentInfo
         --- @return string text

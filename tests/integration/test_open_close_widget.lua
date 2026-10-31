@@ -130,106 +130,136 @@ _G.s.code_selection:add({
         )
     end)
 
-    it(
-        ":tab Agentic {query} resumes into a new session in a new tabpage",
-        function()
-            open()
-            local first_tab = child.api.nvim_get_current_tabpage()
-            child.lua([[
-require("agentic.session_restore").resolve_query = function(query, callback)
-    _G.query = query
-    callback("sid-x", vim.fn.getcwd())
-end
-require("agentic.session_manager").load_acp_session = function(this, sid)
+    describe(":AgenticResume", function()
+        --- Make every listing show `sessions`, and record each load as
+        --- `_G.loaded`.
+        --- @param sessions table[]
+        local function stub_saved(sessions)
+            child.lua(
+                [[
+local sessions = ...
+local ChatHistory = require("agentic.ui.chat_history")
+ChatHistory.list_sessions = function(_, callback) callback(sessions) end
+ChatHistory.list_all_sessions = function(callback) callback(sessions) end
+ChatHistory.read_saved = function() end
+require("agentic.session_manager").load_acp_session = function(_, sid)
     _G.loaded = sid
 end
-]])
-
-            child.cmd("tab Agentic sid-x-prefix")
-            child.flush()
-
-            assert.equal("sid-x-prefix", child.lua_get("_G.query"))
-            assert.equal("sid-x", child.lua_get("_G.loaded"))
-            assert.are_not.equal(
-                first_tab,
-                child.api.nvim_get_current_tabpage()
-            )
-            assert.same({ "AgenticChat" }, get_tabpage_filetypes(0))
-            local resumed = child.lua_get(
-                [[require("agentic.session_registry").owner_of_buf(0).id]]
-            )
-            assert.are_not.equal(child.lua_get("_G.s.id"), resumed)
-            assert.equal(
-                child.api.nvim_get_current_win(),
-                child.lua_get(
-                    [[require("agentic.session_registry").owner_of_buf(0).widget:home_win()]]
-                )
+]],
+                { sessions }
             )
         end
-    )
 
-    describe(":Agentic {query} without a match", function()
+        --- @param id string
+        --- @param title string
+        local function meta(id, title)
+            return {
+                session_id = id,
+                title = title,
+                timestamp = 0,
+                file_path = "/x/" .. id .. ".json",
+            }
+        end
+
+        --- Window of the quickfix list in the current tabpage, 0 when none.
+        --- @return integer
+        local function qf_win()
+            return child.lua_get("vim.fn.getqflist({ winid = 0 }).winid")
+        end
+
         before_each(function()
-            open()
-            child.lua([[
-require("agentic.session_restore").resolve_query = function(_, callback)
-    callback()
-end
-]])
+            stub_saved({ meta("sid-a", "First"), meta("sid-b", "Second") })
         end)
 
-        it("holds {query} in the input of a new session", function()
-            -- A session without messages ends when its chat is hidden.
-            child.lua([[
+        it("<CR> from the input shows the pick in the home window", function()
+            open()
+            local chat_win = child.api.nvim_get_current_win()
+            child.type_keys("i", "<Esc>")
+            child.flush()
+            assert.equal("AgenticInput", child.lua_get("vim.bo.filetype"))
+
+            child.cmd("AgenticResume")
+            child.flush()
+            assert.are_not.equal(0, qf_win())
+            child.type_keys("<CR>")
+            child.flush()
+
+            assert.equal("sid-a", child.lua_get("_G.loaded"))
+            assert.equal(0, qf_win())
+            local shown = child.api.nvim_win_get_buf(chat_win)
+            assert.are_not.equal(
+                child.lua_get("_G.s.id"),
+                child.lua_get(
+                    string.format(
+                        [[require("agentic.session_registry").owner_of_buf(%d).id]],
+                        shown
+                    )
+                )
+            )
+        end)
+
+        for _, used in ipairs({ false, true }) do
+            it(
+                "a pick from "
+                    .. (used and "a used" or "an unused")
+                    .. " chat "
+                    .. (used and "keeps" or "ends")
+                    .. " its session",
+                function()
+                    open()
+                    if used then
+                        child.lua([[
 table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
 ]])
+                    end
 
-            child.cmd("Agentic fix the bug")
-            child.flush()
+                    child.cmd("AgenticResume")
+                    child.flush()
+                    child.type_keys("<CR>")
+                    child.flush()
 
-            assert.equal(2, live_sessions())
-            child.lua([[
-_G.new = require("agentic.session_registry").current()
+                    assert.equal(used and 2 or 1, live_sessions())
+                    assert.equal(not used, child.lua_get("_G.s.destroyed"))
+                end
+            )
+        end
+
+        it(
+            ":tab AgenticResume then <CR> shows the pick in a new tabpage",
+            function()
+                open()
+                child.lua([[
+table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
 ]])
-            assert.are_not.equal(
-                child.lua_get("_G.s.id"),
-                child.lua_get("_G.new.id")
-            )
-            assert.same(
-                { "fix the bug" },
-                child.lua_get(
-                    [[vim.api.nvim_buf_get_lines(_G.new.widget.buf_nrs.input, 0, -1, false)]]
-                )
-            )
-            assert.equal(1, child.lua_get("_G.new.widget:queued_block_count()"))
-            assert.same(
-                { "" },
-                child.lua_get(
-                    [[vim.api.nvim_buf_get_lines(_G.s.widget.buf_nrs.input, 0, -1, false)]]
-                )
-            )
-        end)
+                local first_tab = child.api.nvim_get_current_tabpage()
 
-        it("honours a tab modifier", function()
-            local first_tab = child.api.nvim_get_current_tabpage()
+                child.cmd("tab AgenticResume")
+                child.flush()
+                child.type_keys("<CR>")
+                child.flush()
 
-            child.cmd("tab Agentic fix the bug")
+                assert.are_not.equal(
+                    first_tab,
+                    child.api.nvim_get_current_tabpage()
+                )
+                assert.same({ "AgenticChat" }, get_tabpage_filetypes(0))
+                assert.same({ "AgenticChat" }, get_tabpage_filetypes(first_tab))
+            end
+        )
+
+        it("{query} with two title matches opens the picker on them", function()
+            stub_saved({
+                meta("sid-a", "foo"),
+                meta("sid-b", "bar"),
+                meta("sid-c", "Foo"),
+            })
+
+            child.cmd("AgenticResume foo")
             child.flush()
 
-            assert.are_not.equal(
-                first_tab,
-                child.api.nvim_get_current_tabpage()
-            )
-            assert.same(
-                { "AgenticChat", "AgenticInput" },
-                get_tabpage_filetypes(0)
-            )
-            assert.are_not.equal(
-                child.lua_get("_G.s.id"),
-                child.lua_get(
-                    [[require("agentic.session_registry").owner_of_buf(0).id]]
-                )
-            )
+            assert.are_not.equal(0, qf_win())
+            assert.equal(2, child.lua_get("#vim.fn.getqflist()"))
+            assert.equal(vim.NIL, child.lua_get("_G.loaded"))
         end)
     end)
 

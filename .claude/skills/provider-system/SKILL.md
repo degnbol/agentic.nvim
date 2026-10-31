@@ -433,15 +433,15 @@ the model's context.
 
 There are three restore mechanisms that use this asymmetry differently:
 
-- **Path A — true ACP `session/load`.** Requires
-  `agentCapabilities.loadSession`. Sends the saved `sessionId` and the
-  provider replays its own history via `session/update`
-  notifications. `_history_to_send` is *not* set. Used by the picker
-  when the agent supports it; both claude-agent-acp and opencode do.
-- **Path B — `restore_from_history`** (`session_manager.lua`). Falls
-  back when `loadSession` is unsupported or `session/load` errors.
-  Creates a fresh `session/new`, replays the saved messages into the
-  chat buffer locally, and stashes them on `self._history_to_send`.
+- **Path A — true ACP `session/load`.** Sends the saved `sessionId` and
+  the provider replays its own history via `session/update`
+  notifications. `_history_to_send` is *not* set. Used by
+  `SessionRestore.resume`. Path B when the load fails (an agent without
+  `loadSession` fails it at once) and the session file is readable.
+- **Path B — `restore_from_history`** (`session_manager.lua`). Used by
+  Path A's fallback and `restart_session`. Replays the saved messages into
+  the chat buffer locally. `new_session({ history })` stashes them on
+  `self._history_to_send`.
   On the first `send_prompt`, `ChatHistory.prepend_restored_messages`
   (`ui/chat_history.lua`) injects them as text Content blocks
   (`"User: …"`, `"Assistant: …"`, `"Assistant (thinking): …"`, `"Tool
@@ -451,10 +451,8 @@ There are three restore mechanisms that use this asymmetry differently:
 - **Path C — `respawn_preserving_history`** (`session_recovery.lua`).
   Triggered by `max_tokens` / usage-limit stalls on the
   claude-agent-acp subprocess, and by a re-login the subprocess did not
-  survive. Kills the agent, saves `chat_history.messages` onto
-  `_history_to_send` (`SessionManager:_adopt_history`), and lets the
-  next `session/new` reuse Path B's prefix-stitching to continue the
-  conversation under a fresh subprocess.
+  survive. Kills the agent and passes the history to
+  `new_session({ history })`, as Path B does.
 
 This is the inverse of the "user_message_chunk replay" point below:
 that section explains what the *client* receives on Path A (the
@@ -465,8 +463,8 @@ fallback fires).
 
 ### user_message_chunk contains full prompt content
 
-This applies to Path A only — Path B does not call `session/load`, so no
-replay chunks arrive.
+This applies to Path A only. Path B sends no `session/load`; after a
+failed load, `_reset_conversation` clears the partial replay first.
 
 During `session/load` replay, the provider sends `user_message_chunk` events for
 each content block in the original `session/prompt` request — not just user-typed

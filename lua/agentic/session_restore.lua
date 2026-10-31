@@ -2,177 +2,17 @@ local ACPPayloads = require("agentic.acp.acp_payloads")
 local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
-local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 local SessionRegistry = require("agentic.session_registry")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 
---- @class agentic.SessionRestore.PickerItem
+--- @class agentic.SessionRestore.PickerItem : agentic.ui.ChatHistory.SessionMeta
 --- @field display string
---- @field session_id string
---- @field timestamp integer
---- @field last_activity? integer
---- @field cwd? string
---- @field file_path string Full path to the session file
---- @field prompt_count? integer Number of user prompts
---- @field provider? agentic.UserConfig.ProviderName config key, nil on legacy sessions
---- @field model? string model id
 
 --- @class agentic.SessionRestore
 local SessionRestore = {}
-
---- Checks if the current session has messages or we can safely restore into it if it's empty
---- @param current_session agentic.SessionManager|nil
---- @return boolean has_conflict
-local function check_conflict(current_session)
-    return current_session ~= nil
-        and current_session.session_id ~= nil
-        and current_session.chat_history ~= nil
-        and #current_session.chat_history.messages > 0
-end
-
---- Check whether the agent supports the session/load RPC.
---- Returns true while capabilities are still being negotiated — the agent
---- has just been spawned (first use of this provider), so
---- `load_acp_session` will queue the load until on_ready fires, at which
---- point the capability check inside ACPClient:load_session applies. All
---- currently-supported providers advertise loadSession=true after init.
---- @param session agentic.SessionManager
---- @return boolean
-local function agent_supports_load(session)
-    if not session.agent then
-        return false
-    end
-    if session.agent.agent_capabilities == nil then
-        return true
-    end
-    return session.agent.agent_capabilities.loadSession == true
-end
-
---- Restore `item` into `current_session`, or into a new session when there
---- is none or the saved provider differs. Destroys a replaced
---- `current_session`, but keeps it when no new session could be created.
---- @param item agentic.SessionRestore.PickerItem
---- @param current_session agentic.SessionManager|nil
---- @param has_conflict boolean
---- @return agentic.SessionManager|nil session The session restored into, nil when none could be created
-local function do_restore(item, current_session, has_conflict)
-    --- @type agentic.UserConfig.ProviderName|nil Saved provider, when configured
-    local saved = nil
-    if item.provider and Config.acp_providers[item.provider] then
-        saved = item.provider
-    end
-
-    local reuse = current_session ~= nil
-        and (not saved or current_session.agent.provider_name == saved)
-    -- Not `get_or_create`: a nil `current_session` asks for a new session,
-    -- and `current()` can return a live one.
-    local session = reuse and current_session or SessionRegistry.create(saved)
-    if not session then
-        return nil
-    end
-    if not reuse and current_session then
-        SessionRegistry.destroy(current_session)
-    end
-
-    if item.provider and not saved then
-        Logger.notify(
-            "Saved provider '"
-                .. item.provider
-                .. "' is not configured — restoring with provider '"
-                .. session.agent.provider_name
-                .. "'.",
-            vim.log.levels.WARN
-        )
-    end
-
-    if agent_supports_load(session) then
-        if not item.provider then
-            Logger.notify(
-                "Session has no saved provider — restoring with provider '"
-                    .. session.agent.provider_name
-                    .. "'. May fail if the session was created with a different provider.",
-                vim.log.levels.WARN
-            )
-        end
-        session:load_acp_session(item.session_id, item.cwd, item.model)
-    else
-        if has_conflict and session.session_id then
-            session.agent:cancel_session(session.session_id)
-            session:clear_chat()
-            session.file_list:clear()
-            session.code_selection:clear()
-            session.diagnostics_list:clear()
-            session.permission_manager:clear()
-        end
-
-        local data, err = FileSystem.read_json(item.file_path)
-        if not data then
-            Logger.notify(
-                "Failed to load session: " .. err,
-                vim.log.levels.WARN
-            )
-        else
-            session:restore_from_history(
-                ChatHistory.from_data(data),
-                { reuse_session = not has_conflict }
-            )
-        end
-    end
-
-    return session
-end
-
---- `do_restore`, then reveal the chat of the session restored into.
---- @param item agentic.SessionRestore.PickerItem
---- @param current_session agentic.SessionManager|nil
---- @param has_conflict boolean
-local function restore_here(item, current_session, has_conflict)
-    local session = do_restore(item, current_session, has_conflict)
-    if session then
-        session.widget:reveal(SessionRegistry.target_win())
-    end
-end
-
---- Restore `item` into a new session and show its chat in a new tabpage.
---- @param item agentic.SessionRestore.PickerItem
-local function restore_in_new_tab(item)
-    local session = do_restore(item, nil, false)
-    if not session then
-        return
-    end
-    session.widget:show({
-        tab = vim.api.nvim_tabpage_get_number(
-            vim.api.nvim_get_current_tabpage()
-        ),
-    })
-end
-
---- @param item agentic.SessionRestore.PickerItem
---- @param current_session agentic.SessionManager|nil
---- @param has_conflict boolean
---- @return boolean accepted true if user chose to restore (not cancelled)
-local function restore_with_conflict_check(item, current_session, has_conflict)
-    if has_conflict then
-        local choice = vim.fn.confirm(
-            "Current session has messages:",
-            "&Replace here\n&Open in new tab\n&Cancel",
-            3
-        ) -- no nvim_* equivalent
-        if choice == 1 then
-            restore_here(item, current_session, has_conflict)
-        elseif choice == 2 then
-            restore_in_new_tab(item)
-        else
-            return false
-        end
-    else
-        restore_here(item, current_session, has_conflict)
-    end
-    return true
-end
 
 --- Shorten a path for display: the home directory becomes `~`, and a path with
 --- more than 3 components keeps only the last 2 (`~/a/b/c/d` gives `…/c/d`).
@@ -205,17 +45,8 @@ function SessionRestore.build_items(sessions, opts)
             display = string.format("%s  [%s]", display, shorten_cwd(s.cwd))
         end
 
-        table.insert(items, {
-            display = display,
-            session_id = s.session_id,
-            timestamp = s.timestamp or 0,
-            last_activity = s.last_activity,
-            cwd = s.cwd,
-            file_path = s.file_path,
-            prompt_count = s.prompt_count,
-            provider = s.provider,
-            model = s.model,
-        })
+        local item = vim.tbl_extend("force", s, { display = display }) --[[@as agentic.SessionRestore.PickerItem]]
+        table.insert(items, item)
     end
     return items
 end
@@ -306,40 +137,100 @@ function SessionRestore.list(scope, callback)
     end
 end
 
---- Show session picker and restore selected session
---- @param current_session agentic.SessionManager Session to restore into. A new one when it has ended by the time an item is picked
---- @param scope? agentic.SessionRestore.Scope "local" (default) or "all"
-function SessionRestore.show_picker(current_session, scope)
-    scope = scope or "local"
+--- Show the chat of the open session that holds `ref.session_id`. Else create
+--- a session on `ref.provider`, apply `session_restore.cd_on_load`, load the
+--- saved session into it (ACP `session/load`) and show its chat. A nil `cwd`,
+--- `provider` or `model` takes the value of the saved file, when there is one.
+--- A provider that is not configured warns and uses the default provider.
+--- @param ref agentic.ui.ChatHistory.SessionRef
+--- @param mods vim.api.keyset.cmd_mods|nil A split or tab modifier shows the chat in a new window
+function SessionRestore.resume(ref, mods)
+    local open_session = SessionRegistry.session_for_acp_id(ref.session_id)
+    if open_session then
+        open_session.widget:show(mods, SessionRegistry.target_win())
+        return
+    end
 
-    SessionRestore.list(scope, function(sessions)
+    local cwd, provider, model = ref.cwd, ref.provider, ref.model
+    if not (cwd and provider and model) then
+        local saved = ChatHistory.read_saved(ref.session_id)
+        if saved then
+            cwd = cwd or saved.cwd
+            provider = provider or saved.provider
+            model = model or saved.model
+        end
+    end
+
+    local configured = provider and Config.acp_providers[provider] and provider
+        or nil
+    local session = SessionRegistry.create(configured)
+    if not session then
+        return
+    end
+    if Config.session_restore.cd_on_load and cwd then
+        local st = vim.uv.fs_stat(cwd)
+        if st and st.type == "directory" then
+            vim.api.nvim_set_current_dir(cwd)
+        end
+    end
+    if provider and not configured then
+        Logger.notify(
+            "Saved provider '"
+                .. provider
+                .. "' is not configured — resuming with provider '"
+                .. session.agent.provider_name
+                .. "'.",
+            vim.log.levels.WARN
+        )
+    end
+    session:load_acp_session(ref.session_id, cwd, model)
+    session.widget:show(mods, SessionRegistry.target_win())
+end
+
+--- Saved sessions of all projects whose id starts with `query`, else whose
+--- title equals `query` (case-insensitive). One row per session id, newest
+--- activity first.
+--- @param query string
+--- @param callback fun(matches: agentic.ui.ChatHistory.SessionMeta[])
+function SessionRestore.find(query, callback)
+    SessionRestore.list("all", function(sessions)
+        callback(ChatHistory.match_sessions(sessions, query))
+    end)
+end
+
+--- @class agentic.SessionRestore.PickerOpts
+--- @field scope? agentic.SessionRestore.Scope "local" (default) or "all"
+--- @field mods? vim.api.keyset.cmd_mods
+--- @field marked_id? string ACP session id to mark
+--- @field sessions? agentic.ui.ChatHistory.SessionMeta[] Sessions to show. Default: the saved sessions of `scope`
+--- @field notice? string Notified before the picker shows, or joined with the "No saved sessions found" notification into one
+
+--- Show saved sessions in a picker and resume the picked one.
+--- @param opts agentic.SessionRestore.PickerOpts|nil
+function SessionRestore.show_picker(opts)
+    opts = opts or {}
+    local scope = opts.scope or "local"
+
+    --- @param sessions agentic.ui.ChatHistory.SessionMeta[]
+    local function show(sessions)
         if #sessions == 0 then
-            Logger.notify("No saved sessions found", vim.log.levels.INFO)
+            local message = "No saved sessions found"
+            if opts.notice then
+                message = opts.notice .. "\n" .. message
+            end
+            Logger.notify(message, vim.log.levels.INFO)
             return
         end
+        if opts.notice then
+            Logger.notify(opts.notice, vim.log.levels.INFO)
+        end
 
-        local show_cwd = scope == "all"
         local items =
-            SessionRestore.build_items(sessions, { show_cwd = show_cwd })
+            SessionRestore.build_items(sessions, { show_cwd = scope == "all" })
 
         --- @param item agentic.SessionRestore.PickerItem
-        --- @return boolean accepted
         local function on_select(item)
-            local open_session =
-                SessionRegistry.session_for_acp_id(item.session_id)
-            if open_session then
-                open_session.widget:reveal(SessionRegistry.target_win())
-                return true
-            end
-            -- The picker does not block, so the session can end before a pick.
-            local live_session = not current_session.destroyed
-                    and current_session
-                or nil
-            return restore_with_conflict_check(
-                item,
-                live_session,
-                check_conflict(live_session)
-            )
+            SessionRestore.resume(item, opts.mods)
         end
 
         -- Three genuinely different backends (builtin quickfix, fzf-lua,
@@ -348,7 +239,8 @@ function SessionRestore.show_picker(current_session, scope)
         local picker_name = Config.session_restore.picker or "quickfix"
         local picker_opts = {
             scope = scope,
-            current_session = current_session,
+            mods = opts.mods,
+            marked_id = opts.marked_id,
         }
 
         if picker_name == "fzf-lua" then
@@ -379,6 +271,47 @@ function SessionRestore.show_picker(current_session, scope)
 
         local qf_picker = require("agentic.session_restore_builtin")
         qf_picker.show(items, on_select, picker_opts)
+    end
+
+    if opts.sessions then
+        show(opts.sessions)
+    else
+        SessionRestore.list(scope, show)
+    end
+end
+
+--- Resume the saved session of any project whose id starts with `query`, else
+--- whose title equals `query` (case-insensitive). Several matches: pick among
+--- them. No match: notify and pick among the sessions of this project. Nil or
+--- "" `query`: pick among the sessions of this project.
+--- @param query string|nil
+--- @param opts { mods?: vim.api.keyset.cmd_mods, marked_id?: string }|nil
+function SessionRestore.pick(query, opts)
+    opts = opts or {}
+    if not query or query == "" then
+        SessionRestore.show_picker({
+            mods = opts.mods,
+            marked_id = opts.marked_id,
+        })
+        return
+    end
+    SessionRestore.find(query, function(matches)
+        if #matches == 1 then
+            SessionRestore.resume(matches[1], opts.mods)
+        elseif #matches > 1 then
+            SessionRestore.show_picker({
+                scope = "all",
+                sessions = matches,
+                mods = opts.mods,
+                marked_id = opts.marked_id,
+            })
+        else
+            SessionRestore.show_picker({
+                notice = "No saved session matches: " .. query,
+                mods = opts.mods,
+                marked_id = opts.marked_id,
+            })
+        end
     end)
 end
 
@@ -492,72 +425,6 @@ function SessionRestore.replay_messages(writer, messages, buffer_name)
     -- leave the run buffered until the next turn's first write and render the
     -- restored session's thinking under the new prompt.
     writer:flush_thought_run()
-end
-
---- Shortest session_id prefix a query matches by.
-local MIN_ID_PREFIX = 8
-
---- The first entry of each session_id, in order.
---- @param sessions agentic.ui.ChatHistory.SessionMeta[]
---- @return agentic.ui.ChatHistory.SessionMeta[]
-local function first_per_id(sessions)
-    local seen = {} --- @type table<string, true>
-    local distinct = {} --- @type agentic.ui.ChatHistory.SessionMeta[]
-    for _, s in ipairs(sessions) do
-        if not seen[s.session_id] then
-            seen[s.session_id] = true
-            table.insert(distinct, s)
-        end
-    end
-    return distinct
-end
-
---- Resolve a session reference to a cached session: a session_id prefix of
---- at least `MIN_ID_PREFIX` chars, else an exact case-insensitive title.
---- Several title matches notify and pick the newest. `callback` runs with the match, or with no
---- arguments when nothing matches. An ambiguous prefix notifies and does not
---- call back.
---- @param query string
---- @param callback fun(session_id?: string, cwd?: string, model?: string)
-function SessionRestore.resolve_query(query, callback)
-    ChatHistory.list_all_sessions(function(sessions)
-        local query_lower = query:lower()
-        local prefix_matches = {}
-        local title_matches = {}
-        for _, s in ipairs(first_per_id(sessions)) do
-            if
-                #query >= MIN_ID_PREFIX and vim.startswith(s.session_id, query)
-            then
-                table.insert(prefix_matches, s)
-            end
-            if type(s.title) == "string" and s.title:lower() == query_lower then
-                table.insert(title_matches, s)
-            end
-        end
-        if #prefix_matches > 1 then
-            Logger.notify(
-                "Ambiguous session id prefix: " .. #prefix_matches .. " matches",
-                vim.log.levels.WARN
-            )
-            return
-        end
-        local m = prefix_matches[1] or title_matches[1]
-        if not m then
-            callback()
-            return
-        end
-        if not prefix_matches[1] and #title_matches > 1 then
-            Logger.notify(
-                string.format(
-                    "Ambiguous session title (%d matches); picking newest (%s)",
-                    #title_matches,
-                    m.session_id:sub(1, 8)
-                ),
-                vim.log.levels.WARN
-            )
-        end
-        callback(m.session_id, m.cwd, m.model)
-    end)
 end
 
 return SessionRestore

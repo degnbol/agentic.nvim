@@ -1063,6 +1063,33 @@ describe("agentic.acp.ACPClient", function()
         assert.equal(client.ERROR_CODES.PROTOCOL_ERROR, err.code)
     end)
 
+    for _, case in ipairs({
+        { outcome = "an error", err = { code = -32603, message = "x" } },
+        { outcome = "a success", err = nil },
+    }) do
+        it("keeps the load's subscriber only after " .. case.outcome, function()
+            local respond
+            local client = setmetatable({
+                subscribers = {},
+                _children = {},
+                _loading_sessions = {},
+                _session_roots = {},
+                _tool_call_kinds = { forget_session = function() end },
+                provider_config = {},
+                agent_capabilities = { loadSession = true },
+                _send_request = function(_, _, _, cb)
+                    respond = cb
+                end,
+            }, { __index = ACPClient })
+
+            client:load_session("s-1", "/proj", nil, {}, function() end)
+            assert.is_not_nil(client.subscribers["s-1"])
+            respond(not case.err and {} or nil, case.err)
+
+            assert.equal(case.err == nil, client.subscribers["s-1"] ~= nil)
+        end)
+    end
+
     it(
         "neither reports budget windows nor auto-continues by default",
         function()

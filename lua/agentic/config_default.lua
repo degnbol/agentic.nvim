@@ -545,7 +545,7 @@ local ConfigDefault = {
     --- "fzf-lua" — fzf-lua with preview and scope toggle; falls back to quickfix if not installed.
     --- "select" — delegates to vim.ui.select (works with dressing.nvim, etc; no scope toggle or delete).
     --- @field confirm_delete? boolean Prompt for confirmation before /delete (default: true)
-    --- @field cd_on_load? boolean Change nvim's working directory to the session's recorded cwd when calling load_acp_session (default: true). Applies to the picker, `:Agentic {query}`, and direct API calls.
+    --- @field cd_on_load? boolean Change nvim's working directory to the session's recorded cwd on resume (default: true). Applies to every resume: the picker, `:AgenticResume` and `load_acp_session`.
     session_restore = {
         storage_path = nil,
         picker = "quickfix",

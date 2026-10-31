@@ -42,15 +42,21 @@ describe("agentic.Bootstrap", function()
         end)
 
         it(
-            ":Agentic {query} gives a chat parsed as the agentic language",
+            ":AgenticResume {query} gives a chat parsed as the agentic language",
             function()
                 child.lua([[
-                    require("agentic.session_restore").resolve_query = function(_, callback)
-                        callback("sid-x", vim.fn.getcwd())
+                    require("agentic.session_restore").find = function(_, callback)
+                        callback({ {
+                            session_id = "sid-x",
+                            cwd = vim.fn.getcwd(),
+                            file_path = "x",
+                            title = "",
+                            timestamp = 0,
+                        } })
                     end
                     require("agentic.session_manager").load_acp_session = function() end
                 ]])
-                child.cmd("Agentic sid")
+                child.cmd("AgenticResume sid")
                 child.flush()
 
                 assert.equal("agentic", chat_lang())

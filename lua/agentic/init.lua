@@ -11,8 +11,7 @@ local Agentic = {}
 
 --- @class agentic.OpenOpts
 --- @field mods? vim.api.keyset.cmd_mods Command modifiers. A split or tab modifier opens the chat in a new window.
---- @field auto_add_to_context? boolean Add the current selection or file to the context (default true). Not with `query`
---- @field query? string A saved session's exact title or session_id prefix (8+ chars) to resume; else the first prompt of a new session
+--- @field auto_add_to_context? boolean Add the current selection or file to the context (default true)
 
 --- Notify `message` when the session's chat has no home window in the
 --- current tabpage, where its panels would show the change.
@@ -40,40 +39,9 @@ end
 --- or show the chat in the current window. From an input or a widget panel,
 --- show it instead in the chat window of that buffer's session in the current
 --- tabpage, else in a split above the current window.
----
---- With a non-blank `opts.query`, resume the saved session it matches
---- instead. No match: start a new session, show its chat and input and submit `query`
---- as its first prompt, held until the agent is ready. An ambiguous
---- session_id prefix notifies and changes nothing.
 --- @param opts agentic.OpenOpts|nil
 function Agentic.open(opts)
     opts = opts or {}
-    local query = opts.query
-    if query and query:find("%S") then
-        Agentic.resolve_session(query, function(session_id, cwd, model)
-            if session_id then
-                Agentic.load_acp_session(session_id, cwd, model, opts.mods)
-                return
-            end
-            local session = Agentic.new_session({
-                mods = opts.mods,
-                auto_add_to_context = false,
-            })
-            if not session then
-                return
-            end
-            session.widget:input_win()
-            vim.api.nvim_buf_set_lines(
-                session.widget.buf_nrs.input,
-                0,
-                -1,
-                false,
-                vim.split(query, "\n")
-            )
-            session.widget:submit()
-        end)
-        return
-    end
     local session = SessionRegistry.get_or_create()
     if not session then
         return
@@ -177,40 +145,38 @@ function Agentic.new_session(opts)
     return session
 end
 
---- Load an existing ACP session by full UUID into a new session, show its
---- chat (`ChatWidget:show`) and send session/load to the agent. When a
---- session already holds `session_id`, show its chat instead.
---- @param session_id string
---- @param cwd? string Original working directory for the session (from JSONL).
----   When nil, the cwd recorded in the saved session file, else vim.fn.getcwd().
---- @param model? string Model id saved with the session.
---- @param mods? vim.api.keyset.cmd_mods Command modifiers. A split or tab modifier shows the chat in a new window.
+--- Resume the saved session `session_id` on its saved provider and show its
+--- chat. When a session already holds `session_id`, show that chat instead.
+--- @param session_id string Full UUID
+--- @param cwd string|nil Working directory of the session. When nil, the saved one, else vim.fn.getcwd()
+--- @param model string|nil Model id. When nil, the saved one
+--- @param mods vim.api.keyset.cmd_mods|nil Command modifiers. A split or tab modifier shows the chat in a new window
 function Agentic.load_acp_session(session_id, cwd, model, mods)
-    local open_session = SessionRegistry.session_for_acp_id(session_id)
-    if open_session then
-        open_session.widget:show(mods, SessionRegistry.target_win())
-        return
-    end
-    if Config.session_restore.cd_on_load and cwd then
-        local st = vim.uv.fs_stat(cwd)
-        if st and st.type == "directory" then
-            vim.api.nvim_set_current_dir(cwd)
-        end
-    end
-    local session = SessionRegistry.create()
-    if not session then
-        return
-    end
-    session:load_acp_session(session_id, cwd, model)
-    session.widget:show(mods, SessionRegistry.target_win())
+    SessionRestore.resume(
+        { session_id = session_id, cwd = cwd, model = model },
+        mods
+    )
 end
 
---- Resolve a session reference to a cached session
---- (`SessionRestore.resolve_query`).
+--- Saved sessions of all projects whose id starts with `query`, else whose
+--- title equals `query` (case-insensitive).
 --- @param query string
---- @param callback fun(session_id?: string, cwd?: string, model?: string)
+--- @param callback fun(matches: agentic.ui.ChatHistory.SessionMeta[])
 function Agentic.resolve_session(query, callback)
-    SessionRestore.resolve_query(query, callback)
+    SessionRestore.find(query, callback)
+end
+
+--- Resume the saved session that `query` matches by id prefix, else by exact
+--- title. Several matches, no match, or a nil `query` show a picker, which
+--- marks the session that owns the current buffer.
+--- @param query string|nil
+--- @param mods vim.api.keyset.cmd_mods|nil
+function Agentic.resume_session(query, mods)
+    local owner = SessionRegistry.owner_of_buf(vim.api.nvim_get_current_buf())
+    SessionRestore.pick(query, {
+        mods = mods,
+        marked_id = owner and owner.session_id,
+    })
 end
 
 --- Send arbitrary text as a prompt to the current session.

@@ -1295,9 +1295,13 @@ _G.s2 = require("agentic.session_registry").current()
             -- The new session's own `new_session`, deferred, runs first.
             child.flush()
             child.lua([[
-_G.s2.session_id = "sid-live"
-_G.s2:restore_from_history(vim.deepcopy(_G.saved), { reuse_session = true })
+_G.s2.agent._send_request = function(_, method, _, cb)
+    if method == "session/new" then _G.new_cb = cb end
+end
+_G.s2:restore_from_history(vim.deepcopy(_G.saved))
+_G.new_cb({ sessionId = "sid-live" }, nil)
 ]])
+            child.flush()
 
             local name = child.lua_get(
                 [[vim.api.nvim_buf_get_name(_G.s2._agents.c1.transcript.bufnr)]]

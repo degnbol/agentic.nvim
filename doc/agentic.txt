@@ -31,6 +31,7 @@ CONTENTS                                                    *agentic-contents*
        7.2 Forwarded commands ................... |agentic-commands-forwarded|
        7.3 Command notices ................................. |agentic-notices|
        7.4 :Agentic ................................ |agentic-commands-open|
+       7.5 :AgenticResume ........................ |agentic-commands-resume|
     8. Permissions ..................................... |agentic-permissions|
        8.1 The permission prompt ................ |agentic-permissions-prompt|
        8.2 Auto-approval .......................... |agentic-permissions-auto|
@@ -335,7 +336,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
         Prompt before `/delete`.
     `cd_on_load`        boolean (default: true)
         Change nvim's working directory to the session's recorded cwd on
-        load. Applies to the picker, `:Agentic {query}` and
+        resume. Applies to every resume: the picker, |:AgenticResume| and
         |agentic.load_acp_session()|.
 
 ------------------------------------------------------------------------------
@@ -461,9 +462,6 @@ agentic.open({opts})
                              window, and its panels move there.
       `auto_add_to_context`  Add the current selection or file to the
                              context first (default: true).
-      `query`                Resume the cached session it matches, else
-                             start a new session with it as the first
-                             prompt, as |:Agentic| does with {query}.
 
                                                        *agentic.send_prompt()*
 agentic.send_prompt({text})
@@ -502,20 +500,26 @@ agentic.new_session({opts})
     it, the new session runs the current session's provider.
 
                                                   *agentic.load_acp_session()*
-agentic.load_acp_session({session_id}, {cwd}, {model})
+agentic.load_acp_session({session_id}, {cwd}, {model}, {mods})
     Load a specific ACP session by UUID into a new session and show its
-    chat. Optional {cwd} for the working directory and {model} for the
-    model id saved with the session. On failure, the saved transcript is
-    replayed as context on the next prompt. When the session is already
-    open, shows its chat instead.
+    chat in the target window, as |agentic.open()| does, on the session's
+    saved provider when there is one. Optional {cwd} for the working
+    directory and {model} for the model id; a nil {cwd} or {model} takes
+    the saved value. Optional {mods} as in |agentic.open()|. On failure, the saved transcript is replayed as
+    context on the next prompt. When the session is already open, shows
+    its chat instead.
 
                                                    *agentic.resolve_session()*
 agentic.resolve_session({query}, {callback})
-    Resolve {query} against the session cache: a `session_id` prefix of at
-    least 8 chars, else an exact title, case-insensitive, the newest when
-    several match. {callback} receives `session_id`, `cwd` and `model`, or
-    no arguments when nothing matches. A prefix that several sessions share
-    emits a warning and does not call {callback}.
+    Find the saved sessions {query} matches: those whose `session_id`
+    starts with {query}, else those whose title equals it,
+    case-insensitive. {callback} gets the list of matching sessions, newest
+    first.
+
+                                                    *agentic.resume_session()*
+agentic.resume_session({query}, {mods})
+    Resume a saved session, as |:AgenticResume| does. {query} and {mods}
+    are optional.
 
                                                  *agentic.send_operatorfunc()*
 agentic.send_operatorfunc({type})
@@ -586,7 +590,7 @@ Applied to all buffers in the widget (chat, prompt, panels).
     Key              Field               Mode    Description ~
     `<localLeader>m`   `change_mode`         n/v     Switch agent mode
     `<C-c>`            `stop_generation`     n/i     Stop generation
-    `<localLeader>R`   `restore_session`     n       Restore session
+    `<localLeader>R`   `restore_session`     n       Pick a saved session
     `<localLeader>p`   `switch_provider`     n       Switch this session's provider
     `<localLeader>M`   `switch_model`        n       Switch model
     `<localLeader>!`   `restart_session`     n       Restart session
@@ -692,6 +696,7 @@ Global `<Plug>` mappings for binding from any buffer:
     `<Plug>(agentic-add-diagnostics)`          n      Add cursor diagnostics
     `<Plug>(agentic-add-buffer-diagnostics)`   n      Add buffer diagnostics
     `<Plug>(agentic-new-session)`              n      New session
+    `<Plug>(agentic-resume-session)`           n      Resume a saved session
 
 ==============================================================================
 7. COMMANDS                                                 *agentic-commands*
@@ -738,18 +743,23 @@ notices as well as prompts (|agentic-keymaps-agent|).
 7.4 :AGENTIC                                           *agentic-commands-open*
 
                                                                     *:Agentic*
-:Agentic [{query}]
+:Agentic
     Show the session's chat as |agentic.open()| does, without adding the
     current file. Takes |:command-modifiers|: `:tab Agentic`, `:vert Agentic`
     and `:bo Agentic` open the chat in a new window.
 
-    With {query}, open the cached session it matches
-    (|agentic.resolve_session()|) instead, as |agentic.load_acp_session()|
-    does. `session_restore.cd_on_load` governs the working directory. A
-    `session_id` prefix several sessions share emits a warning and opens
-    nothing. With no match, start a new session with {query} as its first
-    prompt, held in the input until the agent is ready. A leading `/` runs
-    as a slash command, as typed in the input.
+------------------------------------------------------------------------------
+7.5 :AGENTICRESUME                                   *agentic-commands-resume*
+
+                                                              *:AgenticResume*
+:AgenticResume [{query}]
+    Without {query}, open the session picker for this project. With
+    {query}, resume the saved session it matches (|agentic.resolve_session()|)
+    as |agentic.load_acp_session()| does. Several matches open the picker
+    on those matches, across all projects. No match notifies and opens the
+    picker for this project. Takes |:command-modifiers|: `:tab AgenticResume`
+    shows the resumed chat in a new tabpage. `session_restore.cd_on_load`
+    governs the working directory.
 
 ==============================================================================
 8. PERMISSIONS                                           *agentic-permissions*

@@ -15,6 +15,7 @@ map("n", "<Plug>(agentic-open)", agentic("open"))
 
 -- Session management
 map("n", "<Plug>(agentic-new-session)", agentic("new_session"))
+map("n", "<Plug>(agentic-resume-session)", agentic("resume_session"))
 
 -- Context: add file / selection / diagnostics
 map("n", "<Plug>(agentic-add-file)", agentic("add_file"))
@@ -45,9 +46,15 @@ vim.api.nvim_create_user_command("Agentic", function(args)
     require("agentic").open({
         mods = args.smods,
         auto_add_to_context = false,
-        query = args.args,
     })
 end, {
+    nargs = 0,
+    desc = "Show the agentic chat, or start a session; split and tab modifiers open a new window",
+})
+
+vim.api.nvim_create_user_command("AgenticResume", function(args)
+    require("agentic").resume_session(args.args, args.smods)
+end, {
     nargs = "?",
-    desc = "Show the agentic chat, or resume the session an exact title or session_id prefix matches, else start a new session with the text as prompt; split and tab modifiers open a new window",
+    desc = "Resume the saved session a session id prefix or exact title matches, else pick one; split and tab modifiers open a new window",
 })

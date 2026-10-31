@@ -444,14 +444,9 @@ function M.respawn_preserving_history(sm, on_created)
             sm.agent = client
 
             sm:new_session({
-                restore_mode = true,
+                history = saved_history,
                 quiet_welcome = true,
-                on_created = function()
-                    sm:_adopt_history(saved_history)
-                    if on_created then
-                        on_created()
-                    end
-                end,
+                on_created = on_created,
             })
         end)
     end)

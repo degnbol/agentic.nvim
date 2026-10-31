@@ -182,6 +182,25 @@ function ChatHistory.find_files(session_id)
     end, found)
 end
 
+--- The newest saved file of `session_id` in any project folder, decoded.
+--- Warns when that file cannot be read or decoded.
+--- @param session_id string
+--- @return agentic.ui.ChatHistory.StorageData|nil data Nil when there is no file or it cannot be read
+function ChatHistory.read_saved(session_id)
+    local path = ChatHistory.find_files(session_id)[1]
+    if not path then
+        return nil
+    end
+    local data, err = FileSystem.read_json(path)
+    if not data then
+        Logger.notify(
+            "Failed to read saved session: " .. err,
+            vim.log.levels.WARN
+        )
+    end
+    return data
+end
+
 --- The list a message belongs in: `subagent_messages` for one with
 --- `parent_tool_use_id`, else `messages`.
 --- @param msg { parent_tool_use_id?: string }
@@ -575,7 +594,51 @@ function ChatHistory.list_sessions(cwd, callback)
     callback(sessions)
 end
 
---- List sessions from ALL projects, sorted by last activity descending.
+--- One row per session id. An id in several project folders keeps the row of
+--- its newest file by mtime.
+--- @param sessions agentic.ui.ChatHistory.SessionMeta[]
+--- @return agentic.ui.ChatHistory.SessionMeta[] distinct In the order of `sessions`
+local function newest_per_id(sessions)
+    local count = {} --- @type table<string, integer>
+    for _, s in ipairs(sessions) do
+        count[s.session_id] = (count[s.session_id] or 0) + 1
+    end
+    local newest = {} --- @type table<string, string>
+    local distinct = {} --- @type agentic.ui.ChatHistory.SessionMeta[]
+    for _, s in ipairs(sessions) do
+        local id = s.session_id
+        if count[id] == 1 then
+            table.insert(distinct, s)
+        else
+            newest[id] = newest[id] or ChatHistory.find_files(id)[1]
+            if s.file_path == newest[id] then
+                table.insert(distinct, s)
+            end
+        end
+    end
+    return distinct
+end
+
+--- The sessions `query` matches: those whose id starts with it, else those
+--- whose title equals it (case-insensitive). In the order of `sessions`.
+--- @param sessions agentic.ui.ChatHistory.SessionMeta[]
+--- @param query string
+--- @return agentic.ui.ChatHistory.SessionMeta[]
+function ChatHistory.match_sessions(sessions, query)
+    local by_id = vim.tbl_filter(function(s)
+        return vim.startswith(s.session_id, query)
+    end, sessions)
+    if #by_id > 0 then
+        return by_id
+    end
+    local query_lower = query:lower()
+    return vim.tbl_filter(function(s)
+        return type(s.title) == "string" and s.title:lower() == query_lower
+    end, sessions)
+end
+
+--- List sessions from ALL projects, sorted by last activity descending. An id
+--- saved in several projects gives one row, from its newest file.
 --- @param callback fun(sessions: agentic.ui.ChatHistory.SessionMeta[])
 function ChatHistory.list_all_sessions(callback)
     local base = ChatHistory.get_base_storage_path()
@@ -598,6 +661,7 @@ function ChatHistory.list_all_sessions(callback)
         end
     end
     warn_unreadable(all_errors)
+    all_sessions = newest_per_id(all_sessions)
 
     table.sort(all_sessions, function(a, b)
         return (a.last_activity or a.timestamp)

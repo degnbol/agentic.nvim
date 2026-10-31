@@ -135,10 +135,16 @@ _G.s:_sync_modified(_G.s.chat_history)
 ]])
             assert.is_true(chat_modified())
             child.lua([[
+_G.s.agent._send_request = function(_, method, _, cb)
+    if method == "session/new" then _G.new_cb = cb end
+end
 local history = require("agentic.ui.chat_history"):new()
 history.messages = { _G.user_msg("restored") }
-_G.s:restore_from_history(history, { reuse_session = true })
+_G.s:restore_from_history(history)
+_G.new_cb({ sessionId = "sid-2" }, nil)
 ]])
+            child.flush()
+            assert.equal("sid-2", child.lua_get("_G.s.session_id"))
             assert.is_false(chat_modified())
         end)
     end)

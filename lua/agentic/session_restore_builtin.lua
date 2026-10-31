@@ -1,5 +1,5 @@
 --- Fallback session picker using quickfix window (no external deps).
---- Keymaps: <CR> restore, dd delete, u undo delete, <Tab> toggle scope, q close.
+--- Keymaps: <CR> resume, dd delete, u undo delete, <Tab> toggle scope, q close.
 --- Deletions are deferred — files are removed from disk only when the picker closes.
 local Logger = require("agentic.utils.logger")
 local SessionRestore = require("agentic.session_restore")
@@ -9,7 +9,8 @@ local M = {}
 
 --- @class agentic.SessionRestoreBuiltin.Opts
 --- @field scope agentic.SessionRestore.Scope
---- @field current_session agentic.SessionManager
+--- @field mods? vim.api.keyset.cmd_mods
+--- @field marked_id? string ACP session id to mark
 
 --- @class agentic.SessionRestoreBuiltin.DeleteEntry
 --- @field index integer Original index in items list at time of deletion
@@ -20,9 +21,9 @@ local M = {}
 --- plugins render aligned columns automatically.
 --- @param items agentic.SessionRestore.PickerItem[]
 --- @param scope agentic.SessionRestore.Scope
---- @param current_session_id string|nil
---- @return integer|nil current_idx 1-based index of current session, if found
-local function set_qf_items(items, scope, current_session_id)
+--- @param marked_id string|nil
+--- @return integer|nil current_idx 1-based index of the marked session, if found
+local function set_qf_items(items, scope, marked_id)
     local scope_label = scope == "all" and "all projects" or "this project"
     local qf_items = {}
     local current_idx --- @type integer|nil
@@ -35,14 +36,14 @@ local function set_qf_items(items, scope, current_session_id)
             lnum = item.prompt_count or 0,
             text = title,
         })
-        if current_session_id and item.session_id == current_session_id then
+        if marked_id and item.session_id == marked_id then
             current_idx = i
         end
     end
     --- vim.fn.setqflist: no API equivalent; quickfixtextfunc must be a funcref
     local qf_opts = {
         title = string.format(
-            "Sessions (%s) │ date  #prompts  title │ <CR>:restore  dd:delete  u:undo  <Tab>:scope  q:close",
+            "Sessions (%s) │ date  #prompts  title │ <CR>:resume  dd:delete  u:undo  <Tab>:scope  q:close",
             scope_label
         ),
         items = qf_items,
@@ -78,7 +79,6 @@ end
 --- @param opts agentic.SessionRestoreBuiltin.Opts
 function M.show(items, on_select, opts) -- luacheck: ignore
     local scope = opts.scope or "local"
-    local current_session_id = opts.current_session.session_id
     --- @type agentic.SessionRestoreBuiltin.DeleteEntry[]
     local pending_deletes = {}
     local committed = false
@@ -118,7 +118,7 @@ function M.show(items, on_select, opts) -- luacheck: ignore
     end
 
     local function open_qf()
-        local current_idx = set_qf_items(items, scope, current_session_id)
+        local current_idx = set_qf_items(items, scope, opts.marked_id)
         vim.cmd("botright copen")
         setup_qf_win(current_idx ~= nil)
     end
@@ -179,11 +179,10 @@ function M.show(items, on_select, opts) -- luacheck: ignore
         local item = items[idx]
         if item then
             commit_and_notify()
-            -- on_select first (confirm dialog runs while qf is still visible),
-            -- then close qf only if the user chose an action (not cancel).
-            if on_select(item) ~= false then
-                vim.cmd("cclose")
-            end
+            -- `:cclose` returns focus to the window the picker opened from,
+            -- where `on_select` shows the chat.
+            vim.cmd("cclose")
+            on_select(item)
         end
     end, map_opts)
 
@@ -211,7 +210,11 @@ function M.show(items, on_select, opts) -- luacheck: ignore
         commit_and_notify()
         vim.cmd("cclose")
         local new_scope = scope == "all" and "local" or "all"
-        SessionRestore.show_picker(opts.current_session, new_scope)
+        SessionRestore.show_picker({
+            scope = new_scope,
+            mods = opts.mods,
+            marked_id = opts.marked_id,
+        })
     end, map_opts)
 
     vim.keymap.set("n", "q", function()

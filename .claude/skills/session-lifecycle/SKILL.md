@@ -10,60 +10,37 @@ description: Session lifecycle races, epoch guard, cross-turn MessageWriter stat
 For the three restore paths (`session/load`, `restore_from_history`,
 `respawn_preserving_history`) and what each sends on the wire, see the
 `provider-system` skill § "Chat buffer is UI only".
-The races below all concern Path A (`session/load`) interleaving with
-the constructor's `session/new`.
 
-Three race conditions can overwrite `self.session_id` during ACP
-`session/load`:
+Two races leave a callback acting on a session that has moved on:
 
 1. **Constructor on-ready race:** `AgentInstance.get_instance()` calls `on_ready`
    synchronously when the instance already exists. The constructor wraps the
    inner logic in `vim.schedule`. When `load_acp_session()` is called immediately
-   after construction (from the session picker), the deferred callback fires
+   after construction (from `SessionRestore.resume`), the deferred callback fires
    after `_do_load_acp_session` — without the `_restoring` guard it would call
    `new_session()`, replacing the loaded session.
 
-2. **Stale create_session response race:** The constructor's `new_session()`
-   sends `session/new` (async RPC). The user then browses the session picker for
-   seconds/minutes. `_do_load_acp_session` sets `_restoring = true` and sends
-   `session/load`. The load completes and clears `_restoring = false`. The
-   `session/new` response then arrives — `_restoring` is false, so the callback
-   overwrites `session_id` with the stale new-session ID.
-
-3. **Cross-provider restore, two linked hazards.** A saved session on
-   another provider restores into a new session from
-   `SessionRegistry.create(provider)`; the picker's `current_session` is
-   destroyed afterwards, in the same synchronous call (a cached agent's
-   `on_ready` is `vim.schedule`d, so it runs after the destroy). Two races that same-provider restore avoids:
-
-   a. **Capability check during agent init.** `agent_supports_load` is called
-      synchronously inside the picker callback. A freshly-spawned agent has
-      `agent_capabilities == nil` (initialize RPC still in flight). Treating
-      nil as "no support" silently drops into the non-ACP fallback path.
-      Treat nil as "support-assumed" — `load_acp_session` already queues via
-      `_pending_load_session_id` until on_ready fires.
-
-   b. **Stale `session/new` callback from the destroyed session.** The
-      original SessionManager's `create_session` RPC may still be in flight
-      when it's destroyed. The callback closure holds a reference to the
-      destroyed `self`; when the response arrives it would run
-      `_handle_new_config_options` against wiped buffers. Bail out at the top
-      of the create_session callback when `self.destroyed` is true.
+2. **Session destroyed while its `session/new` is in flight:** the unused
+   session a resume replaces (through `BufWinLeave`), or `:bd` right after
+   creation. The callback closure holds the destroyed `self`; when the
+   response arrives it would run `_handle_new_config_options` against wiped
+   buffers. Bail out at the top of the create_session callback when
+   `self.destroyed` is true.
 
 **Guards:**
 
 - `_restoring` flag — prevents the deferred on-ready callback (race 1).
 - `_session_epoch` counter — monotonically incremented by `new_session()`,
   `_do_load_acp_session` and `_delete_session` (which ends a conversation with
-  no `new_session` behind it). The `create_session` callback captures the epoch
-  at call time and rejects the response if the epoch has advanced (race 2).
-  Long-running
+  no `new_session` behind it). The `create_session` and `session/load`
+  callbacks capture the epoch at call time and reject a response that a
+  later transition superseded (e.g. `/new` during a load). Long-running
   side flows capture it too: `run_login` holds the epoch across the login so
   its callback cannot recover into a replaced conversation.
 - `destroyed` flag — set in `SessionManager:destroy`; `SessionRegistry.destroy`
   is a no-op once it is set. Checked at the top of the `create_session`
-  callback for race 3b (epoch/restoring can't catch it because they track the
-  replacement's state, not the destroyed sender's).
+  callback for race 2 (`destroy` advances neither the epoch nor
+  `_restoring`).
 
 **Rules:**
 

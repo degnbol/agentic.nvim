@@ -1306,6 +1306,9 @@ function ACPClient:create_session(cwd, handlers, callback)
     end)
 end
 
+--- Send session/load with `handlers` subscribed to `session_id`. An error
+--- response unsubscribes them. An agent that does not advertise
+--- `loadSession` gets no request, and `callback` gets an error.
 --- @param session_id string
 --- @param cwd string
 --- @param mcp_servers table[]|nil
@@ -1348,6 +1351,9 @@ function ACPClient:load_session(
         _meta = self:session_meta(additional_dirs),
     }, function(result, err)
         self._loading_sessions[session_id] = nil
+        if err then
+            self:unsubscribe(session_id)
+        end
         callback(result, err)
     end)
 end
