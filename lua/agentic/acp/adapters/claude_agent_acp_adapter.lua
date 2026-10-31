@@ -484,7 +484,9 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update, session_id)
         body = self:extract_content_body(update),
     }
     if update.status == "failed" then
-        message.failure_reason = self:extract_failure_reason(update.rawOutput)
+        local reason = self:extract_failure_reason(update.rawOutput)
+        message.failure_reason = reason
+            and ClaudeUtils.unwrap_tool_use_error(reason)
     end
 
     self:__apply_tool_identity(message, update)

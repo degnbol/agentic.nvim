@@ -815,7 +815,7 @@ end
 --- Extract plain text from a tool_call_update's rawOutput field.
 --- claude-agent-acp sets `rawOutput = chunk.content`, which per the Anthropic
 --- API is a string or an array of content blocks (`{type="text", text=...}`).
---- For failed tool calls this is the unwrapped error/denial text — preferable
+--- For failed tool calls this is the unfenced error/denial text — preferable
 --- to `content`, which `toAcpContentUpdate` wraps in ``` fences.
 --- @param raw_output any
 --- @return string[]|nil body

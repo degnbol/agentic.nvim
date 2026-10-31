@@ -212,6 +212,25 @@ function M.message_result(body)
     return vim.split(decoded.message, "\n", { plain = true }), delivered
 end
 
+--- Content of the `<tool_use_error>` element that Claude Code wraps around a
+--- failed tool's result.
+--- @param lines string[]
+--- @return string[]|nil lines A new table with the element's content when `lines` is exactly one such element, ignoring trailing empty lines. Otherwise `lines` itself. Nil when the content is only whitespace.
+function M.unwrap_tool_use_error(lines)
+    -- The SDK lists the tag among its internal envelope tags
+    -- (`claude-agent-sdk/sdk.mjs`). It has no attributes, so dropping it loses nothing.
+    local inner = table
+        .concat(lines, "\n")
+        :match("^<tool_use_error>(.*)</tool_use_error>\n*$")
+    if not inner then
+        return lines
+    end
+    if vim.trim(inner) == "" then
+        return nil
+    end
+    return vim.split(inner, "\n", { plain = true })
+end
+
 --- This session's name and the rest of a `ListAgents` result. The first line
 --- names the calling session as `This session is <token> — …`, or from a
 --- subagent `This process's main session is <token> — …`. The CLI leaves

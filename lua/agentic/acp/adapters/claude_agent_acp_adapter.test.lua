@@ -114,6 +114,16 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         )
     end)
 
+    it("unwraps a failure reason's tool_use_error envelope", function()
+        local msg = make_adapter():__build_tool_call_update({
+            toolCallId = "tc-1",
+            status = "failed",
+            rawOutput = "<tool_use_error>X</tool_use_error>",
+        })
+
+        assert.same({ "X" }, msg.failure_reason)
+    end)
+
     describe("edit diff", function()
         -- Subagent (Task) tool calls carry kind + rawInput + content on the
         -- INITIAL tool_call (nothing streams an empty one first), so the diff

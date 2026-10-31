@@ -85,6 +85,54 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
         end)
     end)
 
+    describe("unwrap_tool_use_error", function()
+        it("unwraps a one-line element", function()
+            assert.same(
+                { "File not found" },
+                ClaudeUtils.unwrap_tool_use_error({
+                    "<tool_use_error>File not found</tool_use_error>",
+                })
+            )
+        end)
+
+        it("unwraps a multi-line element", function()
+            assert.same(
+                { "Found 10 matches of the string.", "Use replace_all." },
+                ClaudeUtils.unwrap_tool_use_error({
+                    "<tool_use_error>Found 10 matches of the string.",
+                    "Use replace_all.</tool_use_error>",
+                })
+            )
+        end)
+
+        it("unwraps despite a trailing empty line", function()
+            assert.same(
+                { "X" },
+                ClaudeUtils.unwrap_tool_use_error({
+                    "<tool_use_error>X</tool_use_error>",
+                    "",
+                })
+            )
+        end)
+
+        it("returns nil for an element holding only whitespace", function()
+            assert.is_nil(ClaudeUtils.unwrap_tool_use_error({
+                "<tool_use_error> </tool_use_error>",
+            }))
+        end)
+
+        it("leaves lines without the envelope unchanged", function()
+            local cases = {
+                { "plain error" },
+                { "<tool_use_error>no closing tag" },
+                { "see <tool_use_error>X</tool_use_error> here" },
+            }
+            for _, lines in ipairs(cases) do
+                assert.same(lines, ClaudeUtils.unwrap_tool_use_error(lines))
+            end
+        end)
+    end)
+
     describe("send_message_update", function()
         it(
             "heads the call with addressee and summary, bodies the message",
