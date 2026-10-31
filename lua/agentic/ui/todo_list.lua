@@ -3,7 +3,7 @@ local BufHelpers = require("agentic.utils.buf_helpers")
 local NS_CHECKBOX = vim.api.nvim_create_namespace("agentic_todo_checkbox")
 
 --- @class agentic.ui.TodoList
---- @field _bufnr integer
+--- @field _get_bufnr fun(): integer|nil
 --- @field _on_change fun(todoList: agentic.ui.TodoList)
 --- @field _on_close fun()
 --- @field _entries agentic.acp.PlanEntry[] Last rendered entries
@@ -12,13 +12,13 @@ local NS_CHECKBOX = vim.api.nvim_create_namespace("agentic_todo_checkbox")
 local TodoList = {}
 TodoList.__index = TodoList
 
---- @param bufnr integer
+--- @param get_bufnr fun(): integer|nil The buffer to render to; nil skips the write
 --- @param on_change fun(todoList: agentic.ui.TodoList)
 --- @param on_close fun()
 --- @return agentic.ui.TodoList
-function TodoList:new(bufnr, on_change, on_close)
+function TodoList:new(get_bufnr, on_change, on_close)
     return setmetatable({
-        _bufnr = bufnr,
+        _get_bufnr = get_bufnr,
         _entries = {},
         _on_change = on_change,
         _on_close = on_close,
@@ -46,7 +46,8 @@ local STATUS_CHECKBOX = {
     completed = "[x]",
 }
 
---- Render plan entries as markdown todo list
+--- Store plan entries and render them as a markdown todo list. While
+--- `get_bufnr` gives nil, only stores them: no write, no `on_change`.
 --- @param entries agentic.acp.PlanEntry[]
 function TodoList:render(entries)
     self._entries = entries
@@ -67,14 +68,19 @@ function TodoList:render(entries)
     self.completed_count = completed
     self.total_count = #entries
 
-    BufHelpers.with_modifiable(self._bufnr, function(buf)
+    local bufnr = self._get_bufnr()
+    if not bufnr then
+        return
+    end
+
+    BufHelpers.with_modifiable(bufnr, function(buf)
         vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     end)
 
     -- Treesitter markdown parses [~] as shortcut_link (only [x]/[ ] are
     -- recognised as task_list_marker), so the brackets get concealed.
     -- Override with conceal extmarks at priority > treesitter's 100.
-    vim.api.nvim_buf_clear_namespace(self._bufnr, NS_CHECKBOX, 0, -1)
+    vim.api.nvim_buf_clear_namespace(bufnr, NS_CHECKBOX, 0, -1)
     for i, line in ipairs(lines) do
         local col = line:find("%[~%]")
         if col then
@@ -84,7 +90,7 @@ function TodoList:render(entries)
             for offset = 0, 2 do
                 local char = line:sub(col + offset, col + offset)
                 vim.api.nvim_buf_set_extmark(
-                    self._bufnr,
+                    bufnr,
                     NS_CHECKBOX,
                     row,
                     c + offset,
@@ -100,13 +106,14 @@ function TodoList:render(entries)
     end
 
     self._on_change(self)
-    self:_scroll_to_non_completed(entries)
+    self:_scroll_to_non_completed(bufnr, entries)
 end
 
---- Scroll window to show at least 2 non-completed items
+--- Scroll the window showing `bufnr` to show at least 2 non-completed items.
+--- @param bufnr integer
 --- @param entries agentic.acp.PlanEntry[]
-function TodoList:_scroll_to_non_completed(entries)
-    local wins = vim.fn.win_findbuf(self._bufnr)
+function TodoList:_scroll_to_non_completed(bufnr, entries)
+    local wins = vim.fn.win_findbuf(bufnr)
     if #wins == 0 then
         return
     end
@@ -156,9 +163,12 @@ function TodoList:clear()
     self.completed_count = 0
     self.total_count = 0
 
-    BufHelpers.with_modifiable(self._bufnr, function(buf)
-        vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
-    end)
+    local bufnr = self._get_bufnr()
+    if bufnr then
+        BufHelpers.with_modifiable(bufnr, function(buf)
+            vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
+        end)
+    end
 end
 
 return TodoList

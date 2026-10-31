@@ -194,7 +194,7 @@ is dropped from the body (the description is read from `rawInput.description`).
 **Requirements for injection to work:**
 
 - `vim.treesitter.start(chat_bufnr, "agentic")` must be called on the chat
-  buffer (done in `ChatWidget:_create_buf_nrs`; `agentic` is a markdown-parser
+  buffer (done in `ChatBuffer.start`; `agentic` is a markdown-parser
   clone whose `injections.scm` inherits markdown, so bash/zsh injection still
   fires — see the folding note in the project CLAUDE.md). Falls back to
   `markdown` if the `agentic` language could not be registered.
@@ -318,7 +318,7 @@ providers don't advertise them in `available_commands_update`):
 
 Providers intercept a line-start `/word` whether or not they advertised it,
 which is why `PromptBlocks.command` classifies on line shape and the advertised
-list is only used to warn. Measured 2026-09-09 by sending an unadvertised
+list only feeds completion. Measured 2026-09-09 by sending an unadvertised
 command:
 
 | Provider | Advertised | Unknown `/word` |
@@ -326,10 +326,8 @@ command:
 | claude-agent-acp | 72, all `[%w_-]+` | `end_turn`, zero usage, one chunk `Unknown command: …` |
 | opencode | 32, all `[%w_-]+` | `end_turn` with **no session updates at all** — dropped silently |
 
-No advertised name on either escapes the shape rule. opencode's silent drop is
-what `SessionManager:_warn_unadvertised_command` exists for: without the
-warning, a stray `/word` line vanishes with no trace once the splitter gives it
-its own turn.
+No advertised name on either escapes the shape rule. The plugin does not warn
+on an unknown `/word`, so on opencode a stray one vanishes with no trace.
 
 gemini, codex, cursor, auggie and vibe are unverified — not installed here, and
 their adapters carry no slash-command logic at all (only `rawInput.command`

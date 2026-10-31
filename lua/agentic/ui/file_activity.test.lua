@@ -20,7 +20,9 @@ describe("agentic.ui.FileActivity", function()
 
     --- @return agentic.ui.FileActivity
     local function make_activity()
-        return FileActivity:new(bufnr, function()
+        return FileActivity:new(function()
+            return bufnr
+        end, function()
             changes = changes + 1
         end)
     end
@@ -71,6 +73,19 @@ describe("agentic.ui.FileActivity", function()
             assert.equal(1, #rows)
             assert.equal("/repo/a.lua", rows[1].path)
             assert.equal("edit", rows[1].op)
+        end)
+
+        it("records but skips the render while it has no buffer", function()
+            local activity = FileActivity:new(function()
+                return nil
+            end, function()
+                changes = changes + 1
+            end)
+
+            assert.is_true(record(activity, "tc-1", "/repo/a.lua", "edit"))
+
+            assert.equal(1, #activity:rows())
+            assert.equal(0, changes)
         end)
 
         it("ignores a repeated tool call id", function()
@@ -626,6 +641,7 @@ describe("agentic.ui.FileActivity", function()
 
         it("opens the row's file with tab drop", function()
             local activity = make_activity()
+            activity:bind_keymaps(bufnr)
             record(activity, "tc-1", "/repo/a.lua", "edit")
 
             vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)

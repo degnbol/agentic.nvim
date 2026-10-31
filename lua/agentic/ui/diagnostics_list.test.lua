@@ -40,8 +40,9 @@ describe("agentic.ui.DiagnosticsList", function()
         })
         on_change_spy = spy.new(function() end)
 
-        diagnostics_list =
-            DiagnosticsList:new(bufnr, on_change_spy --[[@as function]])
+        diagnostics_list = DiagnosticsList:new(function()
+            return bufnr
+        end, on_change_spy --[[@as function]])
     end)
 
     after_each(function()

@@ -26,8 +26,9 @@ describe("agentic.ui.CodeSelection", function()
     before_each(function()
         bufnr = vim.api.nvim_create_buf(false, true)
         on_change_spy = spy.new(function() end)
-        code_selection =
-            CodeSelection:new(bufnr, on_change_spy --[[@as function]])
+        code_selection = CodeSelection:new(function()
+            return bufnr
+        end, on_change_spy --[[@as function]])
     end)
 
     after_each(function()

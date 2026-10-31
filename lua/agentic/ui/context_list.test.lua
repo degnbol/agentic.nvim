@@ -32,7 +32,9 @@ describe("agentic.ui.ContextList", function()
     before_each(function()
         bufnr = vim.api.nvim_create_buf(false, true)
         on_change_spy = spy.new(function() end)
-        list = RowsList:new(bufnr, on_change_spy --[[@as function]])
+        list = RowsList:new(function()
+            return bufnr
+        end, on_change_spy --[[@as function]])
     end)
 
     after_each(function()
@@ -160,6 +162,7 @@ describe("agentic.ui.ContextList", function()
                 row = 0,
                 col = 0,
             })
+            list:bind_keymaps(bufnr)
             list:add({ "a" })
             list:add({ "b1", "b2", "b3" })
             list:add({ "c" })
@@ -194,6 +197,17 @@ describe("agentic.ui.ContextList", function()
 
         list:add({ "a" })
 
+        assert.spy(on_change_spy).was.called(0)
+    end)
+
+    it("skips the render while it has no buffer", function()
+        local unbuffered = RowsList:new(function()
+            return nil
+        end, on_change_spy --[[@as function]])
+
+        unbuffered:add({ "a" })
+
+        assert.equal(1, unbuffered:count())
         assert.spy(on_change_spy).was.called(0)
     end)
 end)

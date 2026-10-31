@@ -20,6 +20,11 @@ describe("agentic.ui.TodoList", function()
     --- @type TestSpy
     local on_close_spy
 
+    --- @return integer
+    local function get_bufnr()
+        return bufnr
+    end
+
     before_each(function()
         bufnr = vim.api.nvim_create_buf(false, true)
         on_change_spy = spy.new(function() end)
@@ -37,7 +42,7 @@ describe("agentic.ui.TodoList", function()
             "writes checkbox lines, updates header, and notifies on_change",
             function()
                 local todo_list = TodoList:new(
-                    bufnr,
+                    get_bufnr,
                     on_change_spy --[[@as function]],
                     on_close_spy --[[@as function]]
                 )
@@ -59,9 +64,24 @@ describe("agentic.ui.TodoList", function()
             end
         )
 
+        it("skips the write while it has no buffer", function()
+            local todo_list = TodoList:new(
+                function()
+                    return nil
+                end,
+                on_change_spy --[[@as function]],
+                on_close_spy --[[@as function]]
+            )
+
+            todo_list:render({ entry("First task", "pending") })
+            todo_list:clear()
+
+            assert.spy(on_change_spy).was.called(0)
+        end)
+
         it("clears buffer and skips header for empty entries", function()
             local todo_list = TodoList:new(
-                bufnr,
+                get_bufnr,
                 on_change_spy --[[@as function]],
                 on_close_spy --[[@as function]]
             )
@@ -77,7 +97,7 @@ describe("agentic.ui.TodoList", function()
 
         it("replaces previous content on re-render", function()
             local todo_list = TodoList:new(
-                bufnr,
+                get_bufnr,
                 on_change_spy --[[@as function]],
                 on_close_spy --[[@as function]]
             )
@@ -96,7 +116,7 @@ describe("agentic.ui.TodoList", function()
     describe("close_if_all_completed", function()
         it("does nothing when not all tasks are completed", function()
             local todo_list = TodoList:new(
-                bufnr,
+                get_bufnr,
                 on_change_spy --[[@as function]],
                 on_close_spy --[[@as function]]
             )
@@ -116,7 +136,7 @@ describe("agentic.ui.TodoList", function()
 
         it("clears and calls on_close when all tasks completed", function()
             local todo_list = TodoList:new(
-                bufnr,
+                get_bufnr,
                 on_change_spy --[[@as function]],
                 on_close_spy --[[@as function]]
             )
@@ -166,7 +186,7 @@ describe("agentic.ui.TodoList", function()
         it("does not scroll when non-completed items are visible", function()
             open_todo_window(5)
             local todo_list = TodoList:new(
-                bufnr,
+                get_bufnr,
                 on_change_spy --[[@as function]],
                 on_close_spy --[[@as function]]
             )
@@ -183,7 +203,7 @@ describe("agentic.ui.TodoList", function()
         it("scrolls to show at least 2 non-completed items", function()
             open_todo_window(4)
             local todo_list = TodoList:new(
-                bufnr,
+                get_bufnr,
                 on_change_spy --[[@as function]],
                 on_close_spy --[[@as function]]
             )
@@ -205,7 +225,7 @@ describe("agentic.ui.TodoList", function()
         it("clamps topline so last todo is last visible line", function()
             open_todo_window(4)
             local todo_list = TodoList:new(
-                bufnr,
+                get_bufnr,
                 on_change_spy --[[@as function]],
                 on_close_spy --[[@as function]]
             )
@@ -224,7 +244,7 @@ describe("agentic.ui.TodoList", function()
 
         it("does not error when no window is open", function()
             local todo_list = TodoList:new(
-                bufnr,
+                get_bufnr,
                 on_change_spy --[[@as function]],
                 on_close_spy --[[@as function]]
             )
@@ -246,7 +266,7 @@ describe("agentic.ui.TodoList", function()
             -- e.g., 8 entries in a window of height 10 (due to dynamic height + padding)
             open_todo_window(10)
             local todo_list = TodoList:new(
-                bufnr,
+                get_bufnr,
                 on_change_spy --[[@as function]],
                 on_close_spy --[[@as function]]
             )
@@ -270,7 +290,7 @@ describe("agentic.ui.TodoList", function()
             vim.wo[winid].winbar = "test winbar"
 
             local todo_list = TodoList:new(
-                bufnr,
+                get_bufnr,
                 on_change_spy --[[@as function]],
                 on_close_spy --[[@as function]]
             )
@@ -298,7 +318,7 @@ describe("agentic.ui.TodoList", function()
                 vim.wo[winid].winbar = "test winbar"
 
                 local todo_list = TodoList:new(
-                    bufnr,
+                    get_bufnr,
                     on_change_spy --[[@as function]],
                     on_close_spy --[[@as function]]
                 )
@@ -324,7 +344,7 @@ describe("agentic.ui.TodoList", function()
         it("does not scroll when all items are completed", function()
             open_todo_window(3)
             local todo_list = TodoList:new(
-                bufnr,
+                get_bufnr,
                 on_change_spy --[[@as function]],
                 on_close_spy --[[@as function]]
             )
@@ -343,7 +363,7 @@ describe("agentic.ui.TodoList", function()
     describe("clear", function()
         it("resets state and clears buffer", function()
             local todo_list = TodoList:new(
-                bufnr,
+                get_bufnr,
                 on_change_spy --[[@as function]],
                 on_close_spy --[[@as function]]
             )

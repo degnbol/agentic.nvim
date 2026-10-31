@@ -21,7 +21,9 @@ describe("agentic.ui.FileList", function()
         fs_stat_stub = spy.stub(vim.uv, "fs_stat")
         fs_stat_stub:returns({ type = "file" })
 
-        file_list = FileList:new(bufnr, on_change_spy --[[@as function]])
+        file_list = FileList:new(function()
+            return bufnr
+        end, on_change_spy --[[@as function]])
     end)
 
     after_each(function()

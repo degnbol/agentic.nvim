@@ -61,6 +61,18 @@ function BufHelpers.rename(bufnr, name)
     end
 end
 
+--- The buffer named `name`, or nil when none is.
+--- @param name string
+--- @return integer|nil bufnr
+function BufHelpers.named(name)
+    for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_get_name(bufnr) == name then
+            return bufnr
+        end
+    end
+    return nil
+end
+
 --- Sets a keymap for a specific buffer.
 --- @param bufnr integer
 --- @param mode string|string[]

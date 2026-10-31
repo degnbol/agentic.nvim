@@ -1190,6 +1190,87 @@ describe("agentic.ui.ChatWidget", function()
         end)
     end)
 
+    describe("panel_buf", function()
+        local widget
+        local buf_nrs
+
+        before_each(function()
+            widget = new_widget(function()
+                return true
+            end)
+            buf_nrs = widget.buf_nrs
+        end)
+
+        after_each(function()
+            pcall(function()
+                widget:destroy()
+            end)
+        end)
+
+        it("returns the panel's buffer while it is valid", function()
+            local info = widget.buf_nrs.info
+            assert.equal(info, widget:panel_buf("info"))
+            assert.equal(info, widget:panel_buf("info"))
+        end)
+
+        it("makes a new buffer for a wiped one", function()
+            local on_panel_buf = spy.new(function() end)
+            widget.on_panel_buf = on_panel_buf --[[@as function]]
+            local old = widget.buf_nrs.input
+            vim.cmd.bwipeout(old)
+
+            local new = widget:panel_buf("input") --[[@as integer]]
+
+            assert.is_true(new ~= old and vim.api.nvim_buf_is_valid(new))
+            assert.equal(new, buf_nrs.input)
+            assert.equal("AgenticInput", vim.bo[new].filetype)
+            assert.is_false(vim.bo[new].buflisted)
+            assert.equal("input", vim.b[new].agentic_window)
+            assert.equal(last_owner_id, vim.b[new].agentic_session_id)
+            local descs = vim.tbl_map(function(map)
+                return map.desc
+            end, vim.api.nvim_buf_get_keymap(new, "n"))
+            assert.is_true(vim.list_contains(descs, "Agentic: Send line"))
+            assert.spy(on_panel_buf).was.called(1)
+            assert.equal("input", on_panel_buf.calls[1][1])
+            assert.equal(new, on_panel_buf.calls[1][2])
+
+            assert.equal(new, widget:panel_buf("input"))
+            assert.spy(on_panel_buf).was.called(1)
+        end)
+
+        it("replaces a stray buffer holding the panel's name", function()
+            local old = widget.buf_nrs.files
+            local name = vim.api.nvim_buf_get_name(old)
+            vim.cmd.bwipeout(old)
+            local stray = vim.api.nvim_create_buf(false, true)
+            vim.api.nvim_buf_set_name(stray, name)
+
+            local new = widget:panel_buf("files") --[[@as integer]]
+
+            assert.is_false(vim.api.nvim_buf_is_valid(stray))
+            assert.equal(name, vim.api.nvim_buf_get_name(new))
+        end)
+
+        it("reads a wiped input as an empty queue", function()
+            vim.cmd.bwipeout(widget.buf_nrs.input)
+
+            assert.is_nil(widget:next_queued_block())
+            assert.equal(0, widget:queued_block_count())
+            assert.is_nil(widget:consume_queued_block())
+            widget:cancel_queue()
+            assert.is_false(vim.api.nvim_buf_is_valid(widget.buf_nrs.input))
+        end)
+
+        it("returns nil and makes no buffer after destroy", function()
+            widget:destroy()
+            local before = #vim.api.nvim_list_bufs()
+
+            assert.is_nil(widget:panel_buf("info"))
+            assert.equal(before, #vim.api.nvim_list_bufs())
+        end)
+    end)
+
     describe("prompt navigation", function()
         local MessageWriter = require("agentic.ui.message_writer")
         local widget

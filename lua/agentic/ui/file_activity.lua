@@ -65,26 +65,25 @@ local UNSEEN_MARKER = "●"
 --- @field _next_seq integer
 --- @field _last_viewed_seq integer Highest seq the user has seen; bumped when the panel closes
 --- @field _reverted table<string, boolean> Paths the last reconcile found back at their HEAD content
---- @field _bufnr integer The ChatWidget's activity buffer
+--- @field _get_bufnr fun(): integer|nil
 --- @field _on_change fun(activity: agentic.ui.FileActivity)
 local FileActivity = {}
 FileActivity.__index = FileActivity
 
---- @param bufnr integer The activity buffer number from ChatWidget
---- @param on_change fun(activity: agentic.ui.FileActivity) Called after every render (e.g. to refresh the chat header count)
+--- @param get_bufnr fun(): integer|nil The buffer to render to; nil skips the render
+--- @param on_change fun(activity: agentic.ui.FileActivity) Called after each render that wrote the buffer
 --- @return agentic.ui.FileActivity
-function FileActivity:new(bufnr, on_change)
+function FileActivity:new(get_bufnr, on_change)
     local instance = setmetatable({
         _ops = {},
         _recorded = {},
         _next_seq = 1,
         _last_viewed_seq = 0,
         _reverted = {},
-        _bufnr = bufnr,
+        _get_bufnr = get_bufnr,
         _on_change = on_change,
     }, self)
 
-    instance:_setup_keybindings()
     instance:render()
 
     return instance
@@ -420,7 +419,13 @@ function FileActivity:clear()
     self:render()
 end
 
+--- Write the rows to the buffer, then call `on_change` if the write
+--- succeeded. No-op while `get_bufnr` gives nil.
 function FileActivity:render()
+    local target = self._get_bufnr()
+    if not target then
+        return
+    end
     local rows = self:rows()
 
     --- @type string[]
@@ -442,7 +447,7 @@ function FileActivity:render()
         lines = { PLACEHOLDER }
     end
 
-    local rendered = BufHelpers.with_modifiable(self._bufnr, function(bufnr)
+    local rendered = BufHelpers.with_modifiable(target, function(bufnr)
         vim.api.nvim_buf_clear_namespace(bufnr, NS_ACTIVITY, 0, -1)
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 
@@ -486,13 +491,15 @@ function FileActivity:_open_row_under_cursor()
     DiffJump.open(target, "tab drop", math.floor(vim.o.lines / 2))
 end
 
---- @private
-function FileActivity:_setup_keybindings()
-    BufHelpers.keymap_set(self._bufnr, "n", "<CR>", function()
+--- Bind `<CR>` in `bufnr` to open the file of the row under the cursor, and
+--- `Q` to send the rows to the quickfix list.
+--- @param bufnr integer
+function FileActivity:bind_keymaps(bufnr)
+    BufHelpers.keymap_set(bufnr, "n", "<CR>", function()
         self:_open_row_under_cursor()
     end, { nowait = true, desc = "Agentic: Open file under cursor" })
 
-    BufHelpers.keymap_set(self._bufnr, "n", "Q", function()
+    BufHelpers.keymap_set(bufnr, "n", "Q", function()
         local count = self:to_quickfix()
         Logger.notify(
             string.format("%d file(s) sent to the quickfix list", count),

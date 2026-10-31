@@ -41,6 +41,7 @@ local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 --- @field on_submit_input fun(prompt: string, opts?: agentic.SessionManager.SubmitOpts): boolean external callback for a submitted prompt; false means it was deferred and the range should be tagged
 --- @field on_refresh? fun() external callback for manual refresh (reset stale state)
 --- @field on_goto_bottom? fun(winid: integer) external callback that moves a window showing the chat or a transcript to its last line
+--- @field on_panel_buf? fun(panel: agentic.ui.ChatWidget.StackPanel, bufnr: integer) external callback for a buffer `panel_buf` made in place of a wiped one, already in `buf_nrs`
 --- @field _draining? boolean guard so drain's own buffer edits don't self-untag
 --- @field _home_win? integer The window the panels attach to
 --- @field _home_closed_autocmd? integer The WinClosed autocmd of `_home_win`
@@ -294,9 +295,22 @@ end
 --- The stack panels that only a key opens or closes, never their buffer's rows.
 local TOGGLED_PANELS = { input = true, activity = true, info = true }
 
+--- The stack panels shown with the markdown parser. The input starts its own
+--- on each load (`_attach_input`).
+local MARKDOWN_PANELS =
+    { todos = true, code = true, files = true, diagnostics = true, info = true }
+
+--- `bufnr` while it is a valid buffer, else nil.
+--- @param bufnr integer|nil
+--- @return integer|nil
+local function valid_buf(bufnr)
+    return bufnr and vim.api.nvim_buf_is_valid(bufnr) and bufnr or nil
+end
+
 --- Open or close each content panel (code, files, diagnostics, and todos
 --- when `Config.windows.todos.display`) to match its buffer. No-op without a
---- home window.
+--- home window. Skips a wiped buffer: the next write to the panel makes it
+--- again.
 function ChatWidget:sync_panels()
     local home = self:home_win()
     if not home then
@@ -305,7 +319,9 @@ function ChatWidget:sync_panels()
     for _, panel in ipairs(Config.windows.stack) do
         local is_content = not TOGGLED_PANELS[panel]
         if
-            is_content and (panel ~= "todos" or Config.windows.todos.display)
+            is_content
+            and (panel ~= "todos" or Config.windows.todos.display)
+            and valid_buf(self.buf_nrs[panel])
         then
             WidgetLayout.sync_panel(self.win_nrs, self.buf_nrs, home, panel)
         end
@@ -349,11 +365,11 @@ end
 --- replaces it.
 ---
 --- Leaves each buffer's `modified` as it was: clearing the render loses
---- nothing that its owner has not accounted for.
+--- nothing that its owner has not accounted for. Skips a wiped buffer.
 function ChatWidget:clear()
     local kept = { input = true, code = true, files = true, diagnostics = true }
     for name, bufnr in pairs(self.buf_nrs) do
-        if not kept[name] then
+        if not kept[name] and valid_buf(bufnr) then
             local was_modified = vim.bo[bufnr].modified
             BufHelpers.with_modifiable(bufnr, function()
                 local ok = pcall(
@@ -390,10 +406,13 @@ function ChatWidget:destroy()
         self._home_closed_autocmd = nil
     end
     self._home_win = nil
+    -- Clear the chat first: `panel_buf` then gives nil, so an autocmd that
+    -- the deletes below trigger makes no new panel buffer.
     local chat = self.buf_nrs.agent
+    self.buf_nrs.agent = nil
     for name, bufnr in pairs(self.buf_nrs) do
         self.buf_nrs[name] = nil
-        if bufnr ~= chat and vim.api.nvim_buf_is_valid(bufnr) then
+        if vim.api.nvim_buf_is_valid(bufnr) then
             vim.api.nvim_buf_delete(bufnr, { force = true })
         end
     end
@@ -861,17 +880,22 @@ end
 
 --- The next queued block in buffer order, or nil when nothing is queued. Reads
 --- only, so a caller that decides not to dispatch leaves the region tagged and
---- visible.
+--- visible. A wiped input holds no queue.
 --- @return agentic.utils.PromptBlocks.Block|nil
 function ChatWidget:next_queued_block()
-    local head = queue_head(self.buf_nrs.input)
+    local buf = valid_buf(self.buf_nrs.input)
+    local head = buf and queue_head(buf)
     return head and head.block or nil
 end
 
---- How many blocks the queue still holds, across every region.
+--- How many blocks the queue still holds, across every region. A wiped input
+--- holds no queue.
 --- @return integer
 function ChatWidget:queued_block_count()
-    local buf = self.buf_nrs.input
+    local buf = valid_buf(self.buf_nrs.input)
+    if not buf then
+        return 0
+    end
     local count = 0
     local marks =
         vim.api.nvim_buf_get_extmarks(buf, NS_QUEUED, 0, -1, { details = true })
@@ -897,7 +921,10 @@ end
 --- that followed it as a queued block.
 --- @return agentic.utils.PromptBlocks.Block|nil
 function ChatWidget:consume_queued_block()
-    local buf = self.buf_nrs.input
+    local buf = valid_buf(self.buf_nrs.input)
+    if not buf then
+        return nil
+    end
     local head = queue_head(buf)
     if not head then
         return nil
@@ -914,7 +941,10 @@ end
 
 --- Drop every queued region, leaving the text as ordinary draft in place.
 function ChatWidget:cancel_queue()
-    vim.api.nvim_buf_clear_namespace(self.buf_nrs.input, NS_QUEUED, 0, -1)
+    local buf = valid_buf(self.buf_nrs.input)
+    if buf then
+        vim.api.nvim_buf_clear_namespace(buf, NS_QUEUED, 0, -1)
+    end
 end
 
 --- On the next tick, focus the `panel` window, the home window for the chat,
@@ -945,9 +975,12 @@ end
 --- The window to type into: the input's window in the current tabpage, else
 --- the input panel of the chat in the current tabpage (`_home_in_tab`), else a
 --- split below the current window. Opens the window when there is none.
---- @return integer|nil winid Nil when the input panel fails to open
+--- @return integer|nil winid Nil when the input panel fails to open, or after `destroy`
 function ChatWidget:input_win()
-    local input = self.buf_nrs.input
+    local input = self:panel_buf("input")
+    if not input then
+        return nil
+    end
     local shown = vim.fn.bufwinid(input)
     if shown ~= -1 then
         return shown
@@ -1026,13 +1059,61 @@ function ChatWidget:_track_home(chat)
 end
 
 function ChatWidget:_initialize()
-    self.buf_nrs = self:_create_buf_nrs()
+    -- The chat stands for the session: listed so `:ls`, `:bd` and buffer
+    -- pickers reach it (`:bd` on an unlisted buffer only unloads it).
+    local chat = self:_create_new_buf("agent", true)
+    ChatBuffer.setup(chat)
+    self.buf_nrs = { agent = chat }
+    for _, panel in ipairs(Config.windows.stack) do
+        self:_create_panel_buf(panel)
+    end
     self:set_chat_title(nil)
 
-    self:_bind_keymaps()
+    self:_bind_buf_keymaps("agent", chat)
+    self:_track_home(chat)
+end
+
+--- Make the `panel` buffer and store it in `buf_nrs`, with what lasts for the
+--- buffer's life: its autocmds, the widget's maps, and for a markdown panel
+--- the parser. Renders nothing.
+--- @param panel agentic.ui.ChatWidget.StackPanel
+--- @return integer bufnr
+function ChatWidget:_create_panel_buf(panel)
+    local bufnr = self:_create_new_buf(panel, false)
+    self.buf_nrs[panel] = bufnr
+    if MARKDOWN_PANELS[panel] then
+        pcall(vim.treesitter.start, bufnr, "markdown")
+    end
+    self:_bind_buf_keymaps(panel, bufnr)
+    if panel == "input" then
+        self:_setup_input()
+    end
+    return bufnr
+end
+
+--- The `panel` buffer. When it was wiped, makes a new one and passes it to
+--- `on_panel_buf`. Nil after `destroy`.
+--- @param panel agentic.ui.ChatWidget.StackPanel
+--- @return integer|nil bufnr
+function ChatWidget:panel_buf(panel)
+    if not self.buf_nrs.agent then
+        return nil
+    end
+    local bufnr = valid_buf(self.buf_nrs[panel])
+    if bufnr then
+        return bufnr
+    end
+    bufnr = self:_create_panel_buf(panel)
+    if self.on_panel_buf then
+        self.on_panel_buf(panel, bufnr)
+    end
+    return bufnr
+end
+
+--- Set up the input buffer for the queue, completion and the modified flag.
+function ChatWidget:_setup_input()
     self:_setup_queue()
     self:_attach_input()
-    self:_track_home(self.buf_nrs.agent)
 
     local input = self.buf_nrs.input
     vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
@@ -1131,12 +1212,6 @@ function ChatWidget:_goto_transcripts_bottom()
         then
             self.on_goto_bottom(winid)
         end
-    end
-end
-
-function ChatWidget:_bind_keymaps()
-    for panel, bufnr in pairs(self.buf_nrs) do
-        self:_bind_buf_keymaps(panel, bufnr)
     end
 end
 
@@ -1254,14 +1329,15 @@ end
 --- @param text string
 function ChatWidget:_stage_input(text)
     local lines = vim.split(text, "\n", { trimempty = true })
-    if #lines == 0 then
+    local input = self:panel_buf("input")
+    if #lines == 0 or not input then
         return
     end
-    if vim.api.nvim_get_current_buf() == self.buf_nrs.input then
+    if vim.api.nvim_get_current_buf() == input then
         BufHelpers.insert_text(lines)
         return
     end
-    local row = BufHelpers.append_paragraph(self.buf_nrs.input, lines)
+    local row = BufHelpers.append_paragraph(input, lines)
 
     if vim.api.nvim_get_mode().mode:match("^[vVsS\22\19]") then
         vim.cmd("normal! \27")
@@ -1411,42 +1487,9 @@ local function panel_buf_opts(panel)
     }, panel_opts[panel])
 end
 
---- @return agentic.ui.ChatWidget.BufNrs
-function ChatWidget:_create_buf_nrs()
-    -- The chat stands for the session: listed so `:ls`, `:bd` and buffer
-    -- pickers reach it (`:bd` on an unlisted buffer only unloads it).
-    local chat = self:_create_new_buf("agent", true)
-    local todos = self:_create_new_buf("todos", false)
-    local code = self:_create_new_buf("code", false)
-    local files = self:_create_new_buf("files", false)
-    local diagnostics = self:_create_new_buf("diagnostics", false)
-    local activity = self:_create_new_buf("activity", false)
-    local info = self:_create_new_buf("info", false)
-    local input = self:_create_new_buf("input", false)
-
-    ChatBuffer.setup(chat)
-
-    pcall(vim.treesitter.start, todos, "markdown")
-    pcall(vim.treesitter.start, code, "markdown")
-    pcall(vim.treesitter.start, files, "markdown")
-    pcall(vim.treesitter.start, diagnostics, "markdown")
-    pcall(vim.treesitter.start, info, "markdown")
-
-    --- @type agentic.ui.ChatWidget.BufNrs
-    local buf_nrs = {
-        agent = chat,
-        todos = todos,
-        code = code,
-        files = files,
-        diagnostics = diagnostics,
-        activity = activity,
-        info = info,
-        input = input,
-    }
-
-    return buf_nrs
-end
-
+--- A buffer with a panel's options, b-vars and name, and an autocmd that
+--- renders its header in a window that starts showing it. Deletes a buffer
+--- that already holds the name.
 --- @param panel agentic.ui.ChatWidget.PanelNames
 --- @param listed boolean
 --- @return integer bufnr
@@ -1455,7 +1498,14 @@ function ChatWidget:_create_new_buf(panel, listed)
     self:_apply_buf_opts(bufnr, panel)
     -- A `scheme://` name passes through `vim.uri_from_bufnr` unchanged, so the
     -- input's name is also its document URI for the completion LSP.
-    BufHelpers.rename(bufnr, WindowDecoration.buffer_name(bufnr))
+    local name = WindowDecoration.buffer_name(bufnr)
+    -- `:e` or a tag jump on the name of a wiped panel leaves a plain buffer
+    -- holding it, and the rename would raise E95.
+    local stray = BufHelpers.named(name)
+    if stray then
+        vim.api.nvim_buf_delete(stray, { force = true })
+    end
+    BufHelpers.rename(bufnr, name)
     -- The header renders into the windows showing the buffer when it changes;
     -- a window that starts showing it later needs it too.
     vim.api.nvim_create_autocmd("BufWinEnter", {
@@ -1490,11 +1540,12 @@ function ChatWidget:setup_panel_buf(bufnr, panel)
     self:_bind_buf_keymaps(panel, bufnr)
 end
 
---- Set a panel's header context and render it.
+--- Set a panel's header context and render it. No-op while its buffer is
+--- wiped.
 --- @param window_name agentic.ui.ChatWidget.PanelNames
 --- @param context string|nil Shown after the title; nil for none
 function ChatWidget:render_header(window_name, context)
-    local bufnr = self.buf_nrs[window_name]
+    local bufnr = valid_buf(self.buf_nrs[window_name])
     if not bufnr then
         return
     end
@@ -1571,7 +1622,7 @@ end
 function ChatWidget:toggle_panel(panel, on_open, on_close)
     local home = self:_home_in_tab()
     if not home then
-        local title = WindowDecoration.get_header(self.buf_nrs[panel]).title
+        local title = WindowDecoration.default_header(panel).title
         Logger.notify(
             "Show the chat to open the " .. title .. " panel.",
             vim.log.levels.WARN,
@@ -1588,6 +1639,9 @@ function ChatWidget:toggle_panel(panel, on_open, on_close)
         return
     end
 
+    if not self:panel_buf(panel) then
+        return
+    end
     if on_open then
         on_open()
     end

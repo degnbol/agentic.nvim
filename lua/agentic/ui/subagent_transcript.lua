@@ -55,8 +55,8 @@ function SubagentTranscript:new(session_id, subagent, widget, handlers)
     )
     -- `:e` or `gf` on the name of a wiped transcript leaves a plain buffer
     -- holding it.
-    local stray = vim.fn.bufnr("^" .. vim.fn.escape(name, "\\/.*$^~[]") .. "$")
-    if stray ~= -1 and vim.b[stray].agentic_window ~= "subagent" then
+    local stray = BufHelpers.named(name)
+    if stray and vim.b[stray].agentic_window ~= "subagent" then
         vim.api.nvim_buf_delete(stray, { force = true })
     end
     BufHelpers.rename(bufnr, name)

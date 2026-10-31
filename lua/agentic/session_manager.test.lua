@@ -351,6 +351,7 @@ describe("agentic.SessionManager", function()
                 },
                 _cancel_session = SessionManager._cancel_session,
                 _reset_conversation = SessionManager._reset_conversation,
+                _set_available_commands = SessionManager._set_available_commands,
                 render_info = function() end,
                 _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
@@ -406,6 +407,7 @@ describe("agentic.SessionManager", function()
                     clear_chat = SessionManager.clear_chat,
                     _cancel_session = SessionManager._cancel_session,
                     _reset_conversation = SessionManager._reset_conversation,
+                    _set_available_commands = SessionManager._set_available_commands,
                     render_info = function() end,
                     _set_generating = SessionManager._set_generating,
                     _update_chat_header = function() end,
@@ -471,6 +473,7 @@ describe("agentic.SessionManager", function()
                 message_writer = { reset = noop },
                 clear_chat = SessionManager.clear_chat,
                 _reset_conversation = SessionManager._reset_conversation,
+                _set_available_commands = SessionManager._set_available_commands,
                 render_info = function() end,
                 _set_generating = SessionManager._set_generating,
                 _update_chat_header = update_chat_header or noop,
@@ -656,6 +659,7 @@ describe("agentic.SessionManager", function()
                 },
                 _cancel_session = SessionManager._cancel_session,
                 _reset_conversation = SessionManager._reset_conversation,
+                _set_available_commands = SessionManager._set_available_commands,
                 render_info = function() end,
                 _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
@@ -756,6 +760,7 @@ describe("agentic.SessionManager", function()
                 _dispatch_deferred_prompts = noop,
                 _cancel_session = SessionManager._cancel_session,
                 _reset_conversation = SessionManager._reset_conversation,
+                _set_available_commands = SessionManager._set_available_commands,
                 render_info = function() end,
                 _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
@@ -1651,7 +1656,9 @@ describe("agentic.SessionManager", function()
                     end,
                 },
                 widget = {
-                    buf_nrs = { info = bufnr },
+                    panel_buf = function()
+                        return bufnr
+                    end,
                     resize_panel = resize_spy,
                 },
                 _info_snapshot = SessionManager._info_snapshot,
@@ -1666,6 +1673,23 @@ describe("agentic.SessionManager", function()
             )
             assert.spy(resize_spy).was.called(1)
             assert.equal("info", resize_spy.calls[1][2])
+        end)
+
+        it("does nothing without an info buffer", function()
+            local resize_spy = spy.new(function() end)
+            local session = {
+                widget = {
+                    panel_buf = function()
+                        return nil
+                    end,
+                    resize_panel = resize_spy,
+                },
+                render_info = SessionManager.render_info,
+            } --[[@as agentic.SessionManager]]
+
+            session:render_info()
+
+            assert.spy(resize_spy).was.called(0)
         end)
     end)
 
@@ -3402,7 +3426,6 @@ describe("agentic.SessionManager", function()
 
             it("returns a command with no context", function()
                 local session = session_with_context()
-                session._warn_unadvertised_command = function() end
 
                 session:_handle_input_submit("/compact")
 
@@ -4031,7 +4054,6 @@ describe("agentic.SessionManager", function()
                 _run_local_command = SessionManager._run_local_command,
                 _drain_queue = SessionManager._drain_queue,
                 _truncate_queue = SessionManager._truncate_queue,
-                _warn_unadvertised_command = SessionManager._warn_unadvertised_command,
                 _handle_input_submit = SessionManager._handle_input_submit,
                 _submit_hold_reason = SessionManager._submit_hold_reason,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
@@ -4144,6 +4166,18 @@ describe("agentic.SessionManager", function()
             assert.equal(1, delete_spy.call_count)
             assert.equal(1, grant_spy.call_count)
             assert.equal(0, dispatch_spy.call_count)
+        end)
+
+        it("sends an unadvertised command without a warning", function()
+            local warning_spy = spy.new(function() end)
+            session.message_writer.write_error_action = warning_spy --[[@as function]]
+            session._available_commands =
+                { { name = "review", description = "Review" } }
+
+            session:_handle_input_submit("/implement plan.md")
+
+            assert.equal(1, dispatch_spy.call_count)
+            assert.spy(warning_spy).was.called(0)
         end)
     end)
 
@@ -4424,6 +4458,7 @@ describe("agentic.SessionManager", function()
                 stop_generation = SessionManager.stop_generation,
                 _cancel_session = SessionManager._cancel_session,
                 _reset_conversation = SessionManager._reset_conversation,
+                _set_available_commands = SessionManager._set_available_commands,
                 render_info = function() end,
                 _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
@@ -5141,7 +5176,6 @@ describe("agentic.SessionManager", function()
                 _drain_queue = SessionManager._drain_queue,
                 _truncate_queue = SessionManager._truncate_queue,
                 _confirm_queued_command = SessionManager._confirm_queued_command,
-                _warn_unadvertised_command = SessionManager._warn_unadvertised_command,
                 _handle_input_submit = SessionManager._handle_input_submit,
                 _submit_hold_reason = SessionManager._submit_hold_reason,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,

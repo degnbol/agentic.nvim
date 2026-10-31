@@ -99,7 +99,8 @@ end
 --- @return string[] rows
 function DiagnosticsList:__rows(diagnostic)
     local icons = get_diagnostic_icons()
-    local winid = vim.fn.bufwinid(self.__bufnr)
+    local bufnr = self.__get_bufnr()
+    local winid = bufnr and vim.fn.bufwinid(bufnr) or -1
     local buf_width = winid ~= -1 and vim.api.nvim_win_get_width(winid)
         or vim.o.columns
 

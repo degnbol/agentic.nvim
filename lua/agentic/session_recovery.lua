@@ -84,22 +84,29 @@ end
 --- attached again. The provider keeps the refused message in its
 --- conversation, so the restored history and system info it carried are not
 --- sent again. Writes what was returned and the number of drafted prompts to
---- the chat.
+--- the chat. No-op once the widget is destroyed.
 --- @param sm agentic.SessionManager
 --- @param text string The refused prompt as the user wrote it
 --- @param consumed agentic.SessionManager.PanelContext What the prompt took from the context panels
 --- @param bufnr integer|nil Input to put the text in, default the session's input
 function M.restore_refused_prompt(sm, text, consumed, bufnr)
-    local input = sm.widget.buf_nrs.input
+    if sm.destroyed then
+        return
+    end
+    --- The session's input, made again when wiped; never nil before destroy.
+    --- @return integer
+    local function input()
+        return sm.widget:panel_buf("input") --[[@as integer]]
+    end
     local count = sm.widget:queued_block_count()
     sm.widget:cancel_queue()
     if sm._pending_bufferless_prompt then
-        BufHelpers.prepend_draft(input, sm._pending_bufferless_prompt)
+        BufHelpers.prepend_draft(input(), sm._pending_bufferless_prompt)
         sm._pending_bufferless_prompt = nil
         count = count + 1
     end
 
-    BufHelpers.prepend_draft(bufnr or input, text)
+    BufHelpers.prepend_draft(bufnr or input(), text)
 
     for _, selection in ipairs(consumed.selections) do
         sm.code_selection:add(selection)

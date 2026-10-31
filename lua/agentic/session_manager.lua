@@ -114,6 +114,7 @@ end
 --- @field _cwd string Working directory of the ACP session. Also selects the project folder of its session file
 --- @field _pending_load_model? string Model id to apply after session/load succeeds
 --- @field _usage? agentic.ui.InfoPanel.Usage
+--- @field _available_commands? agentic.acp.AvailableCommand[] The provider's last advertised slash commands; nil before the first advertisement
 --- @field _last_prompt? string
 --- @field destroyed boolean Flag set on destroy() to guard async callbacks
 --- @field _pending_bufferless_prompt? string Deferred prompt with no buffer range to tag
@@ -475,8 +476,6 @@ function SessionManager:new()
         self:_on_permission_decided(tool_call_id, deciders)
     end
 
-    States.setChatBufnr(self.widget.buf_nrs.input, self.widget.buf_nrs.agent)
-
     self.config_options = AgentConfigOptions:new(
         function(mode_id, is_legacy, opts)
             self:_handle_mode_change(mode_id, is_legacy, opts)
@@ -489,45 +488,51 @@ function SessionManager:new()
         end
     )
 
-    for panel, bufnr in pairs(self.widget.buf_nrs) do
-        self:_setup_session_buf(
-            bufnr,
-            panel == "agent" and self.message_writer or nil
-        )
+    --- @param panel agentic.ui.ChatWidget.StackPanel
+    --- @return fun(): integer|nil
+    local function buf_of(panel)
+        return function()
+            return self.widget:panel_buf(panel)
+        end
     end
 
-    self.file_list = FileList:new(
-        self.widget.buf_nrs.files,
-        self:_context_panel_on_change("files")
-    )
+    self.file_list =
+        FileList:new(buf_of("files"), self:_context_panel_on_change("files"))
 
     -- Unlike the sibling list panels, an empty tally must not close the window
     -- and a new row must not open it: the panel is a toggle. The callback only
     -- re-fits an already-open window.
-    self.file_activity = FileActivity:new(
-        self.widget.buf_nrs.activity,
-        function()
-            self.widget:resize_panel("activity")
-        end
-    )
+    self.file_activity = FileActivity:new(buf_of("activity"), function()
+        self.widget:resize_panel("activity")
+    end)
 
-    self.code_selection = CodeSelection:new(
-        self.widget.buf_nrs.code,
-        self:_context_panel_on_change("code")
-    )
+    self.code_selection =
+        CodeSelection:new(buf_of("code"), self:_context_panel_on_change("code"))
 
     self.diagnostics_list = DiagnosticsList:new(
-        self.widget.buf_nrs.diagnostics,
+        buf_of("diagnostics"),
         self:_context_panel_on_change("diagnostics")
     )
 
-    self.todo_list = TodoList:new(self.widget.buf_nrs.todos, function(todo_list)
+    self.todo_list = TodoList:new(buf_of("todos"), function(todo_list)
         if not todo_list:is_empty() then
             self.widget:sync_panels()
         end
     end, function()
         self.widget:close_panel("todos")
     end)
+
+    self:_setup_session_buf(self.widget.buf_nrs.agent, self.message_writer)
+    --- @param panel agentic.ui.ChatWidget.StackPanel
+    --- @param bufnr integer
+    local function setup_panel(panel, bufnr)
+        self:_watch_panel_buf(panel, bufnr)
+        self:_setup_panel_buf(panel, bufnr)
+    end
+    for _, panel in ipairs(Config.windows.stack) do
+        setup_panel(panel, self.widget.buf_nrs[panel])
+    end
+    self.widget.on_panel_buf = setup_panel
 
     self:_setup_buffer_lifecycle()
 
@@ -562,6 +567,81 @@ function SessionManager:_setup_session_buf(bufnr, writer)
         DiffJump.set_goto_file_keymaps(bufnr, writer)
         vim.bo[bufnr].tagfunc = SessionManager.TAGFUNC
     end
+end
+
+--- Bind the session's maps and those of the panel's owner in a panel buffer.
+--- For the input, also set the chat it completes words from and the
+--- advertised slash commands. Renders nothing.
+--- @param panel agentic.ui.ChatWidget.StackPanel
+--- @param bufnr integer
+function SessionManager:_setup_panel_buf(panel, bufnr)
+    self:_setup_session_buf(bufnr, nil)
+    --- @type table<agentic.ui.ChatWidget.StackPanel, { bind_keymaps: fun(self: any, bufnr: integer) }>
+    local owners = {
+        code = self.code_selection,
+        files = self.file_list,
+        diagnostics = self.diagnostics_list,
+        activity = self.file_activity,
+    }
+    local owner = owners[panel]
+    if owner then
+        owner:bind_keymaps(bufnr)
+    end
+    if panel == "input" then
+        States.setChatBufnr(bufnr, self.widget.buf_nrs.agent)
+        if self._available_commands then
+            SlashCommands.setCommands(bufnr, self._available_commands)
+        end
+    end
+end
+
+--- Keep the provider's advertised slash commands, and offer them in the input.
+--- @param commands agentic.acp.AvailableCommand[]
+function SessionManager:_set_available_commands(commands)
+    self._available_commands = commands
+    SlashCommands.setCommands(self.widget.buf_nrs.input, commands)
+end
+
+--- Per panel, the call that renders its buffer again from the session's state.
+--- @type table<agentic.ui.ChatWidget.StackPanel, fun(self: agentic.SessionManager)>
+local PANEL_RELOADS = {
+    todos = function(self)
+        self.todo_list:redraw()
+    end,
+    code = function(self)
+        self.code_selection:render()
+    end,
+    files = function(self)
+        self.file_list:render()
+    end,
+    diagnostics = function(self)
+        self.diagnostics_list:render()
+    end,
+    activity = function(self)
+        self.file_activity:render()
+    end,
+    info = function(self)
+        self:render_info()
+    end,
+}
+
+--- Render a panel buffer again from the session's state on `:e`. Once per
+--- buffer: the autocmd outlives an unload.
+--- @param panel agentic.ui.ChatWidget.StackPanel
+--- @param bufnr integer
+function SessionManager:_watch_panel_buf(panel, bufnr)
+    local reload = PANEL_RELOADS[panel]
+    if not reload then
+        return
+    end
+    vim.api.nvim_create_autocmd("BufReadCmd", {
+        buffer = bufnr,
+        callback = function()
+            if not self.destroyed then
+                reload(self)
+            end
+        end,
+    })
 end
 
 --- 'tagfunc' value that calls `tagfunc`.
@@ -714,9 +794,8 @@ end
 
 --- Tie the session to its chat buffer the way a file ties to its buffer:
 --- `:w` writes the history, `:bd` ends the session, `:e` re-renders the chat
---- and the panels from the session's state, and a session nobody used goes
---- when its chat is no longer shown, as a scratch buffer with
---- `bufhidden=wipe` would.
+--- from the session's state, and a session nobody used goes when its chat
+--- is no longer shown, as a scratch buffer with `bufhidden=wipe` would.
 function SessionManager:_setup_buffer_lifecycle()
     local buf_nrs = self.widget.buf_nrs
     local chat = buf_nrs.agent
@@ -741,10 +820,12 @@ function SessionManager:_setup_buffer_lifecycle()
             -- Deferred: the leaving window still shows the buffer here, and a
             -- re-layout reopens the chat straight after.
             vim.schedule(function()
+                local input = buf_nrs.input
                 if
                     not self.destroyed
                     and #self.chat_history.messages == 0
-                    and not vim.bo[buf_nrs.input].modified
+                    -- A wiped input holds no draft.
+                    and not (vim.api.nvim_buf_is_valid(input) and vim.bo[input].modified)
                     and #vim.fn.win_findbuf(chat) == 0
                 then
                     SessionRegistry.destroy(self)
@@ -753,40 +834,14 @@ function SessionManager:_setup_buffer_lifecycle()
         end,
     })
 
-    --- @type table<integer, fun()>
-    local reloads = {
-        [chat] = function()
-            self:_reload_chat()
+    vim.api.nvim_create_autocmd("BufReadCmd", {
+        buffer = chat,
+        callback = function()
+            if not self.destroyed then
+                self:_reload_chat()
+            end
         end,
-        [buf_nrs.todos] = function()
-            self.todo_list:redraw()
-        end,
-        [buf_nrs.code] = function()
-            self.code_selection:render()
-        end,
-        [buf_nrs.files] = function()
-            self.file_list:render()
-        end,
-        [buf_nrs.diagnostics] = function()
-            self.diagnostics_list:render()
-        end,
-        [buf_nrs.activity] = function()
-            self.file_activity:render()
-        end,
-        [buf_nrs.info] = function()
-            self:render_info()
-        end,
-    }
-    for bufnr, reload in pairs(reloads) do
-        vim.api.nvim_create_autocmd("BufReadCmd", {
-            buffer = bufnr,
-            callback = function()
-                if not self.destroyed then
-                    reload()
-                end
-            end,
-        })
-    end
+    })
 end
 
 --- Re-render the chat from the in-memory history, which is the session file
@@ -1740,10 +1795,7 @@ function SessionManager:_on_session_update(update, source_session_id)
             end
         end
     elseif update.sessionUpdate == "available_commands_update" then
-        SlashCommands.setCommands(
-            self.widget.buf_nrs.input,
-            update.availableCommands
-        )
+        self:_set_available_commands(update.availableCommands)
     elseif update.sessionUpdate == "current_mode_update" then
         -- only for legacy modes, not for config_options
         self.config_options.legacy_agent_modes:handle_agent_update_mode(
@@ -2436,8 +2488,13 @@ function SessionManager:_info_snapshot()
 end
 
 --- Render the info panel's buffer, and fit its window when it is open.
+--- No-op once the widget is destroyed.
 function SessionManager:render_info()
-    InfoPanel.render(self.widget.buf_nrs.info, self:_info_snapshot(), os.time())
+    local info = self.widget:panel_buf("info")
+    if not info then
+        return
+    end
+    InfoPanel.render(info, self:_info_snapshot(), os.time())
     self.widget:resize_panel("info")
 end
 
@@ -3543,37 +3600,6 @@ function SessionManager:_drain_queue()
     return true
 end
 
---- Warn when a command block names neither a local command nor an advertised
---- one.
----
---- Membership decides nothing about command-ness — the provider intercepts
---- every line-start `/word` whether or not it advertised it — but opencode
---- drops the unknown ones without a single session update, so the block would
---- otherwise vanish without a trace. Silent while the advertised list is empty,
---- which every session reset leaves it as.
---- @param text string
-function SessionManager:_warn_unadvertised_command(text)
-    local word = PromptBlocks.command(text)
-    if not word then
-        return
-    end
-    local commands = States.getSlashCommands(self.widget.buf_nrs.input)
-    if #commands == 0 then
-        return
-    end
-    for _, command in ipairs(commands) do
-        if command.word == word then
-            return
-        end
-    end
-    self.message_writer:write_error_action(
-        string.format(
-            "/%s is not a known command — the provider may drop it silently.",
-            word
-        )
-    )
-end
-
 --- Dispatch one block: a local command, or one turn to the provider.
 ---
 --- Blocks arrive one at a time — the submit's first from
@@ -3623,9 +3649,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
     --- @type agentic.SessionManager.PanelContext
     local consumed = { selections = {}, files = {}, diagnostics = {} }
 
-    if is_command then
-        self:_warn_unadvertised_command(input_text)
-    else
+    if not is_command then
         -- If restored/switched session, prepend history on first submit
         if self._history_to_send then
             ChatHistory.prepend_restored_messages(self._history_to_send, prompt)
@@ -4411,7 +4435,7 @@ function SessionManager:_reset_conversation()
     Recovery.cancel_retry_timer(self)
     self._transient_attempt = 0
     self.permission_manager:clear()
-    SlashCommands.setCommands(self.widget.buf_nrs.input, {})
+    self:_set_available_commands({})
     self._last_edited_md = nil
     self:_reset_subagents()
 

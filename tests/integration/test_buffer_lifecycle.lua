@@ -313,6 +313,157 @@ widget:consume_queued_block()
         end)
     end)
 
+    describe("a wiped panel buffer", function()
+        --- Open a session in this tabpage, then another as `_G.s` in a new
+        --- one, keeping the first as `_G.other` and its buffers as
+        --- `_G.other_bufs`.
+        local function open_two_sessions()
+            open_session()
+            child.lua([[
+_G.other = _G.s
+_G.other_bufs = vim.deepcopy(_G.s.widget.buf_nrs)
+]])
+            child.cmd("tabnew")
+            child.new_session()
+            open_session()
+        end
+
+        --- Wipe `panel` of `_G.s` and clear `v:errmsg`.
+        --- @param panel string
+        local function wipe(panel)
+            child.lua(
+                [[
+local panel = ...
+_G.wiped = _G.s.widget.buf_nrs[panel]
+vim.cmd.bwipeout(_G.wiped)
+vim.v.errmsg = ""
+]],
+                { panel }
+            )
+        end
+
+        after_each(function()
+            if child_alive() and child.lua_get("_G.other_bufs ~= nil") then
+                assert.is_true(child.lua_get([[
+vim.deep_equal(_G.other.widget.buf_nrs, _G.other_bufs)
+    and vim.iter(vim.tbl_values(_G.other_bufs)):all(vim.api.nvim_buf_is_valid)
+]]))
+            end
+        end)
+
+        it("of the info renders and opens again", function()
+            open_two_sessions()
+            wipe("info")
+
+            assert.is_true(child.lua_get("pcall(_G.s.render_info, _G.s)"))
+            child.lua([[vim.api.nvim_set_current_win(_G.s.widget:home_win())]])
+            child.type_keys("\\I")
+
+            local info = child.lua_get("_G.s.widget.buf_nrs.info")
+            assert.is_not.equal(child.lua_get("_G.wiped"), info)
+            assert.is_not.equal(
+                vim.NIL,
+                child.lua_get([[_G.s.widget:panel_win("info")]])
+            )
+            assert.is_true(
+                #child.api.nvim_buf_get_lines(info, 0, -1, false) > 1
+            )
+            assert.equal("", child.lua_get("vim.v.errmsg"))
+        end)
+
+        it(
+            "of the files opens again with an added file, which d removes",
+            function()
+                open_two_sessions()
+                wipe("files")
+                child.lua([[
+_G.path = vim.fn.tempname()
+vim.fn.writefile({ "x" }, _G.path)
+_G.s.file_list:add(_G.path)
+]])
+
+                local function shows_file()
+                    return child.lua_get([[
+(vim.api.nvim_buf_get_lines(_G.s.widget.buf_nrs.files, 0, 1, false)[1] or "")
+    :find(vim.fn.fnamemodify(_G.path, ":t"), 1, true) ~= nil
+]])
+                end
+                local winid = child.lua_get([[_G.s.widget:panel_win("files")]])
+                assert.is_not.equal(vim.NIL, winid)
+                assert.is_true(shows_file())
+
+                -- `:e!` empties the buffer; the new buffer's BufReadCmd
+                -- renders it again.
+                child.api.nvim_set_current_win(winid)
+                child.cmd("edit!")
+                assert.is_true(shows_file())
+
+                child.type_keys("d")
+
+                assert.is_true(child.lua_get("_G.s.file_list:is_empty()"))
+                assert.equal("", child.lua_get("vim.v.errmsg"))
+            end
+        )
+
+        it("of the input reads as empty and comes back on input_win", function()
+            open_two_sessions()
+            child.lua([[
+_G.h.on_session_update({
+    sessionUpdate = "available_commands_update",
+    availableCommands = { { name = "foo", description = "Foo" } },
+}, "sid-1")
+]])
+            wipe("input")
+
+            assert.is_true(child.lua_get("pcall(_G.s._drain_queue, _G.s)"))
+            child.lua([[_G.input_win = _G.s.widget:input_win()]])
+            child.flush()
+
+            local input = child.lua_get("_G.s.widget.buf_nrs.input")
+            assert.is_not.equal(child.lua_get("_G.wiped"), input)
+            assert.equal(
+                input,
+                child.lua_get("vim.api.nvim_win_get_buf(_G.input_win)")
+            )
+            assert.is_true(child.lua_get(
+                [[
+vim.iter(vim.api.nvim_buf_get_keymap(..., "n")):any(function(map)
+    return map.desc == "Agentic: Send line"
+end)
+]],
+                { input }
+            ))
+            assert.equal(
+                1,
+                child.lua_get(
+                    [[#vim.lsp.get_clients({ bufnr = ..., name = "agentic_input" })]],
+                    { input }
+                )
+            )
+            assert.is_true(child.lua_get(
+                [[
+vim.iter(require("agentic.states").getSlashCommands(...)):any(function(c)
+    return c.word == "foo"
+end)
+]],
+                { input }
+            ))
+            assert.equal("", child.lua_get("vim.v.errmsg"))
+        end)
+
+        it("of the input leaves the chat's BufWinLeave quiet", function()
+            open_two_sessions()
+            wipe("input")
+
+            child.lua([[vim.api.nvim_set_current_win(_G.s.widget:home_win())]])
+            child.cmd("enew")
+            child.flush()
+
+            assert.equal("", child.lua_get("vim.v.errmsg"))
+            assert.equal(1, live_sessions())
+        end)
+    end)
+
     describe(":bd on the chat", function()
         it("ends an idle session and wipes its buffers", function()
             open_session()

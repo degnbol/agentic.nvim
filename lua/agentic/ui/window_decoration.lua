@@ -76,6 +76,13 @@ local function concat_header_parts(parts)
     return Chunks.text(WindowDecoration.header_chunks(parts))
 end
 
+--- A copy of a panel's default header.
+--- @param panel agentic.ui.ChatWidget.PanelNames|nil
+--- @return agentic.ui.ChatWidget.HeaderParts
+function WindowDecoration.default_header(panel)
+    return vim.deepcopy(WINDOW_HEADERS[panel]) or { title = "" }
+end
+
 --- The header state of an Agentic buffer, `vim.b[bufnr].agentic_header`, or
 --- its panel's default when none is set. A copy: write it back with
 --- `set_header`.
@@ -83,8 +90,7 @@ end
 --- @return agentic.ui.ChatWidget.HeaderParts
 function WindowDecoration.get_header(bufnr)
     return vim.b[bufnr].agentic_header
-        or vim.deepcopy(WINDOW_HEADERS[vim.b[bufnr].agentic_window])
-        or { title = "" }
+        or WindowDecoration.default_header(vim.b[bufnr].agentic_window)
 end
 
 --- Store an Agentic buffer's header state, announce it with the
