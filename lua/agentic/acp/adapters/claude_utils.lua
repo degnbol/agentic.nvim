@@ -266,6 +266,19 @@ function M.find_session_dir(config_dir, session_id)
     return nil
 end
 
+--- The CLI's transcript of a session, `<config_dir>/projects/<project>/<session_id>.jsonl`,
+--- whichever project it is under.
+--- @param config_dir string
+--- @param session_id string
+--- @return string|nil path Nil until the CLI has written it
+function M.find_transcript(config_dir, session_id)
+    return vim.fn.glob(
+        config_dir .. "/projects/*/" .. session_id .. ".jsonl",
+        false,
+        true
+    )[1]
+end
+
 --- @class agentic.acp.SubagentMeta
 --- @field agent_type string Subagent type the agent was spawned as
 --- @field request_shape string `background` or `foreground`, as the agent ran

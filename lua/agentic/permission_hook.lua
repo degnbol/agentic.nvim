@@ -49,20 +49,12 @@ end
 --- Fail-open: any decode error, unknown tool, missing session, or `decide`
 --- error returns "" (empty) — the caller emits no permissionDecision and the
 --- call falls through to the classifier. Never returns a spurious verdict.
---- @param b64 string base64-encoded JSON: `{session_id, transcript_path, tool_name, tool_input, tool_use_id}`
+--- @param b64 string base64-encoded JSON hook input; fields read: `{session_id, tool_name, tool_input, tool_use_id}`
 --- @return string verdict "allow" | "deny" | "" (undecided / fall-through)
 function M.evaluate(b64)
     local ok, verdict = pcall(function()
         local payload = vim.json.decode(vim.base64.decode(b64))
         local session = SessionRegistry.session_for_acp_id(payload.session_id)
-
-        -- The hook input is the only channel that names the transcript
-        -- (`agentic.hook_record_reader`), and this payload is decoded here
-        -- anyway for the verdict, so noting it costs one field read on a path
-        -- that must not grow work.
-        if session and type(payload.transcript_path) == "string" then
-            session:note_hook_transcript(payload.transcript_path)
-        end
 
         local tool = payload.tool_name
         local kind = NAME_TO_KIND[tool]

@@ -3,26 +3,20 @@
 --- the hook lifecycle events, so the transcript is the only channel carrying
 --- what a hook injected, printed or how it failed.
 ---
---- Pure and stateless: one line in, zero or more records out. Cross-record
---- work — the `parentUuid` join that attributes a body to a script, offsets,
---- session teardown — belongs to `agentic.hook_record_reader`.
+--- Pure and stateless: one line in, zero or more records out. Records carry no
+--- `script`: naming it takes the `parentUuid` join across records.
 local M = {}
 
---- @alias agentic.acp.HookRecordGroup
---- | "context" context a hook delivered to the model
---- | "unrecognised" output in a schema we do not know, surfaced rather than dropped
---- | "failure" timed out, or exited non-zero with real stderr
+--- @alias agentic.acp.ClaudeHookRecordGroup
+--- | agentic.acp.HookRecordGroup
 --- | "silent" ran with nothing to show; carried only so its `command` can attribute a later record
---- | "verbatim" the transcript line itself did not parse
 
---- @class agentic.acp.HookRecord
---- @field group agentic.acp.HookRecordGroup
---- @field body string[]
+--- @class agentic.acp.ClaudeHookRecord : agentic.acp.HookRecord
+--- @field group agentic.acp.ClaudeHookRecordGroup
 --- @field uuid? string
 --- @field parent_uuid? string
 --- @field timestamp? string ISO-8601 UTC, fixed width so string order is time order
 --- @field command? string the hook script's invocation
---- @field script? string basename of the script the body came from; filled in by the reader, which owns the `parentUuid` join
 --- @field tool_call_id? string what the hook fired on, verbatim from `toolUseID`. Only a `toolu_`-prefixed value is a tool call id: an event with no call to name puts `"SessionStart"`, `hook-<uuid>` or a bare message uuid in the same slot
 
 --- Keys of `stdout.hookSpecificOutput` whose meaning is already accounted for:
@@ -82,7 +76,7 @@ local function is_known_output(stdout)
 end
 
 --- @param attachment table
---- @return agentic.acp.HookRecordGroup|nil group nil when the attachment is not a hook record
+--- @return agentic.acp.ClaudeHookRecordGroup|nil group nil when the attachment is not a hook record
 --- @return string[] body
 local function classify(attachment)
     local kind = attachment.type
@@ -116,7 +110,7 @@ end
 
 --- The hook record a transcript entry carries as its attachment.
 --- @param entry table one decoded transcript line
---- @return agentic.acp.HookRecord|nil record nil when the entry is not a hook attachment
+--- @return agentic.acp.ClaudeHookRecord|nil record nil when the entry is not a hook attachment
 local function attachment_record(entry)
     -- `hookEvent` is what separates hook attachments from the other
     -- attachment kinds (pasted images, file contents).
@@ -134,7 +128,7 @@ local function attachment_record(entry)
         return nil
     end
 
-    --- @type agentic.acp.HookRecord
+    --- @type agentic.acp.ClaudeHookRecord
     local record = {
         group = group,
         body = body,
@@ -161,9 +155,9 @@ end
 --- the command prefix is a non-blocking error, which a
 --- `hook_non_blocking_error` attachment already carries, so it yields none.
 --- @param entry table one decoded transcript line
---- @return agentic.acp.HookRecord[] records empty when the entry is not a Stop hook summary
+--- @return agentic.acp.ClaudeHookRecord[] records empty when the entry is not a Stop hook summary
 local function stop_feedback_records(entry)
-    --- @type agentic.acp.HookRecord[]
+    --- @type agentic.acp.ClaudeHookRecord[]
     local records = {}
     if
         entry.type ~= "system"
@@ -196,7 +190,7 @@ end
 --- still yields a record, in the `verbatim` group: a transcript this decoder
 --- cannot read is the thing least safe to drop.
 --- @param line string one raw line of the transcript jsonl
---- @return agentic.acp.HookRecord[] records empty for a line that carries no hook activity
+--- @return agentic.acp.ClaudeHookRecord[] records empty for a line that carries no hook activity
 function M.decode(line)
     if line:match("^%s*$") then
         return {}
@@ -204,7 +198,7 @@ function M.decode(line)
 
     local ok, entry = pcall(vim.json.decode, line)
     if not ok or type(entry) ~= "table" then
-        --- @type agentic.acp.HookRecord
+        --- @type agentic.acp.ClaudeHookRecord
         local unparsed = { group = "verbatim", body = { line } }
         return { unparsed }
     end

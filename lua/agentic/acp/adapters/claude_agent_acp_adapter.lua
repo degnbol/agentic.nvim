@@ -3,6 +3,8 @@ local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
 local FileSystem = require("agentic.utils.file_system")
+local ClaudeHookRecordReader =
+    require("agentic.acp.adapters.claude_hook_record_reader")
 local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 local SkillPath = require("agentic.utils.skill_path")
 local TextWrap = require("agentic.utils.text_wrap")
@@ -80,6 +82,7 @@ end
 --- @class agentic.acp.ClaudeAgentACPAdapter : agentic.acp.ACPClient
 --- @field provider_config agentic.acp.ClaudeProviderConfig
 --- @field _session_dirs table<string, string> Root session id -> Claude Code's side-file directory of the session, once found
+--- @field _hook_readers table<string, agentic.acp.ClaudeHookRecordReader> Session id -> reader of the session's transcript, from the session's opening until `unsubscribe`
 --- @field _exec_shell? "bash"|"zsh"
 local ClaudeAgentACPAdapter = ACPClient.extend()
 
@@ -113,6 +116,7 @@ function ClaudeAgentACPAdapter:new(config, on_ready)
 
     local client = ACPClient.new(self, config, on_ready) --[[@as agentic.acp.ClaudeAgentACPAdapter]]
     client._session_dirs = {}
+    client._hook_readers = {}
     -- Resolved here: tool calls are built in the transport's fast callback,
     -- where reading `vim.env` is forbidden.
     client._exec_shell = ClaudeUtils.exec_shell(config.env)
@@ -159,10 +163,76 @@ function ClaudeAgentACPAdapter:session_meta(additional_dirs)
     }
 end
 
+--- Creates a session and opens a hook record reader for it.
+--- @param cwd string
+--- @param handlers agentic.acp.ClientHandlers
+--- @param callback fun(result: agentic.acp.SessionCreationResponse|nil, err: agentic.acp.ACPError|nil)
+function ClaudeAgentACPAdapter:create_session(cwd, handlers, callback)
+    -- Built before the request: the reader keeps only records from its
+    -- construction on, and the CLI writes SessionStart's before the bridge
+    -- answers `session/new`.
+    local reader = ClaudeHookRecordReader:new()
+    ACPClient.create_session(self, cwd, handlers, function(result, err)
+        -- Before the callback, which may unsubscribe the session at once.
+        if result and result.sessionId then
+            self._hook_readers[result.sessionId] = reader
+        end
+        callback(result, err)
+    end)
+end
+
+--- Loads a session and opens a hook record reader for it.
+--- @param session_id string
+--- @param cwd string
+--- @param mcp_servers table[]|nil
+--- @param handlers agentic.acp.ClientHandlers
+--- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil)
+function ClaudeAgentACPAdapter:load_session(
+    session_id,
+    cwd,
+    mcp_servers,
+    handlers,
+    callback
+)
+    -- Built before the request, so it keeps the SessionStart records the CLI
+    -- writes before answering, and none of the replayed history.
+    self._hook_readers[session_id] = ClaudeHookRecordReader:new()
+    ACPClient.load_session(
+        self,
+        session_id,
+        cwd,
+        mcp_servers,
+        handlers,
+        callback
+    )
+end
+
 --- @param session_id string
 function ClaudeAgentACPAdapter:unsubscribe(session_id)
     self._session_dirs[session_id] = nil
+    self._hook_readers[session_id] = nil
     ACPClient.unsubscribe(self, session_id)
+end
+
+--- Hook records from the CLI's transcript of the session. Empty until the CLI
+--- has written the transcript.
+--- @param session_id string
+--- @return agentic.acp.HookRecord[]
+function ClaudeAgentACPAdapter:drain_hook_records(session_id)
+    local reader = self._hook_readers[session_id]
+    if not reader then
+        return {}
+    end
+    if not reader:has_transcript() then
+        local path = ClaudeUtils.find_transcript(
+            ClaudeUtils.config_dir(self.provider_config.env),
+            session_id
+        )
+        if path then
+            reader:set_transcript_path(path)
+        end
+    end
+    return reader:drain()
 end
 
 --- @return "bash"|"zsh"|nil

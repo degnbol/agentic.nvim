@@ -27,7 +27,7 @@ describe("ClaudeHookRecords", function()
 
     --- The record a line decodes to, asserting it is the only one.
     --- @param raw string
-    --- @return agentic.acp.HookRecord
+    --- @return agentic.acp.ClaudeHookRecord
     local function decode_one(raw)
         local records = ClaudeHookRecords.decode(raw)
         assert.equal(1, #records)

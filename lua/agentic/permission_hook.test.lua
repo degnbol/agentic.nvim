@@ -28,7 +28,6 @@ describe("agentic.permission_hook", function()
                         return verdict_to_return
                     end,
                 },
-                note_hook_transcript = function() end,
             }
         end
     end)
@@ -62,43 +61,6 @@ describe("agentic.permission_hook", function()
 
         it("returns empty on undecodable input", function()
             assert.equal("", PermissionHook.evaluate("not base64 !!!"))
-        end)
-    end)
-
-    describe("transcript path", function()
-        it("hands the reported path to the session", function()
-            local noted
-            SessionRegistry.session_for_acp_id = function(_)
-                return {
-                    permission_manager = {
-                        decide = function() end,
-                    },
-                    note_hook_transcript = function(_self, path)
-                        noted = path
-                    end,
-                }
-            end
-
-            PermissionHook.evaluate(encode({
-                session_id = "s1",
-                transcript_path = "/projects/slug/s1.jsonl",
-                tool_name = "Bash",
-                tool_input = { command = "ls" },
-            }))
-
-            assert.equal("/projects/slug/s1.jsonl", noted)
-        end)
-
-        it("still decides for a tool the reader never hears about", function()
-            -- Verdicts must not depend on a transcript path being present.
-            assert.equal(
-                "allow",
-                PermissionHook.evaluate(encode({
-                    session_id = "s1",
-                    tool_name = "Bash",
-                    tool_input = { command = "ls" },
-                }))
-            )
         end)
     end)
 
@@ -193,10 +155,7 @@ describe("agentic.permission_hook", function()
                 end,
             }, { __index = PermissionManager })
             SessionRegistry.session_for_acp_id = function(_)
-                return {
-                    permission_manager = pm,
-                    note_hook_transcript = function() end,
-                }
+                return { permission_manager = pm }
             end
         end)
 

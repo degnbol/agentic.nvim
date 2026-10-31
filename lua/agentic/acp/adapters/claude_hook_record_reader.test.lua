@@ -1,9 +1,9 @@
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
-describe("HookRecordReader", function()
+describe("ClaudeHookRecordReader", function()
     --- @type table
-    local HookRecordReader
+    local ClaudeHookRecordReader
     --- @type table
     local Logger
     local SESSION_ID = "5bcf246d-0000-0000-0000-000000000000"
@@ -13,8 +13,9 @@ describe("HookRecordReader", function()
     local transcript
 
     before_each(function()
-        package.loaded["agentic.hook_record_reader"] = nil
-        HookRecordReader = require("agentic.hook_record_reader")
+        package.loaded["agentic.acp.adapters.claude_hook_record_reader"] = nil
+        ClaudeHookRecordReader =
+            require("agentic.acp.adapters.claude_hook_record_reader")
         Logger = require("agentic.utils.logger")
         dir = vim.fn.tempname()
         vim.fn.mkdir(dir, "p")
@@ -86,24 +87,13 @@ describe("HookRecordReader", function()
     --- @param path string
     --- @return table
     local function reader_at(path)
-        local reader = HookRecordReader:new()
-        reader:set_transcript_path(path, SESSION_ID)
+        local reader = ClaudeHookRecordReader:new()
+        reader:set_transcript_path(path)
         return reader
     end
 
     it("drains nothing before a transcript path is known", function()
-        assert.same({}, HookRecordReader:new():drain())
-    end)
-
-    it("ignores a subagent transcript reported under this session", function()
-        local subagent =
-            vim.fs.joinpath(dir, SESSION_ID, "subagents", "agent-1.jsonl")
-        vim.fn.mkdir(vim.fs.dirname(subagent), "p")
-        local reader = reader_at(subagent)
-
-        append({ injected("c-1", nil, "hello") })
-
-        assert.same({}, reader:drain())
+        assert.same({}, ClaudeHookRecordReader:new():drain())
     end)
 
     it("returns injected context appended after construction", function()

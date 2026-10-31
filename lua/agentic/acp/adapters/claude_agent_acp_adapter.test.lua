@@ -18,6 +18,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         return setmetatable({
             _session_roots = session_roots or {},
             _children = {},
+            _hook_readers = {},
             provider_config = { subagents = { force_background = false } },
         }, { __index = ClaudeAgentACPAdapter })
     end
@@ -1224,6 +1225,122 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             }, "s1")
 
             assert.equal("toolu_1", message.parent_tool_use_id)
+        end)
+    end)
+
+    describe("hook records", function()
+        local ClaudeHookRecordReader =
+            require("agentic.acp.adapters.claude_hook_record_reader")
+
+        --- @param responses table<string, table> method -> result the request answers with
+        --- @return agentic.acp.ClaudeAgentACPAdapter adapter
+        --- @return string[] sent methods of the requests sent, in order
+        local function wired_adapter(responses)
+            local adapter = make_adapter()
+            adapter.subscribers = {}
+            adapter._session_dirs = {}
+            adapter._loading_sessions = {}
+            adapter._tool_call_kinds = { forget_session = function() end }
+            adapter.agent_capabilities = { loadSession = true }
+            local sent = {}
+            function adapter:_send_request(method, _params, callback)
+                table.insert(sent, method)
+                callback(responses[method], nil)
+            end
+            return adapter, sent
+        end
+
+        it("builds the reader before session/new is sent", function()
+            -- The reader keeps records from its construction on, and the CLI
+            -- writes SessionStart's before the bridge answers.
+            local new = spy.on(ClaudeHookRecordReader, "new")
+            local adapter = make_adapter()
+            local built_before_send
+            function adapter:_send_request()
+                built_before_send = new.call_count == 1
+            end
+
+            adapter:create_session("/tmp", {}, function() end)
+            new:revert()
+
+            assert.is_true(built_before_send)
+        end)
+
+        it("stores the reader before the callback runs", function()
+            local adapter =
+                wired_adapter({ ["session/new"] = { sessionId = "s-1" } })
+            local stored
+
+            adapter:create_session("/tmp", {}, function()
+                stored = adapter._hook_readers["s-1"] ~= nil
+            end)
+
+            assert.is_true(stored)
+        end)
+
+        it("keeps a reader built before session/load is sent", function()
+            local adapter = wired_adapter({})
+            local built_before_send
+            function adapter:_send_request()
+                built_before_send = self._hook_readers["s-1"] ~= nil
+            end
+
+            adapter:load_session("s-1", "/tmp", {}, {}, function() end)
+
+            assert.is_true(built_before_send)
+        end)
+
+        it("drops the reader on unsubscribe", function()
+            local adapter =
+                wired_adapter({ ["session/new"] = { sessionId = "s-1" } })
+            adapter:create_session("/tmp", {}, function() end)
+
+            adapter:unsubscribe("s-1")
+
+            assert.is_nil(adapter._hook_readers["s-1"])
+        end)
+
+        it("drains nothing for an unknown session", function()
+            assert.same({}, make_adapter():drain_hook_records("s-1"))
+        end)
+
+        describe("with a transcript", function()
+            local config_dir
+
+            before_each(function()
+                config_dir = vim.fn.tempname()
+            end)
+
+            after_each(function()
+                vim.fs.rm(config_dir, { recursive = true })
+            end)
+
+            it("finds the transcript under the config dir", function()
+                local adapter =
+                    wired_adapter({ ["session/new"] = { sessionId = "s-1" } })
+                adapter.provider_config.env = { CLAUDE_CONFIG_DIR = config_dir }
+                adapter:create_session("/tmp", {}, function() end)
+
+                local project = vim.fs.joinpath(config_dir, "projects", "-tmp")
+                vim.fn.mkdir(project, "p")
+                vim.fn.writefile({
+                    vim.json.encode({
+                        type = "attachment",
+                        uuid = "c-1",
+                        timestamp = "2999-01-01T00:00:00.000Z",
+                        attachment = {
+                            type = "hook_additional_context",
+                            hookEvent = "SessionStart",
+                            content = { "ctx" },
+                        },
+                    }),
+                }, vim.fs.joinpath(project, "s-1.jsonl"))
+
+                local records = adapter:drain_hook_records("s-1")
+
+                assert.equal(1, #records)
+                assert.same({ "ctx" }, records[1].body)
+            end)
         end)
     end)
 

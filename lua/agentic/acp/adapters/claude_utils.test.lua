@@ -143,6 +143,17 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
             assert.is_nil(ClaudeUtils.find_session_dir(config_dir, "nope"))
         end)
 
+        it("finds a transcript in any project directory", function()
+            assert.equal(
+                session_dir .. ".jsonl",
+                ClaudeUtils.find_transcript(config_dir, session_id)
+            )
+        end)
+
+        it("finds no transcript before the CLI writes it", function()
+            assert.is_nil(ClaudeUtils.find_transcript(config_dir, "nope"))
+        end)
+
         --- @param agent_id string
         --- @param lines string[]
         local function write_meta(agent_id, lines)

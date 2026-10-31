@@ -7,24 +7,21 @@ local Logger = require("agentic.utils.logger")
 --- Hook lifecycle events never reach the client — the ACP bridge drops them —
 --- so the CLI's transcript is the channel. One reader per session.
 ---
---- The transcript path is not known up front: it arrives on the plugin's own
---- PreToolUse hook input, which fires on the first tool call its matcher covers
---- and may be several turns in. A session that never trips that matcher, or a
---- provider other than Claude, never supplies one and every drain stays empty.
---- Records that predate the reader are discarded, so the first drain of a
---- resumed session does not replay its history.
---- @class agentic.HookRecordReader
+--- Drains are empty until a transcript path is set. Records that predate the
+--- reader are discarded, so the first drain of a resumed session does not
+--- replay its history.
+--- @class agentic.acp.ClaudeHookRecordReader
 --- @field _marker string ISO-8601 UTC; records at or after it belong to this reader
 --- @field _path? string
 --- @field _offset integer bytes of `_path` already drained
 --- @field _catching_up boolean True until the first successful read of a newly discovered path; that read is the only one whose bytes can predate this reader
 --- @field _commands table<string, string> record uuid -> the hook command it ran
 --- @field _notified boolean
-local HookRecordReader = {}
-HookRecordReader.__index = HookRecordReader
+local ClaudeHookRecordReader = {}
+ClaudeHookRecordReader.__index = ClaudeHookRecordReader
 
---- @return agentic.HookRecordReader
-function HookRecordReader:new()
+--- @return agentic.acp.ClaudeHookRecordReader
+function ClaudeHookRecordReader:new()
     return setmetatable({
         -- Same fixed-width format the CLI writes, so records compare as strings.
         _marker = os.date("!%Y-%m-%dT%H:%M:%S.000Z"),
@@ -35,23 +32,17 @@ function HookRecordReader:new()
     }, self)
 end
 
---- Point the reader at the transcript a hook reported, if it is this session's.
----
---- A hook that fires inside a subagent reports the subagent's transcript
---- (`<session-id>/subagents/agent-*.jsonl`) under the *parent's* session id, so
---- the id alone cannot tell them apart — the file name can.
---- @param path string `transcript_path` from a hook input
---- @param session_id string the session id that hook input reported
-function HookRecordReader:set_transcript_path(path, session_id)
-    if path == self._path then
-        return
-    end
-    if vim.fs.basename(path) ~= session_id .. ".jsonl" then
-        return
-    end
+--- Point the reader at a transcript, read from its top on the next drain.
+--- @param path string
+function ClaudeHookRecordReader:set_transcript_path(path)
     self._path = path
     self._offset = 0
     self._catching_up = true
+end
+
+--- @return boolean
+function ClaudeHookRecordReader:has_transcript()
+    return self._path ~= nil
 end
 
 --- Whether a record is one this reader is responsible for showing.
@@ -61,9 +52,9 @@ end
 --- — is placed by the read it came in on instead: only a read that starts from
 --- the top of the file can return bytes older than this reader, so everything
 --- from any other read is new by construction.
---- @param record agentic.acp.HookRecord
+--- @param record agentic.acp.ClaudeHookRecord
 --- @return boolean
-function HookRecordReader:_is_current(record)
+function ClaudeHookRecordReader:_is_current(record)
     if record.timestamp then
         return record.timestamp >= self._marker
     end
@@ -75,8 +66,8 @@ end
 --- Records whose group is `silent` are consumed rather than returned: they ran
 --- with nothing to show, and exist here only to name the script a later
 --- `context` record came from.
---- @return agentic.acp.HookRecord[] records in transcript order
-function HookRecordReader:drain()
+--- @return agentic.acp.ClaudeHookRecord[] records in transcript order
+function ClaudeHookRecordReader:drain()
     if not self._path then
         return {}
     end
@@ -96,7 +87,7 @@ function HookRecordReader:drain()
         return {}
     end
 
-    --- @type agentic.acp.HookRecord[]
+    --- @type agentic.acp.ClaudeHookRecord[]
     local records = {}
     for _, line in ipairs(lines) do
         for _, record in ipairs(ClaudeHookRecords.decode(line)) do
@@ -119,9 +110,9 @@ end
 --- recorded. A record that ran a script names its own; injected context points
 --- at its producer through `parentUuid`. `UserPromptSubmit` context records
 --- point at no producer, and there is no other source for the name.
---- @param record agentic.acp.HookRecord
+--- @param record agentic.acp.ClaudeHookRecord
 --- @return string|nil
-function HookRecordReader:_script_of(record)
+function ClaudeHookRecordReader:_script_of(record)
     local command = record.command
     if not command and record.parent_uuid then
         command = self._commands[record.parent_uuid]
@@ -132,7 +123,7 @@ end
 --- Tell the user hook activity is lost, once per reader — a transcript that
 --- cannot be read fails again on every later drain.
 --- @param err string|nil
-function HookRecordReader:_notify_unreadable(err)
+function ClaudeHookRecordReader:_notify_unreadable(err)
     if self._notified then
         return
     end
@@ -143,4 +134,4 @@ function HookRecordReader:_notify_unreadable(err)
     )
 end
 
-return HookRecordReader
+return ClaudeHookRecordReader

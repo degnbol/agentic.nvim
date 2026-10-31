@@ -1018,6 +1018,22 @@ describe("agentic.SessionManager", function()
             assert.is_nil(session:_submit_defer_reason("hello"))
         end)
 
+        it("a failed load unsubscribes the session", function()
+            local session = make_load_session()
+            local notify_stub = spy.stub(Logger, "notify")
+            session._fallback_restore_from_local = function() end
+            local unsubscribe = spy.on(session.agent, "unsubscribe")
+
+            session:_do_load_acp_session("test-session-id", "/tmp")
+            unsubscribe:reset()
+            captured_load_cb(nil, { message = "not found" })
+            notify_stub:revert()
+
+            assert
+                .spy(unsubscribe).was
+                .called_with(session.agent, "test-session-id")
+        end)
+
         it("clears the load gate when the load fails", function()
             local session = make_load_session()
             local notify_stub = spy.stub(Logger, "notify")
@@ -2106,7 +2122,7 @@ describe("agentic.SessionManager", function()
         end)
 
         it("does not drain for a subagent's tool call", function()
-            -- Subagent hooks write to a transcript the reader does not follow.
+            -- Only the root session's hook records are drained.
             local session, drains =
                 make_session({ ["tc-1"] = { kind = "read" } })
             session._tool_call_owner["tc-1"] = "task-1"
@@ -2256,9 +2272,10 @@ describe("agentic.SessionManager", function()
             --- @type agentic.SessionManager
             local session = {
                 destroyed = false,
+                session_id = "s-1",
                 _drain_hook_records = SessionManager._drain_hook_records,
-                _hook_records = {
-                    drain = function()
+                agent = {
+                    drain_hook_records = function()
                         return records
                     end,
                 },
@@ -2331,6 +2348,16 @@ describe("agentic.SessionManager", function()
             local session, written =
                 make_session({ { group = "context", body = { "ctx" } } })
             session.destroyed = true
+
+            session:_drain_hook_records()
+
+            assert.same({}, written)
+        end)
+
+        it("writes nothing without a session", function()
+            local session, written =
+                make_session({ { group = "context", body = { "ctx" } } })
+            session.session_id = nil
 
             session:_drain_hook_records()
 
@@ -2625,6 +2652,9 @@ describe("agentic.SessionManager", function()
                     send_prompt = function(_self, _sid, _prompt, cb)
                         cb(nil, send_err)
                     end,
+                    drain_hook_records = function()
+                        return {}
+                    end,
                 },
                 message_writer = {
                     write_message = noop,
@@ -2639,11 +2669,6 @@ describe("agentic.SessionManager", function()
                 },
                 _finalize_turn = SessionManager._finalize_turn,
                 _drain_hook_records = SessionManager._drain_hook_records,
-                _hook_records = {
-                    drain = function()
-                        return {}
-                    end,
-                },
                 status_indicator = { start = noop, stop = noop },
                 chat_history = {
                     session_id = "s-1",
@@ -2801,6 +2826,9 @@ describe("agentic.SessionManager", function()
                         table.insert(sink.prompts, prompt)
                         cb(nil, send_err or { message = "boom" })
                     end,
+                    drain_hook_records = function()
+                        return {}
+                    end,
                 },
                 message_writer = {
                     write_message = noop,
@@ -2843,11 +2871,6 @@ describe("agentic.SessionManager", function()
                 _tool_call_owner = {},
                 _finalize_turn = SessionManager._finalize_turn,
                 _drain_hook_records = SessionManager._drain_hook_records,
-                _hook_records = {
-                    drain = function()
-                        return {}
-                    end,
-                },
                 status_indicator = { start = noop, stop = noop },
                 chat_history = {
                     session_id = "s-1",

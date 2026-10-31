@@ -21,7 +21,6 @@ local DiffJump = require("agentic.ui.diff_jump")
 local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
 local GrantSafety = require("agentic.utils.grant_safety")
-local HookRecordReader = require("agentic.hook_record_reader")
 local InfoPanel = require("agentic.ui.info_panel")
 local Json = require("agentic.utils.json")
 local Logger = require("agentic.utils.logger")
@@ -105,7 +104,6 @@ end
 --- @field todo_list agentic.ui.TodoList
 --- @field chat_history agentic.ui.ChatHistory
 --- @field _response_boundary agentic.acp.ResponseBoundary The chat's. Each transcript has its own. Never reset: every session starts with the writer's prose run closed and history ending on a user message, where a stale verdict writes no break
---- @field _hook_records agentic.HookRecordReader Tail of the CLI transcript for hook activity the ACP feed drops. Replaced alongside `chat_history` wherever the ACP session is torn down, so its path and offset cannot outlive the session they belong to
 --- @field _title_user_set? boolean Set once the user picks a title via /rename; blocks the provider's auto-summary from overriding it
 --- @field _history_to_send? agentic.ui.ChatHistory.Message[] Messages to prepend on next prompt submit
 --- @field _restoring boolean Flag to prevent auto-new_session during restore
@@ -412,7 +410,6 @@ function SessionManager:new()
     self.agent = agent
 
     self.chat_history = ChatHistory:new()
-    self._hook_records = HookRecordReader:new()
     self._response_boundary = ResponseBoundary:new()
 
     self.widget = ChatWidget:new(self.id, function(input_text, opts)
@@ -1660,9 +1657,8 @@ function SessionManager:_on_agent_chunk(update, source_session_id)
         transcript.writer:write_message_chunk(chunk, starts_response)
         transcript.status_indicator:reposition()
     else
-        -- Hook records already in the transcript go above a new response,
-        -- so a reply to Stop hook feedback reads under that feedback. A
-        -- subagent's hooks write to another transcript.
+        -- Hook records already recorded go above a new response, so a
+        -- reply to Stop hook feedback reads under that feedback.
         if starts_response and not self._loading then
             self:_drain_hook_records()
         end
@@ -2568,20 +2564,9 @@ function SessionManager:_on_request_permission(request, callback)
     end
 end
 
---- Record where the Claude Code CLI is writing this session's transcript, as
---- reported by a hook input — the only channel that carries the path. No-op
---- before the ACP session id is known, which is what the path is checked
---- against.
---- @param path string `transcript_path` from a hook input
-function SessionManager:note_hook_transcript(path)
-    if self.session_id then
-        self._hook_records:set_transcript_path(path, self.session_id)
-    end
-end
-
 --- Hook record groups that reach the chat buffer. `failure` and `unrecognised`
---- are dropped for now; `verbatim` renders because a record whose line did not
---- parse is exactly the one that must not disappear.
+--- are dropped for now; `verbatim` renders because a record that did not parse
+--- is exactly the one that must not disappear.
 local RENDERED_HOOK_GROUPS = {
     context = true,
     verbatim = true,
@@ -2590,10 +2575,10 @@ local RENDERED_HOOK_GROUPS = {
 --- Write the hook activity recorded since the last drain to the chat buffer,
 --- each record under the tool call it names.
 function SessionManager:_drain_hook_records()
-    if self.destroyed then
+    if self.destroyed or not self.session_id then
         return
     end
-    for _, record in ipairs(self._hook_records:drain()) do
+    for _, record in ipairs(self.agent:drain_hook_records(self.session_id)) do
         if RENDERED_HOOK_GROUPS[record.group] then
             self.message_writer:write_hook_block(
                 record.body,
@@ -2765,8 +2750,8 @@ function SessionManager:_on_tool_call_update(tool_call_update)
 
     -- Look for records as soon as the call they fired on ends, rather than
     -- waiting for the turn-end drain — where they land is settled by the id
-    -- each record carries, not by when the drain runs. Subagent calls are
-    -- excluded: their hooks write to a transcript the reader does not follow.
+    -- each record carries, not by when the drain runs. Subagent calls do not
+    -- trigger a drain: only the root session's hook records are drained.
     if
         not is_subagent
         and (
@@ -4230,6 +4215,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                 -- Held for a replay that will not come; the local
                 -- fallback reads the deciders from the history.
                 self.permission_manager:drop_deciders()
+                self.agent:unsubscribe(session_id)
                 self:_fallback_restore_from_local(session_id, saved_history)
                 return
             end
@@ -4354,9 +4340,6 @@ function SessionManager:_reset_conversation()
 
     self.chat_history = ChatHistory:new()
     self:_sync_modified(self.chat_history)
-    -- Fresh reader: a path and offset from the outgoing session would read the
-    -- wrong file at the wrong position.
-    self._hook_records = HookRecordReader:new()
     self._title_user_set = false -- Fresh session: allow provider auto-summary again
     self.widget:set_chat_title(nil) -- Reset buffer name to default
     self.widget:set_idle(false)

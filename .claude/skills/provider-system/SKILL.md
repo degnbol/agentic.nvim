@@ -248,6 +248,8 @@ Provider-only settings are read through overrides, never from shared code:
 `session_meta(additional_dirs)` (the `_meta` of session/new and session/load,
 default nil), `budget_windows(update)` (default nil) and
 `auto_continue_on_usage_limit()` (default false).
+`drain_hook_records(session_id)` returns the hook activity recorded outside
+the ACP feed since the last call (default `{}`).
 
 `__build_tool_call_message` and `__build_tool_call_update` take the session id
 as a trailing argument, for overrides needing session-scoped state — currently

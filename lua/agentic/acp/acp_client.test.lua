@@ -24,6 +24,11 @@ describe("agentic.acp.ACPClient", function()
         end)
     end)
 
+    it("drains no hook records by default", function()
+        local client = setmetatable({}, { __index = ACPClient })
+        assert.same({}, client:drain_hook_records("s-1"))
+    end)
+
     it("names no plan file by default", function()
         local client = setmetatable({}, { __index = ACPClient })
         assert.is_nil(client:plan_file({

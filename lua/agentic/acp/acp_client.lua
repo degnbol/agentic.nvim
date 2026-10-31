@@ -148,6 +148,27 @@ function ACPClient:subagent_record(_session_id, _child_id)
     return nil
 end
 
+--- @alias agentic.acp.HookRecordGroup
+--- | "context" context a hook delivered to the model
+--- | "unrecognised" output in a schema we do not know, surfaced rather than dropped
+--- | "failure" timed out, or exited non-zero with real stderr
+--- | "verbatim" the provider's own record of it did not parse; the body is that record
+
+--- Hook activity a provider recorded outside the ACP feed.
+--- @class agentic.acp.HookRecord
+--- @field group agentic.acp.HookRecordGroup
+--- @field body string[]
+--- @field script? string Basename of the hook command
+--- @field tool_call_id? string Tool call the record belongs to; may be an id that names no tool call
+
+--- Hook records of the session that arrived since the last call.
+--- Adapters for providers that record hook activity override this.
+--- @param _session_id string
+--- @return agentic.acp.HookRecord[]
+function ACPClient:drain_hook_records(_session_id)
+    return {}
+end
+
 --- The id of the tool use that spawned the subagent an update belongs to.
 --- Adapters for providers that tag subagent updates override this.
 --- @param _update agentic.acp.SessionUpdateMessage
