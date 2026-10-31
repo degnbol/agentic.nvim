@@ -77,7 +77,7 @@ describe("agentic.SessionManager", function()
                     buf_nrs = { agent = test_bufnr },
                 },
                 _on_session_update = SessionManager._on_session_update,
-                _render_info = function() end,
+                render_info = function() end,
                 _update_chat_header = SessionManager._update_chat_header,
             } --[[@as agentic.SessionManager]]
         end)
@@ -144,7 +144,7 @@ describe("agentic.SessionManager", function()
                 },
                 _agents = {},
                 _on_session_update = SessionManager._on_session_update,
-                _render_info = function() end,
+                render_info = function() end,
                 _update_chat_header = SessionManager._update_chat_header,
                 _handle_new_config_options = SessionManager._handle_new_config_options,
             } --[[@as agentic.SessionManager]]
@@ -288,7 +288,7 @@ describe("agentic.SessionManager", function()
                 _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _on_session_update = SessionManager._on_session_update,
-                _render_info = function() end,
+                render_info = function() end,
             } --[[@as agentic.SessionManager]]
             return session, set_title_spy, save_spy
         end
@@ -351,7 +351,7 @@ describe("agentic.SessionManager", function()
                 },
                 _cancel_session = SessionManager._cancel_session,
                 _reset_conversation = SessionManager._reset_conversation,
-                _render_info = function() end,
+                render_info = function() end,
                 _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
                 _reset_subagents = function() end,
@@ -406,7 +406,7 @@ describe("agentic.SessionManager", function()
                     clear_chat = SessionManager.clear_chat,
                     _cancel_session = SessionManager._cancel_session,
                     _reset_conversation = SessionManager._reset_conversation,
-                    _render_info = function() end,
+                    render_info = function() end,
                     _set_generating = SessionManager._set_generating,
                     _update_chat_header = function() end,
                     _reset_subagents = function() end,
@@ -471,7 +471,7 @@ describe("agentic.SessionManager", function()
                 message_writer = { reset = noop },
                 clear_chat = SessionManager.clear_chat,
                 _reset_conversation = SessionManager._reset_conversation,
-                _render_info = function() end,
+                render_info = function() end,
                 _set_generating = SessionManager._set_generating,
                 _update_chat_header = update_chat_header or noop,
                 _reset_subagents = noop,
@@ -533,7 +533,7 @@ describe("agentic.SessionManager", function()
             local session = make_session()
             session._usage = { used = 1000, size = 200000 }
             local usage_at_render = "unset"
-            session._render_info = function(this)
+            session.render_info = function(this)
                 usage_at_render = this._usage
             end
 
@@ -576,7 +576,7 @@ describe("agentic.SessionManager", function()
                 },
                 _update_chat_header = function() end,
                 _on_session_update = SessionManager._on_session_update,
-                _render_info = function() end,
+                render_info = function() end,
             } --[[@as agentic.SessionManager]]
         end
 
@@ -618,7 +618,7 @@ describe("agentic.SessionManager", function()
         it("renders the info panel with the new usage", function()
             local session = make_session()
             local used_at_render
-            session._render_info = function(this)
+            session.render_info = function(this)
                 used_at_render = this._usage.used
             end
 
@@ -656,7 +656,7 @@ describe("agentic.SessionManager", function()
                 },
                 _cancel_session = SessionManager._cancel_session,
                 _reset_conversation = SessionManager._reset_conversation,
-                _render_info = function() end,
+                render_info = function() end,
                 _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
                 _reset_subagents = function() end,
@@ -756,7 +756,7 @@ describe("agentic.SessionManager", function()
                 _dispatch_deferred_prompts = noop,
                 _cancel_session = SessionManager._cancel_session,
                 _reset_conversation = SessionManager._reset_conversation,
-                _render_info = function() end,
+                render_info = function() end,
                 _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
                 _reset_subagents = function() end,
@@ -1439,7 +1439,7 @@ describe("agentic.SessionManager", function()
                 _update_chat_header = function() end,
                 _handle_mode_change = SessionManager._handle_mode_change,
                 _set_session_option = SessionManager._set_session_option,
-                _render_info = function() end,
+                render_info = function() end,
                 _notice_mode_switched = SessionManager._notice_mode_switched,
             } --[[@as agentic.SessionManager]]
             return session, notice_spy
@@ -1474,7 +1474,7 @@ describe("agentic.SessionManager", function()
         it("renders the info panel once the mode is set", function()
             local session = make_session(nil)
             local mode_at_render
-            session._render_info = function(this)
+            session.render_info = function(this)
                 mode_at_render =
                     this.config_options.legacy_agent_modes.current_mode_id
             end
@@ -1487,7 +1487,7 @@ describe("agentic.SessionManager", function()
         it("drops the response of a session destroyed meanwhile", function()
             local session, notice_spy = make_session(nil)
             local render_spy = spy.new(function() end)
-            session._render_info = render_spy --[[@as function]]
+            session.render_info = render_spy --[[@as function]]
             session.destroyed = true
 
             session:_handle_mode_change("auto", true, { as_notice = true })
@@ -1565,7 +1565,7 @@ describe("agentic.SessionManager", function()
                 announce_model_loaded = function() end,
                 _handle_model_change = SessionManager._handle_model_change,
                 _set_session_option = SessionManager._set_session_option,
-                _render_info = function() end,
+                render_info = function() end,
             } --[[@as agentic.SessionManager]]
 
             session:_handle_model_change("new", true)
@@ -1630,7 +1630,7 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
-    describe("_render_info", function()
+    describe("render_info", function()
         it("renders the snapshot and fits the panel", function()
             local bufnr = vim.api.nvim_create_buf(false, true)
             MiniTest.finally(function()
@@ -1655,10 +1655,10 @@ describe("agentic.SessionManager", function()
                     resize_panel = resize_spy,
                 },
                 _info_snapshot = SessionManager._info_snapshot,
-                _render_info = SessionManager._render_info,
+                render_info = SessionManager.render_info,
             } --[[@as agentic.SessionManager]]
 
-            session:_render_info()
+            session:render_info()
 
             assert.same(
                 { "- Agent: Claude", "- Account: not logged in" },
@@ -4424,7 +4424,7 @@ describe("agentic.SessionManager", function()
                 stop_generation = SessionManager.stop_generation,
                 _cancel_session = SessionManager._cancel_session,
                 _reset_conversation = SessionManager._reset_conversation,
-                _render_info = function() end,
+                render_info = function() end,
                 _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
                 _reset_subagents = function() end,

@@ -8,9 +8,13 @@ local Theme = require("agentic.theme")
 --- The account's usage budget, shared by all Neovim instances through a file,
 --- and the values that depend on the current time, computed when read. Each
 --- change is published as `vim.g.agentic_budget`, shortest window first, with
---- `User AgenticBudgetChanged`.
+--- `User AgenticBudgetChanged`. The event also fires every `TICK_MS` while a
+--- window has not reset, as the values that depend on time change.
 --- @class agentic.Budget
-local Budget = {}
+--- @field TICK_MS integer
+local Budget = {
+    TICK_MS = 60000,
+}
 
 local STATE_HL = {
     warning = Theme.HL_GROUPS.BUDGET_WARNING,
@@ -21,6 +25,48 @@ local STATE_HL = {
 local history = BudgetHistory.empty()
 --- @type string|nil
 local path
+--- @type uv.uv_timer_t|nil
+local tick
+
+local function fire_changed()
+    vim.api.nvim_exec_autocmds("User", { pattern = "AgenticBudgetChanged" })
+end
+
+--- Whether any of `windows` has not reset at `now`.
+--- @param windows agentic.acp.BudgetWindow[]
+--- @param now integer Epoch seconds
+--- @return boolean
+local function any_pending(windows, now)
+    return vim.iter(windows):any(function(window)
+        return Budget.resets_in(window, now) > 0
+    end)
+end
+
+--- Start the tick unless it is running. It fires `AgenticBudgetChanged` every
+--- `TICK_MS` while a window in `vim.g.agentic_budget` has not reset, and once
+--- more when none has, then stops.
+local function start_tick()
+    if tick then
+        return
+    end
+    local timer = assert(vim.uv.new_timer())
+    tick = timer
+    timer:start(
+        Budget.TICK_MS,
+        Budget.TICK_MS,
+        vim.schedule_wrap(function()
+            -- A callback queued before the close still runs.
+            if timer:is_closing() then
+                return
+            end
+            fire_changed()
+            if not any_pending(vim.g.agentic_budget or {}, os.time()) then
+                timer:close()
+                tick = nil
+            end
+        end)
+    )
+end
 
 --- The history in a file: empty when the file is missing, or unreadable
 --- (with a warning).
@@ -58,7 +104,10 @@ local function apply(next_history)
         return a.window_s < b.window_s
     end)
     vim.g.agentic_budget = windows
-    vim.api.nvim_exec_autocmds("User", { pattern = "AgenticBudgetChanged" })
+    fire_changed()
+    if any_pending(windows, os.time()) then
+        start_tick()
+    end
 end
 
 --- Merge `other` into the history, pruned as `record` prunes, and apply the

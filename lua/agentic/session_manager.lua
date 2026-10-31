@@ -774,7 +774,7 @@ function SessionManager:_setup_buffer_lifecycle()
             self.file_activity:render()
         end,
         [buf_nrs.info] = function()
-            self:_render_info()
+            self:render_info()
         end,
     }
     for bufnr, reload in pairs(reloads) do
@@ -1749,7 +1749,7 @@ function SessionManager:_on_session_update(update, source_session_id)
         self.config_options.legacy_agent_modes:handle_agent_update_mode(
             update.currentModeId
         )
-        self:_render_info()
+        self:render_info()
     elseif update.sessionUpdate == "config_option_update" then
         if source_session_id and source_session_id ~= self.session_id then
             local agent = self._agents[source_session_id]
@@ -1787,7 +1787,7 @@ function SessionManager:_on_session_update(update, source_session_id)
         end
 
         self:_update_chat_header()
-        self:_render_info()
+        self:render_info()
     elseif update.sessionUpdate == "session_info_update" then
         -- Provider pushes the SDK's background-generated title at turn-end.
         -- Adopt it unless the user has chosen a title via /rename.
@@ -2436,7 +2436,7 @@ function SessionManager:_info_snapshot()
 end
 
 --- Render the info panel's buffer, and fit its window when it is open.
-function SessionManager:_render_info()
+function SessionManager:render_info()
     InfoPanel.render(self.widget.buf_nrs.info, self:_info_snapshot(), os.time())
     self.widget:resize_panel("info")
 end
@@ -2444,7 +2444,7 @@ end
 --- Show or hide the info panel.
 function SessionManager:toggle_info()
     self.widget:toggle_panel("info", function()
-        self:_render_info()
+        self:render_info()
     end)
 end
 
@@ -2918,7 +2918,7 @@ function SessionManager:_set_session_option(
             self:_handle_new_config_options(result.configOptions)
         end
         on_set()
-        self:_render_info()
+        self:render_info()
     end
 
     if not is_legacy then
@@ -4099,7 +4099,7 @@ function SessionManager:new_session(opts)
                 self:_handle_mode_change(mode, is_legacy)
             end
         )
-        self:_render_info()
+        self:render_info()
 
         -- Reset first message flag for new session (skip when restoring)
         if not restore_mode then
@@ -4423,7 +4423,7 @@ function SessionManager:_reset_conversation()
     self._history_to_send = nil
     self._usage = nil
     self:_update_chat_header()
-    self:_render_info()
+    self:render_info()
 end
 
 --- Cancel the ACP session on the provider and reset the conversation like
@@ -4561,7 +4561,7 @@ end
 --- @param new_config_options agentic.acp.ConfigOption[]
 function SessionManager:_handle_new_config_options(new_config_options)
     self.config_options:set_options(new_config_options)
-    self:_render_info()
+    self:render_info()
 end
 
 function SessionManager:_get_system_info()

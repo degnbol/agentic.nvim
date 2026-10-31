@@ -111,5 +111,34 @@ describe("agentic.Bootstrap", function()
 
             assert.equal("reload", child.v.fcs_choice)
         end)
+
+        it("renders every session's info on AgenticBudgetChanged", function()
+            child.lua([[ require("agentic").open() ]])
+            child.cmd("tabnew")
+            child.new_session()
+            child.lua([[
+                vim.g.agentic_budget = { {
+                    label = "5h",
+                    utilization = 0.5,
+                    resets_at = os.time() + 3600,
+                    window_s = 5 * 3600,
+                    state = "ok",
+                } }
+                vim.api.nvim_exec_autocmds("User", { pattern = "AgenticBudgetChanged" })
+            ]])
+
+            assert.same(
+                { true, true },
+                child.lua_get(
+                    [[vim.tbl_map(function(session)
+                    local lines = vim.api.nvim_buf_get_lines(
+                        session.widget.buf_nrs.info, 0, -1, false)
+                    return vim.iter(lines):any(function(line)
+                        return vim.startswith(line, "- 5h: 50% used")
+                    end)
+                end, vim.tbl_values(require("agentic.session_registry").by_id))]]
+                )
+            )
+        end)
     end)
 end)

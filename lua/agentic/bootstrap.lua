@@ -94,6 +94,19 @@ local function create_global_autocmds()
         desc = "Record the Agentic session whose buffer was entered last",
     })
 
+    -- Global since a User event has no buffer. A session's info buffer can
+    -- show in any window, so every one is rendered, shown or not.
+    vim.api.nvim_create_autocmd("User", {
+        group = group,
+        pattern = "AgenticBudgetChanged",
+        callback = function()
+            for _, session in pairs(SessionRegistry.by_id) do
+                session:render_info()
+            end
+        end,
+        desc = "Render every Agentic session's info with the new budget",
+    })
+
     -- A tag jump refuses a name that is neither a file nor matched by a
     -- BufReadCmd pattern (`jumpto_tag` in nvim's tag.c). It does not consult
     -- buffer-local BufReadCmds, such as those of Agentic buffers.

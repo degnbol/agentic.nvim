@@ -537,7 +537,7 @@ Each window is a table:
     `resets_at`    Epoch seconds when the window refills
     `window_s`     Length of the window in seconds
     `state`        "ok" | "warning" | "exhausted"
-|AgenticBudgetChanged| fires when the budget changes.
+Changes fire |AgenticBudgetChanged|.
 
                                                 *agentic.budget.statusline()*
 budget.statusline({opts})
@@ -1268,8 +1268,9 @@ User AgenticHeadersChanged
 
                                                        *AgenticBudgetChanged*
 User AgenticBudgetChanged
-    Fired when the account's usage budget changes in any Neovim instance.
-    The budget is `vim.g.agentic_budget`, see |agentic-budget|.
+    Fired when the account's usage budget changes in any Neovim instance,
+    and once a minute until every window has reset. The budget is
+    `vim.g.agentic_budget`, see |agentic-budget|.
 
 ==============================================================================
 12. HEALTH CHECK                                              *agentic-health*

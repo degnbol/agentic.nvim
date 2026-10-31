@@ -493,4 +493,80 @@ describe("agentic.Budget", function()
             assert.is_not_nil(read_file().windows["5h"])
         end)
     end)
+
+    describe("tick", function()
+        local Child = require("tests.helpers.child")
+        local child = Child.new()
+
+        before_each(function()
+            child.launch()
+            child.lua([[
+                local Budget = require("agentic.budget")
+                Budget.TICK_MS = 50
+                _G.fired = 0
+                _G.fired_after_reset = false
+                vim.api.nvim_create_autocmd("User", {
+                    pattern = "AgenticBudgetChanged",
+                    callback = function()
+                        _G.fired = _G.fired + 1
+                        local window = vim.g.agentic_budget[1]
+                        _G.fired_after_reset = _G.fired_after_reset
+                            or Budget.resets_in(window, os.time()) == 0
+                    end,
+                })
+            ]])
+        end)
+
+        after_each(function()
+            child.stop()
+        end)
+
+        --- Record one five-hour window resetting `reset_in` seconds from now.
+        --- @param reset_in integer
+        local function record(reset_in)
+            child.lua(
+                [[
+                local reset_in = ...
+                require("agentic.budget").record({ {
+                    label = "5h",
+                    utilization = 0.5,
+                    resets_at = os.time() + reset_in,
+                    window_s = 5 * 3600,
+                    state = "ok",
+                } }, os.time())
+            ]],
+                { reset_in }
+            )
+        end
+
+        it("fires again while a window has not reset", function()
+            record(HOUR)
+            vim.uv.sleep(300)
+
+            assert.is_true(child.lua_get("_G.fired") > 2)
+        end)
+
+        it("does not fire for windows past their reset", function()
+            record(-HOUR)
+            vim.uv.sleep(300)
+
+            assert.equal(1, child.lua_get("_G.fired"))
+        end)
+
+        it(
+            "fires once more after every window has reset, then stops",
+            function()
+                -- 2, not 1: `os.time()` has whole seconds, so a window resetting
+                -- in 1 s may reset within the first tick.
+                record(2)
+                vim.uv.sleep(2300)
+                local fired = child.lua_get("_G.fired")
+                vim.uv.sleep(300)
+
+                assert.is_true(fired > 2)
+                assert.is_true(child.lua_get("_G.fired_after_reset"))
+                assert.equal(fired, child.lua_get("_G.fired"))
+            end
+        )
+    end)
 end)
