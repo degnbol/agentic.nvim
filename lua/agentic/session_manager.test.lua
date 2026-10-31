@@ -555,14 +555,14 @@ describe("agentic.SessionManager", function()
         end
 
         --- @type TestStub
-        local publish_stub
+        local record_stub
 
         before_each(function()
-            publish_stub = spy.stub(Budget, "publish")
+            record_stub = spy.stub(Budget, "record")
         end)
 
         after_each(function()
-            publish_stub:revert()
+            record_stub:revert()
         end)
 
         --- @param windows agentic.acp.BudgetWindow[]|nil What the agent reports
@@ -580,7 +580,7 @@ describe("agentic.SessionManager", function()
             } --[[@as agentic.SessionManager]]
         end
 
-        it("publishes the windows the agent reports", function()
+        it("records the windows the agent reports", function()
             local windows = {
                 {
                     label = "5h",
@@ -593,13 +593,13 @@ describe("agentic.SessionManager", function()
 
             make_session(windows):_on_session_update(usage_update())
 
-            assert.spy(publish_stub).was.called_with(windows)
+            assert.same(windows, record_stub.calls[1][1])
         end)
 
-        it("publishes nothing when the agent reports no windows", function()
+        it("records nothing when the agent reports no windows", function()
             make_session(nil):_on_session_update(usage_update())
 
-            assert.spy(publish_stub).was.called(0)
+            assert.spy(record_stub).was.called(0)
         end)
 
         it("preserves prior cost when the update omits it", function()

@@ -316,6 +316,78 @@ describe("FileSystem", function()
         end)
     end)
 
+    describe("write_atomic", function()
+        it("writes the content, creating the parent directory", function()
+            local path = vim.fs.joinpath(vim.fn.tempname(), "sub", "file.json")
+
+            assert.same({ true }, { FileSystem.write_atomic(path, "hello") })
+            assert.same({ "hello" }, vim.fn.readfile(path))
+        end)
+
+        it("replaces an existing file", function()
+            local path = vim.fn.tempname()
+            vim.fn.writefile({ "old" }, path)
+
+            FileSystem.write_atomic(path, "new")
+
+            assert.same({ "new" }, vim.fn.readfile(path))
+        end)
+    end)
+
+    describe("watch", function()
+        local Child = require("tests.helpers.child")
+        local child = Child.new()
+
+        before_each(function()
+            child.launch()
+            child.lua([[
+                local FileSystem = require("agentic.utils.file_system")
+                local dir = vim.fn.tempname()
+                _G.path = vim.fs.joinpath(dir, "file.json")
+                _G.sibling = vim.fs.joinpath(dir, "other.json")
+                _G.changes = 0
+                _G.handle = assert(FileSystem.watch(_G.path, function(err)
+                    assert(not err, err)
+                    _G.changes = _G.changes + 1
+                end))
+            ]])
+        end)
+
+        after_each(function()
+            child.stop()
+        end)
+
+        --- Wait up to 2 s for the child to see a change.
+        --- @return integer changes
+        local function await_changes()
+            for _ = 1, 40 do
+                local changes = child.lua_get("_G.changes")
+                if changes > 0 then
+                    return changes
+                end
+                vim.uv.sleep(50)
+            end
+            return 0
+        end
+
+        it("calls back when the file is replaced", function()
+            child.lua([[
+                require("agentic.utils.file_system").write_atomic(_G.path, "x")
+            ]])
+
+            assert.is_true(await_changes() > 0)
+        end)
+
+        it("ignores a sibling file", function()
+            child.lua([[
+                require("agentic.utils.file_system").write_atomic(_G.sibling, "x")
+            ]])
+            vim.uv.sleep(500)
+
+            assert.equal(0, child.lua_get("_G.changes"))
+        end)
+    end)
+
     describe("mkdirp", function()
         it("creates nested directories", function()
             local base = "/tmp/agentic_test_mkdirp_" .. os.time()

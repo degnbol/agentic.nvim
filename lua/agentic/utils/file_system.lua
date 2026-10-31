@@ -151,6 +151,67 @@ function FileSystem.save_to_disk(abs_path, content)
             .. tostring(open_err)
 end
 
+--- Replace a file's content atomically, creating its parent directory: a
+--- reader sees the old or the new content, never a partial file, also with
+--- writers in other processes.
+--- @param abs_path string
+--- @param content string
+--- @return boolean success
+--- @return string|nil error
+function FileSystem.write_atomic(abs_path, content)
+    local dir_ok, dir_err = FileSystem.mkdirp(vim.fs.dirname(abs_path))
+    if not dir_ok then
+        return false, dir_err
+    end
+    -- Per process, so concurrent writers do not share it.
+    local tmp = abs_path .. "." .. vim.uv.os_getpid() .. ".tmp"
+    local saved, save_err = FileSystem.save_to_disk(tmp, content)
+    if not saved then
+        return false, save_err
+    end
+    -- Unlike `os.rename`, replaces an existing file on Windows too.
+    local renamed, rename_err = vim.uv.fs_rename(tmp, abs_path)
+    if not renamed then
+        os.remove(tmp)
+        return false, rename_err
+    end
+    return true, nil
+end
+
+--- Watch a file for changes, including its creation and its replacement by a
+--- rename. Creates the parent directory when missing.
+--- @param abs_path string
+--- @param on_change fun(err: string|nil) Called on the main loop, with the watch's error if it fails
+--- @return uv.uv_fs_event_t|nil handle Stop it with `handle:stop()`
+--- @return string|nil error
+function FileSystem.watch(abs_path, on_change)
+    local dir = vim.fs.dirname(abs_path)
+    local dir_ok, dir_err = FileSystem.mkdirp(dir)
+    if not dir_ok then
+        return nil, dir_err
+    end
+    local handle, new_err = vim.uv.new_fs_event()
+    if not handle then
+        return nil, new_err
+    end
+    local name = vim.fs.basename(abs_path)
+    local callback = vim.schedule_wrap(on_change)
+    -- The directory, since a watch on the file fails while it is missing and
+    -- stays on the old inode after a replace.
+    local started, start_err = handle:start(dir, {}, function(err, filename)
+        if err then
+            callback(err)
+        elseif filename == name then
+            callback(nil)
+        end
+    end)
+    if not started then
+        handle:close()
+        return nil, start_err
+    end
+    return handle, nil
+end
+
 --- @param abs_path string
 --- @param content string
 --- @param callback fun(error: string|nil)

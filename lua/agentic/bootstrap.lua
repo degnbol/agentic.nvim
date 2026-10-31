@@ -1,11 +1,13 @@
 local AgentInstance = require("agentic.acp.agent_instance")
+local Budget = require("agentic.budget")
 local Config = require("agentic.config")
 local EdgeConceal = require("agentic.ui.edge_conceal")
 local SessionRegistry = require("agentic.session_registry")
 local Logger = require("agentic.utils.logger")
 
 --- Process-wide initialization: treesitter languages, the edge conceal
---- decoration provider, global autocmds, image paste, signal handlers.
+--- decoration provider, global autocmds, image paste, signal handlers, the
+--- shared budget file.
 --- @class agentic.Bootstrap
 local Bootstrap = {}
 
@@ -162,6 +164,14 @@ function Bootstrap.ensure()
         wrap_paste()
     end
     trap_signals()
+    Budget.start(
+        vim.fs.joinpath(
+            vim.fn.stdpath("cache") --[[@as string]],
+            "agentic",
+            "budget",
+            "budget.json"
+        )
+    )
 end
 
 return Bootstrap

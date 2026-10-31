@@ -526,16 +526,18 @@ agentic.send_operatorfunc({type})
 Budget ~
 
 `require("agentic.budget")` formats the account's usage budget. Only claude.ai
-subscription auth reports one. All chats share one budget per Neovim.
+subscription auth reports one. All chats in all Neovim instances share one
+budget.
 
-`vim.g.agentic_budget` holds the windows of the last report, shortest first.
+`vim.g.agentic_budget` holds the newest windows from any instance, shortest
+first.
 Each window is a table:
     `label`        Short name: "5h" or "7d"
     `utilization`  Fraction 0-1 of the window used
     `resets_at`    Epoch seconds when the window refills
     `window_s`     Length of the window in seconds
     `state`        "ok" | "warning" | "exhausted"
-|AgenticBudgetChanged| fires on each report.
+|AgenticBudgetChanged| fires when the budget changes.
 
                                                 *agentic.budget.statusline()*
 budget.statusline({opts})
@@ -554,9 +556,10 @@ budget.elapsed({window}, {now})
 
                                                       *agentic.budget.pace()*
 budget.pace({window}, {now})
-    Projected use of {window} at its reset at the average rate so far:
-    `utilization` divided by |agentic.budget.elapsed()|.
-    Above 1 the limit is hit before the reset. nil below 5% passed.
+    Projected use of {window} at its reset: a linear extrapolation of the
+    usage rate over the last `window_s`, without the time when a window was
+    exhausted. Above 1 the limit is hit before the reset. nil when less than
+    5% of that span has known usage.
 
                                                  *agentic.budget.resets_in()*
 budget.resets_in({window}, {now})
@@ -1265,8 +1268,8 @@ User AgenticHeadersChanged
 
                                                        *AgenticBudgetChanged*
 User AgenticBudgetChanged
-    Fired when a provider reports the account's usage budget. The budget
-    is `vim.g.agentic_budget`, see |agentic-budget|.
+    Fired when the account's usage budget changes in any Neovim instance.
+    The budget is `vim.g.agentic_budget`, see |agentic-budget|.
 
 ==============================================================================
 12. HEALTH CHECK                                              *agentic-health*

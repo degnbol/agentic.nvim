@@ -47,6 +47,10 @@ vim.api.nvim_set_option_value("runtimepath", table.concat(cleaned, ","), {})
 -- or Claude's `projects/`. Child neovims inherit it.
 vim.env.CLAUDE_CONFIG_DIR = vim.fn.tempname()
 
+-- A temporary cache dir, so no test reads, watches or writes the user's
+-- shared budget file. Child neovims inherit it.
+vim.env.XDG_CACHE_HOME = vim.fn.tempname()
+
 local MiniTest = require("mini.test")
 
 MiniTest.setup({

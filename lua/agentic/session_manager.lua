@@ -1783,7 +1783,7 @@ function SessionManager:_on_session_update(update, source_session_id)
 
         local windows = self.agent:budget_windows(update)
         if windows then
-            Budget.publish(windows)
+            Budget.record(windows, os.time())
         end
 
         self:_update_chat_header()
