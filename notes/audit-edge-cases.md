@@ -24,7 +24,7 @@ Fixed on 2026-10-26, with tests (`make validate` passes):
 - 0.11 `text_matcher.lua`: the trailing-whitespace strategy trims all trailing whitespace (this also removes 6.1's unused `trim` modes).
 
 Reports, each getting a plan:
-- 0.2, 0.3 (git fails open; same-second cache) → `bug-git-files-fail-open.md`
+- 0.2, 0.3 (git fails open; same-second cache) → fixed
 - 0.9 (failed execute row offset) → `bug-failed-execute-body-offset.md`
 - 0.12 (`$5 and $10` as math) → `bug-inline-math-dollar-pairing.md`
 - 0.13 (deny gate over the flag cap) → `bug-deny-gate-flag-cap.md`

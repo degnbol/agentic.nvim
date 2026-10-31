@@ -594,6 +594,43 @@ describe("agentic.utils.grant_safety", function()
                 GrantSafety.safe_for_kind("move", source_ok_dest_dirty)
             )
         end)
+
+        describe("when git state is unknown", function()
+            --- An existing file in a tmp root whose git state is unknown.
+            --- @return agentic.utils.GrantSafety.KindArgs
+            local function unknown()
+                --- @type agentic.utils.GrantSafety.KindArgs
+                local args = {
+                    exists = true,
+                    tracked = false,
+                    git_unknown = true,
+                    has_unstaged_hunks = false,
+                    hunks = {},
+                    claude_owned_ranges = {},
+                    tmp = true,
+                }
+                return args
+            end
+
+            for _, kind in ipairs({ "write", "delete", "edit", "move" }) do
+                it(kind .. " of an existing file is unsafe", function()
+                    assert.is_false(GrantSafety.safe_for_kind(kind, unknown()))
+                end)
+            end
+
+            it("move with an unknown destination is unsafe", function()
+                local source = unknown()
+                source.git_unknown = false
+                source.tmp = false
+                source.tracked = true
+                source.dest = unknown()
+                assert.is_false(GrantSafety.safe_for_kind("move", source))
+            end)
+
+            it("a tmp path is not scratch", function()
+                assert.is_false(GrantSafety.is_scratch(unknown()))
+            end)
+        end)
     end)
 
     describe("compile_scope", function()

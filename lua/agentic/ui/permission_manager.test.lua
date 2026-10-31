@@ -1263,6 +1263,28 @@ describe("agentic.ui.PermissionManager", function()
             assert.is_true(write_approves(repo .. "/sub/new.lua"))
         end)
 
+        describe("when git cannot answer", function()
+            it("approves a write of a new file", function()
+                is_tracked_stub:returns(nil)
+                grant(repo)
+                assert.is_true(write_approves(repo .. "/new.lua"))
+            end)
+
+            it("prompts for a write of an existing tmp file", function()
+                touch(tmp .. "/x")
+                git_root_stub:returns(tmp)
+                is_tracked_stub:returns(nil)
+                grant(tmp)
+                assert.is_false(write_approves(tmp .. "/x"))
+            end)
+
+            it("prompts for a write of a tracked file", function()
+                diff_hunks_stub:returns(nil)
+                grant(repo)
+                assert.is_false(write_approves(a_lua))
+            end)
+        end)
+
         it("prompts for a hidden part below the grant root", function()
             grant(repo)
             assert.is_false(write_approves(repo .. "/.git/hooks/x"))
@@ -1789,6 +1811,26 @@ describe("agentic.ui.PermissionManager", function()
                     }, nil)
                     assert.equal("allow", verdict)
                     assert.same({ "read-only", "grant" }, deciders)
+                end
+            )
+
+            it("a delete clears nothing when git diff fails", function()
+                diff_hunks_stub:returns(nil)
+                grant(repo)
+                assert.is_false(clears("delete", a_lua))
+            end)
+
+            it(
+                "a tmp delete after a write clears nothing when ls-files fails",
+                function()
+                    touch(tmp .. "/x")
+                    git_root_stub:returns(tmp)
+                    is_tracked_stub:returns(nil)
+                    grant(tmp)
+                    assert.is_false(pm:_bash_effects_clear({
+                        { kind = "write", path = tmp .. "/x" },
+                        { kind = "delete", path = tmp .. "/x" },
+                    }))
                 end
             )
 

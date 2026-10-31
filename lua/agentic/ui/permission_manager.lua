@@ -648,10 +648,18 @@ function PermissionManager:_kind_args(kind, orig, real, diff, exclude_id)
     local snap = GrantSafety.stat_snapshot(path)
     local lstat = vim.uv.fs_lstat(path)
     local git_root = vim.fs.root(vim.fs.dirname(path), ".git")
-    local tracked = git_root ~= nil and GitFiles.is_tracked(path, git_root)
-    local hunks = (tracked and snap.exists)
-            and GitFiles.diff_hunks(git_root, path)
-        or {}
+    --- @type boolean|nil
+    local tracked = false
+    if git_root then
+        tracked = GitFiles.is_tracked(path, git_root)
+    end
+    --- @type agentic.utils.GitFiles.Hunk[]|nil
+    local hunks = {}
+    if git_root and tracked and snap.exists then
+        hunks = GitFiles.diff_hunks(git_root, path)
+    end
+    local git_unknown = snap.exists and (tracked == nil or hunks == nil)
+    hunks = hunks or {}
 
     --- @type string[]
     local file_lines = {}
@@ -675,7 +683,8 @@ function PermissionManager:_kind_args(kind, orig, real, diff, exclude_id)
     --- @type agentic.utils.GrantSafety.KindArgs
     local args = {
         exists = snap.exists,
-        tracked = tracked,
+        tracked = tracked == true,
+        git_unknown = git_unknown,
         has_unstaged_hunks = #hunks > 0,
         hunks = hunks,
         edit_range = edit_range,

@@ -491,6 +491,7 @@ end
 --- @class agentic.utils.GrantSafety.KindArgs
 --- @field exists boolean File exists on disk
 --- @field tracked boolean File is tracked in the relevant git index
+--- @field git_unknown? boolean Git could not report tracked state or unstaged hunks
 --- @field has_unstaged_hunks boolean Working tree differs from index
 --- @field hunks agentic.utils.GitFiles.Hunk[] Unstaged hunk ranges in the new file
 --- @field edit_range? agentic.utils.GrantSafety.Range Target range of an Edit
@@ -501,16 +502,17 @@ end
 --- @field is_dir? boolean Path is a directory (a symlink to one is not)
 --- @field dest? agentic.utils.GrantSafety.KindArgs Destination state for `move`
 
---- True iff the path is scratch: under a tmp root and not tracked by git.
---- Scratch is write/create/edit-safe with no further check.
+--- True iff the path is scratch: under a tmp root and known to git as
+--- untracked. Scratch is write/create/edit-safe with no further check.
 --- @param args agentic.utils.GrantSafety.KindArgs
 --- @return boolean
 function M.is_scratch(args)
-    return args.tmp == true and not args.tracked
+    return args.tmp == true and not args.tracked and not args.git_unknown
 end
 
---- Whether a mutation of `kind` leaves the path recoverable. Scratch
---- (`is_scratch`) clears write, create and edit. Otherwise:
+--- Whether a mutation of `kind` leaves the path recoverable. When git could
+--- not answer (`git_unknown`) nothing is safe. Scratch (`is_scratch`) clears
+--- write, create and edit. Otherwise:
 ---   * create — the file does not exist
 ---   * write  — a new file, or tracked and clean
 ---   * delete — a tracked, clean file that is not a directory
@@ -523,6 +525,10 @@ end
 --- @return boolean safe
 --- @return string|nil reason
 function M.safe_for_kind(kind, args)
+    if args.git_unknown then
+        return false, "git state unknown"
+    end
+
     if kind == "create" then
         if M.is_scratch(args) then
             return true, "tmp scratch create"

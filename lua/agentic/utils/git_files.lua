@@ -5,12 +5,23 @@ local M = {}
 
 --- @class agentic.utils.GitFiles.Cache
 --- @field index_path string Absolute path to this worktree's index file
---- @field index_mtime number mtime.sec of index_path at last load
+--- @field index_key string Version key (mtime, size, inode) of index_path at last load
 --- @field tracked table<string, boolean> Set of absolute tracked paths
 
 --- Per-git-root caches.
 --- @type table<string, agentic.utils.GitFiles.Cache>
 local caches = {}
+
+--- Show a WARN notification for a failed git command.
+--- @param what string What failed, e.g. "git diff failed in /repo"
+--- @param stderr string|nil The command's stderr
+local function warn_failure(what, stderr)
+    Logger.notify(
+        string.format("%s: %s", what, vim.trim(stderr or "")),
+        vim.log.levels.WARN,
+        { title = "Agentic" }
+    )
+end
 
 --- Resolve the worktree's actual index file path. For `git worktree`
 --- checkouts, `.git` is a file pointing to `.git/worktrees/<name>/`, and the
@@ -27,6 +38,7 @@ local function resolve_index_path(git_root)
         "index",
     }, { text = true }):wait()
     if result.code ~= 0 then
+        warn_failure("git rev-parse failed in " .. git_root, result.stderr)
         return nil
     end
     local rel = vim.trim(result.stdout)
@@ -39,14 +51,23 @@ local function resolve_index_path(git_root)
     return vim.fs.joinpath(git_root, rel)
 end
 
+--- Identity of a file's current version: mtime (sec and nsec), size and
+--- inode. The inode catches a file replaced by rename (as git does with
+--- `index.lock`) even where mtime resolution is too coarse to change.
 --- @param path string
---- @return number
-local function mtime_of(path)
+--- @return string key `""` when the file is missing
+local function index_key_of(path)
     local stat = vim.uv.fs_stat(path)
-    if stat then
-        return stat.mtime.sec
+    if not stat then
+        return ""
     end
-    return 0
+    return string.format(
+        "%d.%d:%d:%d",
+        stat.mtime.sec,
+        stat.mtime.nsec,
+        stat.size,
+        stat.ino
+    )
 end
 
 --- Load (or refresh) the tracked-files set for a git root.
@@ -60,8 +81,8 @@ local function load_cache(git_root)
         return nil
     end
 
-    local current_mtime = mtime_of(index_path)
-    if cache and cache.index_mtime == current_mtime then
+    local index_key = index_key_of(index_path)
+    if cache and cache.index_key == index_key then
         return cache
     end
 
@@ -74,7 +95,7 @@ local function load_cache(git_root)
         "--full-name",
     }, { text = true }):wait()
     if result.code ~= 0 then
-        Logger.debug("git_files: ls-files failed for", git_root, result.stderr)
+        warn_failure("git ls-files failed in " .. git_root, result.stderr)
         return nil
     end
 
@@ -86,7 +107,7 @@ local function load_cache(git_root)
     --- @type agentic.utils.GitFiles.Cache
     local new_cache = {
         index_path = index_path,
-        index_mtime = current_mtime,
+        index_key = index_key,
         tracked = tracked,
     }
     caches[git_root] = new_cache
@@ -94,13 +115,14 @@ local function load_cache(git_root)
 end
 
 --- Check whether an absolute path is tracked in `git_root`'s index.
+--- A failed git command shows a WARN notification.
 --- @param path string Absolute path
 --- @param git_root string
---- @return boolean
+--- @return boolean|nil tracked nil, not false, when git could not read the index
 function M.is_tracked(path, git_root)
     local cache = load_cache(git_root)
     if not cache then
-        return false
+        return nil
     end
     return cache.tracked[path] == true
 end
@@ -113,9 +135,10 @@ end
 --- Parse `git diff --no-color -U0 -- <path>` output for unstaged hunk ranges
 --- (working tree vs index). For a 0-line hunk (pure deletion), `start_line`
 --- is the line *before* which deletion occurred and `end_line == start_line`.
+--- A failed `git diff` shows a WARN notification.
 --- @param git_root string
 --- @param path string Absolute path
---- @return agentic.utils.GitFiles.Hunk[]
+--- @return agentic.utils.GitFiles.Hunk[]|nil hunks Empty when there are no unstaged changes, nil when git diff failed
 function M.diff_hunks(git_root, path)
     local result = vim.system({
         "git",
@@ -128,7 +151,11 @@ function M.diff_hunks(git_root, path)
         path,
     }, { text = true }):wait()
     if result.code ~= 0 then
-        return {}
+        warn_failure(
+            string.format("git diff failed in %s for %s", git_root, path),
+            result.stderr
+        )
+        return nil
     end
 
     --- @type agentic.utils.GitFiles.Hunk[]
@@ -179,15 +206,7 @@ function M.dirty_paths(git_root, callback)
     }, { text = true }, function(result)
         if result.code ~= 0 then
             vim.schedule(function()
-                Logger.notify(
-                    string.format(
-                        "git status failed in %s: %s",
-                        git_root,
-                        vim.trim(result.stderr or "")
-                    ),
-                    vim.log.levels.WARN,
-                    { title = "Agentic" }
-                )
+                warn_failure("git status failed in " .. git_root, result.stderr)
                 callback(nil)
             end)
             return

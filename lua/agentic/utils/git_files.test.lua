@@ -13,7 +13,7 @@ describe("agentic.utils.git_files", function()
     --- Map from joined argv string to a `vim.system` result.
     --- @type table<string, { code: integer, stdout: string, stderr: string }>
     local responses = {}
-    --- @type table<string, { mtime: { sec: integer, nsec: integer } }|nil>
+    --- @type table<string, { mtime: { sec: integer, nsec: integer }, size: integer, ino: integer }|nil>
     local fs_results = {}
 
     --- Encode an argv array as a stable lookup key.
@@ -93,7 +93,20 @@ describe("agentic.utils.git_files", function()
 
             local index_abs = index_rel:sub(1, 1) == "/" and index_rel
                 or git_root .. "/" .. index_rel
-            fs_results[index_abs] = { mtime = { sec = 1, nsec = 0 } }
+            fs_results[index_abs] =
+                { mtime = { sec = 1, nsec = 0 }, size = 100, ino = 1 }
+        end
+
+        --- Number of `git ls-files` runs so far.
+        --- @return integer
+        local function ls_files_count()
+            local n = 0
+            for _, c in ipairs(system_stub.calls) do
+                if c[1][4] == "ls-files" then
+                    n = n + 1
+                end
+            end
+            return n
         end
 
         it("matches absolute paths in the tracked set", function()
@@ -125,26 +138,15 @@ describe("agentic.utils.git_files", function()
             set_repo("/repo", ".git/index", { "src/a.lua" })
             assert.is_true(GitFiles.is_tracked("/repo/src/a.lua", "/repo"))
 
-            local ls_count_after_first = 0
-            for _, c in ipairs(system_stub.calls) do
-                if c[1][4] == "ls-files" then
-                    ls_count_after_first = ls_count_after_first + 1
-                end
-            end
-            assert.equal(1, ls_count_after_first)
+            assert.equal(1, ls_files_count())
 
             -- Same mtime → cache hit, no second ls-files
             assert.is_true(GitFiles.is_tracked("/repo/src/a.lua", "/repo"))
-            local ls_count_after_second = 0
-            for _, c in ipairs(system_stub.calls) do
-                if c[1][4] == "ls-files" then
-                    ls_count_after_second = ls_count_after_second + 1
-                end
-            end
-            assert.equal(1, ls_count_after_second)
+            assert.equal(1, ls_files_count())
 
             -- mtime changes + new tracked set
-            fs_results["/repo/.git/index"] = { mtime = { sec = 2, nsec = 0 } }
+            fs_results["/repo/.git/index"] =
+                { mtime = { sec = 2, nsec = 0 }, size = 100, ino = 1 }
             local nul = string.char(0)
             responses[key_of({
                 "git",
@@ -161,6 +163,57 @@ describe("agentic.utils.git_files", function()
                 }
 
             assert.is_true(GitFiles.is_tracked("/repo/src/b.lua", "/repo"))
+        end)
+
+        it(
+            "invalidates cache when only the index mtime nsec changes",
+            function()
+                set_repo("/repo", ".git/index", { "src/a.lua" })
+                GitFiles.is_tracked("/repo/src/a.lua", "/repo")
+
+                fs_results["/repo/.git/index"] =
+                    { mtime = { sec = 1, nsec = 5 }, size = 100, ino = 1 }
+                GitFiles.is_tracked("/repo/src/a.lua", "/repo")
+                assert.equal(2, ls_files_count())
+            end
+        )
+
+        it("invalidates cache when only the index inode changes", function()
+            set_repo("/repo", ".git/index", { "src/a.lua" })
+            GitFiles.is_tracked("/repo/src/a.lua", "/repo")
+
+            fs_results["/repo/.git/index"] =
+                { mtime = { sec = 1, nsec = 0 }, size = 100, ino = 2 }
+            GitFiles.is_tracked("/repo/src/a.lua", "/repo")
+            assert.equal(2, ls_files_count())
+        end)
+
+        it("returns nil and notifies when git ls-files fails", function()
+            set_repo("/repo", ".git/index", { "src/a.lua" })
+            responses[key_of({
+                "git",
+                "-C",
+                "/repo",
+                "ls-files",
+                "-z",
+                "--full-name",
+            })] =
+                { code = 128, stdout = "", stderr = "fatal" }
+            local notify_stub = spy.stub(Logger, "notify")
+
+            assert.is_nil(GitFiles.is_tracked("/repo/src/a.lua", "/repo"))
+            assert.stub(notify_stub).was.called(1)
+
+            notify_stub:revert()
+        end)
+
+        it("returns nil and notifies when git rev-parse fails", function()
+            local notify_stub = spy.stub(Logger, "notify")
+
+            assert.is_nil(GitFiles.is_tracked("/repo/src/a.lua", "/repo"))
+            assert.stub(notify_stub).was.called(1)
+
+            notify_stub:revert()
         end)
     end)
 
@@ -191,7 +244,7 @@ describe("agentic.utils.git_files", function()
                 "+z",
             }, "\n") .. "\n")
 
-            local hunks = GitFiles.diff_hunks("/repo", "/repo/a.lua")
+            local hunks = GitFiles.diff_hunks("/repo", "/repo/a.lua") --[[@as agentic.utils.GitFiles.Hunk[] ]]
             assert.equal(2, #hunks)
             assert.equal(10, hunks[1].start_line)
             assert.equal(10, hunks[1].end_line)
@@ -208,14 +261,14 @@ describe("agentic.utils.git_files", function()
                 "@@ -5,2 +4,0 @@\n-line one\n-line two\n"
             )
 
-            local hunks = GitFiles.diff_hunks("/repo", "/repo/a.lua")
+            local hunks = GitFiles.diff_hunks("/repo", "/repo/a.lua") --[[@as agentic.utils.GitFiles.Hunk[] ]]
             assert.equal(1, #hunks)
             assert.equal(0, hunks[1].count)
             assert.equal(4, hunks[1].start_line)
             assert.equal(4, hunks[1].end_line)
         end)
 
-        it("returns empty list when git diff fails", function()
+        it("returns nil and notifies when git diff fails", function()
             responses[key_of({
                 "git",
                 "-C",
@@ -227,9 +280,12 @@ describe("agentic.utils.git_files", function()
                 "/repo/missing.lua",
             })] =
                 { code = 128, stdout = "", stderr = "fatal" }
+            local notify_stub = spy.stub(Logger, "notify")
 
-            local hunks = GitFiles.diff_hunks("/repo", "/repo/missing.lua")
-            assert.equal(0, #hunks)
+            assert.is_nil(GitFiles.diff_hunks("/repo", "/repo/missing.lua"))
+            assert.stub(notify_stub).was.called(1)
+
+            notify_stub:revert()
         end)
     end)
 

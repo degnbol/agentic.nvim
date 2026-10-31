@@ -172,7 +172,8 @@ across calls and moves with an in-command `cd`.
    pattern names it (`GrantSafety.scope_contains`).
 3. **Recoverability** — `GrantSafety.safe_for_kind`. A Bash delete of
    scratch clears only for a path redirected to earlier in the same command
-   (`tmp_cleanup`).
+   (`tmp_cleanup`). When git fails on an existing file (`git_unknown`), every
+   kind refuses and it is never scratch.
 4. **Verified Claude-owned range.** `SessionManager:_try_record_edit_range`
    records an Edit's line range before it applies, `finalize_edit_range`
    promotes it on `completed`, and `GrantSafety.verify_edit_range` drops it

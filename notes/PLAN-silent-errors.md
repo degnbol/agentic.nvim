@@ -42,7 +42,7 @@ Facts that decide the cases below (Neovim 0.12.6 runtime):
 
 ### No change
 10. **`status_indicator.lua`** — the report's `:285` does not exist (file has 102 lines); the `pcall` is at `:60-65` in `stop()`. It deletes an extmark that may be on a wiped buffer (`subagent_transcript.lua:166` calls `stop()` before its own validity check at `:167`): the cleanup case the rule allows.
-11. **`git_files.lua:130-132`** — covered by `notes/PLAN-git-files-fail-open.md` (`diff_hunks` notifies and returns `nil`).
+11. **`git_files.lua:130-132`** — done: `diff_hunks` notifies and returns `nil`.
 12. **`permission_manager.lua:651-656`** — see Open questions.
 
 ### Tests
