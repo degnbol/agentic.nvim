@@ -37,6 +37,20 @@ function M._generate_message_chunk(text, role)
     }
 end
 
+--- Whether a user content block is prompt text, not a block the plugin or the
+--- provider adds to a prompt (`<tag>…</tag>` metadata, the selection focus).
+--- @param text string
+--- @return boolean
+function M.is_prompt_text(text)
+    local trimmed = vim.trim(text)
+    -- Both tags are required, so prose that starts with `<` stays prose.
+    local tag = trimmed:match("^<(%w[%w_-]*)[ >]")
+    if tag and trimmed:match("</" .. tag .. ">%s*$") then
+        return false
+    end
+    return not trimmed:match("^IMPORTANT: Focus")
+end
+
 --- @param path string
 --- @return agentic.acp.Content
 function M.create_file_content(path)

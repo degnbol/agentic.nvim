@@ -51,13 +51,14 @@ function SessionRestore.build_items(sessions, opts)
     return items
 end
 
---- Format a session's messages as preview lines for the picker.
+--- Format a session's messages as preview lines for the picker. Synthetic
+--- prompts are skipped.
 --- @param messages agentic.ui.ChatHistory.Message[]
 --- @return string[]
 function SessionRestore.format_preview(messages)
     local lines = {}
     for _, msg in ipairs(messages) do
-        if msg.type == "user" then
+        if msg.type == "user" and not msg.synthetic then
             table.insert(lines, "## You")
             for line in msg.text:gmatch("[^\n]+") do
                 table.insert(lines, line)
@@ -394,13 +395,13 @@ function SessionRestore.write_row(writer, row, mid_turn, buffer_name)
     })
 end
 
---- Replay stored messages to the UI
+--- Replay stored messages to the UI. Synthetic prompts are skipped.
 --- @param writer agentic.ui.MessageWriter
 --- @param messages agentic.ui.ChatHistory.Message[]
 --- @param buffer_name fun(session_id: string): string|nil Name of a session's buffer, nil when it has none
 function SessionRestore.replay_messages(writer, messages, buffer_name)
     for _, msg in ipairs(messages) do
-        if msg.type == "user" then
+        if msg.type == "user" and not msg.synthetic then
             writer:write_user_prompt(msg.text)
         elseif msg.type == "agent" then
             local agent_message = ACPPayloads.generate_agent_message(msg.text)

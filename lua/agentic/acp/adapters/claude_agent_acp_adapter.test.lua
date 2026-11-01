@@ -1400,6 +1400,25 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             }))
         end)
 
+        it(
+            "names the compaction summary and interrupt marker replay-only",
+            function()
+                local client = adapter()
+
+                assert.is_true(
+                    client:is_replay_only_prompt(
+                        "This session is being continued from a previous conversation that ran out of context."
+                    )
+                )
+                assert.is_true(
+                    client:is_replay_only_prompt(
+                        "[Request interrupted by user for tool use]"
+                    )
+                )
+                assert.is_false(client:is_replay_only_prompt("continue"))
+            end
+        )
+
         it("tags a subagent's tool call with its spawning Task id", function()
             local message = adapter():__build_tool_call_message({
                 sessionUpdate = "tool_call",

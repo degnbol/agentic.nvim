@@ -190,6 +190,15 @@ describe("SessionRestore", function()
             assert.truthy(vim.tbl_contains(lines, "Hello world"))
         end)
 
+        it("skips a synthetic prompt", function()
+            assert.same(
+                {},
+                SessionRestore.format_preview({
+                    { type = "user", text = "continue", synthetic = true },
+                })
+            )
+        end)
+
         it("formats agent messages with heading", function()
             local lines = SessionRestore.format_preview({
                 { type = "agent", text = "Response text" },
@@ -558,6 +567,22 @@ describe("SessionRestore", function()
         local function no_buffer()
             return nil
         end
+
+        it("skips a synthetic prompt", function()
+            local write_prompt_spy = spy.new(function() end)
+            local writer = {
+                write_user_prompt = write_prompt_spy,
+                flush_thought_run = function() end,
+            }
+
+            SessionRestore.replay_messages(
+                writer --[[@as agentic.ui.MessageWriter]],
+                { { type = "user", text = "continue", synthetic = true } },
+                no_buffer
+            )
+
+            assert.equal(0, write_prompt_spy.call_count)
+        end)
 
         it("replays user and agent messages", function()
             local write_message_spy = spy.new(function() end)

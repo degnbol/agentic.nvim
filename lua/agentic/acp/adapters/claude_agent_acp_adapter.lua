@@ -351,6 +351,16 @@ function ClaudeAgentACPAdapter:subagent_task_id(update)
     return vim.tbl_get(update, "_meta", "claudeCode", "parentToolUseId")
 end
 
+--- The compaction summary and the interrupt markers.
+--- @param text string
+--- @return boolean
+function ClaudeAgentACPAdapter:is_replay_only_prompt(text)
+    return vim.startswith(
+        text,
+        "This session is being continued from a previous conversation"
+    ) or vim.startswith(text, "[Request interrupted by user")
+end
+
 --- "background" when the provider config sets `subagents.force_background`.
 --- @return "background"|"blocking"
 function ClaudeAgentACPAdapter:subagent_predicted_mode()

@@ -26,6 +26,30 @@ describe("ACPPayloads", function()
         end
     end)
 
+    describe("is_prompt_text", function()
+        it("accepts plain prose", function()
+            assert.is_true(Payloads.is_prompt_text("fix the bug"))
+        end)
+
+        it("accepts prose that starts with a tag it does not close", function()
+            assert.is_true(Payloads.is_prompt_text("<div> is wrong here"))
+        end)
+
+        it("rejects a closed tag block", function()
+            assert.is_false(
+                Payloads.is_prompt_text(
+                    "  <environment_info>\n- cwd\n</environment_info>\n"
+                )
+            )
+        end)
+
+        it("rejects the selection focus instruction", function()
+            assert.is_false(
+                Payloads.is_prompt_text("IMPORTANT: Focus and respect …")
+            )
+        end)
+    end)
+
     describe("generate_user_message", function()
         it("creates user message from string", function()
             local msg = Payloads.generate_user_message("hello world")

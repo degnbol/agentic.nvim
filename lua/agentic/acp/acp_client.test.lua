@@ -1407,6 +1407,14 @@ describe("agentic.acp.ACPClient", function()
             }))
         end)
 
+        it("knows no replay-only prompt", function()
+            assert.is_false(
+                make_client():is_replay_only_prompt(
+                    "[Request interrupted by user]"
+                )
+            )
+        end)
+
         it("reports a disconnect to every subscriber", function()
             local reached = {}
             local client = make_client({

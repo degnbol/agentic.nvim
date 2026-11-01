@@ -9,6 +9,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field text string Raw user input text, not the buffer formatted content
 --- @field timestamp integer Unix timestamp when message was sent
 --- @field provider_name string
+--- @field synthetic? boolean Sent by the plugin, not typed. Kept as a session/load alignment key; every rendering of the history skips it, so a restore reads the response as one continuous turn
 
 --- @class agentic.ui.ChatHistory.AgentMessage
 --- @field type "agent"
@@ -368,13 +369,33 @@ function ChatHistory.session_label(messages, session_id)
     return "main agent"
 end
 
---- Prepend restored messages to prompt in ACP Content format
+--- One sequence entry per main-chat message, in order. Tool calls, prompts
+--- and session message rows are keyed and start a tail. A synthetic prompt is
+--- keyed but does not start one. Agent and thought rows have no key.
+--- @return agentic.utils.SequenceTail.Entry[]
+function ChatHistory:sequence_entries()
+    return vim.tbl_map(function(msg)
+        if msg.type == "tool_call" then
+            -- `tostring`: the field is optional, and a row without an id
+            -- matches nothing.
+            return { key = "tool:" .. tostring(msg.tool_call_id), starts = true }
+        elseif msg.type == "user" then
+            return { key = "prompt:" .. msg.text, starts = not msg.synthetic }
+        elseif msg.type == "session_message" then
+            return { key = "message:" .. msg.message_id, starts = true }
+        end
+        return { starts = false }
+    end, self.messages)
+end
+
+--- Prepend restored messages to prompt in ACP Content format. Synthetic
+--- prompts are skipped.
 --- @param messages agentic.ui.ChatHistory.Message[]
 --- @param prompt agentic.acp.Content[] The prompt array to prepend to
 function ChatHistory.prepend_restored_messages(messages, prompt)
     for _, msg in ipairs(messages) do
         -- Convert stored messages to ACP Content format
-        if msg.type == "user" then
+        if msg.type == "user" and not msg.synthetic then
             table.insert(prompt, { type = "text", text = "User: " .. msg.text })
         elseif msg.type == "agent" then
             table.insert(
@@ -534,7 +555,7 @@ local function read_sessions_from_folder(folder)
                 local prompt_count = 0
                 if parsed.messages then
                     for _, msg in ipairs(parsed.messages) do
-                        if msg.type == "user" then
+                        if msg.type == "user" and not msg.synthetic then
                             prompt_count = prompt_count + 1
                         end
                     end

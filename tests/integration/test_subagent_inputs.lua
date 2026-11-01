@@ -194,15 +194,6 @@ _G.read_record("c1")
         assert.is_false(child.lua_get("vim.api.nvim_buf_is_valid(_G.bufnr)"))
     end)
 
-    it("no input while loading", function()
-        child.lua([[
-_G.s._loading = true
-_G.spawn("c1")
-]])
-
-        assert.is_true(child.lua_get([[_G.input("c1") == nil]]))
-    end)
-
     it("no input with an adapter that gives no instruction", function()
         child.lua([[
 _G.s.agent.subagent_message_instruction = function() return nil end

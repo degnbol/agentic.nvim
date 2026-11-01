@@ -390,6 +390,26 @@ describe("ChatHistory", function()
             return prompt[1].text
         end
 
+        it("skips a synthetic prompt", function()
+            local prompt = {}
+            ChatHistory.prepend_restored_messages({
+                {
+                    type = "user",
+                    text = "go",
+                    timestamp = 0,
+                    provider_name = "p",
+                },
+                {
+                    type = "user",
+                    text = "continue",
+                    timestamp = 0,
+                    provider_name = "p",
+                    synthetic = true,
+                },
+            }, prompt)
+            assert.same({ { type = "text", text = "User: go" } }, prompt)
+        end)
+
         it("writes the range of a read", function()
             local prompt = {}
             ChatHistory.prepend_restored_messages({
@@ -515,6 +535,58 @@ describe("ChatHistory", function()
                 "Message received from agentic-nvim-45:\nPlease rebase.",
                 prompt[1].text
             )
+        end)
+    end)
+
+    describe("sequence_entries", function()
+        it("keys main-chat tool calls, prompts and message rows", function()
+            local history = ChatHistory:new()
+            for _, msg in ipairs({
+                {
+                    type = "user",
+                    text = "hi",
+                    timestamp = 0,
+                    provider_name = "p",
+                },
+                { type = "thought", text = "hm", provider_name = "p" },
+                {
+                    type = "tool_call",
+                    tool_call_id = "tc-1",
+                    status = "completed",
+                },
+                { type = "agent", text = "done", provider_name = "p" },
+                {
+                    type = "user",
+                    text = "continue",
+                    timestamp = 0,
+                    provider_name = "p",
+                    synthetic = true,
+                },
+                {
+                    type = "session_message",
+                    message_id = "m-1",
+                    view = "received",
+                    kind = "result",
+                    text = "r",
+                },
+                {
+                    type = "agent",
+                    text = "child",
+                    provider_name = "p",
+                    parent_tool_use_id = "tc-1",
+                },
+            }) do
+                history:add_message(msg)
+            end
+
+            assert.same({
+                { key = "prompt:hi", starts = true },
+                { starts = false },
+                { key = "tool:tc-1", starts = true },
+                { starts = false },
+                { key = "prompt:continue", starts = false },
+                { key = "message:m-1", starts = true },
+            }, history:sequence_entries())
         end)
     end)
 
@@ -1230,6 +1302,26 @@ describe("ChatHistory", function()
             end
             assert.is_true(ids["session-1"])
             assert.is_true(ids["session-2"])
+        end)
+
+        it("does not count a synthetic prompt", function()
+            local s = history_with_id("sid-synthetic")
+            s:add_message({
+                type = "user",
+                text = "typed",
+                timestamp = 0,
+                provider_name = "p",
+            })
+            s:add_message({
+                type = "user",
+                text = "continue",
+                timestamp = 0,
+                provider_name = "p",
+                synthetic = true,
+            })
+            assert.is_nil(s:save(TEST_CWD))
+
+            assert.equal(1, list(TEST_CWD)[1].prompt_count)
         end)
 
         it("skips an unreadable file with one warning naming it", function()

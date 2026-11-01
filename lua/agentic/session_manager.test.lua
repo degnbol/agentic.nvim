@@ -741,7 +741,7 @@ describe("agentic.SessionManager", function()
                     set_idle = noop,
                     buf_nrs = { agent = 0, input = 0 },
                 },
-                permission_manager = { clear = noop, drop_deciders = noop },
+                permission_manager = { clear = noop },
                 todo_list = { clear = noop },
                 file_list = { clear = noop },
                 code_selection = { clear = noop },
@@ -766,6 +766,10 @@ describe("agentic.SessionManager", function()
                 _update_chat_header = function() end,
                 _reset_subagents = function() end,
                 _restore_transcripts = noop,
+                _install_history = SessionManager._install_history,
+                _render_history = noop,
+                _message_infos = {},
+                _delegated = {},
                 _forget_agents = noop,
                 _destroy_inputs = noop,
                 _sync_modified = SessionManager._sync_modified,
@@ -858,49 +862,6 @@ describe("agentic.SessionManager", function()
             end)
         end)
 
-        it("keeps the saved deciders for the replayed tool calls", function()
-            local session = make_load_session()
-            session.file_activity = { load = function() end }
-            local stashed = {}
-            session.permission_manager.stash_deciders = function(
-                _,
-                id,
-                deciders
-            )
-                stashed[id] = deciders
-            end
-            local find_stub = spy.stub(ChatHistory, "find_files")
-            find_stub:returns({ "/saved/test-session-id.json" })
-            local read_stub = spy.stub(FileSystem, "read_json")
-            read_stub:returns({
-                title = "",
-                messages = {
-                    { type = "user", text = "hi" },
-                    {
-                        type = "tool_call",
-                        tool_call_id = "tc-1",
-                        status = "completed",
-                        decided_by = { "grant" },
-                    },
-                    {
-                        type = "tool_call",
-                        tool_call_id = "tc-2",
-                        status = "completed",
-                    },
-                },
-            })
-
-            session:_do_load_acp_session("test-session-id", "/tmp")
-            find_stub:revert()
-            read_stub:revert()
-
-            assert.same({ ["tc-1"] = { "grant" } }, stashed)
-            assert.same(
-                { "/saved/test-session-id.json", n = 1 },
-                read_stub.calls[1]
-            )
-        end)
-
         it("warns when the saved file cannot be read", function()
             local session = make_load_session()
             local find_stub = spy.stub(ChatHistory, "find_files")
@@ -932,7 +893,6 @@ describe("agentic.SessionManager", function()
                     .. (case.given and "given" or "of the saved file"),
                 function()
                     local session = make_load_session()
-                    session.file_activity = { load = function() end }
                     local find_stub = spy.stub(ChatHistory, "find_files")
                     find_stub:returns({ "/saved/test-session-id.json" })
                     local read_stub = spy.stub(FileSystem, "read_json")
@@ -949,26 +909,6 @@ describe("agentic.SessionManager", function()
                     assert.equal(case.expected, session._cwd)
                 end
             )
-        end
-
-        for outcome, err in pairs({
-            succeeded = false,
-            failed = { message = "x" },
-        }) do
-            it("drops held deciders once the load has " .. outcome, function()
-                local session = make_load_session()
-                local drop = spy.new(function() end)
-                session.permission_manager.drop_deciders = drop
-                session._fallback_restore_from_local = function() end
-                local notify_stub = spy.stub(Logger, "notify")
-
-                session:_do_load_acp_session("test-session-id", "/tmp")
-                assert.equal(0, drop.call_count)
-                captured_load_cb(nil, err or nil)
-                notify_stub:revert()
-
-                assert.equal(1, drop.call_count)
-            end)
         end
 
         it("resolves `.` grants against the loaded session's cwd", function()
@@ -1082,6 +1022,8 @@ describe("agentic.SessionManager", function()
             local notify_stub = spy.stub(Logger, "notify")
             local fallback = spy.new(function() end)
             session._fallback_restore_from_local = fallback
+            local render = spy.new(function() end)
+            session._render_history = render
 
             session:_do_load_acp_session("test-session-id", "/tmp")
             read_stub:revert()
@@ -1091,6 +1033,8 @@ describe("agentic.SessionManager", function()
             assert.spy(notify_stub).was.called(0)
             assert.equal("test-session-id", fallback.calls[1][2])
             assert.equal("hi", fallback.calls[1][3].messages[1].text)
+            assert.spy(render).was.called(0)
+            assert.is_nil(session._replay_hold)
         end)
 
         it("clears the load gate when the load fails", function()
@@ -1292,6 +1236,155 @@ describe("agentic.SessionManager", function()
                     assert.equal("/project/a", session._cwd)
                 end
             )
+        end)
+    end)
+
+    describe("_replay_entry", function()
+        --- A session whose root is `root`, with the file's subagent `c-file`.
+        --- @return agentic.SessionManager
+        local function make_session()
+            return {
+                session_id = "root",
+                _agents = {},
+                chat_history = { subagents = { ["c-file"] = {} } },
+                agent = {
+                    subagent_task_id = function(_, update)
+                        return update.tag
+                    end,
+                    is_replay_only_prompt = function(_, text)
+                        return text == "summary"
+                    end,
+                },
+                _replay_entry = SessionManager._replay_entry,
+            } --[[@as agentic.SessionManager]]
+        end
+
+        --- @param text string
+        --- @param source string
+        --- @return { kind: string, args: table }
+        local function user_chunk(text, source)
+            return {
+                kind = "on_session_update",
+                args = {
+                    {
+                        sessionUpdate = "user_message_chunk",
+                        content = { type = "text", text = text },
+                    },
+                    source,
+                },
+            }
+        end
+
+        it("keys a main prompt, which starts a tail", function()
+            assert.same(
+                { key = "prompt:go", starts = true },
+                make_session():_replay_entry(user_chunk("go", "root"))
+            )
+        end)
+
+        it("keys a replay-only prompt, which starts no tail", function()
+            assert.same(
+                { key = "prompt:summary", starts = false },
+                make_session():_replay_entry(user_chunk("summary", "root"))
+            )
+        end)
+
+        it("gives a metadata chunk no key", function()
+            assert.same(
+                { starts = false },
+                make_session():_replay_entry(user_chunk("<env>x</env>", "root"))
+            )
+        end)
+
+        it("gives a child's prompt no entry, with no agent entry", function()
+            assert.is_nil(make_session():_replay_entry(user_chunk("go", "c1")))
+        end)
+
+        it("gives a tagged update on the root no entry", function()
+            local held = user_chunk("go", "root")
+            held.args[1].tag = "toolu_1"
+            assert.is_nil(make_session():_replay_entry(held))
+        end)
+
+        it("keys a main tool call and a main message row", function()
+            local session = make_session()
+            assert.same(
+                { key = "tool:t1", starts = true },
+                session:_replay_entry({
+                    kind = "on_tool_call",
+                    args = { { tool_call_id = "t1" }, "root" },
+                })
+            )
+            assert.same(
+                { key = "message:m1", starts = true },
+                session:_replay_entry({
+                    kind = "on_session_update",
+                    args = {
+                        { sessionUpdate = "session_message", messageId = "m1" },
+                        "root",
+                    },
+                })
+            )
+        end)
+
+        it("gives a subagent's tool call no entry by its tag", function()
+            assert.is_nil(make_session():_replay_entry({
+                kind = "on_tool_call",
+                args = {
+                    { tool_call_id = "t1", parent_tool_use_id = "toolu_1" },
+                    "root",
+                },
+            }))
+        end)
+
+        it("gives a tool call update and a subagent update no entry", function()
+            local session = make_session()
+            assert.is_nil(session:_replay_entry({
+                kind = "on_tool_call_update",
+                args = { { tool_call_id = "t1" }, "root" },
+            }))
+            assert.is_nil(session:_replay_entry({
+                kind = "on_session_update",
+                args = {
+                    { sessionUpdate = "subagent_update", sessionId = "c9" },
+                    "root",
+                },
+            }))
+        end)
+
+        it("gives main agent text an unkeyed entry", function()
+            assert.same(
+                { starts = false },
+                make_session():_replay_entry({
+                    kind = "on_session_update",
+                    args = {
+                        {
+                            sessionUpdate = "agent_message_chunk",
+                            content = { type = "text", text = "x" },
+                        },
+                        "root",
+                    },
+                })
+            )
+        end)
+    end)
+
+    describe("_send_synthetic_prompt", function()
+        it("records the prompt as a synthetic user row", function()
+            local dispatch = spy.new(function() end)
+            local session = {
+                chat_history = ChatHistory:new(),
+                agent = { provider_config = { name = "Test" } },
+                _dispatch_turn = dispatch,
+                _history_changed = function() end,
+            } --[[@as agentic.SessionManager]]
+
+            SessionManager._send_synthetic_prompt(session, "continue")
+
+            local row = session.chat_history.messages[1]
+            assert.equal("continue", row.text)
+            assert.is_true(row.synthetic)
+            assert.spy(dispatch).was.called(1)
         end)
     end)
 
@@ -3887,7 +3980,8 @@ describe("agentic.SessionManager", function()
                 session:_handle_input_submit("hello")
 
                 assert.equal(2, #sink.prompts)
-                assert.equal(1, sink.saves - sink.saves_at_send)
+                -- The resend's synthetic row, then the turn end.
+                assert.equal(2, sink.saves - sink.saves_at_send)
             end)
         end)
 
@@ -3947,9 +4041,15 @@ describe("agentic.SessionManager", function()
                 assert.equal(0, #sink.actions)
                 assert.same({ "continue", "continue" }, sink.synthetic)
                 -- Only the user's own prompt is attributed to them: one
-                -- heading, one history entry, one bell, one drain, one hook.
+                -- heading, one typed history entry, one bell, one drain, one
+                -- hook.
                 assert.same({ "hello" }, sink.headings)
-                assert.equal(1, #sink.history)
+                assert.same(
+                    { false, true, true },
+                    vim.tbl_map(function(msg)
+                        return msg.synthetic == true
+                    end, sink.history)
+                )
                 assert.spy(bell_stub).was.called(1)
                 assert.equal(1, sink.drains)
                 assert.equal(1, #completions)

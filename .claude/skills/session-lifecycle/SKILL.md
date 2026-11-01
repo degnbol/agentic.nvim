@@ -9,7 +9,9 @@ description: Session lifecycle races, epoch guard, cross-turn MessageWriter stat
 
 For the three restore paths (`session/load`, `restore_from_history`,
 `respawn_preserving_history`) and what each sends on the wire, see the
-`provider-system` skill § "Chat buffer is UI only".
+`provider-system` skill § "Chat buffer is UI only". A `session/load` with a
+session file renders the file; the replay is held and only its tail after
+the file is dispatched (`_dispatch_replay_tail`).
 
 Two races leave a callback acting on a session that has moved on:
 

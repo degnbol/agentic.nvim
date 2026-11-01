@@ -30,6 +30,7 @@ local Recovery = require("agentic.session_recovery")
 local SessionRegistry = require("agentic.session_registry")
 local SessionRestore = require("agentic.session_restore")
 local ResponseBoundary = require("agentic.acp.response_boundary")
+local SequenceTail = require("agentic.utils.sequence_tail")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
 local SubagentInput = require("agentic.ui.subagent_input")
@@ -124,6 +125,8 @@ end
 --- @field _prompt_pending integer Prompt callbacks still outstanding (the in_flight gate)
 --- @field _usage_reset_epoch? number Epoch seconds the provider's usage limit lifts at
 --- @field _loading? boolean A session/load RPC is in flight
+--- @field _replay_hold? agentic.SessionManager.HeldUpdate[] Conversation updates of a session/load replay, held until the load completes
+--- @field _replay_dropped? boolean A held replay was abandoned: its remaining updates are dropped until the load completes or a turn starts
 --- @field _retry_timer? uv.uv_timer_t Scheduled auto-continue timer for usage limit errors
 --- @field _retry_keymap? {bufnr: number, lhs: string} Active cancel-retry keymap
 --- @field _retry_attempt number Consecutive auto-continue attempts (0 = first try)
@@ -311,7 +314,7 @@ end
 --- the turn-end save writes it.
 --- @param history agentic.ui.ChatHistory
 function SessionManager:_history_changed(history)
-    -- A session/load replay mirrors the file; its end marks the history clean.
+    -- A session/load writes once, at its end.
     if self._prompt_pending == 0 and not self._loading then
         self:_persist_history(history)
     else
@@ -1330,9 +1333,7 @@ end
 --- Apply a `subagent_update`: announce an unknown child, relabel a known one,
 --- then start or end its work. A label is the description, else the title,
 --- else the child session id. A custom (`_`-prefixed) state neither
---- starts nor ends it. While a session loads, the work state is left out: the
---- session file holds the transcript's rows, and the provider reports the
---- current state again after the load.
+--- starts nor ends it.
 --- @param update agentic.acp.SubagentUpdate
 --- @param source_session_id string The session it arrived on, the child's parent
 function SessionManager:_on_subagent_update(update, source_session_id)
@@ -1367,7 +1368,7 @@ function SessionManager:_on_subagent_update(update, source_session_id)
     agent.parent_session_id = agent.parent_session_id or source_session_id
 
     local state = Json.present(update.state)
-    if self._loading or not state then
+    if not state then
         return
     end
     if state.state == "running" or state.state == "requires_action" then
@@ -1424,8 +1425,7 @@ end
 
 --- Show one view of a session message as a row in the buffer of the session
 --- it arrived on, tagged with the message id. A received view on a subagent
---- that is not a result is a delegation, whose id routes to the subagent. While a session loads,
---- only the main chat gets a row: the session file holds the transcripts'.
+--- that is not a result is a delegation, whose id routes to the subagent.
 --- @param update agentic.acp.SessionMessage
 --- @param source_session_id string The session it arrived on
 function SessionManager:_on_session_message(update, source_session_id)
@@ -1453,9 +1453,6 @@ function SessionManager:_on_session_message(update, source_session_id)
     local info = self:_message_info(update.messageId, sender, recipient)
     if received and not on_root and info.kind ~= "result" then
         self:_note_agent_task(source_session_id, update.messageId)
-    end
-    if self._loading and not on_root then
-        return
     end
 
     --- @type agentic.ui.ChatHistory.SessionMessage
@@ -1727,19 +1724,10 @@ end
 --- transcript of the subagent that sent it, and append its text to the
 --- history. A message chunk that opens a new response loses its leading
 --- newlines, and is dropped if no text is left. A thought chunk is written
---- as sent. While a session loads, subagent chunks are ignored.
+--- as sent.
 --- @param update agentic.acp.AgentMessageChunk|agentic.acp.AgentThoughtChunk
 --- @param source_session_id string|nil The session that sent it: the root, or a subagent's child session
 function SessionManager:_on_agent_chunk(update, source_session_id)
-    if
-        self._loading
-        and self:_agent_of(
-            source_session_id,
-            self.agent:subagent_task_id(update)
-        )
-    then
-        return
-    end
     local is_message = update.sessionUpdate == "agent_message_chunk"
     local child_id, transcript = self:_chunk_agent(update, source_session_id)
     local chunk, starts_response = update, nil
@@ -1815,9 +1803,7 @@ function SessionManager:_on_session_update(update, source_session_id)
         -- Arrives during session/load replay (ACPClient filters it out in
         -- normal operation). Format as a user heading and write to chat.
         -- The provider sends each content block from the original prompt as
-        -- a separate event — including system metadata (environment_info,
-        -- slash command tags, selection instructions, etc.). Filter those
-        -- out: real user text is plain prose, system blocks start with `<`.
+        -- a separate event.
         local text = update.content and update.content.text
         -- A subagent's is its prompt, which its block holds.
         if
@@ -1825,27 +1811,16 @@ function SessionManager:_on_session_update(update, source_session_id)
             and text ~= ""
             and not (source_session_id and self._agents[source_session_id])
             and not self.agent:subagent_task_id(update)
+            and ACPPayloads.is_prompt_text(text)
         then
-            local trimmed = vim.trim(text)
-            -- Match XML-tagged system blocks: <tag_name> ... </tag_name>
-            -- Requires both opening and closing tags to avoid false positives
-            -- on user text that happens to start with '<'.
-            local tag = trimmed:match("^<(%w[%w_-]*)[ >]")
-            if
-                (tag and trimmed:match("</" .. tag .. ">%s*$"))
-                or trimmed:match("^IMPORTANT: Focus")
-            then
-                -- System metadata injected into the prompt — skip
-            else
-                self.message_writer:write_user_prompt(text)
-                self.chat_history:add_message({
-                    type = "user",
-                    text = text,
-                    timestamp = os.time(),
-                    provider_name = self.agent.provider_config.name,
-                })
-                self:_history_changed(self.chat_history)
-            end
+            self.message_writer:write_user_prompt(text)
+            self.chat_history:add_message({
+                type = "user",
+                text = text,
+                timestamp = os.time(),
+                provider_name = self.agent.provider_config.name,
+            })
+            self:_history_changed(self.chat_history)
         end
     elseif update.sessionUpdate == "available_commands_update" then
         self:_set_available_commands(update.availableCommands)
@@ -1932,6 +1907,12 @@ function SessionManager:_refresh()
     -- submit with no way back, and unwedging that is what this function is for.
     self:_set_prompt_pending(0)
     self._loading = false
+    -- The rest of a held replay would otherwise render below the file and save
+    -- as duplicates. A later load adds what the dropped part held.
+    if self._replay_hold then
+        self._replay_hold = nil
+        self._replay_dropped = true
+    end
     -- A subagent the provider never reports as ended holds the chat modified.
     self:_close_agents({ state = "unknown" })
 
@@ -2272,21 +2253,80 @@ function SessionManager:_delete_session()
     end
 end
 
---- Build the ACP client handlers table.
+--- One conversation update of a session/load replay, as its handler got it.
+--- @class agentic.SessionManager.HeldUpdate
+--- @field kind "on_session_update"|"on_tool_call"|"on_tool_call_update" The handler that got it
+--- @field args { [1]: table, [2]: string|nil } The update and the session that sent it
+
+--- The method each replay handler runs.
+--- @type table<string, string>
+local REPLAY_METHODS = {
+    on_session_update = "_on_session_update",
+    on_tool_call = "_on_tool_call",
+    on_tool_call_update = "_on_tool_call_update",
+}
+
+--- The `sessionUpdate` values of the conversation, as opposed to provider
+--- state (commands, modes, config options, usage, plan). Tool calls and their
+--- updates have handlers of their own.
+--- @type table<string, true>
+local CONVERSATION_UPDATES = {
+    user_message_chunk = true,
+    agent_message_chunk = true,
+    agent_thought_chunk = true,
+    subagent_update = true,
+    session_message = true,
+}
+
+--- Run a replay update through its handler's method.
+--- @param held agentic.SessionManager.HeldUpdate
+function SessionManager:_dispatch_held(held)
+    self[REPLAY_METHODS[held.kind]](self, held.args[1], held.args[2])
+end
+
+--- Build the ACP client handlers table. Conversation updates of a session/load
+--- replay are held or dropped instead of handled.
 --- @return agentic.acp.ClientHandlers
 function SessionManager:_build_handlers()
     --- @type agentic.acp.ClientHandlers
     return {
         on_session_update = function(update, source_session_id)
-            self:_on_session_update(update, source_session_id)
+            if
+                not (
+                    CONVERSATION_UPDATES[update.sessionUpdate]
+                    and self:_take_replay_update(
+                        "on_session_update",
+                        update,
+                        source_session_id
+                    )
+                )
+            then
+                self:_on_session_update(update, source_session_id)
+            end
         end,
 
         on_tool_call = function(tool_call, source_session_id)
-            self:_on_tool_call(tool_call, source_session_id)
+            if
+                not self:_take_replay_update(
+                    "on_tool_call",
+                    tool_call,
+                    source_session_id
+                )
+            then
+                self:_on_tool_call(tool_call, source_session_id)
+            end
         end,
 
-        on_tool_call_update = function(tool_call_update)
-            self:_on_tool_call_update(tool_call_update)
+        on_tool_call_update = function(tool_call_update, source_session_id)
+            if
+                not self:_take_replay_update(
+                    "on_tool_call_update",
+                    tool_call_update,
+                    source_session_id
+                )
+            then
+                self:_on_tool_call_update(tool_call_update)
+            end
         end,
 
         on_request_permission = function(request, callback)
@@ -2299,6 +2339,128 @@ function SessionManager:_build_handlers()
             end
         end,
     }
+end
+
+--- Append an update to `_replay_hold` while a replay is held, or drop it while
+--- `_replay_dropped` is set.
+--- @param kind "on_session_update"|"on_tool_call"|"on_tool_call_update" The handler that got it
+--- @param update table
+--- @param source_session_id string|nil
+--- @return boolean taken False when the update is neither held nor dropped
+function SessionManager:_take_replay_update(kind, update, source_session_id)
+    if self._replay_hold then
+        table.insert(
+            self._replay_hold,
+            { kind = kind, args = { update, source_session_id } }
+        )
+        return true
+    end
+    return self._replay_dropped == true
+end
+
+--- The sequence entry of one held replay update. Nil when the update makes no
+--- main-chat row: a `tool_call_update`, or an update from a subagent.
+--- `subagent_update` counts as a subagent's, because the bridge replays a
+--- subagent under an id of its own, which no key could match.
+--- @param held agentic.SessionManager.HeldUpdate
+--- @return agentic.utils.SequenceTail.Entry|nil
+function SessionManager:_replay_entry(held)
+    local update, source_session_id = held.args[1], held.args[2]
+    if held.kind == "on_tool_call_update" then
+        return nil
+    end
+    -- Not from `_agents`: no held `subagent_update` has been dispatched yet.
+    if source_session_id ~= self.session_id then
+        return nil
+    end
+    if held.kind == "on_tool_call" then
+        if update.parent_tool_use_id then
+            return nil
+        end
+        return { key = "tool:" .. update.tool_call_id, starts = true }
+    end
+    local kind = update.sessionUpdate
+    if
+        kind == "subagent_update"
+        or self.agent:subagent_task_id(
+            update --[[@as agentic.acp.SessionUpdateMessage]]
+        )
+    then
+        return nil
+    end
+    if kind == "session_message" then
+        return { key = "message:" .. update.messageId, starts = true }
+    end
+    local text = kind == "user_message_chunk"
+        and vim.tbl_get(update, "content", "text")
+    if text and text ~= "" and ACPPayloads.is_prompt_text(text) then
+        return {
+            key = "prompt:" .. text,
+            starts = not self.agent:is_replay_only_prompt(text),
+        }
+    end
+    return { starts = false }
+end
+
+--- Dispatch the part of a held session/load replay that the rendered history
+--- does not hold. Warns and dispatches nothing when the replay cannot be
+--- matched to the history.
+---
+--- An update from the tail's start on is dispatched, except a
+--- `tool_call_update` of a call the tail did not dispatch: a block the history
+--- rendered is never changed. Before the start, only a subagent's view of a
+--- message whose main view is in the tail is dispatched.
+--- @param hold agentic.SessionManager.HeldUpdate[]
+function SessionManager:_dispatch_replay_tail(hold)
+    local entries, held_index = {}, {}
+    --- @type table<integer, true> Held indices of the main-chat updates
+    local is_main = {}
+    for i, held in ipairs(hold) do
+        local entry = self:_replay_entry(held)
+        if entry then
+            table.insert(entries, entry)
+            held_index[#entries] = i
+            is_main[i] = true
+        end
+    end
+    local start =
+        SequenceTail.tail_start(self.chat_history:sequence_entries(), entries)
+    if not start then
+        Logger.notify(
+            "The provider's replay of this session does not match its session file; showing the file only",
+            vim.log.levels.WARN
+        )
+        return
+    end
+    local first = held_index[start] or #hold + 1
+
+    --- @type table<string, true>
+    local tail_messages = {}
+    for i = first, #hold do
+        local update = hold[i].args[1]
+        if update.sessionUpdate == "session_message" and is_main[i] then
+            tail_messages[update.messageId] = true
+        end
+    end
+    --- @type table<string, true>
+    local tail_calls = {}
+    for i, held in ipairs(hold) do
+        local update = held.args[1]
+        if held.kind == "on_tool_call_update" then
+            if tail_calls[update.tool_call_id] then
+                self:_dispatch_held(held)
+            end
+        elseif
+            i >= first
+            or update.sessionUpdate == "session_message"
+                and tail_messages[update.messageId]
+        then
+            if held.kind == "on_tool_call" then
+                tail_calls[update.tool_call_id] = true
+            end
+            self:_dispatch_held(held)
+        end
+    end
 end
 
 --- Whether a tool call status is one the provider reports as the call's end.
@@ -2320,10 +2482,6 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
     local parent
     if child_id then
         self._tool_call_owner[id] = child_id
-        -- A session/load replays the call, and the session file holds it.
-        if self._loading then
-            return
-        end
         self:_note_agent_task(child_id, task_id)
         self:_read_agent_record(child_id)
         parent = self:_task_of(child_id)
@@ -2893,11 +3051,6 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     local id = tool_call_update.tool_call_id
     local child_id = self._tool_call_owner[id]
     local is_subagent = child_id ~= nil
-    -- The whole session/load replay arrives before the load completes, so
-    -- this is an update to a call `_on_tool_call` dropped.
-    if is_subagent and self._loading then
-        return
-    end
     if child_id then
         self:_read_agent_record(child_id)
     end
@@ -3538,11 +3691,16 @@ end
 --- every epoch bump strands whatever prompt callbacks the outgoing session had,
 --- and their decrements are refused from now on, so nothing else would ever
 --- bring the counter back down. A restore leaves `_cancel_session` unrun.
+--- The same holds for the load gate and replay hold of a load the refused
+--- callback would have ended.
 function SessionManager:_advance_session_epoch()
     self._session_epoch = self._session_epoch + 1
     self:_forget_agents()
     self:_set_prompt_pending(0)
     self:_destroy_inputs()
+    self._loading = false
+    self._replay_hold = nil
+    self._replay_dropped = nil
 end
 
 --- Stop the running turn without ending the session. Safe when nothing is
@@ -3913,12 +4071,20 @@ end
 
 --- Send a prompt that the user did not author, recording nothing that would
 --- attribute it to them: no `## ` heading, prompt sign or `---` separator
---- (`write_user_prompt`), no `chat_history` entry — so a Path B restore reads
---- the response as one continuous turn — and no context blocks, because
---- pending @files, selections and diagnostics belong to the user's *next*
---- prompt and stay pending. No `on_prompt_submit` hook either.
+--- (`write_user_prompt`), and no context blocks, because pending @files,
+--- selections and diagnostics belong to the user's *next* prompt and stay
+--- pending. No `on_prompt_submit` hook either. The history records it as a
+--- `synthetic` user row.
 --- @param text string
 function SessionManager:_send_synthetic_prompt(text)
+    self.chat_history:add_message({
+        type = "user",
+        text = text,
+        timestamp = os.time(),
+        provider_name = self.agent.provider_config.name,
+        synthetic = true,
+    })
+    self:_history_changed(self.chat_history)
     self:_dispatch_turn({ { type = "text", text = text } })
 end
 
@@ -3944,6 +4110,10 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
     -- must still back off. No-op when nothing is armed, and _fire_auto_continue
     -- has already cancelled by the time its own turn reaches here.
     Recovery.cancel_retry_timer(self, false)
+
+    -- What arrives from here on answers this turn, not a replay `_refresh`
+    -- abandoned.
+    self._replay_dropped = nil
 
     self:_set_generating(true)
 
@@ -4297,8 +4467,8 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     -- `_restoring` stops the constructor's deferred new_session, the epoch
     -- rejects an in-flight one.
     self._restoring = true
-    self._loading = true
     self:_advance_session_epoch()
+    self._loading = true
     local epoch = self._session_epoch
 
     -- Clean up the old session's UI state and subscriber, but do NOT send
@@ -4315,9 +4485,17 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     self.status_indicator:start("busy")
 
     self.session_id = session_id
-    self.chat_history.session_id = session_id
-    self.chat_history.timestamp = os.time()
     local saved_data = ChatHistory.read_saved(session_id)
+    local saved_history = saved_data and ChatHistory.from_data(saved_data)
+    -- The file renders the chat and the replay adds only what comes after the
+    -- file's end. Without `loadSession` the load fails at once, and the
+    -- fallback renders the file.
+    local from_file = saved_history ~= nil
+        and self.agent.agent_capabilities.loadSession == true
+    if not from_file then
+        self.chat_history.session_id = session_id
+        self.chat_history.timestamp = os.time()
+    end
     self._cwd = cwd and FileSystem.canonical_path(cwd)
         or saved_data and saved_data.cwd
         or vim.fn.getcwd()
@@ -4329,23 +4507,10 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
 
     local handlers = self:_build_handlers()
 
-    -- The title, file tally and subagent output come from the file, not the
-    -- replay. Assigned directly: values read from the file leave the history
-    -- clean.
-    local saved_history = saved_data and ChatHistory.from_data(saved_data)
     if saved_history then
-        if saved_history.title ~= "" then
-            self.chat_history.title = saved_history.title
-            self._title_user_set = true
-            self.widget:set_chat_title(saved_history.title)
-        end
-        self.chat_history.file_activity = saved_history.file_activity
-        self.file_activity:load(saved_history.file_activity)
-        self.chat_history.subagent_messages = saved_history.subagent_messages
-        self.chat_history.subagents = saved_history.subagents
-        -- Replayed views reuse the saved kinds and summaries, and no later
-        -- message to an agent the file shows delegated to is its first
-        -- delegation.
+        -- Replayed views and the tail reuse the saved kinds and summaries,
+        -- and no later message to an agent the file shows delegated to is its
+        -- first delegation.
         for _, list in ipairs({
             saved_history.messages,
             saved_history.subagent_messages,
@@ -4360,15 +4525,12 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                 end
             end
         end
-        -- The replay carries no deciders; `_on_tool_call` takes these.
-        for _, msg in ipairs(saved_history.messages) do
-            if msg.type == "tool_call" and msg.decided_by then
-                self.permission_manager:stash_deciders(
-                    msg.tool_call_id --[[@as string]],
-                    msg.decided_by
-                )
-            end
-        end
+    end
+    if from_file then
+        --- @cast saved_history agentic.ui.ChatHistory
+        self:_install_history(saved_history)
+        self:_render_history()
+        self._replay_hold = {}
     end
 
     self.agent:load_session(
@@ -4407,25 +4569,35 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                 end
                 self._restoring = false
                 self._loading = false
-                -- Held for a replay that will not come; the local
-                -- fallback reads the deciders from the history.
-                self.permission_manager:drop_deciders()
+                self._replay_hold = nil
+                self._replay_dropped = nil
+                -- With `from_file` the same object as `self.chat_history`.
                 self:_fallback_restore_from_local(session_id, saved_history)
                 return
             end
 
+            if from_file then
+                -- Set unless `_refresh` dropped it.
+                local hold = self._replay_hold --[[@as agentic.SessionManager.HeldUpdate[] ]]
+                self._replay_hold = nil
+                if self._replay_dropped then
+                    self._replay_dropped = nil
+                else
+                    -- With `_loading` still set: the tail's edits are on disk
+                    -- already, so `_try_record_edit_range` must skip them.
+                    self:_dispatch_replay_tail(hold)
+                end
+            end
             self._restoring = false
             self._loading = false
-            -- The replay is over: what it did not take, nothing will.
-            self.permission_manager:drop_deciders()
             self.status_indicator:stop()
-            -- The replay mirrors what the session file already holds.
-            self.chat_history.dirty = false
             self:_sync_modified(self.chat_history)
 
-            -- After the replay, whose spawns made the transcripts they
-            -- had a block for.
-            self:_restore_transcripts()
+            if not from_file then
+                -- After the replay, whose spawns made the transcripts they
+                -- had a block for.
+                self:_restore_transcripts()
+            end
 
             -- Apply configOptions the provider returned with session/load,
             -- so the config options hold the restored session's mode/model
@@ -4437,6 +4609,13 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
             local opts = self.config_options
             if model then
                 opts:set_pending_initial_model(model)
+            end
+
+            -- A load whose replay added nothing to the file writes nothing.
+            -- The model saved here can be the one from before the pending
+            -- model takes effect; the next turn's save corrects it.
+            if self.chat_history.dirty then
+                self:_history_changed(self.chat_history)
             end
 
             local provider_label = self.agent.provider_config.name
@@ -4567,6 +4746,8 @@ function SessionManager:_cancel_session()
     -- also covers the restore paths that never reach here.
     self._usage_reset_epoch = nil
     self._loading = false
+    self._replay_hold = nil
+    self._replay_dropped = nil
     self:_reset_conversation()
 end
 
@@ -4785,41 +4966,49 @@ end
 function SessionManager:restore_from_history(history)
     self:clear_chat()
     -- Held while session/new is in flight, and kept if it fails.
-    self.chat_history = history
-    self:_sync_modified(history)
-
-    -- Replaying the saved messages writes tool-call blocks straight to the
-    -- chat buffer, bypassing the handlers that record ops, so the tally has to
-    -- come from the history. Cleared first: `load` deliberately keeps ops
-    -- recorded before it ran (the session/load replay race), but the tally of
-    -- the conversation being replaced must not follow the user into the new
-    -- one.
-    self.file_activity:clear()
-    self.file_activity:load(self.chat_history.file_activity)
-
-    -- Show restored session title in buffer name
-    local restored_title = self.chat_history.title
-    if restored_title and restored_title ~= "" then
-        self._title_user_set = true
-        self.widget:set_chat_title(restored_title)
-    end
-
+    self:_install_history(history)
     self:new_session({
         history = history,
         on_created = function()
-            -- Replays the history's own messages, not `_history_to_send`:
-            -- restoring the transcripts points the blocks at their new names
-            -- in the history.
-            self:_restore_transcripts()
-            SessionRestore.replay_messages(
-                self.message_writer,
-                self.chat_history.messages,
-                function(id)
-                    return self:_buffer_name(id)
-                end
-            )
+            self:_render_history()
         end,
     })
+end
+
+--- Make `history` the session's: the history, its modified flag, file tally
+--- and title.
+--- @param history agentic.ui.ChatHistory
+function SessionManager:_install_history(history)
+    self.chat_history = history
+    self:_sync_modified(history)
+
+    -- Rendering the history writes tool-call blocks straight to the chat
+    -- buffer, bypassing the handlers that record ops, so the tally has to come
+    -- from the history. Cleared first: `load` deliberately keeps ops recorded
+    -- before it ran, but the tally of the conversation being replaced must not
+    -- follow the user into the new one.
+    self.file_activity:clear()
+    self.file_activity:load(history.file_activity)
+
+    if history.title ~= "" then
+        self._title_user_set = true
+        self.widget:set_chat_title(history.title)
+    end
+end
+
+--- Render `self.chat_history`: the subagent transcripts, then the messages.
+function SessionManager:_render_history()
+    -- The history's own messages, not `_history_to_send`: restoring the
+    -- transcripts points the blocks at their new names in the history.
+    self:_restore_transcripts()
+    SessionRestore.replay_messages(
+        self.message_writer,
+        self.chat_history.messages,
+        function(id)
+            return self:_buffer_name(id)
+        end
+    )
+    self.status_indicator:reposition()
 end
 
 --- Restart the current session: cancel it and restore from chat history.

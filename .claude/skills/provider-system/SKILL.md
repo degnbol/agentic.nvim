@@ -463,8 +463,7 @@ fallback fires).
 
 ### user_message_chunk contains full prompt content
 
-This applies to Path A only. Path B sends no `session/load`; after a
-failed load, `_reset_conversation` clears the partial replay first.
+Path A only.
 
 During `session/load` replay, the provider sends `user_message_chunk` events for
 each content block in the original `session/prompt` request — not just user-typed
@@ -475,9 +474,8 @@ user prose.
 
 `ACPClient:__handle_session_update` normally drops all `user_message_chunk`
 events because the plugin writes user messages locally on prompt submit. During `session/load`, it
-forwards them instead (gated by `_loading_sessions[session_id]`). The
-`SessionManager` handler filters out system metadata by checking if the trimmed
-text starts with `<` or known instruction prefixes.
+forwards them instead (gated by `_loading_sessions[session_id]`).
+`ACPPayloads.is_prompt_text` tells the user's prose from the rest.
 
 Any new code that processes replayed user messages must account for this: expect
 multiple chunks per turn, most of which are system content.

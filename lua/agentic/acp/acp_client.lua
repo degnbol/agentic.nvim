@@ -213,6 +213,14 @@ function ACPClient:subagent_task_id(_update)
     return nil
 end
 
+--- Whether a replayed prompt is one the provider adds itself during a
+--- session/load replay, not one the user sent.
+--- @param _text string
+--- @return boolean
+function ACPClient:is_replay_only_prompt(_text)
+    return false
+end
+
 --- The shell the provider's execute tool runs commands in, when the client
 --- can prove it. Reaches only blocks built by the base `__build_tool_call_message`.
 --- @return "bash"|"zsh"|nil

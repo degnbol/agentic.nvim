@@ -1155,10 +1155,11 @@ _G.mid_file = table.concat(vim.fn.readfile(
         function()
             load()
 
+            -- The file's rows once; the reply the file lacks is the tail.
             local chat = child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]])
             local name = child.lua_get([[_G.block("c1").argument]])
-            assert.truthy(chat:find("## Find it.\n" .. name, 1, true))
-            assert.truthy(chat:find("## replayed reply\n" .. name, 1, true))
+            assert.equal(1, count(chat, "## Find it.\n" .. name))
+            assert.equal(1, count(chat, "## replayed reply\n" .. name))
             assert.same(
                 { "tool_call", "session_message", "session_message" },
                 child.lua_get([[vim.tbl_map(function(m)
@@ -1200,6 +1201,7 @@ _G.update = function(source, update)
     _G.s.agent.subscribers["sid-x"].on_session_update(update, source)
 end
 _G.announce("c1", "finder", "sid-x", { state = "running" })
+_G.message("toolu_1", "sid-x", "c1", "Find it.")
 for _, view in ipairs({
     { session = "c1", link = "senderMessageId" },
     { session = "sid-x", link = "recipientMessageId" },
@@ -1215,12 +1217,13 @@ _G.load_cb({}, nil)
 ]])
             child.flush()
 
+            -- The message is new, so both views are in the tail.
             local chat = child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]])
             assert.equal(1, count(chat, "## Also lib/."))
             child.lua([[vim.fn.bufload(_G.transcript("c1").bufnr)]])
-            assert.is_nil(
-                child.lua_get([[_G.ttext("c1")]]):find("Also lib/.", 1, true)
-            )
+            local transcript = child.lua_get([[_G.ttext("c1")]])
+            assert.equal(1, count(transcript, "Also lib/."))
+            assert.equal(1, count(transcript, "## Find it."))
         end
     )
 
@@ -1351,25 +1354,6 @@ describe("subagent edge cases", function()
     after_each(function()
         child.stop()
     end)
-
-    it(
-        "a tool call update while loading leaves the transcript unloaded",
-        function()
-            child.lua([[
-_G.s._loading = true
-_G.spawn("c1")
-local h = _G.s:_build_handlers()
-h.on_tool_call({ tool_call_id = "t1", kind = "read", status = "pending", argument = "a" }, "c1")
-h.on_tool_call_update({ tool_call_id = "t1", status = "completed" }, "c1")
-]])
-
-            assert.is_false(
-                child.lua_get(
-                    [[vim.api.nvim_buf_is_loaded(_G.transcript("c1").bufnr)]]
-                )
-            )
-        end
-    )
 
     it("an auto-approved request opens no tab", function()
         child.lua([[
