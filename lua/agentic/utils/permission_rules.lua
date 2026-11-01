@@ -261,6 +261,28 @@ end
 --- unsafe whatever its scope or order relative to the definition.
 --- @alias agentic.utils.PermissionRules.Shadowed table<string, true>
 
+--- The action commands of an action host (`find -exec`, `fd -x`) and their
+--- parse, for re-walking one level deeper. nil at the nesting cap, for a
+--- command whose actions do not resolve (see `ShellParse.host_actions`), or
+--- when they do not parse; the host is then matched with all its arguments.
+--- @param cmd_name string
+--- @param args string[] delivered words after the name
+--- @param args_dynamic boolean[] parallel to `args`
+--- @param depth integer nesting depth of the host
+--- @return agentic.utils.ShellParse.HostActions|nil actions
+--- @return TSNode|nil root parse of `actions.inner`
+local function parsed_actions(cmd_name, args, args_dynamic, depth)
+    if depth >= NESTED_MAX_DEPTH then
+        return nil
+    end
+    local actions = ShellParse.host_actions(cmd_name, args, args_dynamic)
+    local root = actions and parse_zsh(actions.inner)
+    if not root then
+        return nil
+    end
+    return actions, root
+end
+
 --- @alias agentic.utils.PermissionRules.WalkCtx { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], sources: table<agentic.utils.PermissionRules.Source, true>, deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve_tier: agentic.PermAutoApproveTier, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed, read_scripts: boolean }
 
 --- Run `walk_once` until a run adds no name to the shadowed set, or a run
@@ -1108,6 +1130,31 @@ local function walk_command(node, src, ctx, known, funcs)
         )
     end
 
+    -- Action host (`find -exec`, `fd -x`): its actions must approve, then the
+    -- structured matcher sees the host without them. Globs keep the whole
+    -- leaf: allow still needs the actions, deny/ask only over-fire. An
+    -- action that runs in another directory may not add a path effect or read
+    -- a script, since a relative path in it resolves there.
+    local actions, actions_root =
+        parsed_actions(cmd_name, args, args_dynamic, ctx.depth)
+    if actions and actions_root then
+        local n_effects = #ctx.effects
+        if
+            not walk(
+                actions_root,
+                actions.inner,
+                vim.tbl_extend("force", ctx, {
+                    depth = ctx.depth + 1,
+                    read_scripts = ctx.read_scripts and not actions.foreign_cwd,
+                })
+            )
+            or (actions.foreign_cwd and #ctx.effects > n_effects)
+        then
+            return false
+        end
+        args, args_dynamic = actions.args, actions.args_dynamic
+    end
+
     if script_path and not ctx.read_scripts then
         return false
     end
@@ -1649,7 +1696,7 @@ end
 -- decision, so a `safe_write` like `git add` never lights up even at the
 -- read_only tier.
 
---- @alias agentic.utils.PermissionRules.TallyCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[], written: table<string, string|false>, for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed }
+--- @alias agentic.utils.PermissionRules.TallyCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[], written: table<string, string|false>, for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed, read_scripts: boolean }
 
 --- Forward declaration — the tally handlers are mutually recursive, and
 --- `command_known_safe` recurses through `tally_walk` for inline `-c` bodies.
@@ -1869,10 +1916,37 @@ local function command_known_safe(node, src, ctx, known, funcs)
         return false
     end
 
+    -- Action host (`find -exec`, `fd -x`): its actions must be known-safe, and
+    -- one outside the cwd may not read a script. The rebuilt actions are not a
+    -- substring of `src`, so an unsafe one washes the whole leaf.
+    local actions, actions_root =
+        parsed_actions(cmd_name, args, args_dynamic, ctx.depth)
+    if actions and actions_root then
+        --- @type agentic.utils.PermissionRules.Range[]
+        local body_ranges = {}
+        tally_walk(
+            actions_root,
+            actions.inner,
+            vim.tbl_extend("force", ctx, {
+                depth = ctx.depth + 1,
+                leaves = {},
+                read_scripts = ctx.read_scripts and not actions.foreign_cwd,
+            }),
+            body_ranges
+        )
+        if #body_ranges > 0 then
+            return false
+        end
+        args, args_dynamic = actions.args, actions.args_dynamic
+    end
+
     -- Non-`-c` script execution: tally the body it runs. Clean → known-safe. A
     -- file body has no representation in the chat buffer (no origin to anchor
     -- ranges to), so an unsafe body washes the whole leaf and is not
     -- rememberable (no leaf return).
+    if script_path and not ctx.read_scripts then
+        return false
+    end
     if script_path and ctx.depth < NESTED_MAX_DEPTH then
         local body = script_body(script_path, ctx.written)
         if not body then
@@ -2278,6 +2352,7 @@ function M.tally_unapproved(command, config_dir)
             written = {},
             for_budget = FOR_UNROLL_CAP,
             shadowed = shadowed,
+            read_scripts = true,
         }
         --- @type agentic.utils.PermissionRules.Range[]
         local ranges = {}
@@ -2361,6 +2436,29 @@ local function command_is_denied(node, src, ctx)
     end
 
     local leaf = leaf_text(name, args)
+    -- Action host: a denied action rejects, and the structured matcher sees
+    -- the host without its actions (`-delete` inside an action is an
+    -- argument of it).
+    local actions, actions_root = parsed_actions(
+        cmd_name,
+        args,
+        args_dynamic --[[@as boolean[] ]],
+        ctx.depth
+    )
+    if actions and actions_root then
+        local source = reject_walk(
+            actions_root,
+            actions.inner,
+            vim.tbl_extend("force", ctx, {
+                depth = ctx.depth + 1,
+            })
+        )
+        if source then
+            return source
+        end
+        args, args_dynamic = actions.args, actions.args_dynamic
+    end
+
     if #ctx.deny > 0 and M.matches_any_pattern(leaf, ctx.deny) then
         return "glob_deny"
     end

@@ -189,7 +189,12 @@ handling.
    shell `-c <body>` (`zsh`/`bash`/`sh`/`dash`) and the exec-wrappers `timeout`,
    `time`, `stdbuf`, `uv run`, `xargs`, bare `command`. `xargs` additionally
    appends a trailing dynamic stdin token, so a gated inner (`xargs sort` → `-o`) prompts while
-   read-only inners approve. `extract_commands` also unwraps `uv run` with its
+   read-only inners approve. The actions of `find -exec` and `fd -x`
+   (`ShellParse.host_actions`) are re-walked like a transparent prefix's
+   inner, with each placeholder word a dynamic path token, and the host leaf
+   is checked without the action words. An action that does not resolve
+   stays in the host leaf, where its `ask` gate prompts.
+   `extract_commands` also unwraps `uv run` with its
    code-injecting options (it reports what runs); the permission walk does
    not. Anonymous separators
    (`|`, `&&`, `;`, `&`, newline) and comments are skipped. Loops

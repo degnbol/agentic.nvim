@@ -327,21 +327,32 @@ describe("ShellParse.extract_commands", function()
             end
         end)
 
-        it("unwraps find's action commands", function()
+        it("reports an action host, then its action commands", function()
             for _, src in ipairs({
                 "find . -name x -exec rm -f {} \\;",
                 "find . -execdir rm -f {} +",
                 "find . -exec rm -f {} ';' -print",
             }) do
                 local recs = ShellParse.extract_commands(src)
-                assert.same({ "rm" }, names(src))
-                assert.same({ "find" }, recs[1].via)
+                assert.same({ "find", "rm" }, names(src))
+                assert.same({}, recs[1].via)
+                assert.same({ "find" }, recs[2].via)
             end
             assert.same(
-                { "echo", "rm" },
+                { "find", "echo", "rm" },
                 names("find . -exec echo {} \\; -exec rm -f {} \\;")
             )
             assert.same({ "find" }, names("find . -name x -print"))
+            local recs = ShellParse.extract_commands("fd -x rm {}")
+            assert.same({ "fd", "rm" }, names("fd -x rm {}"))
+            assert.same({}, recs[1].argv)
+            assert.same({ "fd" }, recs[2].via)
+        end)
+
+        it("gives an action in the match's directory an unknown cwd", function()
+            local recs = ShellParse.extract_commands("find . -execdir rm {} +")
+            assert.equal(nil, recs[1].cwd)
+            assert.equal(false, recs[2].cwd)
         end)
 
         it("ends a launcher's options at --", function()
@@ -854,6 +865,149 @@ describe("ShellParse.extract_commands", function()
         it("is false for other names", function()
             assert.is_false(ShellParse.runs_without_call("ls"))
             assert.is_false(ShellParse.runs_without_call("chpwd_functions"))
+        end)
+    end)
+
+    describe("host_actions", function()
+        --- `host_actions` of the single command `src`.
+        --- @param src string
+        --- @return agentic.utils.ShellParse.HostActions|nil
+        local function actions_of(src)
+            local node = ZshParse.parse(src):named_child(0)
+            assert.equal("command", node:type())
+            local args, arg_nodes, args_dynamic = {}, {}, {}
+            for child in node:iter_children() do
+                if child:named() and child:type() ~= "command_name" then
+                    table.insert(args, ShellParse.literal_token(child, src))
+                    table.insert(arg_nodes, child)
+                    table.insert(
+                        args_dynamic,
+                        ShellParse.token_is_dynamic(child)
+                    )
+                end
+            end
+            args, arg_nodes, args_dynamic = ShellParse.join_adjacent_args(
+                args,
+                arg_nodes,
+                args_dynamic,
+                src
+            )
+            local name = ShellParse.command_name(node, src)
+            return ShellParse.host_actions(name, args, args_dynamic)
+        end
+
+        --- `actions_of`, asserted to resolve.
+        --- @param src string
+        --- @return agentic.utils.ShellParse.HostActions
+        local function resolved(src)
+            local actions = actions_of(src)
+            assert.is_not_nil(actions)
+            return actions --[[@as agentic.utils.ShellParse.HostActions]]
+        end
+
+        it("replaces a placeholder word with a dynamic path", function()
+            local actions = resolved("find . -exec rm -f {} \\;")
+            assert.equal("'rm' '-f' $__exec_path", actions.inner)
+            assert.same({ "." }, actions.args)
+            assert.same({ false }, actions.args_dynamic)
+            assert.is_false(actions.foreign_cwd)
+        end)
+
+        it("puts each action on its own line", function()
+            local actions =
+                resolved("find . -exec echo {} \\; -print -exec wc {} +")
+            assert.equal(
+                "'echo' $__exec_path\n'wc' $__exec_path",
+                actions.inner
+            )
+            assert.same({ ".", "-print" }, actions.args)
+        end)
+
+        it("ends a find action at + only directly after {}", function()
+            assert.equal(
+                "'sort' '+' '-o' 'out' $__exec_path",
+                resolved("find . -exec sort + -o out {} \\;").inner
+            )
+            local actions = resolved("find . -exec rm {} + -print")
+            assert.equal("'rm' $__exec_path", actions.inner)
+            assert.same({ ".", "-print" }, actions.args)
+        end)
+
+        it("single-quotes each action word as delivered", function()
+            assert.equal(
+                "'grep' '-n' 'a b' $__exec_path",
+                resolved("find . -exec grep -n 'a b' {} +").inner
+            )
+            assert.equal(
+                [['cat' 'it'\''s' 'X=1']],
+                resolved([[find . -exec cat "it's" X=1 \;]]).inner
+            )
+        end)
+
+        it("appends fd's path to an action without a placeholder", function()
+            assert.equal("'file' $__exec_path", resolved("fd -x file").inner)
+            assert.equal(
+                "'mv' $__exec_path $__exec_path",
+                resolved("fd -x mv {} {.}.bak").inner
+            )
+            local actions = resolved("fd -x echo \\; -H")
+            assert.equal("'echo' $__exec_path", actions.inner)
+            assert.same({ "-H" }, actions.args)
+            assert.equal(
+                "'wc' '-l' $__exec_path",
+                resolved("fd -t f -X wc -l").inner
+            )
+        end)
+
+        it("makes an option token inside a fd action a word of it", function()
+            assert.equal(
+                "'echo' '-x' 'rm' $__exec_path",
+                resolved("fd -x echo -x rm").inner
+            )
+        end)
+
+        it("marks an action outside the cwd", function()
+            for _, src in ipairs({
+                "find . -execdir rm {} \\;",
+                "find . -okdir rm {} \\;",
+                "fd --base-directory d -x rm foo",
+                "fd --base-directory=d -x rm foo",
+                "fd -C d -x rm foo",
+                "fd -HC d -x rm foo",
+            }) do
+                assert.is_true(resolved(src).foreign_cwd)
+            end
+        end)
+
+        it("is nil when the slice does not resolve", function()
+            for _, src in ipairs({
+                "find . -name x",
+                "ls -exec rm {} \\;",
+                "find . -exec rm {}",
+                "find . -exec \\;",
+                "fd -x",
+                "fd -x echo $t -x rm {}",
+                "fd --exec=echo",
+                "fd -Hx echo",
+                "find . -exec cat ';x' -delete -exec cat {} \\;",
+                "find . -exec cat {} +x -delete -exec cat {} \\;",
+                "fd --and -x cat -x rm {}",
+                "find -f -exec cat -exec rm {} \\;",
+                "find . -fprintf /dev/null -exec -delete -exec true \\;",
+                "find . $x -exec cat {} \\;",
+                "fd -- -x echo",
+                "fd -x echo '{{}}'",
+                "fd -x echo '{{x}}'",
+            }) do
+                assert.is_nil(actions_of(src))
+            end
+        end)
+
+        it("lets an action follow a self-contained --opt=value", function()
+            assert.equal(
+                "'cat' $__exec_path",
+                resolved("fd --type=f -x cat").inner
+            )
         end)
     end)
 end)

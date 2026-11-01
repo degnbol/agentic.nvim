@@ -853,13 +853,10 @@ describe("PermissionRules", function()
             )
         end)
 
-        it("prompts on find -exec via plugin ask list", function()
+        it("prompts on a find action that does not approve", function()
             assert.is_false(
                 approves_at("safe_write", "find . -name '*.lua' -exec rm {} +")
             )
-        end)
-
-        it("prompts on find -okdir via plugin ask list", function()
             assert.is_false(
                 approves_at("safe_write", "find . -name '*.lua' -okdir rm {} +")
             )
@@ -878,6 +875,110 @@ describe("PermissionRules", function()
 
         it("approves find without -exec", function()
             assert.is_true(approves_at("safe_write", "find . -name '*.lua'"))
+        end)
+
+        describe("action hosts", function()
+            it("approves read-only actions at the read_only tier", function()
+                for _, cmd in ipairs({
+                    "fd -x file {}",
+                    "fd -t f -X wc -l",
+                    "find . -name '*.lua' -exec grep -n foo {} +",
+                }) do
+                    assert.is_true(approves_at("read_only", cmd))
+                end
+            end)
+
+            it("prompts on an action that does not resolve", function()
+                for _, cmd in ipairs({
+                    "find . -exec cat {}",
+                    "fd -x echo $t -x rm {}",
+                    "fd --exec=echo",
+                    "fd -Hx echo",
+                    "find . -exec cat ';x' -delete -exec cat {} \\;",
+                    "find . -exec cat {} +x -delete -exec cat {} \\;",
+                    "fd --and -x cat -x rm {}",
+                    "find -f -exec cat -exec rm {} \\;",
+                    "fd -x echo '{{}}'",
+                    "find . $x rm {} \\; -exec cat {} \\;",
+                }) do
+                    assert.is_false(approves_at("safe_write", cmd))
+                end
+            end)
+
+            it("prompts on an action that is not approved", function()
+                for _, cmd in ipairs({
+                    "fd -x sed -i s/a/b/ {}",
+                    "find . -exec {} \\;",
+                    "fd -x {}",
+                    "fd -e sh -x sh",
+                    -- find runs words, not shell: no assignment binds a path
+                    "find . -exec X=1 \\;",
+                    "find . -exec __exec_path=x \\; -o -exec rm {} \\;",
+                    "find . ! -exec __exec_path=x \\; -exec rm {} \\;",
+                }) do
+                    assert.is_false(approves_at("safe_write", cmd))
+                end
+            end)
+
+            it("refuses a path effect in an action outside the cwd", function()
+                Config.permissions.use_plugin_defaults = true
+                Config.permissions.use_claude_settings = false
+                PermissionRules.invalidate_cache()
+                for _, cmd in ipairs({
+                    "find . -execdir rm foo \\;",
+                    "fd --base-directory d -x rm foo",
+                }) do
+                    assert.is_false((PermissionRules.evaluate(cmd, config_dir)))
+                end
+                assert.is_true(
+                    (
+                        PermissionRules.evaluate(
+                            "find . -exec rm /tmp/foo \\;",
+                            config_dir
+                        )
+                    )
+                )
+            end)
+
+            it("refuses a script read outside the cwd", function()
+                local dir = vim.fn.tempname()
+                vim.uv.fs_mkdir(dir, tonumber("700", 8))
+                local f = io.open(dir .. "/x.sh", "w")
+                if not f then
+                    error("could not open " .. dir .. "/x.sh")
+                end
+                f:write("ls\n")
+                f:close()
+                local cwd = vim.fn.getcwd()
+                vim.fn.chdir(dir)
+                MiniTest.finally(function()
+                    vim.fn.chdir(cwd)
+                    vim.fs.rm(dir, { recursive = true })
+                end)
+                assert.is_true(
+                    approves_at("read_only", "find . -exec sh x.sh \\;")
+                )
+                assert.is_false(
+                    approves_at("read_only", "find . -execdir sh x.sh \\;")
+                )
+                assert.equal(
+                    1,
+                    #PermissionRules.tally_unapproved(
+                        "find . -execdir sh x.sh \\;",
+                        config_dir
+                    )
+                )
+            end)
+
+            it("pins no grant path through a placeholder", function()
+                Config.permissions.use_plugin_defaults = true
+                Config.permissions.use_claude_settings = false
+                PermissionRules.invalidate_cache()
+                local ok, effects =
+                    PermissionRules.evaluate("fd -x rm /tmp/{//}", config_dir)
+                assert.is_false(ok)
+                assert.same({}, effects)
+            end)
         end)
 
         it("rejects awk system() via plugin deny list", function()
@@ -2889,11 +2990,11 @@ describe("PermissionRules", function()
                 )
 
                 it(
-                    'prompts on g=-exec; find . "$g" echo X {} \\; (flag in a var)',
+                    'prompts on g=-exec; find . "$g" rm X {} \\; (flag in a var starts an action)',
                     function()
                         assert.is_false(
                             PermissionRules.should_auto_approve(
-                                'g=-exec; find . "$g" echo X {} \\;',
+                                'g=-exec; find . "$g" rm X {} \\;',
                                 config_dir
                             )
                         )
@@ -3749,6 +3850,12 @@ describe("PermissionRules", function()
                 -- deny survives bare `command`
                 "command rm -rf /tmp/x -v",
                 "command find . -delete -v",
+                -- deny in an action, or on the host beside one
+                "find . -exec rm -rf {} \\;",
+                "fd -x rm -f",
+                "find . -exec echo {} \\; -delete",
+                -- GNU -fprintf takes `-exec` as its format
+                "find . -fprintf /dev/null -exec -delete -exec true \\;",
             }
             for _, cmd in ipairs(rejected) do
                 it("rejects: " .. cmd, function()
@@ -3765,6 +3872,7 @@ describe("PermissionRules", function()
                 "mlr -I foo", -- in-place edit is ask, not deny
                 "fd -x rm", -- exec is ask, not deny
                 "find . -exec rm {} \\;",
+                "find . -exec echo -delete \\;", -- -delete is a word of echo
                 "rm $flags x", -- concrete-only: dynamic token does not reject
                 "rm -rf / |", -- parse failure: fail-closed to prompt, not reject
             }
@@ -4266,6 +4374,21 @@ describe("PermissionRules", function()
             assert.is_true(approves({}, nil, "a; b", {
                 PermissionRules.literal_pattern("a"),
                 PermissionRules.literal_pattern("b"),
+            }))
+        end)
+
+        it("remembers an action host by its whole leaf", function()
+            Config.permissions.use_plugin_defaults = false
+            Config.permissions.auto_approve_tier = "read_only"
+            stub_settings({ allow = { "Bash(file *)" } })
+            local cmd = "fd -x file {}"
+            local _, leaves, complete =
+                PermissionRules.tally_unapproved(cmd, config_dir)
+            assert.same({ cmd }, leaves)
+            assert.is_true(complete)
+            assert.is_false(approves({ "Bash(file *)" }, nil, cmd))
+            assert.is_true(approves({ "Bash(file *)" }, nil, cmd, {
+                PermissionRules.literal_pattern(leaves[1]),
             }))
         end)
 

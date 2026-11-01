@@ -891,7 +891,6 @@ end
 --- @field subcommand? string require this literal first positional (uv's `run`); options are consumed both before and after it, and a non-match falls through to the leaf matchers (so `uv pip`/`uv lock` keep their own allow rules)
 --- @field writes? boolean the wrapper itself has a recoverable side effect of its own (uv's env sync may install). Reported back from `inner_source` so the decision walk gates recursion to the safe_write tier — a read-only inner must not launder the command into a read-only one.
 --- @field assignments? boolean `NAME=value` operands may follow the options (env's), skipped like options
---- @field exec_action? boolean the inner is not the trailing words but find's actions: the words after each `-exec`/`-execdir`/`-ok`/`-okdir` up to the `;` or `+` ending it, one action per line
 
 --- Exec-wrappers: effect-neutral prefixes whose sole job is to launch the
 --- following command. Excluding a write option / requiring a positional makes
@@ -995,7 +994,7 @@ local EXEC_WRAPPERS = {
 --- which change the environment but not which command runs. `--script`/`-s`
 --- and `--directory` still stop the skip. Also unwraps the launchers that
 --- `EXEC_WRAPPERS` leaves out for their other effects (`sudo`, `env`, `nohup`,
---- `exec`, `builtin`, ...) and `find -exec`: they still run the command.
+--- `exec`, `builtin`, ...): they still run the command.
 --- @type table<string, agentic.utils.ShellParse.WrapperSpec>
 local VISIBLE_WRAPPERS = vim.tbl_extend("force", EXEC_WRAPPERS, {
     sudo = {
@@ -1056,7 +1055,6 @@ local VISIBLE_WRAPPERS = vim.tbl_extend("force", EXEC_WRAPPERS, {
     builtin = {},
     noglob = {},
     nocorrect = {},
-    find = { exec_action = true },
     uv = vim.tbl_extend("force", EXEC_WRAPPERS.uv, {
         value_opts = {
             "--with",
@@ -1145,34 +1143,288 @@ local function skip_wrapper_operands(args, spec)
     return i + (spec.positionals or 0)
 end
 
---- find's options that run a command: the words after one, up to the `;` or
---- `+` ending it.
-local FIND_ACTIONS =
-    { ["-exec"] = true, ["-execdir"] = true, ["-ok"] = true, ["-okdir"] = true }
+--- Grammar of a command that runs an action command per match. Unlike an
+--- exec-wrapper, the host keeps effects of its own (`find -delete`).
+--- @class agentic.utils.ShellParse.ActionSpec
+--- @field opts string[] tokens that start an action
+--- @field flag_opts string[] valueless options an action option may follow
+--- @field pair_opts string[] options that take two values, so the second may be an action option
+--- @field foreign_cwd_opts string[] action options that run in the match's directory
+--- @field chdir_opts string[] host options whose value becomes every action's cwd. A short one also counts inside a cluster (`-HC`).
+--- @field plus_ends boolean `+` directly after `{}` ends an action
+--- @field open_ended boolean the last action may run to the end of the arguments
+--- @field placeholders string[] substrings replaced by a match's path
+--- @field escapes string[] substrings that make an action word unresolved
+--- @field appends_path boolean an action without a placeholder gets the path appended
 
---- The words of each of find's action commands.
---- @param args string[] quote-stripped arg tokens after `find`
---- @return { [1]: integer, [2]: integer }[]|nil spans first and last index into
----         `args` of each action's words, in order. nil when an action is
----         empty or has no `;`/`+`.
-local function find_action_spans(args)
+--- Commands that run action commands. find per BSD find(1) and the GNU
+--- findutils manual. fd per `fd --help` (10.5.0).
+--- @type table<string, agentic.utils.ShellParse.ActionSpec>
+local ACTION_HOSTS = {
+    find = {
+        opts = { "-exec", "-execdir", "-ok", "-okdir" },
+        flag_opts = {
+            -- options
+            "-H",
+            "-L",
+            "-P",
+            "-E",
+            "-X",
+            "-d",
+            "-s",
+            "-x",
+            "-depth",
+            "-xdev",
+            "-mount",
+            "-follow",
+            "-noleaf",
+            "-daystart",
+            "-ignore_readdir_race",
+            "-noignore_readdir_race",
+            "-warn",
+            "-nowarn",
+            -- tests and actions
+            "-empty",
+            "-executable",
+            "-readable",
+            "-writable",
+            "-nouser",
+            "-nogroup",
+            "-true",
+            "-false",
+            "-prune",
+            "-quit",
+            "-delete",
+            "-print",
+            "-print0",
+            "-ls",
+            -- operators
+            "-not",
+            "-a",
+            "-and",
+            "-o",
+            "-or",
+        },
+        pair_opts = { "-fprintf" },
+        foreign_cwd_opts = { "-execdir", "-okdir" },
+        chdir_opts = {},
+        plus_ends = true,
+        open_ended = false,
+        placeholders = { "{}" },
+        escapes = {},
+        appends_path = false,
+    },
+    fd = {
+        opts = { "-x", "--exec", "-X", "--exec-batch" },
+        flag_opts = {
+            "-H",
+            "--hidden",
+            "-I",
+            "--no-ignore",
+            "--no-ignore-vcs",
+            "--no-require-git",
+            "--no-ignore-parent",
+            "-u",
+            "--unrestricted",
+            "-s",
+            "--case-sensitive",
+            "-i",
+            "--ignore-case",
+            "-g",
+            "--glob",
+            "--regex",
+            "-F",
+            "--fixed-strings",
+            "--exact",
+            "-a",
+            "--absolute-path",
+            "-l",
+            "--list-details",
+            "-L",
+            "--follow",
+            "-p",
+            "--full-path",
+            "-0",
+            "--print0",
+            "--prune",
+            "-1",
+            "-q",
+            "--quiet",
+            "--show-errors",
+            "--hyperlink",
+            "--strip-cwd-prefix",
+            "--one-file-system",
+        },
+        pair_opts = {},
+        foreign_cwd_opts = {},
+        chdir_opts = { "-C", "--base-directory" },
+        plus_ends = false,
+        open_ended = true,
+        placeholders = { "{}", "{/}", "{//}", "{.}", "{/.}" },
+        escapes = { "{{", "}}" },
+        appends_path = true,
+    },
+}
+
+--- Stand-in word for the path an action receives at runtime. The obscure name
+--- avoids a variable assigned earlier in the command.
+local EXEC_PATH = "$__exec_path"
+
+--- Whether `word` contains any of `substrings`.
+--- @param word string
+--- @param substrings string[]
+--- @return boolean
+local function contains_any(word, substrings)
+    return vim.iter(substrings):any(function(s)
+        return word:find(s, 1, true) ~= nil
+    end)
+end
+
+--- The words of each action command of an action host.
+---
+--- Fails closed wherever the host may read the words differently: an action
+--- word that is dynamic (it may expand to the terminator), that starts with
+--- `;` or (after `{}`) `+` without being the terminator, or that holds an
+--- escape; and an action option that an option before it may take as its
+--- value: directly after a dynamic word, `--`, or a dash-word that is neither
+--- a valueless option nor a self-contained `--opt=value`, or second after a
+--- two-value option. An option token inside an action is a word of it.
+--- @param args string[] delivered words after the host name
+--- @param args_dynamic boolean[] parallel to `args`
+--- @param spec agentic.utils.ShellParse.ActionSpec
+--- @return { first: integer, last: integer, opt: string }[]|nil spans index
+---         range into `args` of each action's words (without the option and
+---         terminator) and its option, in order. nil when unresolved, an
+---         action is empty, or an action that may not run to the end of the
+---         arguments has no terminator.
+local function action_spans(args, args_dynamic, spec)
     local spans = {}
     local i = 1
     while i <= #args do
-        if FIND_ACTIONS[args[i]] then
-            local j = i + 1
-            while args[j] and args[j] ~= ";" and args[j] ~= "+" do
-                j = j + 1
-            end
-            if not args[j] or j == i + 1 then
+        local opt = args[i]
+        if vim.list_contains(spec.opts, opt) then
+            local prev = args[i - 1]
+            if
+                args_dynamic[i - 1]
+                or (prev and prev:sub(1, 1) == "-" and not vim.list_contains(
+                    spec.flag_opts,
+                    prev
+                ) and not prev:match("^%-%-[^=]+="))
+                or vim.list_contains(spec.pair_opts, args[i - 2])
+            then
                 return nil
             end
-            table.insert(spans, { i + 1, j - 1 })
-            i = j
+            local first = i + 1
+            local j = first
+            local ended = false
+            while j <= #args do
+                local word = args[j]
+                local plus_ends = spec.plus_ends and args[j - 1] == "{}"
+                if word == ";" or (plus_ends and word == "+") then
+                    ended = true
+                    break
+                end
+                if
+                    args_dynamic[j]
+                    or word:sub(1, 1) == ";"
+                    or (plus_ends and word:sub(1, 1) == "+")
+                    or contains_any(word, spec.escapes)
+                then
+                    return nil
+                end
+                j = j + 1
+            end
+            if j == first or not (ended or spec.open_ended) then
+                return nil
+            end
+            table.insert(spans, { first = first, last = j - 1, opt = opt })
+            i = j + 1
+        else
+            i = i + 1
         end
-        i = i + 1
     end
     return spans
+end
+
+--- Whether `word` sets one of `opts`: the option itself, its `--opt=value`
+--- form, or a short option anywhere in a single-dash cluster.
+--- @param word string
+--- @param opts string[] long options and one-letter short options
+--- @return boolean
+local function sets_option(word, opts)
+    return vim.iter(opts):any(function(opt)
+        if vim.startswith(opt, "--") then
+            return word == opt or vim.startswith(word, opt .. "=")
+        end
+        return word:match("^%-[^-]") ~= nil
+            and word:find(opt:sub(2), 2, true) ~= nil
+    end)
+end
+
+--- @class agentic.utils.ShellParse.HostActions
+--- @field inner string one action per line. A word that holds a placeholder is `$__exec_path`, other words are their delivered text in single quotes, so the inner runs each as the word it is (find does not parse shell: `X=1` is a program name). On an `appends_path` host, an action without a placeholder ends with ` $__exec_path`.
+--- @field args string[] the host's own tokens (no action option, word or terminator)
+--- @field args_dynamic boolean[] parallel to `args`
+--- @field foreign_cwd boolean some action runs outside the cwd
+
+--- Split an action host (`find -exec`, `fd -x`) into its action commands and
+--- its own tokens. Placeholders, terminators and escapes are read on the
+--- delivered word. A word that holds a placeholder becomes a dynamic token as
+--- a whole, since a match's path is runtime data.
+--- @param cmd_name string command name, already path-stripped
+--- @param args string[] delivered words after the name
+--- @param args_dynamic boolean[] parallel to `args`
+--- @return agentic.utils.ShellParse.HostActions|nil actions nil when
+---         `cmd_name` is no action host, it has no action, or an action does
+---         not resolve: it is empty or unterminated, holds a dynamic word or an
+---         escape, or its option may be the value of an option before it
+function M.host_actions(cmd_name, args, args_dynamic)
+    local spec = ACTION_HOSTS[cmd_name]
+    local spans = spec and action_spans(args, args_dynamic, spec)
+    if not spans or #spans == 0 then
+        return nil
+    end
+    local lines = {}
+    --- @type table<integer, true>
+    local action_tokens = {}
+    local foreign_cwd = false
+    for _, span in ipairs(spans) do
+        local words = {}
+        local has_placeholder = false
+        for k = span.first, span.last do
+            if contains_any(args[k], spec.placeholders) then
+                has_placeholder = true
+                table.insert(words, EXEC_PATH)
+            else
+                table.insert(words, "'" .. args[k]:gsub("'", [['\'']]) .. "'")
+            end
+        end
+        if spec.appends_path and not has_placeholder then
+            table.insert(words, EXEC_PATH)
+        end
+        table.insert(lines, table.concat(words, " "))
+        for k = span.first - 1, span.last + 1 do
+            action_tokens[k] = true
+        end
+        foreign_cwd = foreign_cwd
+            or vim.list_contains(spec.foreign_cwd_opts, span.opt)
+    end
+    --- @type agentic.utils.ShellParse.HostActions
+    local actions = {
+        inner = table.concat(lines, "\n"),
+        args = {},
+        args_dynamic = {},
+        foreign_cwd = foreign_cwd,
+    }
+    for k, arg in ipairs(args) do
+        if not action_tokens[k] then
+            table.insert(actions.args, arg)
+            table.insert(actions.args_dynamic, args_dynamic[k])
+            actions.foreign_cwd = actions.foreign_cwd
+                or sets_option(arg, spec.chdir_opts)
+        end
+    end
+    return actions
 end
 
 --- @alias agentic.utils.ShellParse.Origin [integer, integer]
@@ -1188,8 +1440,7 @@ end
 --- it gets an origin (content start) and tally ranges map 1:1; any other quoting
 --- (double, `$'...'`, concatenation) processes the body and stays nil-origin. The
 --- wrapper inner is a raw substring of `src` (quotes/escapes intact)
---- from the inner node's start to the wrapper command node's end (for an
---- `exec_action` wrapper, its actions' words, one action per line), with the inner
+--- from the inner node's start to the wrapper command node's end, with the inner
 --- node's `(row, col)` as origin for translating tally ranges.
 --- @param cmd_name string command name, already path-stripped
 --- @param node TSNode the `command` node
@@ -1243,21 +1494,6 @@ local function inner_source(
     local spec = (wrappers or EXEC_WRAPPERS)[cmd_name]
     if not spec then
         return nil, nil, false
-    end
-    if spec.exec_action then
-        local spans = find_action_spans(args)
-        if not spans or #spans == 0 then
-            return nil, nil, false
-        end
-        -- One action per line, so the inner parses as a command list.
-        local actions = {}
-        for _, span in ipairs(spans) do
-            local _, _, start_byte = arg_nodes[span[1]]:range(true)
-            local _, _, _, _, _, end_byte = arg_nodes[span[2]]:range(true)
-            table.insert(actions, src:sub(start_byte + 1, end_byte))
-        end
-        local sr, sc = arg_nodes[spans[1][1]]:range()
-        return table.concat(actions, "\n"), { sr, sc }, false
     end
     local inner_idx = skip_wrapper_operands(args, spec)
     if not inner_idx then
@@ -1472,8 +1708,9 @@ local SAME_SHELL_PREFIXES = {
 }
 
 --- Whether a command that was not unwrapped still runs code given in its
---- arguments: an `eval`, a shell with `-c`, a find action, or a launcher in
---- `VISIBLE_WRAPPERS` whose operands did not resolve.
+--- arguments: an `eval`, a shell with `-c`, an action option of an
+--- `ACTION_HOSTS` command, or a launcher in `VISIBLE_WRAPPERS` whose operands
+--- did not resolve.
 --- @param cmd_name string
 --- @param args string[] quote-stripped arg tokens
 --- @return boolean
@@ -1489,14 +1726,14 @@ local function names_unseen_command(cmd_name, args)
             return arg:match("^%-[a-zA-Z]*c$") ~= nil
         end, { predicate = true })
     end
+    if ACTION_HOSTS[cmd_name] then
+        return vim.iter(args):any(function(arg)
+            return vim.list_contains(ACTION_HOSTS[cmd_name].opts, arg)
+        end)
+    end
     local spec = VISIBLE_WRAPPERS[cmd_name]
     if not spec then
         return false
-    end
-    if spec.exec_action then
-        return vim.tbl_contains(args, function(arg)
-            return FIND_ACTIONS[arg] ~= nil
-        end, { predicate = true })
     end
     return not spec.subcommand or vim.list_contains(args, spec.subcommand)
 end
@@ -1520,6 +1757,43 @@ local function collect_each(nodes, src, out, depth, shell, stdin_of)
         end
     end
     return true
+end
+
+--- Parse `inner` and `collect` it one level deeper, with `launcher` prepended
+--- to the `via` of every record it adds.
+--- @param inner string the source the launcher runs
+--- @param launcher string
+--- @param out agentic.ShellCommand[]
+--- @param depth integer the launcher's depth
+--- @param shell agentic.utils.ShellParse.Shell state of the shell running `inner`
+--- @param stdin agentic.utils.ShellParse.Heredoc|nil heredoc the inner reads
+---        on stdin when it is a single command
+--- @return boolean ok false also when `depth` is at the nesting cap or
+---         `inner` does not parse
+local function collect_unwrapped(inner, launcher, out, depth, shell, stdin)
+    if depth >= NESTED_MAX_DEPTH then
+        return false
+    end
+    local root = ZshParse.parse(inner)
+    if not root then
+        return false
+    end
+    local inner_stdin_of = heredoc_targets(root, inner)
+    local inner_cmd = root:named_child(0)
+    if
+        stdin
+        and root:named_child_count() == 1
+        and inner_cmd
+        and inner_cmd:type() == "command"
+    then
+        inner_stdin_of[inner_cmd:id()] = stdin
+    end
+    local first = #out + 1
+    local ok = collect(root, inner, out, depth + 1, shell, inner_stdin_of)
+    for i = first, #out do
+        table.insert(out[i].via, 1, launcher)
+    end
+    return ok
 end
 
 --- Process a `command` node: resolve its name, unwrap transparent prefixes
@@ -1620,42 +1894,26 @@ local function collect_command(node, src, out, depth, shell, stdin_of)
         )
     end
     if inner and inner ~= "" then
-        if depth >= NESTED_MAX_DEPTH then
-            return false
-        end
-        local root = ZshParse.parse(inner)
-        if not root then
-            return false
-        end
-        local inner_stdin_of = heredoc_targets(root, inner)
-        -- The wrapper's stdin reaches the inner, except xargs' (read as its
-        -- argument list).
-        local inner_cmd = root:named_child(0)
-        if
-            stdin_of[node:id()]
-            and not SHELL_C_COMMANDS[cmd_name]
-            and cmd_name ~= "xargs"
-            and root:named_child_count() == 1
-            and inner_cmd
-            and inner_cmd:type() == "command"
-        then
-            inner_stdin_of[inner_cmd:id()] = stdin_of[node:id()]
-        end
-        local first = #out + 1
         -- Most inners run in a process of their own, so their `cd` does not
-        -- leak out.
-        local ok = collect(
-            root,
+        -- leak out. The wrapper's stdin reaches the inner, except xargs' (read
+        -- as its argument list).
+        return collect_unwrapped(
             inner,
+            cmd_name,
             out,
-            depth + 1,
+            depth,
             SAME_SHELL_PREFIXES[cmd_name] and shell or { cwd = shell.cwd },
-            inner_stdin_of
+            not SHELL_C_COMMANDS[cmd_name]
+                    and cmd_name ~= "xargs"
+                    and stdin_of[node:id()]
+                or nil
         )
-        for i = first, #out do
-            table.insert(out[i].via, 1, cmd_name)
-        end
-        return ok
+    end
+
+    -- An action host is still a record of its own, without its actions.
+    local actions = M.host_actions(cmd_name, args, args_dynamic)
+    if actions then
+        args, args_dynamic = actions.args, actions.args_dynamic
     end
 
     --- @type agentic.ShellCommand
@@ -1675,6 +1933,19 @@ local function collect_command(node, src, out, depth, shell, stdin_of)
     end
     table.insert(out, rec)
 
+    if
+        actions
+        and not collect_unwrapped(
+            actions.inner,
+            cmd_name,
+            out,
+            depth,
+            { cwd = not actions.foreign_cwd and shell.cwd },
+            nil
+        )
+    then
+        return false
+    end
     if not collect_each(to_flatten, src, out, depth, shell, stdin_of) then
         return false
     end
@@ -1768,7 +2039,7 @@ end
 --- @field flags string[] short clusters split (`-rf` → `-r`,`-f`), long flags whole
 --- @field args string[] positional arguments (literal text where resolvable)
 --- @field argv string[] every token after the name in source order, flags unsplit (literal text where resolvable)
---- @field argv_dynamic boolean[] parallel to `argv`: true where the token is not a static literal (expansion, substitution, xargs' stand-in `$__xargs_stdin`)
+--- @field argv_dynamic boolean[] parallel to `argv`: true where the token is not a static literal (expansion, substitution, xargs' stand-in `$__xargs_stdin`, an action's path `$__exec_path`)
 --- @field stdin? agentic.utils.ShellParse.Heredoc the heredoc this command reads on stdin
 --- @field cwd? string|false the directory this command starts in, after earlier `cd`s in the same shell. Not normalised, and relative to the caller's cwd when relative. nil = no `cd` yet, false = unknown. A `cd` in a branch or loop counts as if it always ran.
 --- @field opaque? true the command runs code from its arguments that extraction could not unwrap (`eval "$x"`, `sudo -i …`, `zsh -c "$x"`), so `argv` holds commands no record shows
