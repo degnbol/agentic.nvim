@@ -71,7 +71,6 @@ after `PLAN-placeholder-titles.md`),
 [`PLAN-updated-input-display.md`](notes/PLAN-updated-input-display.md),
 [`PLAN-completion-current-buf.md`](notes/PLAN-completion-current-buf.md),
 [`PLAN-deny-gate-flag-cap.md`](notes/PLAN-deny-gate-flag-cap.md),
-[`PLAN-exec-action-walk.md`](notes/PLAN-exec-action-walk.md),
 [`PLAN-inline-math-dollar-pairing.md`](notes/PLAN-inline-math-dollar-pairing.md),
 [`PLAN-placeholder-titles.md`](notes/PLAN-placeholder-titles.md).
 
