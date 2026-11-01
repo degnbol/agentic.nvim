@@ -31,9 +31,7 @@ renames its references first.
 1. [`PLAN-agent-view-consolidation.md`](notes/PLAN-agent-view-consolidation.md).
    After `PLAN-reapply-model.md`, which deletes the model-line dedupe this
    plan would otherwise move. After Session resume 3 only to avoid a rebase.
-- [`PLAN-cancel-subagent-session.md`](notes/PLAN-cancel-subagent-session.md)
-  and [`PLAN-nested-subagent-blocks.md`](notes/PLAN-nested-subagent-blocks.md):
-  any order.
+- [`PLAN-nested-subagent-blocks.md`](notes/PLAN-nested-subagent-blocks.md).
 
 **Harness context in chat:**
 - [`PLAN-discovered-skills.md`](notes/PLAN-discovered-skills.md)

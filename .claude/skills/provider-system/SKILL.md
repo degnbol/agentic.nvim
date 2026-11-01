@@ -391,9 +391,8 @@ message link by tag.
 Adapters override `subagent_task_id`, `subagent_record`
 (type, mode, Task id; claude reads `agent-<id>.meta.json`) and
 `subagent_predicted_mode`. A background subagent gets a message input only
-when the adapter gives `subagent_stop_instruction` and
-`subagent_message_instruction`, prompts the main agent relays (claude:
-TaskStop, SendMessage); implement both or neither. opencode and
+when the adapter gives `subagent_message_instruction`, a prompt the main
+agent relays (claude: SendMessage). opencode and
 mistral-vibe `SubAgent` calls are plain blocks.
 
 ### Response boundaries come from `messageId` (claude-agent-acp)

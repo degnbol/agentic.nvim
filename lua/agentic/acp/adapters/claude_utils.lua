@@ -401,20 +401,6 @@ function M.subagent_meta(session_dir, agent_id)
     return meta
 end
 
---- Instruction for the main agent to stop a background subagent with its
---- TaskStop tool. Values are JSON-quoted, so quotes and newlines in them cannot
---- break the sentence.
---- @param agent_id string Id the agent was launched under
---- @param label string Display name of the agent
---- @return string
-function M.task_stop_instruction(agent_id, label)
-    return string.format(
-        "Call TaskStop with task_id %s to stop the background subagent %s. Do nothing else. Do not reply nor report back what you did.",
-        vim.json.encode(agent_id),
-        vim.json.encode(label)
-    )
-end
-
 --- Instruction for the main agent to pass a message to a background subagent
 --- with its SendMessage tool. Values are JSON-quoted, so quotes and newlines in
 --- them cannot break the sentence.

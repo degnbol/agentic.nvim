@@ -3687,9 +3687,6 @@ describe("agentic.SessionManager", function()
                 )
                     return "relay: " .. text
                 end
-                session.agent.subagent_stop_instruction = function()
-                    return "stop it"
-                end
                 session._agent_label = function()
                     return "x"
                 end
@@ -3699,7 +3696,6 @@ describe("agentic.SessionManager", function()
                 session._inputs = { c1 = { bufnr = 42 } }
                 session._relay = SessionManager._relay
                 session._relay_to_agent = SessionManager._relay_to_agent
-                session._stop_agent = SessionManager._stop_agent
                 return session
             end
 
@@ -3838,12 +3834,6 @@ describe("agentic.SessionManager", function()
                 refusing_session({ stopReason = "refusal" }):_send_synthetic_prompt(
                     "continue"
                 )
-
-                assert.spy(restore_stub).was.called(0)
-            end)
-
-            it("returns nothing for a subagent stop", function()
-                refusing_session({ stopReason = "refusal" }):_stop_agent("c1")
 
                 assert.spy(restore_stub).was.called(0)
             end)

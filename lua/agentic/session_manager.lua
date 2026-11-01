@@ -1607,7 +1607,7 @@ function SessionManager:_open_input(child_id)
                     Config.keymaps.widget.stop_generation,
                     bufnr,
                     function()
-                        self:_stop_agent(child_id)
+                        self.agent:stop_generation(child_id)
                     end,
                     { desc = "Agentic: Stop subagent" }
                 )
@@ -1636,10 +1636,9 @@ function SessionManager:_agent_input_win(child_id)
     return self.widget:input_win()
 end
 
---- Bind the keys of a subagent's transcript that act on the agent, each
---- resolving the agent's message input when pressed: `keymaps.agent.to_input`
---- runs in the agent's input, and `keymaps.widget.stop_generation` stops the
---- agent, or the main agent's turn for an agent without a message input.
+--- Bind the keys of a subagent's transcript that act on the agent.
+--- `keymaps.agent.to_input` runs in the agent's message input, resolved when
+--- pressed, and `keymaps.widget.stop_generation` cancels the agent's session.
 --- @param child_id string
 --- @param bufnr integer The transcript
 function SessionManager:_bind_agent_keymaps(child_id, bufnr)
@@ -1650,13 +1649,9 @@ function SessionManager:_bind_agent_keymaps(child_id, bufnr)
         Config.keymaps.widget.stop_generation,
         bufnr,
         function()
-            if self._inputs[child_id] then
-                self:_stop_agent(child_id)
-            else
-                self:stop_generation()
-            end
+            self.agent:stop_generation(child_id)
         end,
-        { desc = "Agentic: Stop subagent or generation" }
+        { desc = "Agentic: Stop subagent" }
     )
 end
 
@@ -3603,46 +3598,6 @@ function SessionManager:_relay(instruction, opts, on_refusal)
         self:_send_user_prompt(instruction, {}, {}, on_refusal)
     end
     return reason
-end
-
---- Ask the main agent to stop a subagent, through the provider's stop
---- instruction. A blocking one stops by stopping the main agent's turn.
---- Notifies when the agent has finished, the provider gives no instruction,
---- or the gate holds the request.
---- @param child_id string
-function SessionManager:_stop_agent(child_id)
-    if self:_confirmed_blocking(child_id) then
-        self:stop_generation()
-        return
-    end
-    local label = self:_agent_label(child_id)
-    if not (self._agents[child_id] and self._agents[child_id].open) then
-        Logger.notify(string.format("Subagent %s has finished", label))
-        return
-    end
-    local instruction = self.agent:subagent_stop_instruction(child_id, label)
-    if not instruction then
-        Logger.notify(
-            string.format(
-                "%s cannot stop subagent %s",
-                self.agent.provider_config.name,
-                label
-            ),
-            vim.log.levels.WARN
-        )
-        return
-    end
-    local held = self:_relay(instruction, { force = false })
-    if held then
-        Logger.notify(
-            string.format(
-                "Subagent %s not stopped — %s.",
-                label,
-                HOLD_CAUSE[held]
-            ),
-            vim.log.levels.WARN
-        )
-    end
 end
 
 --- Ask the main agent to pass `text` to a subagent, through the provider's

@@ -34,12 +34,8 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             assert.equal("blocking", adapter:subagent_predicted_mode())
         end)
 
-        it("gives the TaskStop and SendMessage instructions", function()
+        it("gives the SendMessage instruction", function()
             local adapter = make_adapter()
-            assert.equal(
-                ClaudeUtils.task_stop_instruction("a1", "x"),
-                adapter:subagent_stop_instruction("a1", "x")
-            )
             assert.equal(
                 ClaudeUtils.send_message_instruction("a1", "x", "m"),
                 adapter:subagent_message_instruction("a1", "x", "m")

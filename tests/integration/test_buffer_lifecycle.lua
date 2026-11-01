@@ -784,7 +784,7 @@ end)(...)]]):format(bufnr_expr or "_G.sub"),
             assert.is_true(header.running)
             assert.is_true(child.lua_get([[(function()
     for _, map in ipairs(vim.api.nvim_buf_get_keymap(_G.sub, "n")) do
-        if map.desc == "Agentic: Stop subagent or generation" then
+        if map.desc == "Agentic: Stop subagent" then
             return true
         end
     end

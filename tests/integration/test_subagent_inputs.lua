@@ -4,8 +4,9 @@ local Child = require("tests.helpers.child")
 --- Lua run in each child: a bound, ready session `_G.s` with a session id, a
 --- throwaway session store and Claude config dir, background subagents, and
 --- helpers that feed it what the bridge sends. Turns are recorded in
---- `_G.sent` instead of going to the provider, notifications in
---- `_G.notices`, bells in `_G.bells`.
+--- `_G.sent` instead of going to the provider, the session ids of
+--- `session/cancel` in `_G.cancels`, notifications in `_G.notices`, bells in
+--- `_G.bells`.
 local SETUP = [[
 local Config = require("agentic.config")
 Config.session_restore.storage_path = vim.fn.tempname()
@@ -22,6 +23,10 @@ _G.s.agent.provider_config.env = { CLAUDE_CONFIG_DIR = _G.config_dir }
 _G.sent = {}
 _G.s._dispatch_turn = function(_, prompt)
     table.insert(_G.sent, prompt)
+end
+_G.cancels = {}
+_G.s.agent.stop_generation = function(_, session_id)
+    table.insert(_G.cancels, session_id)
 end
 _G.notices = {}
 require("agentic.utils.logger").notify = function(msg)
@@ -236,11 +241,8 @@ _G.press(_G.input("c1").bufnr, "<C-c>")
                 .lua_get([[_G.text(_G.transcript("c1").bufnr)]])
                 :find("still going", 1, true)
         )
-        assert.equal(2, child.lua_get("#_G.sent"))
-        assert.truthy(
-            child.lua_get("_G.sent_text(1)"):find("TaskStop", 1, true)
-        )
-        assert.truthy(child.lua_get("_G.sent_text(2)"):find('"c1"', 1, true))
+        assert.same({ "c1", "c1" }, child.lua_get("_G.cancels"))
+        assert.equal(0, child.lua_get("#_G.sent"))
     end)
 
     it("<C-c> stops the agent in a wiped and remade transcript", function()
@@ -251,23 +253,31 @@ _G.chunk("c1", "back")
 _G.press(_G.transcript("c1").bufnr, "<C-c>")
 ]])
 
-        assert.truthy(
-            child.lua_get("_G.sent_text(1)"):find("TaskStop", 1, true)
-        )
-    end)
-
-    it("stopping a finished agent notifies and sends nothing", function()
-        child.lua([[
-_G.spawn("c1")
-_G.state("c1", _G.COMPLETED)
-_G.s:_stop_agent("c1")
-]])
-
+        assert.same({ "c1" }, child.lua_get("_G.cancels"))
         assert.equal(0, child.lua_get("#_G.sent"))
-        assert.truthy(
-            child.lua_get("_G.notices[#_G.notices]"):find("finished", 1, true)
-        )
     end)
+
+    for state, setup in pairs({
+        blocking = [[
+_G.write_meta("c1", "blocking")
+_G.read_record("c1")
+]],
+        finished = [[_G.state("c1", _G.COMPLETED)]],
+        ["not cancellable"] = [[
+_G.update("root", {
+    sessionUpdate = "subagent_update", sessionId = "c1", capabilities = vim.NIL,
+})
+]],
+    }) do
+        it("<C-c> on a " .. state .. " agent cancels its session", function()
+            child.lua([[_G.spawn("c1")]])
+            child.lua(setup)
+            child.lua([[_G.press(_G.transcript("c1").bufnr, "<C-c>")]])
+
+            assert.same({ "c1" }, child.lua_get("_G.cancels"))
+            assert.equal(0, child.lua_get("#_G.sent"))
+        end)
+    end
 
     for _, case in ipairs({
         { how = "the submit map", run = [[_G.press(_G.bufnr, "<F5>")]] },

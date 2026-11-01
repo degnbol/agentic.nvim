@@ -286,15 +286,6 @@ function ACPClient:subagent_predicted_mode()
     return "blocking"
 end
 
---- A prompt for the main agent to stop a background subagent. Adapters for
---- providers whose main agent can stop one override this.
---- @param _agent_id string Id addressing the subagent
---- @param _label string Display name of the subagent
---- @return string|nil instruction Nil when the main agent cannot stop it
-function ACPClient:subagent_stop_instruction(_agent_id, _label)
-    return nil
-end
-
 --- A prompt for the main agent to pass a message to a background subagent.
 --- Adapters for providers whose main agent can message one override this.
 --- @param _agent_id string Id addressing the subagent
@@ -1424,9 +1415,8 @@ function ACPClient:set_model(session_id, model_id, callback)
     self:_send_request("session/set_model", params, callback)
 end
 
---- Send `session/cancel` for the session. The session stays subscribed and
---- can take the next prompt.
---- @param session_id string
+--- Send `session/cancel`, which stops the session's current work.
+--- @param session_id string A main session, or a subagent
 function ACPClient:stop_generation(session_id)
     self:_send_notification("session/cancel", {
         sessionId = session_id,

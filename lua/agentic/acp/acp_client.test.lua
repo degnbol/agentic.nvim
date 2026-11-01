@@ -15,11 +15,10 @@ describe("agentic.acp.ACPClient", function()
     end)
 
     describe("subagent defaults", function()
-        it("predict blocking and give no instructions", function()
+        it("predict blocking and give no message instruction", function()
             local client = setmetatable({}, { __index = ACPClient })
 
             assert.equal("blocking", client:subagent_predicted_mode())
-            assert.is_nil(client:subagent_stop_instruction("a1", "x"))
             assert.is_nil(client:subagent_message_instruction("a1", "x", "m"))
         end)
     end)

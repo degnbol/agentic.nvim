@@ -370,13 +370,6 @@ end
 
 --- @param agent_id string
 --- @param label string
---- @return string
-function ClaudeAgentACPAdapter:subagent_stop_instruction(agent_id, label)
-    return ClaudeUtils.task_stop_instruction(agent_id, label)
-end
-
---- @param agent_id string
---- @param label string
 --- @param message string
 --- @return string
 function ClaudeAgentACPAdapter:subagent_message_instruction(

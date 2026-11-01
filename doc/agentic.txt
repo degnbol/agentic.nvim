@@ -1161,11 +1161,12 @@ the chat (|agentic-permissions-prompt|).
 
 A `to_input` key in a background subagent's transcript opens its message
 input. `:w` there sends the text to the subagent through the main agent, as
-your prompt in the chat; `@path` stays text. `<C-c>` in either buffer asks
-the main agent to stop the subagent. A blocking subagent has no message
-input: in its transcript, `to_input` keys go to the session's input and
-`<C-c>` stops the turn. A restored background subagent gets its input when it
-runs again.
+your prompt in the chat; `@path` stays text. A blocking subagent has no
+message input: in its transcript, `to_input` keys go to the session's input.
+A restored background subagent gets its input when it runs again.
+
+`<C-c>` in a subagent's transcript or message input sends the interrupt to
+that subagent; the main agent's turn goes on.
 
 Transcripts are saved with the session (|agentic-buffers|) and come back on
 load and restore.

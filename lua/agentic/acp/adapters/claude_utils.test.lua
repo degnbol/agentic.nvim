@@ -3,20 +3,6 @@ local assert = require("tests.helpers.assert")
 local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 
 describe("agentic.acp.adapters.ClaudeUtils", function()
-    describe("task_stop_instruction", function()
-        it("names the agent id and label", function()
-            assert.equal(
-                'Call TaskStop with task_id "a1b2" to stop the background subagent "Explore auth". Do nothing else. Do not reply nor report back what you did.',
-                ClaudeUtils.task_stop_instruction("a1b2", "Explore auth")
-            )
-        end)
-
-        it("escapes quotes in the label", function()
-            local text = ClaudeUtils.task_stop_instruction("a1", 'say "hi"')
-            assert.is_true(text:find('"say \\"hi\\""', 1, true) ~= nil)
-        end)
-    end)
-
     describe("send_message_instruction", function()
         it("names the agent id, label and message", function()
             assert.equal(
