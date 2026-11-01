@@ -967,12 +967,13 @@ describe("agentic.ui.ToolCallLayout", function()
                 -- ...the reason renders below the diff, not in place of it...
                 assert.is_true(reason_i > new_i)
 
-                -- ...the diff fence carries the injection-suppressing fold marker...
+                -- ...the diff fence is labelled `text` and folds through the
+                -- reason's fence...
                 local fence_i = old_i - 1
-                assert.is_not_nil(lines[fence_i]:match("difffold$"))
+                assert.is_not_nil(lines[fence_i]:match("^`+text%-foldnext$"))
 
-                -- ...and a failed edit folds closed: the anchor is the first
-                -- body line.
+                -- ...and that fold is closed: the anchor is the first body
+                -- line.
                 assert.same(
                     { { anchor = old_i - 1, state = "closed" } },
                     layout.folds
@@ -1121,7 +1122,7 @@ describe("agentic.ui.ToolCallLayout", function()
             end
         end)
 
-        it("keeps red error highlight on non-execute failures", function()
+        it("dims the reason with no error range", function()
             --- @type agentic.ui.MessageWriter.ToolCallBlock
             local block = {
                 tool_call_id = "tc-edit-fail",
@@ -1131,16 +1132,55 @@ describe("agentic.ui.ToolCallLayout", function()
                 failure_reason = { "Permission denied." },
             }
 
-            local ranges = Layout.build(block, 0).highlights
+            local layout = Layout.build(block, 0)
 
-            local has_error = false
-            for _, range in ipairs(ranges) do
-                if range.type == "error" then
-                    has_error = true
-                    break
-                end
+            local reason_i = vim.fn.index(layout.lines, "Permission denied.")
+            assert.same({ reason_i, reason_i }, layout.dim)
+            assert.same({}, layout.highlights)
+            assert.same({}, layout.folds)
+        end)
+
+        it("gives a failed empty diff no fold over it", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "tc-edit-empty",
+                kind = "create",
+                argument = "/tmp/foo.lua",
+                status = "failed",
+                diff = { old = {}, new = {} },
+                failure_reason = { "reason 1", "reason 2" },
+            }
+
+            local layout = Layout.build(block, 0)
+
+            local reason_i = vim.fn.index(layout.lines, "reason 1")
+            for _, line in ipairs(layout.lines) do
+                assert.is_nil(line:match("foldnext$"))
             end
-            assert.is_true(has_error)
+            assert.same(
+                { { anchor = reason_i, state = "closed" } },
+                layout.folds
+            )
+        end)
+
+        it("folds a failed search's multi-row reason closed", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "tc-search-fail",
+                kind = "search",
+                argument = "rg foo",
+                status = "failed",
+                failure_reason = { "rg: bad pattern", "at offset 3" },
+            }
+
+            local layout = Layout.build(block, 0)
+
+            local reason_i = vim.fn.index(layout.lines, "rg: bad pattern")
+            assert.is_not_nil(layout.lines[reason_i]:match("^`+console%-fold$"))
+            assert.same(
+                { anchor = reason_i, state = "closed" },
+                layout.folds[#layout.folds]
+            )
         end)
 
         it("keeps kind-specific rendering for non-failed status", function()

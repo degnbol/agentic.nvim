@@ -223,7 +223,7 @@ function M.apply_diff_highlights(bufnr, start_row, highlight_ranges)
                 hl_range.old_line,
                 hl_range.new_line
             )
-        elseif hl_range.type == "comment" or hl_range.type == "error" then
+        elseif hl_range.type == "comment" then
             local line = vim.api.nvim_buf_get_lines(
                 bufnr,
                 buffer_line,
@@ -232,9 +232,6 @@ function M.apply_diff_highlights(bufnr, start_row, highlight_ranges)
             )[1]
 
             if line then
-                local hl_group = hl_range.type == "error"
-                        and Theme.HL_GROUPS.ERROR_BODY
-                    or "Comment"
                 vim.api.nvim_buf_set_extmark(
                     bufnr,
                     NS_DIFF_HIGHLIGHTS,
@@ -242,7 +239,7 @@ function M.apply_diff_highlights(bufnr, start_row, highlight_ranges)
                     0,
                     {
                         end_col = #line,
-                        hl_group = hl_group,
+                        hl_group = "Comment",
                     }
                 )
             end

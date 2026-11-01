@@ -24,7 +24,7 @@ local M = {}
 --- @alias agentic.ui.FoldState "open"|"closed"
 
 --- @class agentic.ui.ToolCallLayout.HighlightRange
---- @field type "comment"|"error"|"old"|"new"|"new_modification"|"table_row_end" Type of highlight to apply
+--- @field type "comment"|"old"|"new"|"new_modification"|"table_row_end" Type of highlight to apply
 --- @field line_index integer 0-based row index
 --- @field old_line? string Original line content (for diff types)
 --- @field new_line? string Modified line content (for diff types)
@@ -35,9 +35,8 @@ local M = {}
 --- @field rows string[]
 --- @field lang? string Fence language; nil leaves the rows unfenced, "" fences with an empty language
 --- @field fold? agentic.ui.FoldState Fold state; adds `-fold` to the info string
---- @field difffold? boolean Info-string marker is `-difffold` instead of `-fold`: foldable, never injected
 --- @field fold_next? boolean With `fold`, the marker is `-foldnext` instead of `-fold`: the fold runs through the next section's `console` or `console-fold` fence. Without `fold` it adds no marker
---- @field dim? boolean Dim the rows with AgenticDimmedBlock
+--- @field dim? boolean Dim the rows with AgenticDimmedBlock. A layout keeps one dimmed range, the last dimmed section's
 --- @field highlights? agentic.ui.ToolCallLayout.HighlightRange[] `line_index` 0-based within `rows`
 --- @field ansi? agentic.utils.Ansi.Span[][] Spans per row of `rows`
 --- @field matches? agentic.utils.GrepHighlights.Match[] `line_index` 0-based within `rows`
@@ -273,8 +272,8 @@ local function assemble(sections)
         if fence then
             -- A command fence keeps its bare language until output exists:
             -- `permission_highlight.lua`'s `OPEN_FENCE` matches only that.
-            local marker = section.difffold and "-difffold"
-                or section.fold and (section.fold_next and "-foldnext" or "-fold")
+            local marker = section.fold
+                    and (section.fold_next and "-foldnext" or "-fold")
                 or ""
             table.insert(lines, fence .. section.lang .. marker)
         end
@@ -344,17 +343,18 @@ local function output_fold_state(rows, max_lines)
     return max_lines > 0 and #rows > max_lines and "closed" or "open"
 end
 
---- A failure reason under a `console` fence, each row as `error`.
+--- A failure reason under a `console` fence. It is a message to the agent,
+--- so it is dimmed and folded closed past one row.
 --- @param reason string[]
 --- @return agentic.ui.ToolCallLayout.Section
 local function reason_section(reason)
-    --- @type agentic.ui.ToolCallLayout.HighlightRange[]
-    local highlights = {}
-    for i = 1, #reason do
-        table.insert(highlights, { type = "error", line_index = i - 1 })
-    end
     --- @type agentic.ui.ToolCallLayout.Section
-    local section = { rows = reason, lang = "console", highlights = highlights }
+    local section = {
+        rows = reason,
+        lang = "console",
+        dim = true,
+        fold = #reason > 1 and "closed" or nil,
+    }
     return section
 end
 
@@ -777,8 +777,8 @@ local function hunk_rows(hunk, source_lines, context_lang)
     return rows, highlights
 end
 
---- The diff of a file-mutating call, as ONE foldable section, then the
---- failure reason when the call failed.
+--- The diff of a file-mutating call as one section, then the failure reason
+--- when the call failed.
 --- @type agentic.ui.ToolCallLayout.Builder
 local function diff_body(call)
     local block = call.block
@@ -805,18 +805,14 @@ local function diff_body(call)
         })
     end
 
-    -- `lang` (inferred from the path) is the fence label and the language for
-    -- context-aware highlighting; it is NOT the injection language (see
-    -- `difffold`). Strip any path-induced `-fold` suffix (a file named
-    -- `foo.x-fold`) so the fence string can't become a pathological
-    -- `foo-fold-difffold`. Contents inform the type only when the filename
-    -- can't (extensionless files like zsh `#compdef` completions); the file's
-    -- own head beats the diff's.
+    -- `lang` (inferred from the path) is the language for context-aware
+    -- highlighting. Contents inform the type only when the filename can't
+    -- (extensionless files like zsh `#compdef` completions); the file's own
+    -- head beats the diff's.
     local lang = Treesitter.language_for_path(
         call.argument,
         #source_lines > 0 and source_lines or diff.new
     )
-        :gsub("%-fold$", "")
 
     -- Context-aware syntax highlighting: the chat buffer's fence injection
     -- only sees the diff lines in isolation, so structurally-dependent
@@ -860,25 +856,25 @@ local function diff_body(call)
         and #diff.new > create_max
     local open = block.status ~= "failed" and not collapse
 
-    -- `difffold` folds the diff as ONE block (folds.scm matches `fold$`)
-    -- while suppressing language injection (injections.scm excludes
-    -- `difffold$`): block_col_hl extmarks already colour the diff at priority
-    -- 200, so injecting the base language would only buy a second parse.
+    -- The `text` label names no parser, so the diff is never injected: an
+    -- injected zsh diff can hang the editor (see ZshParseGuard). Colour
+    -- comes from block_col_hl extmarks where a context parse ran.
+    --- @type agentic.ui.ToolCallLayout.Section
+    local diff_section = { rows = rows, lang = "text", highlights = highlights }
     --- @type agentic.ui.ToolCallLayout.Section[]
-    local sections = {
-        {
-            rows = rows,
-            lang = lang,
-            difffold = true,
-            -- A body of one row or none gets no fold (`Folds.levels`).
-            fold = #rows > 1 and (open and "open" or "closed") or nil,
-            highlights = highlights,
-        },
-    }
-    -- A failed edit keeps the diff, folded closed, with the reason beneath
-    -- it, so the user sees both what was attempted and why it failed.
+    local sections = { diff_section }
     if call.failure then
+        -- A failed edit keeps the diff with the reason beneath it, both in
+        -- one closed fold, so a diff of any length can be hidden. An empty
+        -- diff has no fence content for the fold to anchor on (E490).
+        if #rows > 0 then
+            diff_section.fold = "closed"
+            diff_section.fold_next = true
+        end
         table.insert(sections, reason_section(call.failure))
+    elseif #rows > 1 then
+        -- A body of one row gets no fold (`Folds.levels`).
+        diff_section.fold = open and "open" or "closed"
     end
     return sections
 end
@@ -948,15 +944,7 @@ function M.build(block, wrap_width)
     elseif call.failure and call.kind ~= "execute" then
         -- The summary a kind normally shows ("Read N lines", search results)
         -- describes what the tool attempted — misleading when it never ran.
-        local reason = reason_section(call.failure)
-        if call.kind == "search" then
-            -- The search command's fold runs through this fence.
-            reason.fold = output_fold_state(
-                call.failure,
-                Config.tool_call_display.search_max_lines
-            )
-        end
-        body = { reason }
+        body = { reason_section(call.failure) }
     else
         body = (BODIES[call.kind] or generic_body)(call)
     end

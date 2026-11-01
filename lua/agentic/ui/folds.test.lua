@@ -74,17 +74,6 @@ describe("agentic.ui.folds", function()
             assert.same({ "0", "0", ">1", "1", "1", "0", "0" }, levels)
         end)
 
-        it("folds a `-difffold` fence the same way", function()
-            local levels = levels_of({
-                "```lua-difffold",
-                "local a = 1",
-                "local b = 2",
-                "```",
-            })
-
-            assert.same({ "0", ">1", "1", "0" }, levels)
-        end)
-
         it("leaves an unmarked fence unfolded", function()
             local levels = levels_of({
                 "```console",
@@ -225,22 +214,6 @@ describe("agentic.ui.folds", function()
                 "```console",
                 "out 1",
                 "out 2",
-                "```",
-            })
-
-            assert.same({ "0", ">1", "1", "0", "0", "0", "0", "0" }, levels)
-            assert.same({}, joined)
-        end)
-
-        it("does not join a `-difffold` fence to a `console` fence", function()
-            local levels, joined = levels_of({
-                "```lua-difffold",
-                "local a = 1",
-                "local b = 2",
-                "```",
-                "```console",
-                "reason 1",
-                "reason 2",
                 "```",
             })
 
@@ -488,7 +461,7 @@ describe("agentic.ui.folds", function()
             it("follows a cleared and rewritten buffer", function()
                 append({ "```console-fold", "a", "b", "```" })
                 vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
-                    "```lua-difffold",
+                    "```text-fold",
                     "x",
                     "y",
                     "```",

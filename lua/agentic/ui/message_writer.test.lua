@@ -5469,17 +5469,17 @@ describe("agentic.ui.MessageWriter", function()
             "end",
         }
 
-        --- 1-indexed line of the diff fence carrying the `difffold` marker.
+        --- 1-indexed line of the first diff fence, labelled `text`.
         --- @return integer line
-        local function difffold_fence_line()
+        local function diff_fence_line()
             for i, line in
                 ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
             do
-                if line:match("difffold$") then
+                if line:match("^`+text%-") then
                     return i
                 end
             end
-            error("no difffold fence in buffer")
+            error("no diff fence in buffer")
         end
 
         --- 1-indexed line of the next bare closing fence after `from`.
@@ -5502,11 +5502,11 @@ describe("agentic.ui.MessageWriter", function()
                     tool_call_id = "diff-onefold",
                     status = "completed",
                     kind = "create",
-                    argument = "/tmp/agentic_difffold_probe.lua",
+                    argument = "/tmp/agentic_diff_probe.lua",
                     diff = { old = {}, new = diff_new },
                 })
 
-                local fence = difffold_fence_line()
+                local fence = diff_fence_line()
                 local body_start = fence + 1
                 local body_end = closing_fence_after(fence) - 1
                 deferred.drain()
@@ -5538,11 +5538,11 @@ describe("agentic.ui.MessageWriter", function()
                 tool_call_id = "diff-open",
                 status = "completed",
                 kind = "create",
-                argument = "/tmp/agentic_difffold_open.lua",
+                argument = "/tmp/agentic_diff_open.lua",
                 diff = { old = {}, new = diff_new },
             })
 
-            local body_start = difffold_fence_line() + 1
+            local body_start = diff_fence_line() + 1
             deferred.drain()
             -- Foldable (level 1) and explicitly opened for a non-failed edit,
             -- so `zc` works but nothing is collapsed.
@@ -5557,12 +5557,12 @@ describe("agentic.ui.MessageWriter", function()
                     tool_call_id = "diff-fail",
                     status = "failed",
                     kind = "edit",
-                    argument = "/tmp/agentic_difffold_fail.lua",
+                    argument = "/tmp/agentic_diff_fail.lua",
                     diff = { old = { "stub" }, new = diff_new },
                     failure_reason = { "User refused permission to run tool" },
                 })
 
-                local fence = difffold_fence_line()
+                local fence = diff_fence_line()
                 assert.is_not_nil(fence)
                 local body_start = fence + 1
                 deferred.drain()
@@ -5588,11 +5588,11 @@ describe("agentic.ui.MessageWriter", function()
                     tool_call_id = "diff-trans",
                     status = "in_progress",
                     kind = "edit",
-                    argument = "/tmp/agentic_difffold_trans.lua",
+                    argument = "/tmp/agentic_diff_trans.lua",
                     diff = { old = { "stub" }, new = diff_new },
                 })
                 -- Open while in progress.
-                assert.equal(-1, vim.fn.foldclosed(difffold_fence_line() + 1))
+                assert.equal(-1, vim.fn.foldclosed(diff_fence_line() + 1))
 
                 writer:update_tool_call_block({
                     tool_call_id = "diff-trans",
@@ -5600,7 +5600,7 @@ describe("agentic.ui.MessageWriter", function()
                     failure_reason = { "Load /coding skill first." },
                 })
 
-                local fence = difffold_fence_line()
+                local fence = diff_fence_line()
                 assert.is_not_nil(fence)
                 deferred.drain()
                 -- Folds closed after the failed transition.
@@ -5632,10 +5632,10 @@ describe("agentic.ui.MessageWriter", function()
                 tool_call_id = "diff-cancel",
                 status = "in_progress",
                 kind = "edit",
-                argument = "/tmp/agentic_difffold_cancel.lua",
+                argument = "/tmp/agentic_diff_cancel.lua",
                 diff = { old = { "stub" }, new = diff_new },
             })
-            local fence = difffold_fence_line()
+            local fence = diff_fence_line()
             assert.equal(-1, vim.fn.foldclosed(fence + 1))
             assert.is_not_nil(buffer_text():find("in_progress", 1, true))
 
@@ -5653,7 +5653,7 @@ describe("agentic.ui.MessageWriter", function()
             -- the highlight-only path: the diff is neither re-extracted from
             -- the file nor folded away, as a `failed` edit's is.
             assert.is_not_nil(text:find("local function foo()", 1, true))
-            assert.equal(fence, difffold_fence_line())
+            assert.equal(fence, diff_fence_line())
             deferred.drain()
             assert.equal(-1, vim.fn.foldclosed(fence + 1))
         end)
@@ -5684,10 +5684,10 @@ describe("agentic.ui.MessageWriter", function()
                         tool_call_id = "leak-edit",
                         status = first_status,
                         kind = "create",
-                        argument = "/tmp/agentic_difffold_leak.lua",
+                        argument = "/tmp/agentic_diff_leak.lua",
                         diff = { old = {}, new = diff_new },
                     })
-                    local edit_body = difffold_fence_line() + 1
+                    local edit_body = diff_fence_line() + 1
                     deferred.drain()
                     if first_status == "pending" then
                         writer:update_tool_call_block({
@@ -5770,7 +5770,7 @@ describe("agentic.ui.MessageWriter", function()
                 tool_call_id = "spawn-edit",
                 status = "pending",
                 kind = "create",
-                argument = "/tmp/agentic_difffold_spawn.lua",
+                argument = "/tmp/agentic_diff_spawn.lua",
                 diff = { old = {}, new = diff_new },
             })
             deferred.drain()
@@ -5792,7 +5792,8 @@ describe("agentic.ui.MessageWriter", function()
                     confirmed = true,
                 },
             })
-            local body_start = fold_fence_lines()[2] + 1
+            -- Folds in order: the execute output, the edit diff, the subagent.
+            local body_start = fold_fence_lines()[3] + 1
             deferred.drain()
             assert.equal(body_start, vim.fn.foldclosed(body_start))
         end)
@@ -5849,10 +5850,10 @@ describe("agentic.ui.MessageWriter", function()
                     tool_call_id = id,
                     status = "pending",
                     kind = "create",
-                    argument = "/tmp/agentic_difffold_" .. id .. ".lua",
+                    argument = "/tmp/agentic_diff_" .. id .. ".lua",
                     diff = { old = {}, new = diff_new },
                 })
-                return difffold_fence_line() + 1
+                return diff_fence_line() + 1
             end
 
             it("is closed at render", function()
@@ -5892,7 +5893,7 @@ describe("agentic.ui.MessageWriter", function()
                 for i, line in
                     ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
                 do
-                    if line:match("difffold$") then
+                    if line:match("^`+text%-") then
                         table.insert(bodies, i + 1)
                     end
                 end
@@ -5920,10 +5921,10 @@ describe("agentic.ui.MessageWriter", function()
                 tool_call_id = "fail-reason",
                 status = "pending",
                 kind = "edit",
-                argument = "/tmp/agentic_difffold_reason.lua",
+                argument = "/tmp/agentic_diff_reason.lua",
                 diff = { old = { "stub" }, new = diff_new },
             })
-            local body_start = difffold_fence_line() + 1
+            local body_start = diff_fence_line() + 1
             deferred.drain()
             assert.equal(-1, vim.fn.foldclosed(body_start))
 
@@ -5933,7 +5934,7 @@ describe("agentic.ui.MessageWriter", function()
                 failure_reason = { "rejected" },
             })
             deferred.drain()
-            body_start = difffold_fence_line() + 1
+            body_start = diff_fence_line() + 1
             assert.equal(body_start, vim.fn.foldclosed(body_start))
         end)
 
@@ -5942,10 +5943,10 @@ describe("agentic.ui.MessageWriter", function()
                 tool_call_id = "fail-no-reason",
                 status = "pending",
                 kind = "edit",
-                argument = "/tmp/agentic_difffold_noreason.lua",
+                argument = "/tmp/agentic_diff_noreason.lua",
                 diff = { old = { "stub" }, new = diff_new },
             })
-            local body_start = difffold_fence_line() + 1
+            local body_start = diff_fence_line() + 1
             deferred.drain()
             assert.equal(-1, vim.fn.foldclosed(body_start))
 
@@ -5954,7 +5955,45 @@ describe("agentic.ui.MessageWriter", function()
                 status = "failed",
             })
             deferred.drain()
+            assert.is_not_nil(
+                vim.api
+                    .nvim_buf_get_lines(bufnr, body_start - 2, body_start - 1, false)[1]
+                    :match("^`+text%-fold$")
+            )
             assert.equal(body_start, vim.fn.foldclosed(body_start))
+        end)
+
+        it("folds a failed one-row diff together with its reason", function()
+            writer:write_tool_call_block({
+                tool_call_id = "fail-one-row",
+                status = "failed",
+                kind = "create",
+                argument = "/tmp/agentic_diff_onerow.lua",
+                diff = { old = {}, new = { "local a = 1" } },
+                failure_reason = { "reason 1", "reason 2" },
+            })
+            local fence = diff_fence_line()
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            assert.is_not_nil(lines[fence]:match("^`+text%-foldnext$"))
+            local reason_start = closing_fence_after(fence) + 2
+            assert.is_not_nil(
+                lines[reason_start - 1]:match("^`+console%-fold$")
+            )
+            deferred.drain()
+
+            local diff_start = fence + 1
+            -- One closed fold spans diff and reason, titled by the diff row.
+            assert.equal(diff_start, vim.fn.foldclosed(diff_start))
+            assert.equal(diff_start, vim.fn.foldclosed(reason_start + 1))
+            local _, joined = Folds.levels(bufnr)
+            assert.is_true(joined[diff_start])
+
+            -- The reason's own fold nests inside, also closed.
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd(diff_start .. "foldopen")
+            end)
+            assert.equal(-1, vim.fn.foldclosed(diff_start))
+            assert.equal(reason_start, vim.fn.foldclosed(reason_start))
         end)
 
         it(
@@ -5965,10 +6004,10 @@ describe("agentic.ui.MessageWriter", function()
                     tool_call_id = "create-reopen",
                     status = "pending",
                     kind = "create",
-                    argument = "/tmp/agentic_difffold_reopen.lua",
+                    argument = "/tmp/agentic_diff_reopen.lua",
                     diff = { old = {}, new = diff_new },
                 })
-                local body_start = difffold_fence_line() + 1
+                local body_start = diff_fence_line() + 1
                 writer:update_tool_call_block({
                     tool_call_id = "create-reopen",
                     status = "completed",
@@ -5993,7 +6032,7 @@ describe("agentic.ui.MessageWriter", function()
                 tool_call_id = "fail-stale",
                 status = "pending",
                 kind = "edit",
-                argument = "/tmp/agentic_difffold_stale.lua",
+                argument = "/tmp/agentic_diff_stale.lua",
                 diff = { old = { "stub" }, new = diff_new },
             })
             deferred.drain()
@@ -6021,7 +6060,7 @@ describe("agentic.ui.MessageWriter", function()
                     tool_call_id = "diff-orphan",
                     status = "in_progress",
                     kind = "create",
-                    argument = "/tmp/agentic_difffold_orphan.lua",
+                    argument = "/tmp/agentic_diff_orphan.lua",
                     diff = { old = {}, new = diff_new },
                 })
                 writer:update_tool_call_block({
@@ -6029,8 +6068,8 @@ describe("agentic.ui.MessageWriter", function()
                     status = "failed",
                     failure_reason = { "short" },
                 })
-                -- The diff body ends at the last added line; below it only the
-                -- reason row carries a highlight, its own error one.
+                -- The diff body ends at the last added line; no diff highlight
+                -- lies below it.
                 local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
                 local last_diff_row
                 for i, l in ipairs(lines) do
@@ -6048,12 +6087,10 @@ describe("agentic.ui.MessageWriter", function()
                     { details = true }
                 )
                 for _, m in ipairs(marks) do
-                    if m[2] > last_diff_row then
-                        assert.same(
-                            { "short", Theme.HL_GROUPS.ERROR_BODY },
-                            { lines[m[2] + 1], m[4].hl_group }
-                        )
-                    end
+                    assert.is_true(
+                        m[2] <= last_diff_row,
+                        "diff highlight past the diff at row " .. m[2]
+                    )
                 end
             end
         )

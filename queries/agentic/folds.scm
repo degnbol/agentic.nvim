@@ -1,13 +1,12 @@
 ; Fold the body of fenced code blocks whose info string the MessageWriter
-; tagged with a "fold" suffix: the "-fold" marker on sidecar bodies
-; (```console-fold, ```markdown-fold) and the "difffold" marker on edit diffs
-; (```lua-difffold). The threshold policy lives in the writer (per-kind line
-; counts, sidecar always-fold, diffs always foldable); this query just folds
-; whatever the writer marked.
+; tagged with a "-fold" suffix (```console-fold, ```markdown-fold,
+; ```text-fold). The threshold policy lives in the writer (per-kind line
+; counts, sidecar always-fold); this query just folds whatever the writer
+; marked.
 ;
 ; A "-foldnext" fence (```zsh-foldnext) folds through the ```console or
-; ```console-fold fence directly after it, and forms no fold alone: an
-; execute or search block's command and output are one fold. Folds nest by
+; ```console-fold fence directly after it, and forms no fold alone, e.g. an
+; execute block's command and output are one fold. Folds nest by
 ; containment, so that output's own "-fold" is a fold inside it.
 ;
 ; This is the chat buffer's ONLY fold source. `agentic.ui.folds` runs it over

@@ -237,7 +237,9 @@ All options with defaults are in `lua/agentic/config_default.lua`.
                                            *agentic-config-tool_call_display*
 `tool_call_display` table
     Line thresholds for tool call output. A body over its threshold is
-    folded closed; 0 never closes that fold by length.
+    folded closed; 0 never closes that fold by length. A failed call's
+    reason (any kind but execute) folds closed past one row, whatever the
+    threshold.
 
     An execute or search block with output has two folds: one over its
     output, and one over its command and output. The outer fold is closed
@@ -259,7 +261,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
         this many lines. 0 disables the feature entirely.
     `create_max_lines`         integer (default: 50)
         Fold a created-file diff closed when it exceeds this many lines
-        (0 = always open). Edits are never auto-collapsed.
+        (0 = always open). An edit diff stays open unless the edit failed.
 
 ------------------------------------------------------------------------------
 4.5 PERMISSIONS                                   *agentic-config-permissions*

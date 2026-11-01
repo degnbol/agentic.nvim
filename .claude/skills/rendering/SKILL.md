@@ -2,7 +2,8 @@
 name: rendering
 description:
   Chat-buffer rendering — tool call blocks, code fences, search highlighting,
-  body folding. Use when adding a tool kind, changing the fence info-string,
+  body folding, heading levels, where new content goes in the chat. Use when
+  adding a tool kind or a new kind of chat content, changing the fence info-string,
   modifying tool_call_layout/_renderer or message_writer render paths, editing
   queries/agentic/folds.scm or injections.scm, or wiring in a new foldable
   body. Per-site rationale (sign_text vs virt_text, set_text vs set_lines,
@@ -15,7 +16,7 @@ description:
 The chat buffer is `filetype=AgenticChat` parsed as the private `agentic`
 treesitter language — a clone of the markdown parser registered in
 `bootstrap.lua` (see the `language.add` block there for the registration rationale).
-Two consequences worth carrying in your head:
+Buffer-wide rules:
 
 - Folding uses `agentic.ui.folds`'s own foldexpr over `queries/agentic/folds.scm`,
   isolated from real markdown buffers. Not `vim.treesitter.foldexpr()` — that
@@ -60,7 +61,7 @@ therefore reads `NS_USER_ACTIONS` extmarks rather than scanning for `## `.
 Only levels 2 and 3 are dimmed by the chat window's `winhighlight`
 (`chat_buffer.lua`).
 
-## Tool call block layout
+## Region layout (sign column)
 
 ```
 󰆍  ### <argument>         ← header (sign extmark = kind glyph, NS_DECORATIONS)
@@ -128,15 +129,13 @@ the fence is set per kind:
 | Search body | `console`, or `console-fold` past one row | `console` prevents markdown parsing of `--`, `*` |
 | Prose body (`prose_section`) | `markdown-fold` (multi-line) or `markdown` | Dimmed (sidecar) via `set_dim_range` (`AgenticDimmedBlock`) |
 | Generic and todowrite body | `json`, `markdown` (flat JSON table) or `console`, `-fold` past `other_max_lines` | todowrite folds closed past one row; not dimmed |
-| Diff content (edit/write/create) | `<lang>-difffold` — `lang` inferred from path | Always foldable as ONE block: `open`, or `closed` when the edit failed (e.g. rejected permission) or a created file exceeds `create_max_lines`. No language injection (see below); highlighting via `block_col_hl` extmarks. Diff content is never prose-wrapped (rendered faithfully to file, including markdown); `lang` is inferred from the path (contents only as a fallback for extensionless files) and serves as both the fence label and the context-highlighting language |
-| Failure reason | `console` | Replaces the kind-specific body when `status == "failed"` — **except edits**, which keep the diff (folded closed) and append the reason beneath it |
+| Diff content (edit/write/create) | `text`, `text-fold` past one row; `text-foldnext` when failed with a reason | Fold `open`, or `closed` when the edit failed or a created file exceeds `create_max_lines`. Highlighting via `block_col_hl` extmarks, language inferred from the path (contents only as a fallback for extensionless files). Never prose-wrapped (rendered faithfully to file, including markdown) |
+| Failure reason | `console`, or `console-fold` past one row (closed) | Dimmed. Replaces the kind-specific body when `status == "failed"` — **except edits**, which keep the diff and append the reason beneath it, and execute, which shows it as output |
 
 `injections.scm` strips a trailing
 `-fold` or `-foldnext` before resolving the injected parser (so sidecar markdown still
-highlights) but **excludes `difffold$` from injection entirely** — a diff's
-syntax colour comes from `block_col_hl` extmarks (`highlight_map_in_context`),
-which override any injection at priority 200, so injecting the base language
-would only buy a second parse of the same text.
+highlights). A `text` label names no parser, so it is never injected — an
+injected zsh diff can hang the editor (`ZshParseGuard`).
 
 **Downstream fence consumers must handle variable width.** Match `^\`+$`
 (any backtick-only line) instead of literal triple-backticks, and
@@ -146,11 +145,11 @@ would only buy a second parse of the same text.
 
 A fold marker on the fence language is the only fold trigger — and, because
 levels come from the root tree alone, the chat buffer's only fold source at
-all. Three variants: `<lang>-fold` (sidecar bodies past their threshold,
-thought runs and hook blocks via `_write_collapsed_region`),
-`<lang>-difffold` (every edit diff), and `<lang>-foldnext` (execute and search
-commands), which folds through the `console`/`console-fold` fence after it;
-the output's own fold nests inside. Mechanism is split across four files;
+all. Two variants: `<lang>-fold` (sidecar bodies past their threshold,
+thought runs and hook blocks via `_write_collapsed_region`, edit diffs), and
+`<lang>-foldnext` (execute and search commands, failed edits), which folds
+through the `console`/`console-fold` fence after it; the output's own fold
+nests inside. Mechanism is split across four files;
 read them in this order when changing fold behaviour:
 
 1. `queries/agentic/folds.scm` — folds `code_fence_content`, not the whole
@@ -159,7 +158,7 @@ read them in this order when changing fold behaviour:
    per edit. Its module docstring is the record of why core's
    `vim.treesitter.foldexpr()` cannot be used here.
 3. `lua/agentic/ui/tool_call_layout.lua` — `assemble`: a section with
-   `fold` set gets `-fold`; each `Layout.folds[i].anchor` is the first row
+   `fold` set gets `-fold`, or `-foldnext` with `fold_next`; each `Layout.folds[i].anchor` is the first row
    inside that fold.
 4. `lua/agentic/ui/message_writer.lua` — `_render_block_folds` places a tool
    call's folds. `_queue_fold`'s docstring explains why the fold op is

@@ -473,14 +473,15 @@ local ConfigDefault = {
     --- Maximum lines shown for tool call output before its fold closes (use
     --- zo/za/zc to toggle). An execute or search block has a second fold over
     --- its command and output, closed when the call is read-only and did not
-    --- fail.
+    --- fail. A failed call's reason (any kind but execute) folds closed past
+    --- one row, whatever the threshold.
     --- @class agentic.UserConfig.ToolCallDisplay
     --- @field search_max_lines integer Close a search block's output fold past this many lines; 0 never closes it by length. The fold over command and output closes whenever the search did not fail.
     --- @field execute_max_lines integer Close an execute block's output fold past this many lines; 0 never closes it by length. The fold over command and output closes when the command is read-only (`:h agentic-permissions-shell`) and did not fail.
     --- @field other_max_lines integer Fold generic/MCP/meta tool-result bodies (non-execute) exceeding this many lines. Set to 0 to disable folding for these.
     --- @field execute_formatter? string|false Command to format execute code blocks (default: "shfmt"). Set to false to disable external formatting and use the built-in operator-splitting fallback only.
     --- @field diff_context_max_lines integer Skip context-aware diff highlighting when the target file exceeds this many lines (each Edit render reparses the whole file). Set to 0 to disable the feature entirely.
-    --- @field create_max_lines integer Fold a created-file diff closed when it exceeds this many lines (0 = always open). Edits are never auto-collapsed.
+    --- @field create_max_lines integer Fold a created-file diff closed when it exceeds this many lines (0 = always open). An edit diff stays open unless the edit failed.
     tool_call_display = {
         search_max_lines = 8,
         execute_max_lines = 25,

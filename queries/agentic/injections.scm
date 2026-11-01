@@ -8,12 +8,6 @@
 ; is not a parser). gsub is a no-op on fences without the suffix, so plain
 ; ```python / ```bash blocks inject as before.
 ;
-; Edit diffs carry a "difffold" marker (```lua-difffold) and are deliberately
-; EXCLUDED here: their colour comes from block_col_hl extmarks
-; (`hunk_rows` in tool_call_layout), which override any injection at
-; priority 200 on every loadable diff, so injecting the base language would only
-; buy a second parse of the same text.
-;
 ; This rule fires ONLY on suffixed fences (#lua-match? below). Plain
 ; ```python / ```bash fences are already injected by the inherited markdown rule
 ; above, so matching them here too would inject the same language twice. The
@@ -23,6 +17,5 @@
   (info_string (language) @injection.language)
   (code_fence_content) @injection.content
   (#match? @injection.language "-fold(next)?$")
-  (#not-lua-match? @injection.language "difffold$")
   (#gsub! @injection.language "%-foldnext$" "")
   (#gsub! @injection.language "%-fold$" ""))

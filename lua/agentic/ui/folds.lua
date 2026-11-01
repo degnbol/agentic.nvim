@@ -22,7 +22,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- `parser:for_each_tree` instead.
 ---
 --- So folds here come only from `queries/agentic/folds.scm` — one per
---- writer-marked `*-fold` / `-difffold` body, and one from each `*-foldnext`
+--- writer-marked `*-fold` body, and one from each `*-foldnext`
 --- body through the `console` body right after it, which encloses that
 --- body's own fold. The writer always appends a body with both its fences in a
 --- single `nvim_buf_set_lines`, so such a fold is never transiently
