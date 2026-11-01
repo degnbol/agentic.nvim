@@ -1,9 +1,9 @@
 local assert = require("tests.helpers.assert")
 local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
-local Logger = require("agentic.utils.logger")
 local MiniTest = require("mini.test")
 local PermissionRules = require("agentic.utils.permission_rules")
+local PermissionStructured = require("agentic.utils.permission_structured")
 local spy = require("tests.helpers.spy")
 
 describe("PermissionRules", function()
@@ -108,19 +108,16 @@ describe("PermissionRules", function()
         end)
     end)
 
-    describe("glob_to_lua_pattern", function()
-        it("escapes Lua magic characters", function()
-            local pat = PermissionRules.glob_to_lua_pattern("git (status)")
-            assert.equal("^git %(status%)$", pat)
-        end)
-
-        it("converts glob with multiple wildcards", function()
-            local pat = PermissionRules.glob_to_lua_pattern("cd * && git *log*")
-            assert.equal("^cd .* && git .*log.*$", pat)
-        end)
-    end)
-
     describe("extract_bash_patterns", function()
+        it("reads `?` literally", function()
+            local patterns = PermissionRules.extract_bash_patterns(
+                { allow = { "Bash(ls?)" } },
+                "allow"
+            )
+            assert.is_false(PermissionRules.matches_any_pattern("l", patterns))
+            assert.is_true(PermissionRules.matches_any_pattern("ls?", patterns))
+        end)
+
         it("extracts Bash(...) entries from allow list", function()
             local permissions = {
                 allow = {
@@ -1158,13 +1155,12 @@ describe("PermissionRules", function()
         end)
 
         -- A structured-entry decision (deny / ask / allow) feeds into the same
-        -- walk through `M.get_structured_entries`. Tests stub the accessor
-        -- directly to avoid coupling to the bundled permissions.json.
+        -- walk through `PermissionStructured.get_entries`. Tests stub the
+        -- accessor directly to avoid coupling to the bundled permissions.json.
         describe("structured matcher composition", function()
-            local get_structured_entries =
-                PermissionRules.get_structured_entries
+            local get_entries = PermissionStructured.get_entries
             after_each(function()
-                PermissionRules.get_structured_entries = get_structured_entries
+                PermissionStructured.get_entries = get_entries
             end)
 
             --- Whether `command` auto-approves with `perms` as the only
@@ -1175,7 +1171,7 @@ describe("PermissionRules", function()
             --- @return boolean
             local function decide_with_entries(command, perms, entries)
                 --- @diagnostic disable-next-line: duplicate-set-field
-                PermissionRules.get_structured_entries = function()
+                PermissionStructured.get_entries = function()
                     return entries
                 end
                 return decide(command, perms)
@@ -1259,214 +1255,6 @@ describe("PermissionRules", function()
                     )
                 end
             )
-        end)
-
-        -- get_structured_entries returns dashless-normalised entries even when
-        -- the input rule uses --foo / -foo forms.
-        describe("get_structured_entries normalisation", function()
-            it("strips leading dashes from option strings", function()
-                Config.permissions.structured = {
-                    find = {
-                        deny = { { options = { "--exec", "-x", "okdir" } } },
-                    },
-                }
-                PermissionRules.invalidate_cache()
-                local entries = PermissionRules.get_structured_entries()
-
-                local find_entry = entries.find
-                assert.is_not_nil(find_entry)
-                assert.same(
-                    { "exec", "x", "okdir" },
-                    find_entry and find_entry.deny[1].options
-                )
-            end)
-
-            it("keeps arity tokens literal and drops other shapes", function()
-                local notify = spy.stub(Logger, "notify")
-                MiniTest.finally(function()
-                    notify:revert()
-                end)
-                --- @type table
-                local malformed = {
-                    foo = {
-                        arity = {
-                            [""] = {
-                                takers = { "-C", 1, "C", "-cmd", "--a=b" },
-                                other = { "-x" },
-                            },
-                            config = { booleans = "--global" },
-                            bad = "x",
-                        },
-                    },
-                    ["*"] = { arity = { [""] = { takers = { "-C" } } } },
-                }
-                Config.permissions.structured = malformed
-                PermissionRules.invalidate_cache()
-                local entries = PermissionRules.get_structured_entries()
-
-                local foo, wildcard = entries.foo, entries["*"]
-                assert.same({
-                    [""] = { takers = { "-C" } },
-                    config = { booleans = {} },
-                }, foo and foo.arity)
-                assert.is_nil(wildcard and wildcard.arity)
-                assert.equal(5, notify.call_count)
-            end)
-
-            describe("gate conditions", function()
-                local notify
-                before_each(function()
-                    notify = spy.stub(Logger, "notify")
-                end)
-                after_each(function()
-                    notify:revert()
-                end)
-
-                --- `foo` approves, but asks on `-x` unless a gate of
-                --- `unless` holds.
-                --- @param unless any
-                --- @return table
-                local function foo_entries(unless)
-                    return {
-                        foo = {
-                            read_only = { {} },
-                            ask = { { options = { "x" }, unless = unless } },
-                            arity = { [""] = { takers = { "-x" } } },
-                        },
-                    }
-                end
-
-                --- @param entries table
-                --- @param command string
-                --- @return boolean
-                local function approves(entries, command)
-                    Config.permissions.structured = entries
-                    return decide(command, {})
-                end
-
-                it("approves when the condition holds", function()
-                    local unless = {
-                        {
-                            option_values = {
-                                options = { "x" },
-                                values = { "1" },
-                            },
-                        },
-                    }
-                    assert.is_true(approves(foo_entries(unless), "foo -x 1"))
-                    assert.is_false(approves(foo_entries(unless), "foo -x 2"))
-                    assert.equal(0, notify.call_count)
-                end)
-
-                it("keeps the ask on a typo key in an unless child", function()
-                    local unless = {
-                        {
-                            option_value = {
-                                options = { "x" },
-                                values = { "1" },
-                            },
-                        },
-                    }
-                    assert.is_false(approves(foo_entries(unless), "foo -x 1"))
-                    assert.equal(1, notify.call_count)
-                end)
-
-                it("keeps the ask on an empty unless child", function()
-                    assert.is_false(approves(foo_entries({ {} }), "foo -x 1"))
-                    assert.equal(1, notify.call_count)
-                end)
-
-                it("drops an allow gate with a defect", function()
-                    local entries = {
-                        foo = {
-                            read_only = {
-                                { positionals = { "a" }, Unless = {} },
-                            },
-                        },
-                    }
-                    assert.is_false(approves(entries, "foo a"))
-                    local foo = PermissionRules.get_structured_entries().foo
-                    assert.same({}, foo and foo.read_only)
-                    assert.equal(1, notify.call_count)
-                end)
-
-                it("drops an allow gate whose unless is one gate", function()
-                    local entries = {
-                        foo = {
-                            read_only = { { unless = { options = { "x" } } } },
-                        },
-                    }
-                    assert.is_false(approves(entries, "foo -x"))
-                    assert.equal(1, notify.call_count)
-                end)
-
-                it("drops a partly valid list from an ask gate", function()
-                    --- @type table
-                    local malformed =
-                        { foo = { ask = { { options = { "x", 5 } } } } }
-                    Config.permissions.structured = malformed
-                    PermissionRules.invalidate_cache()
-                    local foo = PermissionRules.get_structured_entries().foo
-                    assert.same({ {} }, foo and foo.ask)
-                    assert.equal(1, notify.call_count)
-                end)
-
-                it("drops unless from a deny gate", function()
-                    Config.permissions.structured = {
-                        foo = {
-                            deny = {
-                                {
-                                    options = { "x" },
-                                    unless = { { options = { "y" } } },
-                                },
-                            },
-                        },
-                    }
-                    PermissionRules.invalidate_cache()
-                    local foo = PermissionRules.get_structured_entries().foo
-                    assert.same({ { options = { "x" } } }, foo and foo.deny)
-                    assert.equal(1, notify.call_count)
-                end)
-
-                it("drops a cyclic unless", function()
-                    local gate = { options = { "x" } }
-                    gate.unless = { gate }
-                    Config.permissions.structured = { foo = { ask = { gate } } }
-                    PermissionRules.invalidate_cache()
-                    local foo = PermissionRules.get_structured_entries().foo
-                    assert.same({ { options = { "x" } } }, foo and foo.ask)
-                    assert.equal(1, notify.call_count)
-                end)
-            end)
-
-            describe("over the bundled arity", function()
-                --- The merged git arity under `user` as the user's git entry.
-                --- @param user table
-                --- @return agentic.PermArity
-                local function git_arity(user)
-                    Config.permissions.use_plugin_defaults = true
-                    Config.permissions.structured = { git = user }
-                    PermissionRules.invalidate_cache()
-                    local git = PermissionRules.get_structured_entries().git
-                    return git and git.arity or {}
-                end
-
-                it("keeps it under a user entry without arity", function()
-                    local arity = git_arity({
-                        read_only = { { positionals = { "log" } } },
-                    })
-                    assert.same({ "--no-pager" }, arity[""].booleans)
-                end)
-
-                it("replaces only the lists the user gives", function()
-                    local arity = git_arity({
-                        arity = { [""] = { takers = {} } },
-                    })
-                    assert.same({}, arity[""].takers)
-                    assert.same({ "--no-pager" }, arity[""].booleans)
-                    assert.same({ "--global" }, arity.config.booleans)
-                end)
-            end)
         end)
 
         -- Phase 2: assignment-position command substitution and loops.
@@ -2458,7 +2246,7 @@ describe("PermissionRules", function()
                 ["create-dirs"] = true,
             }
             local options = vim.iter(
-                PermissionRules.get_structured_entries().curl.ask
+                PermissionStructured.get_entries().curl.ask
             )
                 :map(function(gate)
                     return gate.options
@@ -4897,6 +4685,57 @@ describe("PermissionRules", function()
                 assert.is_false(complete)
             end
         )
+    end)
+
+    describe("tally of a script written earlier in the command", function()
+        before_each(function()
+            Config.permissions.use_plugin_defaults = false
+            stub_settings({ allow = { "Bash(ls)", "Bash(echo *)" } })
+        end)
+        after_each(remove_written)
+
+        --- Whether the tally of `cmd` records a range spanning exactly `text`.
+        --- @param cmd string
+        --- @param text string text on one line of `cmd`
+        --- @return boolean
+        local function tallies(cmd, text)
+            local lines = vim.split(cmd, "\n")
+            local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+            return vim.iter(ranges or {}):any(function(r)
+                return r[1] == r[3]
+                    and lines[r[1] + 1]:sub(r[2] + 1, r[4]) == text
+            end)
+        end
+
+        it("judges heredoc-written bytes over the disk", function()
+            local path = script("rm -rf x\n")
+            local cmd = ("cat > %s <<'EOF'\nls\nEOF\nzsh %s"):format(path, path)
+            assert.is_false(tallies(cmd, "zsh " .. path))
+        end)
+
+        it("highlights a script an unknown write replaced", function()
+            local path = script("ls\n")
+            local cmd = ("echo 'rm -rf x' > %s; zsh %s"):format(path, path)
+            assert.is_true(tallies(cmd, "zsh " .. path))
+        end)
+
+        it("highlights a script written beside an unresolved target", function()
+            local path = script("ls\n")
+            local cmd = ("echo 'rm -rf x' > $dyn > %s; zsh %s"):format(
+                path,
+                path
+            )
+            assert.is_true(tallies(cmd, "zsh " .. path))
+        end)
+
+        it("highlights a script an expanding heredoc wrote", function()
+            local path = script("ls\n")
+            local cmd = ("cat > %s <<EOF\n$HOME\nEOF\nzsh %s"):format(
+                path,
+                path
+            )
+            assert.is_true(tallies(cmd, "zsh " .. path))
+        end)
     end)
 
     describe("script file walk (Step B — heredoc reconstruction)", function()

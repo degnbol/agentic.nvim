@@ -31,8 +31,15 @@ describe("agentic.ui.ToolCallLayout", function()
         -- extract_diff_blocks retries against real disk when the first match
         -- fails, so a fixture path that happens to exist (/tmp/file.txt is
         -- exactly what a scratch session leaves behind) would supply content
-        -- no test declared.
+        -- no test declared. The bundled permissions.json passes through: the
+        -- structured rules come from it.
+        local read_from_disk = FileSystem.read_from_disk
         disk_stub = spy.stub(FileSystem, "read_from_disk")
+        disk_stub:invokes(function(path)
+            if vim.endswith(path, "/permissions.json") then
+                return read_from_disk(path)
+            end
+        end)
     end)
 
     after_each(function()
@@ -1207,20 +1214,6 @@ describe("agentic.ui.ToolCallLayout", function()
     end)
 
     describe("execute fold", function()
-        local read_from_disk =
-            require("agentic.utils.file_system").read_from_disk
-        local PermissionRules = require("agentic.utils.permission_rules")
-
-        before_each(function()
-            -- The structured rules are the bundled permissions.json.
-            disk_stub:invokes(function(path)
-                if vim.endswith(path, "/permissions.json") then
-                    return read_from_disk(path)
-                end
-            end)
-            PermissionRules.invalidate_cache()
-        end)
-
         --- `n` output rows.
         --- @param n integer
         --- @return string[]

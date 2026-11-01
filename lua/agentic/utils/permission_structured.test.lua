@@ -10,7 +10,12 @@
 ---     ) -> "allow"|"ask"|"deny"|nil, "read_only"|"safe_write"|nil
 
 local assert = require("tests.helpers.assert")
+local Config = require("agentic.config")
+local Logger = require("agentic.utils.logger")
+local MiniTest = require("mini.test")
+local PermissionRules = require("agentic.utils.permission_rules")
 local PermissionStructured = require("agentic.utils.permission_structured")
+local spy = require("tests.helpers.spy")
 
 --- Minimal ParsedLeaf stub for matcher tests. The walker (chunk 6) produces
 --- the same shape; here the test feeds args directly.
@@ -1580,6 +1585,313 @@ describe("PermissionStructured", function()
             assert.is_false(get.ask)
             assert.is_true(get.read_only)
             assert.is_true(post.ask)
+        end)
+    end)
+
+    describe("glob_to_lua_pattern", function()
+        --- @param glob string
+        --- @param s string
+        --- @return boolean
+        local function matches(glob, s)
+            return s:match(PermissionStructured.glob_to_lua_pattern(glob))
+                ~= nil
+        end
+
+        it("escapes Lua magic characters", function()
+            local pat = PermissionStructured.glob_to_lua_pattern("git (status)")
+            assert.equal("^git %(status%)$", pat)
+        end)
+
+        it("converts glob with multiple wildcards", function()
+            local pat =
+                PermissionStructured.glob_to_lua_pattern("cd * && git *log*")
+            assert.equal("^cd .* && git .*log.*$", pat)
+        end)
+
+        it("reads `?` literally", function()
+            assert.is_true(matches("ls?", "ls?"))
+            assert.is_false(matches("ls?", "l"))
+            assert.is_false(matches("ls?", "ls"))
+        end)
+
+        it("reads every other character literally", function()
+            for c in ("^$()%.[]+-?"):gmatch(".") do
+                local glob = "a" .. c .. "b"
+                assert.is_true(matches(glob, glob))
+                assert.is_false(matches(glob, "axb"))
+                assert.is_false(matches(glob, "ab"))
+            end
+        end)
+
+        it("matches any run of characters at `*`", function()
+            assert.is_true(matches("a*b", "ab"))
+            assert.is_true(matches("a*b", "a x/y b"))
+            assert.is_false(matches("a*b", "a x"))
+        end)
+    end)
+
+    describe("get_entries", function()
+        --- @type agentic.UserConfig.Permissions
+        local saved_permissions
+
+        before_each(function()
+            saved_permissions = vim.deepcopy(Config.permissions)
+        end)
+
+        after_each(function()
+            Config.permissions = saved_permissions
+        end)
+
+        --- Whether `command` auto-approves with the user structured entries
+        --- as the only rules.
+        --- @param command string
+        --- @return boolean
+        local function approves_alone(command)
+            Config.permissions.use_plugin_defaults = false
+            Config.permissions.use_claude_settings = false
+            return PermissionRules.should_auto_approve(
+                command,
+                vim.fn.tempname()
+            )
+        end
+
+        it("follows use_plugin_defaults with no cache reset", function()
+            Config.permissions.structured = {}
+            Config.permissions.use_plugin_defaults = true
+            assert.is_not_nil(next(PermissionStructured.get_entries()))
+            Config.permissions.use_plugin_defaults = false
+            assert.same({}, PermissionStructured.get_entries())
+        end)
+
+        it("returns the same table until a layer changes", function()
+            Config.permissions.structured = {}
+            local entries = PermissionStructured.get_entries()
+            assert.is_true(
+                rawequal(entries, PermissionStructured.get_entries())
+            )
+            Config.permissions.structured = {}
+            assert.is_false(
+                rawequal(entries, PermissionStructured.get_entries())
+            )
+        end)
+
+        it("retries a failed read of the bundled file", function()
+            local FileSystem = require("agentic.utils.file_system")
+            local notify = spy.stub(Logger, "notify")
+            local read_json = spy.stub(FileSystem, "read_json")
+            MiniTest.finally(function()
+                read_json:revert()
+                notify:revert()
+            end)
+            read_json:invokes(function()
+                return nil, "unreadable"
+            end)
+            Config.permissions.structured = {}
+            Config.permissions.use_plugin_defaults = false
+            PermissionStructured.get_entries()
+            Config.permissions.use_plugin_defaults = true
+            assert.same({}, PermissionStructured.get_entries())
+
+            read_json:revert()
+            assert.is_not_nil(next(PermissionStructured.get_entries()))
+        end)
+
+        it("strips leading dashes from option strings", function()
+            Config.permissions.structured = {
+                find = {
+                    deny = { { options = { "--exec", "-x", "okdir" } } },
+                },
+            }
+            local entries = PermissionStructured.get_entries()
+
+            local find_entry = entries.find
+            assert.is_not_nil(find_entry)
+            assert.same(
+                { "exec", "x", "okdir" },
+                find_entry and find_entry.deny[1].options
+            )
+        end)
+
+        it("keeps arity tokens literal and drops other shapes", function()
+            local notify = spy.stub(Logger, "notify")
+            MiniTest.finally(function()
+                notify:revert()
+            end)
+            --- @type table
+            local malformed = {
+                foo = {
+                    arity = {
+                        [""] = {
+                            takers = { "-C", 1, "C", "-cmd", "--a=b" },
+                            other = { "-x" },
+                        },
+                        config = { booleans = "--global" },
+                        bad = "x",
+                    },
+                },
+                ["*"] = { arity = { [""] = { takers = { "-C" } } } },
+            }
+            Config.permissions.structured = malformed
+            local entries = PermissionStructured.get_entries()
+
+            local foo, wildcard = entries.foo, entries["*"]
+            assert.same({
+                [""] = { takers = { "-C" } },
+                config = { booleans = {} },
+            }, foo and foo.arity)
+            assert.is_nil(wildcard and wildcard.arity)
+            assert.equal(5, notify.call_count)
+        end)
+
+        describe("gate conditions", function()
+            local notify
+            before_each(function()
+                notify = spy.stub(Logger, "notify")
+            end)
+            after_each(function()
+                notify:revert()
+            end)
+
+            --- `foo` approves, but asks on `-x` unless a gate of
+            --- `unless` holds.
+            --- @param unless any
+            --- @return table
+            local function foo_entries(unless)
+                return {
+                    foo = {
+                        read_only = { {} },
+                        ask = { { options = { "x" }, unless = unless } },
+                        arity = { [""] = { takers = { "-x" } } },
+                    },
+                }
+            end
+
+            --- @param entries table
+            --- @param command string
+            --- @return boolean
+            local function approves(entries, command)
+                Config.permissions.structured = entries
+                return approves_alone(command)
+            end
+
+            it("approves when the condition holds", function()
+                local unless = {
+                    {
+                        option_values = {
+                            options = { "x" },
+                            values = { "1" },
+                        },
+                    },
+                }
+                assert.is_true(approves(foo_entries(unless), "foo -x 1"))
+                assert.is_false(approves(foo_entries(unless), "foo -x 2"))
+                assert.equal(0, notify.call_count)
+            end)
+
+            it("keeps the ask on a typo key in an unless child", function()
+                local unless = {
+                    {
+                        option_value = {
+                            options = { "x" },
+                            values = { "1" },
+                        },
+                    },
+                }
+                assert.is_false(approves(foo_entries(unless), "foo -x 1"))
+                assert.equal(1, notify.call_count)
+            end)
+
+            it("keeps the ask on an empty unless child", function()
+                assert.is_false(approves(foo_entries({ {} }), "foo -x 1"))
+                assert.equal(1, notify.call_count)
+            end)
+
+            it("drops an allow gate with a defect", function()
+                local entries = {
+                    foo = {
+                        read_only = {
+                            { positionals = { "a" }, Unless = {} },
+                        },
+                    },
+                }
+                assert.is_false(approves(entries, "foo a"))
+                local foo = PermissionStructured.get_entries().foo
+                assert.same({}, foo and foo.read_only)
+                assert.equal(1, notify.call_count)
+            end)
+
+            it("drops an allow gate whose unless is one gate", function()
+                local entries = {
+                    foo = {
+                        read_only = { { unless = { options = { "x" } } } },
+                    },
+                }
+                assert.is_false(approves(entries, "foo -x"))
+                assert.equal(1, notify.call_count)
+            end)
+
+            it("drops a partly valid list from an ask gate", function()
+                --- @type table
+                local malformed =
+                    { foo = { ask = { { options = { "x", 5 } } } } }
+                Config.permissions.structured = malformed
+                local foo = PermissionStructured.get_entries().foo
+                assert.same({ {} }, foo and foo.ask)
+                assert.equal(1, notify.call_count)
+            end)
+
+            it("drops unless from a deny gate", function()
+                Config.permissions.structured = {
+                    foo = {
+                        deny = {
+                            {
+                                options = { "x" },
+                                unless = { { options = { "y" } } },
+                            },
+                        },
+                    },
+                }
+                local foo = PermissionStructured.get_entries().foo
+                assert.same({ { options = { "x" } } }, foo and foo.deny)
+                assert.equal(1, notify.call_count)
+            end)
+
+            it("drops a cyclic unless", function()
+                local gate = { options = { "x" } }
+                gate.unless = { gate }
+                Config.permissions.structured = { foo = { ask = { gate } } }
+                local foo = PermissionStructured.get_entries().foo
+                assert.same({ { options = { "x" } } }, foo and foo.ask)
+                assert.equal(1, notify.call_count)
+            end)
+        end)
+
+        describe("over the bundled arity", function()
+            --- The merged git arity under `user` as the user's git entry.
+            --- @param user table
+            --- @return agentic.PermArity
+            local function git_arity(user)
+                Config.permissions.use_plugin_defaults = true
+                Config.permissions.structured = { git = user }
+                local git = PermissionStructured.get_entries().git
+                return git and git.arity or {}
+            end
+
+            it("keeps it under a user entry without arity", function()
+                local arity = git_arity({
+                    read_only = { { positionals = { "log" } } },
+                })
+                assert.same({ "--no-pager" }, arity[""].booleans)
+            end)
+
+            it("replaces only the lists the user gives", function()
+                local arity = git_arity({
+                    arity = { [""] = { takers = {} } },
+                })
+                assert.same({}, arity[""].takers)
+                assert.same({ "--no-pager" }, arity[""].booleans)
+                assert.same({ "--global" }, arity.config.booleans)
+            end)
         end)
     end)
 end)

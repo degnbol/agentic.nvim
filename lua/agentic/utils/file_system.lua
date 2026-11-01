@@ -73,6 +73,26 @@ function FileSystem.read_json(abs_path)
     return value, nil
 end
 
+--- The decoded JSON file at `path`. Nil when it is missing, or when it
+--- exists but cannot be read or decoded, which warns.
+--- @param path string
+--- @return any|nil value
+function FileSystem.read_json_if_present(path)
+    local data, err = FileSystem.read_json(path)
+    if err and vim.uv.fs_stat(path) then
+        Logger.notify(err, vim.log.levels.WARN)
+    end
+    return data
+end
+
+--- Modification time of a file.
+--- @param path string
+--- @return number mtime seconds; 0 when the file does not exist
+function FileSystem.mtime(path)
+    local stat = vim.uv.fs_stat(path)
+    return stat and stat.mtime.sec or 0
+end
+
 --- Read whole lines appended to a file since a byte offset.
 ---
 --- For tailing a file another process appends to: the tail may end mid-line, so

@@ -1,7 +1,7 @@
 local Config = require("agentic.config")
+local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
 local OptionParse = require("agentic.utils.option_parse")
-local PermissionRules = require("agentic.utils.permission_rules")
 
 --- Structured option matcher for compound-Bash auto-approval. Consumes a
 --- ParsedLeaf produced by the walker (an ordered word list, each word tagged
@@ -111,6 +111,16 @@ local M = {}
 --- @field args_dynamic? boolean[] parallel to `args`: token expands at runtime
 ---        (variable/glob/quoted-expansion) so its value is unknown. Absent =
 ---        all-static (back-compat for direct callers).
+
+--- Convert a settings.json glob to an anchored Lua pattern. `*` matches any
+--- run of characters, `|`, `;` and `&` included; every other character is
+--- literal.
+--- @param glob string
+--- @return string lua_pattern
+function M.glob_to_lua_pattern(glob)
+    local pieces = vim.tbl_map(vim.pesc, vim.split(glob, "*", { plain = true }))
+    return "^" .. table.concat(pieces, ".*") .. "$"
+end
 
 -- ponytail: fixed cap, raise it if a legitimate command ever trips it.
 --- Multi-element-positional existential matching enumerates absorption parses
@@ -403,7 +413,7 @@ local function some_first_positional_matches(
     dynamic,
     subcommand_idx
 )
-    local lua_pat = PermissionRules.glob_to_lua_pattern(pattern)
+    local lua_pat = M.glob_to_lua_pattern(pattern)
     for i in pairs(subcommand_idx) do
         if dynamic[i] or words[i]:match(lua_pat) then
             return true
@@ -470,7 +480,7 @@ local function some_stream_matches(patterns, words, dynamic, dashdash_value)
                 if dynamic[j] then
                     return true
                 end
-                local pat = PermissionRules.glob_to_lua_pattern(patterns[pos])
+                local pat = M.glob_to_lua_pattern(patterns[pos])
                 if not words[j]:match(pat) then
                     return false
                 end
@@ -489,7 +499,7 @@ local function some_stream_matches(patterns, words, dynamic, dashdash_value)
             if dynamic[i] then
                 return true -- wildcards this element and all later
             end
-            local pat = PermissionRules.glob_to_lua_pattern(patterns[pos])
+            local pat = M.glob_to_lua_pattern(patterns[pos])
             if words[i]:match(pat) then
                 return rec(i + 1, pos + 1)
             end
@@ -839,8 +849,7 @@ end
 --- @param ctx agentic.PermStructured.ForallCtx
 --- @return boolean
 local function every_stream_matches(patterns, ctx)
-    local lua_patterns =
-        vim.tbl_map(PermissionRules.glob_to_lua_pattern, patterns)
+    local lua_patterns = vim.tbl_map(M.glob_to_lua_pattern, patterns)
     --- @type table<string, boolean>
     local memo = {}
 
@@ -940,8 +949,7 @@ local function option_values_must(cond, exist, forall)
     if exist.has_dynamic then
         return false
     end
-    local value_patterns =
-        vim.tbl_map(PermissionRules.glob_to_lua_pattern, cond.values)
+    local value_patterns = vim.tbl_map(M.glob_to_lua_pattern, cond.values)
     local function allowed(value)
         return vim.iter(value_patterns):any(function(pattern)
             return value:match(pattern) ~= nil
@@ -1277,6 +1285,355 @@ function M.deny_leaf(entries, parsed)
         end
     end
     return false
+end
+
+-- ── Loading ─────────────────────────────────────────────────────────────────
+
+--- @type agentic.StructuredEntries|nil
+local cached_bundled_entries
+--- mtime of the bundled file at the last load; nil when that load failed
+--- @type number|nil
+local cached_bundled_mtime
+--- `Config.permissions.use_plugin_defaults` at the last load of the bundled entries
+--- @type boolean|nil
+local cached_bundled_used
+
+--- @type table|nil, agentic.StructuredEntries
+local cached_user_ref, cached_user_entries = nil, {}
+
+--- Merge of the two layers; nil when either changed since the merge.
+--- @type agentic.StructuredEntries|nil
+local cached_entries
+
+--- Path to bundled permissions.json
+--- @return string
+local function bundled_permissions_path()
+    local mod_path = debug.getinfo(1, "S").source:sub(2)
+    local mod_dir = vim.fn.fnamemodify(mod_path, ":h:h")
+    return mod_dir .. "/permissions.json"
+end
+
+--- Strip leading dashes from a rule option so `"--exec"`, `"-exec"`, and
+--- `"exec"` all canonicalise to the dashless candidate-space form. Idempotent.
+--- @param s string
+--- @return string
+local function normalise_option(s)
+    return (s:gsub("^%-+", ""))
+end
+
+local STRUCTURED_KINDS = { "read_only", "safe_write", "ask", "deny" }
+
+--- Keys a gate may have.
+local GATE_KEYS = {
+    options = true,
+    leading_options = true,
+    positionals = true,
+    unless = true,
+    option_values = true,
+}
+
+--- Nesting of `unless` beyond this is a defect, so a cyclic table ends.
+local MAX_UNLESS_DEPTH = 8
+
+--- Whether `value` is a list.
+--- @param value any
+--- @return boolean
+local function is_list(value)
+    return type(value) == "table" and vim.islist(value)
+end
+
+--- Copy of a list of strings.
+--- @param value any
+--- @return string[]|nil strings nil unless `value` is a list of strings only
+local function string_list(value)
+    if
+        is_list(value)
+        and vim.iter(value):all(function(element)
+            return type(element) == "string"
+        end)
+    then
+        return vim.list_slice(value)
+    end
+    return nil
+end
+
+--- Copy of an `option_values` condition with dashless options.
+--- @param cond any
+--- @return agentic.PermOptionValues|nil cond nil unless `options` and
+---         `values` are both non-empty lists of strings
+local function normalise_option_values(cond)
+    if type(cond) ~= "table" then
+        return nil
+    end
+    local options = string_list(cond.options)
+    local values = string_list(cond.values)
+    if not (options and values and #options > 0 and #values > 0) then
+        return nil
+    end
+    --- @type agentic.PermOptionValues
+    local copy =
+        { options = vim.tbl_map(normalise_option, options), values = values }
+    return copy
+end
+
+--- Deep-copy a single gate, normalising every option string (`options`,
+--- `leading_options`, `option_values.options`) to the dashless form.
+--- Positionals are left raw (glob-compiled at match time).
+---
+--- A defect is an unknown key, a field of the wrong type, a malformed
+--- `option_values`, an `unless` child that is not a table or normalises to
+--- `{}`, a defect in an `unless` child, nesting over `MAX_UNLESS_DEPTH`, or
+--- `unless`/`option_values` on a deny gate. Lists must be lists, not maps.
+--- On a defect, an allow gate is dropped, and an ask or deny gate keeps its
+--- valid plain fields but loses a malformed one, `unless` and
+--- `option_values`: an absent field matches anything.
+--- @param gate any
+--- @param kind agentic.PermKind
+--- @param depth integer nesting level of `unless`, 1 at the top
+--- @return agentic.PermGate|nil gate nil when the gate is dropped
+--- @return boolean defect the gate or its `unless` subtree had a defect
+local function normalise_gate(gate, kind, depth)
+    local is_allow = kind == "read_only" or kind == "safe_write"
+    if type(gate) ~= "table" or depth > MAX_UNLESS_DEPTH then
+        return not is_allow and {} or nil, true
+    end
+
+    local defect = false
+    for key in pairs(gate) do
+        defect = defect or not GATE_KEYS[key]
+    end
+
+    --- @type agentic.PermGate
+    local g = {}
+    for _, field in ipairs({ "options", "leading_options", "positionals" }) do
+        if gate[field] ~= nil then
+            local strings = string_list(gate[field])
+            defect = defect or strings == nil
+            if strings and field ~= "positionals" then
+                strings = vim.tbl_map(normalise_option, strings)
+            end
+            g[field] = strings
+        end
+    end
+
+    local option_values = normalise_option_values(gate.option_values)
+    defect = defect or (gate.option_values ~= nil and option_values == nil)
+
+    --- @type agentic.PermGate[]
+    local unless = {}
+    if gate.unless ~= nil then
+        defect = defect or not is_list(gate.unless)
+        for _, child in ipairs(is_list(gate.unless) and gate.unless or {}) do
+            local c, child_defect = normalise_gate(child, kind, depth + 1)
+            defect = defect or child_defect or c == nil or next(c) == nil
+            table.insert(unless, c)
+        end
+    end
+
+    local conditional = gate.unless ~= nil or gate.option_values ~= nil
+    defect = defect or (kind == "deny" and conditional)
+    if defect and is_allow then
+        return nil, true
+    end
+    if not defect then
+        g.unless = gate.unless ~= nil and unless or nil
+        g.option_values = option_values
+    end
+    return g, defect
+end
+
+--- Warn that a gate of `cmd` is malformed.
+--- @param cmd string
+--- @param kind agentic.PermKind
+--- @param kept boolean the gate is kept without its conditions
+local function warn_gate_defect(cmd, kind, kept)
+    Logger.notify(
+        "Structured permission "
+            .. kind
+            .. " gate of "
+            .. cmd
+            .. " is malformed; "
+            .. (
+                kept and "ignoring its unless and option_values"
+                or "dropping it"
+            ),
+        vim.log.levels.WARN,
+        { title = "Agentic" }
+    )
+end
+
+--- Whether `token` is an option token the matcher reads: a short letter
+--- `-x` or a long name `--name`.
+--- @param token any
+--- @return boolean
+local function is_arity_token(token)
+    return type(token) == "string"
+        and (token:match("^%-[^%-%s]$") or token:match("^%-%-[^=%s]+$"))
+            ~= nil
+end
+
+--- Warn that an arity list element of `cmd` is ignored.
+--- @param cmd string
+--- @param element any
+local function warn_arity_element(cmd, element)
+    Logger.notify(
+        "Structured permission arity of "
+            .. cmd
+            .. ": ignoring "
+            .. vim.inspect(element)
+            .. ', not a list of "-x" or "--name" tokens',
+        vim.log.levels.WARN,
+        { title = "Agentic" }
+    )
+end
+
+--- The valid tokens of an arity list, warning about each other element.
+--- @param list any
+--- @param cmd string command whose entry holds the list, for the warning
+--- @return string[]|nil tokens nil when `list` is nil; `{}` when it is not
+---         a table
+local function arity_tokens(list, cmd)
+    if list == nil then
+        return nil
+    end
+    if type(list) ~= "table" then
+        warn_arity_element(cmd, list)
+        return {}
+    end
+    local tokens = {}
+    for _, element in ipairs(list) do
+        if is_arity_token(element) then
+            table.insert(tokens, element)
+        else
+            warn_arity_element(cmd, element)
+        end
+    end
+    return tokens
+end
+
+--- Deep-copy an arity table, dropping malformed parts. Tokens stay literal,
+--- not dashless: the dashes say whether a token is a short letter or a
+--- long name.
+--- @param arity any
+--- @param cmd string command whose entry holds `arity`, for warnings
+--- @return agentic.PermArity|nil arity the string scope keys with a table
+---         value, each with the valid tokens of `takers`/`booleans`. nil
+---         when `arity` is not a table.
+local function normalise_arity(arity, cmd)
+    if type(arity) ~= "table" then
+        return nil
+    end
+    --- @type agentic.PermArity
+    local out = {}
+    for scope, hints in pairs(arity) do
+        if type(scope) == "string" and type(hints) == "table" then
+            out[scope] = {
+                takers = arity_tokens(hints.takers, cmd),
+                booleans = arity_tokens(hints.booleans, cmd),
+            }
+        end
+    end
+    return out
+end
+
+--- Deep-copy a cmd-keyed structured-entries table, normalising every option
+--- string to the dashless form. A `vim.NIL` value (the user's "disable a
+--- bundled cmd" marker) is preserved so it survives the merge in
+--- `get_entries`. `arity` is dropped on `"*"`: an unknown
+--- command's arity is unknowable. The output is owned by the caller (safe to
+--- mutate) so this caches the normalised view rather than mutating the input.
+--- @param entries any
+--- @return agentic.StructuredEntries
+local function normalise_structured_entries(entries)
+    --- @type agentic.StructuredEntries
+    local out = {}
+    if type(entries) ~= "table" then
+        return out
+    end
+    for cmd, entry in pairs(entries) do
+        if type(cmd) == "string" then
+            if entry == vim.NIL then
+                --- @diagnostic disable-next-line: assign-type-mismatch
+                out[cmd] = vim.NIL
+            elseif type(entry) == "table" then
+                --- @type agentic.StructuredCmdEntry
+                local copy = {}
+                for _, kind in ipairs(STRUCTURED_KINDS) do
+                    local gates = entry[kind]
+                    if type(gates) == "table" then
+                        local arr = {}
+                        for _, gate in ipairs(gates) do
+                            local g, defect = normalise_gate(gate, kind, 1)
+                            if defect then
+                                warn_gate_defect(cmd, kind, g ~= nil)
+                            end
+                            table.insert(arr, g)
+                        end
+                        copy[kind] = arr
+                    end
+                end
+                if cmd ~= "*" then
+                    copy.arity = normalise_arity(entry.arity, cmd)
+                end
+                out[cmd] = copy
+            end
+        end
+    end
+    return out
+end
+
+--- Resolve the merged cmd-keyed structured-entries table from the bundled
+--- permissions.json plus any user additions in `Config.permissions.structured`.
+--- The two layers merge via `vim.tbl_deep_extend("force", bundled, user)` — a
+--- user cmd key wins wholesale (its kind-arrays replace the bundled ones), and
+--- a `vim.NIL` value disables the bundled cmd entirely (stripped before return).
+--- Re-reads the bundled file when its mtime or `use_plugin_defaults`
+--- changes; user additions are recompiled when the table reference changes.
+--- The same table is returned until either layer changes.
+--- @return agentic.StructuredEntries entries shared with the cache; do not mutate
+function M.get_entries()
+    local bundled_path = bundled_permissions_path()
+    local bundled_mtime = FileSystem.mtime(bundled_path)
+    if
+        cached_bundled_entries == nil
+        or bundled_mtime ~= cached_bundled_mtime
+        or Config.permissions.use_plugin_defaults ~= cached_bundled_used
+    then
+        local data = Config.permissions.use_plugin_defaults
+            and FileSystem.read_json_if_present(bundled_path)
+        cached_bundled_used = Config.permissions.use_plugin_defaults
+        cached_bundled_entries = normalise_structured_entries(data)
+        -- A failed read retries on the next call rather than keeping no
+        -- bundled rules until the file changes.
+        cached_bundled_mtime = (data or not cached_bundled_used)
+                and bundled_mtime
+            or nil
+        cached_entries = nil
+    end
+
+    local user_table = Config.permissions.structured
+    if user_table ~= cached_user_ref then
+        cached_user_ref = user_table
+        cached_user_entries = normalise_structured_entries(user_table)
+        cached_entries = nil
+    end
+
+    if not cached_entries then
+        local merged = vim.tbl_deep_extend(
+            "force",
+            cached_bundled_entries,
+            cached_user_entries
+        ) or {}
+        -- Drop `vim.NIL`-valued entries (the user's disable marker) so the
+        -- matcher sees a clean table. decide_leaf also guards against vim.NIL.
+        cached_entries = {}
+        for cmd, entry in pairs(merged) do
+            if entry ~= vim.NIL then
+                cached_entries[cmd] = entry
+            end
+        end
+    end
+    return cached_entries
 end
 
 return M

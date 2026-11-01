@@ -1,6 +1,6 @@
 local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
-local Logger = require("agentic.utils.logger")
+local PermissionStructured = require("agentic.utils.permission_structured")
 
 --- @class agentic.utils.PermissionRules
 local M = {}
@@ -13,7 +13,6 @@ local parse_zsh = ShellParse.parse_zsh
 local parse_zsh_untrusted = ShellParse.parse_zsh_untrusted
 local literal_token = ShellParse.literal_token
 local pure_literal_token = ShellParse.pure_literal_token
-local command_name_text = ShellParse.command_name_text
 local subtree_has_substitution = ShellParse.subtree_has_substitution
 local safe_assignment_name = ShellParse.safe_assignment_name
 local token_is_dynamic = ShellParse.token_is_dynamic
@@ -81,67 +80,13 @@ end
 --- @type table<string, agentic.utils.PermissionRules.SettingsCache>
 local cached_settings_patterns = {}
 
---- @type agentic.StructuredEntries|nil
-local cached_plugin_structured_entries
---- @type number
-local cached_plugin_structured_mtime = 0
---- `Config.permissions.use_plugin_defaults` at the last load of the bundled entries
---- @type boolean|nil
-local cached_plugin_defaults_used
-
---- @type table|nil, agentic.StructuredEntries
-local cached_config_structured_ref, cached_config_structured_entries = nil, {}
-
---- Commands `is_read_only` has judged under the cached structured entries,
---- and the verdict.
+--- Commands `is_read_only` has judged under `read_only_entries`, and the
+--- verdict.
 --- @type table<string, boolean>
 local cached_read_only = {}
-
---- Path to bundled permissions.json
---- @return string
-local function plugin_permissions_path()
-    local mod_path = debug.getinfo(1, "S").source:sub(2)
-    local mod_dir = vim.fn.fnamemodify(mod_path, ":h:h")
-    return mod_dir .. "/permissions.json"
-end
-
---- Lua pattern magic characters that need escaping
-local MAGIC_CHARS = {
-    ["."] = "%.",
-    ["+"] = "%+",
-    ["-"] = "%-",
-    ["("] = "%(",
-    [")"] = "%)",
-    ["["] = "%[",
-    ["]"] = "%]",
-    ["^"] = "%^",
-    ["$"] = "%$",
-    ["%"] = "%%",
-}
-
---- Convert a settings.json glob pattern to a Lua pattern. `*` matches any run
---- of characters. The walker hands this matcher a single substitution-free,
---- redirect-free leaf command, so top-level shell operators never reach a
---- pattern (they are sibling separator nodes). The only `|`/`;`/`&` that can
---- arrive is a literal inside a quoted argument, which `*` should match.
---- @param glob string
---- @return string lua_pattern
-function M.glob_to_lua_pattern(glob)
-    local result = {}
-    local i = 1
-    while i <= #glob do
-        local ch = glob:sub(i, i)
-        if ch == "*" then
-            table.insert(result, ".*")
-        elseif MAGIC_CHARS[ch] then
-            table.insert(result, MAGIC_CHARS[ch])
-        else
-            table.insert(result, ch)
-        end
-        i = i + 1
-    end
-    return "^" .. table.concat(result) .. "$"
-end
+--- The structured entries `cached_read_only` was judged under.
+--- @type agentic.StructuredEntries|nil
+local read_only_entries
 
 --- Compile the `Bash(...)` entries of one list in a settings.json permissions
 --- table. Skips other tools' entries and malformed strings.
@@ -160,35 +105,14 @@ function M.extract_bash_patterns(permissions, list_key)
             if inner then
                 table.insert(out, {
                     original = inner,
-                    lua_pattern = M.glob_to_lua_pattern(inner),
+                    lua_pattern = PermissionStructured.glob_to_lua_pattern(
+                        inner
+                    ),
                 })
             end
         end
     end
     return out
-end
-
---- Get mtime for a path, or 0 if the file doesn't exist.
---- @param path string
---- @return number
-local function get_mtime(path)
-    local stat = vim.uv.fs_stat(path)
-    if stat then
-        return stat.mtime.sec
-    end
-    return 0
-end
-
---- The decoded JSON file at `path`. Nil when it is missing, or when it exists
---- but cannot be read or decoded, which warns: its rules then do not apply.
---- @param path string
---- @return table|nil
-local function read_json_if_present(path)
-    local data, err = FileSystem.read_json(path)
-    if err and vim.uv.fs_stat(path) then
-        Logger.notify(err, vim.log.levels.WARN)
-    end
-    return data
 end
 
 --- Paths of the global and the project Claude settings.json.
@@ -206,8 +130,8 @@ end
 local function settings_changed(config_dir)
     local mtimes = cached_settings_patterns[config_dir].mtimes
     local global_path, project_path = M.settings_paths(config_dir)
-    return get_mtime(global_path) ~= mtimes[global_path]
-        or get_mtime(project_path) ~= mtimes[project_path]
+    return FileSystem.mtime(global_path) ~= mtimes[global_path]
+        or FileSystem.mtime(project_path) ~= mtimes[project_path]
 end
 
 --- Compiled `Bash(...)` patterns of one list, merged from the global and
@@ -227,14 +151,14 @@ function M.get_settings_patterns(list_key, config_dir)
         cached_settings_patterns[config_dir] = {
             patterns = patterns,
             mtimes = {
-                [global_path] = get_mtime(global_path),
-                [project_path] = get_mtime(project_path),
+                [global_path] = FileSystem.mtime(global_path),
+                [project_path] = FileSystem.mtime(project_path),
             },
         }
 
         if Config.permissions.use_claude_settings then
             for _, path in ipairs({ global_path, project_path }) do
-                local settings = read_json_if_present(path)
+                local settings = FileSystem.read_json_if_present(path)
                 if settings and settings.permissions then
                     for key, list in pairs(patterns) do
                         vim.list_extend(
@@ -257,7 +181,7 @@ end
 --- @return string[] dirs
 function M.get_additional_directories(config_dir)
     local global_path = M.settings_paths(config_dir)
-    local settings = read_json_if_present(global_path)
+    local settings = FileSystem.read_json_if_present(global_path)
     if
         not settings
         or not settings.permissions
@@ -300,330 +224,6 @@ function M.matches_any_pattern(segment, patterns)
         end
     end
     return false
-end
-
---- Strip leading dashes from a rule option so `"--exec"`, `"-exec"`, and
---- `"exec"` all canonicalise to the dashless candidate-space form. Idempotent.
---- @param s string
---- @return string
-local function normalise_option(s)
-    return (s:gsub("^%-+", ""))
-end
-
-local STRUCTURED_KINDS = { "read_only", "safe_write", "ask", "deny" }
-
---- Keys a gate may have.
-local GATE_KEYS = {
-    options = true,
-    leading_options = true,
-    positionals = true,
-    unless = true,
-    option_values = true,
-}
-
---- Nesting of `unless` beyond this is a defect, so a cyclic table ends.
-local MAX_UNLESS_DEPTH = 8
-
---- Whether `value` is a list.
---- @param value any
---- @return boolean
-local function is_list(value)
-    return type(value) == "table" and vim.islist(value)
-end
-
---- Copy of a list of strings.
---- @param value any
---- @return string[]|nil strings nil unless `value` is a list of strings only
-local function string_list(value)
-    if
-        is_list(value)
-        and vim.iter(value):all(function(element)
-            return type(element) == "string"
-        end)
-    then
-        return vim.list_slice(value)
-    end
-    return nil
-end
-
---- Copy of an `option_values` condition with dashless options.
---- @param cond any
---- @return agentic.PermOptionValues|nil cond nil unless `options` and
----         `values` are both non-empty lists of strings
-local function normalise_option_values(cond)
-    if type(cond) ~= "table" then
-        return nil
-    end
-    local options = string_list(cond.options)
-    local values = string_list(cond.values)
-    if not (options and values and #options > 0 and #values > 0) then
-        return nil
-    end
-    --- @type agentic.PermOptionValues
-    local copy =
-        { options = vim.tbl_map(normalise_option, options), values = values }
-    return copy
-end
-
---- Deep-copy a single gate, normalising every option string (`options`,
---- `leading_options`, `option_values.options`) to the dashless form.
---- Positionals are left raw (glob-compiled at match time).
----
---- A defect is an unknown key, a field of the wrong type, a malformed
---- `option_values`, an `unless` child that is not a table or normalises to
---- `{}`, a defect in an `unless` child, nesting over `MAX_UNLESS_DEPTH`, or
---- `unless`/`option_values` on a deny gate. Lists must be lists, not maps.
---- On a defect, an allow gate is dropped, and an ask or deny gate keeps its
---- valid plain fields but loses a malformed one, `unless` and
---- `option_values`: an absent field matches anything.
---- @param gate any
---- @param kind agentic.PermKind
---- @param depth integer nesting level of `unless`, 1 at the top
---- @return agentic.PermGate|nil gate nil when the gate is dropped
---- @return boolean defect the gate or its `unless` subtree had a defect
-local function normalise_gate(gate, kind, depth)
-    local is_allow = kind == "read_only" or kind == "safe_write"
-    if type(gate) ~= "table" or depth > MAX_UNLESS_DEPTH then
-        return not is_allow and {} or nil, true
-    end
-
-    local defect = false
-    for key in pairs(gate) do
-        defect = defect or not GATE_KEYS[key]
-    end
-
-    --- @type agentic.PermGate
-    local g = {}
-    for _, field in ipairs({ "options", "leading_options", "positionals" }) do
-        if gate[field] ~= nil then
-            local strings = string_list(gate[field])
-            defect = defect or strings == nil
-            if strings and field ~= "positionals" then
-                strings = vim.tbl_map(normalise_option, strings)
-            end
-            g[field] = strings
-        end
-    end
-
-    local option_values = normalise_option_values(gate.option_values)
-    defect = defect or (gate.option_values ~= nil and option_values == nil)
-
-    --- @type agentic.PermGate[]
-    local unless = {}
-    if gate.unless ~= nil then
-        defect = defect or not is_list(gate.unless)
-        for _, child in ipairs(is_list(gate.unless) and gate.unless or {}) do
-            local c, child_defect = normalise_gate(child, kind, depth + 1)
-            defect = defect or child_defect or c == nil or next(c) == nil
-            table.insert(unless, c)
-        end
-    end
-
-    local conditional = gate.unless ~= nil or gate.option_values ~= nil
-    defect = defect or (kind == "deny" and conditional)
-    if defect and is_allow then
-        return nil, true
-    end
-    if not defect then
-        g.unless = gate.unless ~= nil and unless or nil
-        g.option_values = option_values
-    end
-    return g, defect
-end
-
---- Warn that a gate of `cmd` is malformed.
---- @param cmd string
---- @param kind agentic.PermKind
---- @param kept boolean the gate is kept without its conditions
-local function warn_gate_defect(cmd, kind, kept)
-    Logger.notify(
-        "Structured permission "
-            .. kind
-            .. " gate of "
-            .. cmd
-            .. " is malformed; "
-            .. (
-                kept and "ignoring its unless and option_values"
-                or "dropping it"
-            ),
-        vim.log.levels.WARN,
-        { title = "Agentic" }
-    )
-end
-
---- Whether `token` is an option token the matcher reads: a short letter
---- `-x` or a long name `--name`.
---- @param token any
---- @return boolean
-local function is_arity_token(token)
-    return type(token) == "string"
-        and (token:match("^%-[^%-%s]$") or token:match("^%-%-[^=%s]+$"))
-            ~= nil
-end
-
---- Warn that an arity list element of `cmd` is ignored.
---- @param cmd string
---- @param element any
-local function warn_arity_element(cmd, element)
-    Logger.notify(
-        "Structured permission arity of "
-            .. cmd
-            .. ": ignoring "
-            .. vim.inspect(element)
-            .. ', not a list of "-x" or "--name" tokens',
-        vim.log.levels.WARN,
-        { title = "Agentic" }
-    )
-end
-
---- The valid tokens of an arity list, warning about each other element.
---- @param list any
---- @param cmd string command whose entry holds the list, for the warning
---- @return string[]|nil tokens nil when `list` is nil; `{}` when it is not
----         a table
-local function arity_tokens(list, cmd)
-    if list == nil then
-        return nil
-    end
-    if type(list) ~= "table" then
-        warn_arity_element(cmd, list)
-        return {}
-    end
-    local tokens = {}
-    for _, element in ipairs(list) do
-        if is_arity_token(element) then
-            table.insert(tokens, element)
-        else
-            warn_arity_element(cmd, element)
-        end
-    end
-    return tokens
-end
-
---- Deep-copy an arity table, dropping malformed parts. Tokens stay literal,
---- not dashless: the dashes say whether a token is a short letter or a
---- long name.
---- @param arity any
---- @param cmd string command whose entry holds `arity`, for warnings
---- @return agentic.PermArity|nil arity the string scope keys with a table
----         value, each with the valid tokens of `takers`/`booleans`. nil
----         when `arity` is not a table.
-local function normalise_arity(arity, cmd)
-    if type(arity) ~= "table" then
-        return nil
-    end
-    --- @type agentic.PermArity
-    local out = {}
-    for scope, hints in pairs(arity) do
-        if type(scope) == "string" and type(hints) == "table" then
-            out[scope] = {
-                takers = arity_tokens(hints.takers, cmd),
-                booleans = arity_tokens(hints.booleans, cmd),
-            }
-        end
-    end
-    return out
-end
-
---- Deep-copy a cmd-keyed structured-entries table, normalising every option
---- string to the dashless form. A `vim.NIL` value (the user's "disable a
---- bundled cmd" marker) is preserved so it survives the merge in
---- `get_structured_entries`. `arity` is dropped on `"*"`: an unknown
---- command's arity is unknowable. The output is owned by the caller (safe to
---- mutate) so this caches the normalised view rather than mutating the input.
---- @param entries any
---- @return agentic.StructuredEntries
-local function normalise_structured_entries(entries)
-    --- @type agentic.StructuredEntries
-    local out = {}
-    if type(entries) ~= "table" then
-        return out
-    end
-    for cmd, entry in pairs(entries) do
-        if type(cmd) == "string" then
-            if entry == vim.NIL then
-                --- @diagnostic disable-next-line: assign-type-mismatch
-                out[cmd] = vim.NIL
-            elseif type(entry) == "table" then
-                --- @type agentic.StructuredCmdEntry
-                local copy = {}
-                for _, kind in ipairs(STRUCTURED_KINDS) do
-                    local gates = entry[kind]
-                    if type(gates) == "table" then
-                        local arr = {}
-                        for _, gate in ipairs(gates) do
-                            local g, defect = normalise_gate(gate, kind, 1)
-                            if defect then
-                                warn_gate_defect(cmd, kind, g ~= nil)
-                            end
-                            table.insert(arr, g)
-                        end
-                        copy[kind] = arr
-                    end
-                end
-                if cmd ~= "*" then
-                    copy.arity = normalise_arity(entry.arity, cmd)
-                end
-                out[cmd] = copy
-            end
-        end
-    end
-    return out
-end
-
---- Resolve the merged cmd-keyed structured-entries table from the bundled
---- permissions.json plus any user additions in `Config.permissions.structured`.
---- The two layers merge via `vim.tbl_deep_extend("force", bundled, user)` — a
---- user cmd key wins wholesale (its kind-arrays replace the bundled ones), and
---- a `vim.NIL` value disables the bundled cmd entirely (stripped before return).
---- Re-reads the bundled file automatically when its mtime or
---- `use_plugin_defaults` changes; user
---- additions are recompiled when the table reference changes.
---- @return agentic.StructuredEntries
-function M.get_structured_entries()
-    local plugin_path = plugin_permissions_path()
-    local plugin_mtime = get_mtime(plugin_path)
-    if
-        cached_plugin_structured_entries == nil
-        or plugin_mtime ~= cached_plugin_structured_mtime
-        or Config.permissions.use_plugin_defaults
-            ~= cached_plugin_defaults_used
-    then
-        cached_plugin_structured_mtime = plugin_mtime
-        cached_plugin_defaults_used = Config.permissions.use_plugin_defaults
-        cached_plugin_structured_entries = {}
-        cached_read_only = {}
-        if Config.permissions.use_plugin_defaults then
-            local data = read_json_if_present(plugin_path)
-            cached_plugin_structured_entries =
-                normalise_structured_entries(data)
-        end
-    end
-
-    local user_table = Config.permissions.structured
-    if user_table ~= cached_config_structured_ref then
-        cached_config_structured_ref = user_table
-        cached_config_structured_entries =
-            normalise_structured_entries(user_table)
-        cached_read_only = {}
-    end
-
-    --- @type agentic.StructuredEntries
-    local merged = vim.tbl_deep_extend(
-        "force",
-        cached_plugin_structured_entries,
-        cached_config_structured_entries
-    ) or {}
-    -- Drop `vim.NIL`-valued entries (the user's disable marker) so the matcher
-    -- sees a clean table. decide_leaf also guards against vim.NIL.
-    --- @type agentic.StructuredEntries
-    local result = {}
-    for cmd, entry in pairs(merged) do
-        if entry ~= vim.NIL then
-            result[cmd] = entry
-        end
-    end
-    return result
 end
 
 -- ── Treesitter walker ──────────────────────────────────────────────────────
@@ -819,13 +419,8 @@ local NAMESPACE_MUTATING = {
 --- @param src string
 --- @return string|nil
 local function command_leaf_name(node, src)
-    for child in node:iter_children() do
-        if child:type() == "command_name" then
-            local n = command_name_text(child, src)
-            return n and M.strip_command_path(n) or nil
-        end
-    end
-    return nil
+    local name = ShellParse.command_name(node, src)
+    return name and M.strip_command_path(name)
 end
 
 --- Node types whose bindings never reach the enclosing sequence — a subshell,
@@ -1085,12 +680,11 @@ local function string_subst_only(node)
     return saw_subst
 end
 
---- Extract a `command` node's argument tokens — shared by `walk_command` (the
---- mode-gated decision) and `command_known_safe` (the highlight tally), which
---- differ only in how an inner command substitution is vetted, passed in as
---- `inner_check`. Returns the parallel `args`/`arg_nodes`/`args_dynamic` streams
---- plus the `command_name` node. `args` is nil on any structural bail (an
---- env-hijack prefix, an unhandled substitution, an unextractable token).
+--- Extract a `command` node's argument tokens, without the command name, as
+--- the parallel `args`/`arg_nodes`/`args_dynamic` streams. `inner_check`
+--- vets each inner command substitution. `args` is nil on any structural
+--- bail (an env-hijack prefix, an unhandled substitution, an unextractable
+--- token).
 ---
 --- A bare `$(…)` argument and a quoted `"$(…)"` (a `string` whose single
 --- named child is a `command_substitution`) both vet their inner via
@@ -1108,9 +702,7 @@ end
 --- @return string[]|nil args
 --- @return TSNode[]|nil arg_nodes
 --- @return boolean[]|nil args_dynamic
---- @return TSNode|nil name_node
 function extract_args(node, src, ctx, known, inner_check)
-    local name_node
     --- @type string[]
     local args = {}
     --- @type TSNode[]
@@ -1131,9 +723,7 @@ function extract_args(node, src, ctx, known, inner_check)
                 return nil
             end
         elseif t == "command_name" then
-            -- A substitution-bearing name is dynamic; command_name_text returns
-            -- nil for it at the call site and we bail.
-            name_node = child
+            -- Not an argument: callers read it with `ShellParse.command_name`.
         elseif t == "command_substitution" then
             -- A bare `$(...)` argument: vet the inner command (it runs), then
             -- splice its output into the arg stream as a dynamic token. The
@@ -1242,21 +832,29 @@ function extract_args(node, src, ctx, known, inner_check)
     end
     args, arg_nodes, args_dynamic =
         ShellParse.join_adjacent_args(args, arg_nodes, args_dynamic, src)
-    return args, arg_nodes, args_dynamic, name_node
+    return args, arg_nodes, args_dynamic
 end
 
---- Read a script file's bytes for recursive walking. Regular file under the
---- 64 KB cap only — a fifo/device would hang or mislead, oversize bails like the
---- `-c` length cap. Any stat/size/read failure returns nil → the caller bails to
---- a prompt (fail-closed). No re-stat against the eventual `open()`: the walk →
---- approve callback path is synchronous, so the bytes read here are the bytes
---- judged, and the post-callback IPC window to the shell's open is not closeable
---- client-side anyway.
+--- A command's name and delivered args joined by single spaces.
+--- @param name string
+--- @param args string[]
+--- @return string
+local function leaf_text(name, args)
+    return #args > 0 and name .. " " .. table.concat(args, " ") or name
+end
+
+--- The bytes of a script file. Nil unless it is a regular file of at most
+--- `ShellParse.MAX_SOURCE_BYTES` (a fifo or device would hang or mislead),
+--- or when any stat or read fails.
 --- @param path string resolved absolute path
 --- @return string|nil
 local function read_script(path)
+    -- No re-stat against the eventual `open()`: the walk → approve callback
+    -- path is synchronous, so the bytes read here are the bytes judged, and
+    -- the post-callback IPC window to the shell's open is not closeable
+    -- client-side anyway.
     local st = vim.uv.fs_stat(path)
-    if not st or st.type ~= "file" or st.size > 65536 then
+    if not st or st.type ~= "file" or st.size > ShellParse.MAX_SOURCE_BYTES then
         return nil
     end
     local fd = vim.uv.fs_open(path, "r", 438)
@@ -1266,6 +864,93 @@ local function read_script(path)
     local data = vim.uv.fs_read(fd, st.size, 0)
     vim.uv.fs_close(fd)
     return data --[[@as string|nil]]
+end
+
+--- The files a `redirected_statement` writes, and the bytes they then
+--- hold. Content is known only for `cat > f <<'EOF' … EOF`: a bare `cat`,
+--- one truncating write, one heredoc without expansions. Safe redirects
+--- (`> /dev/null`, fd duplication) write nothing.
+--- @param node TSNode `redirected_statement`
+--- @param src string
+--- @param known table<string, string>|nil constant environment of the enclosing sequence
+--- @return string[] paths write targets that resolve to a literal, as delivered
+--- @return string|nil content bytes every target holds after the statement; nil when unknown
+--- @return boolean resolved every write target resolves to a literal
+local function redirect_writes(node, src, known)
+    --- @type string[]
+    local paths = {}
+    local resolved = true
+    local truncates = false
+    --- @type (string|false)[] pure body of each heredoc, false for one with expansions
+    local heredocs = {}
+    local other_redirect = false
+    for child, field in node:iter_children() do
+        if field ~= "body" and child:named() then
+            local t = child:type()
+            if t == "heredoc_redirect" then
+                table.insert(heredocs, heredoc_pure_body(child, src) or false)
+            elseif t ~= "file_redirect" then
+                other_redirect = true
+            elseif not redirect_is_safe(child, src) then
+                -- Resolved exactly as an `rm` operand is, so the two correlate
+                -- for the intra-command create-then-delete check: a `$var`
+                -- bound to a literal earlier in the sequence resolves through
+                -- `known`, a quoted literal is quote-stripped.
+                local dest = redirect_write_dest(child, src)
+                local kname = dest and known and resolved_var_name(dest, src)
+                local target = kname and known and known[kname] or nil
+                if dest and target == nil and not token_is_dynamic(dest) then
+                    target = literal_token(dest, src)
+                end
+                if target then
+                    table.insert(paths, target)
+                    truncates = redirect_is_truncate(child)
+                else
+                    resolved = false
+                end
+            end
+        end
+    end
+    local content = nil
+    if
+        resolved
+        and #heredocs == 1
+        and heredocs[1]
+        and not other_redirect
+        and #paths == 1
+        and truncates
+        and is_bare_cat(node:field("body")[1], src)
+    then
+        content = heredocs[1] --[[@as string]]
+    end
+    return paths, content, resolved
+end
+
+--- Record writes to `paths` in `written`, keyed by the path resolved
+--- against the cwd: `content` for a first write to a key; `false` for a
+--- second write or nil content.
+--- @param written table<string, string|false> cwd-resolved path → bytes, false = unknown
+--- @param paths string[]
+--- @param content string|nil
+local function record_writes(written, paths, content)
+    for _, path in ipairs(paths) do
+        local key = resolve_against_cwd(path)
+        written[key] = written[key] == nil and (content or false) or false
+    end
+end
+
+--- The bytes the script at `path` holds when the command runs it: a write
+--- earlier in the same command wins over disk. Nil when that write's bytes
+--- are unknown, or the disk file is not readable (see `read_script`).
+--- @param path string resolved script path
+--- @param written table<string, string|false>
+--- @return string|nil body
+local function script_body(path, written)
+    local body = written[path]
+    if body == nil then
+        return read_script(path)
+    end
+    return body or nil
 end
 
 --- Walk a `command`: validate the name and each argument by position
@@ -1286,16 +971,13 @@ end
 --- @param funcs table<string, table<agentic.utils.PermissionRules.Source, true>>|nil
 --- @return boolean
 local function walk_command(node, src, ctx, known, funcs)
-    local args, arg_nodes, args_dynamic, name_node =
+    local args, arg_nodes, args_dynamic =
         extract_args(node, src, ctx, known, walk_substitution_inner)
     if not (args and args_dynamic) then
         return false
     end
 
-    if not name_node then
-        return false
-    end
-    local name = command_name_text(name_node, src)
+    local name = ShellParse.command_name(node, src)
     if not name then
         return false
     end
@@ -1316,10 +998,7 @@ local function walk_command(node, src, ctx, known, funcs)
         return false
     end
 
-    local leaf = name
-    if #args > 0 then
-        leaf = leaf .. " " .. table.concat(args, " ")
-    end
+    local leaf = leaf_text(name, args)
 
     -- Cheap glob denies first — short-circuit before the structured matcher.
     if #ctx.deny > 0 and M.matches_any_pattern(leaf, ctx.deny) then
@@ -1438,24 +1117,11 @@ local function walk_command(node, src, ctx, known, funcs)
     -- shrinking substring), files can cycle (`a.sh` sources `b.sh` sources
     -- `a.sh`), so NESTED_MAX_DEPTH is the actual termination guard here.
     if script_path and ctx.depth < NESTED_MAX_DEPTH then
-        -- A redirect earlier in this command may have written this very path.
-        -- The SDK applies nothing before approval, so disk holds stale-or-absent
-        -- bytes — reading them would judge content the shell never runs. The
-        -- ordered `ctx.written` (populated in `walk_redirected`) is consulted by
-        -- the cwd-resolved path: reconstructed bytes (a `cat > f.sh <<'EOF' … EOF`
-        -- heredoc) are walked directly; an unreconstructable write (`echo`, `>>`,
-        -- a second write) is `false` and bails; an absent entry reads disk.
-        local body
-        local written = ctx.written[script_path]
-        if written == false then
+        -- The SDK applies nothing before approval, so a path written earlier in
+        -- this command holds stale-or-absent bytes on disk.
+        local body = script_body(script_path, ctx.written)
+        if not body then
             return false
-        elseif type(written) == "string" then
-            body = written
-        else
-            body = read_script(script_path)
-            if not body then
-                return false
-            end
         end
         -- Untrusted on-disk (or reconstructed) content: parse under the
         -- subprocess termination guard so a grammar hang can't freeze the editor.
@@ -1480,10 +1146,6 @@ local function walk_command(node, src, ctx, known, funcs)
         --- @type agentic.ParsedLeaf
         local parsed =
             { cmd_name = cmd_name, args = args, args_dynamic = args_dynamic }
-        -- Lazy require: permission_structured itself requires this module
-        -- (for `glob_to_lua_pattern`). Deferring to call-time breaks the cycle.
-        local PermissionStructured =
-            require("agentic.utils.permission_structured")
         structured, allow_kind = PermissionStructured.decide_leaf(
             ctx.structured_entries,
             parsed,
@@ -1636,85 +1298,32 @@ end
 --- @param known table<string, string>|nil constant environment of the enclosing sequence
 --- @return boolean
 function walk_redirected(node, src, ctx, known)
-    local body_node
-    --- @type { key: string, truncate: boolean }[] cwd-resolved write targets
-    local writes = {}
-    local heredoc_count = 0
-    local heredoc_text = nil
-
     for child, field in node:iter_children() do
         if field == "body" then
-            body_node = child
             if not walk(child, src, ctx) then
                 return false
             end
         elseif child:named() then
             local t = child:type()
-            if t == "heredoc_redirect" then
-                -- A non-pure-text body (`<<EOF` with `$var`/`$(…)`) runs its
-                -- expansion at write time → bail. A pure-text body is inert as
-                -- stdin and is the reconstruction source for a `cat >` passthrough.
-                local text = heredoc_pure_body(child, src)
-                if text == nil then
-                    return false
-                end
-                heredoc_count = heredoc_count + 1
-                heredoc_text = text
-            elseif t == "file_redirect" then
-                if not redirect_is_safe(child, src) then
-                    -- A concrete file-write redirect (`cmd > /tmp/x`) is not
-                    -- bailed but emitted as a write effect; the policy layer
-                    -- clears it against the grant scopes. The destination is
-                    -- resolved to a literal exactly as an `rm` operand is (so the
-                    -- two correlate for the intra-command create-then-delete
-                    -- check): a `$var` bound to a literal earlier in the sequence
-                    -- resolves through `known`, a quoted literal is quote-stripped.
-                    -- A target left dynamic (unbound var, glob) or unmodelled
-                    -- still bails.
-                    local dest = redirect_write_dest(child, src)
-                    if not dest then
-                        return false
-                    end
-                    local kname = known and resolved_var_name(dest, src)
-                    local target = kname and known and known[kname] or nil
-                    if target == nil and not token_is_dynamic(dest) then
-                        target = literal_token(dest, src)
-                    end
-                    if target == nil then
-                        return false
-                    end
-                    table.insert(ctx.effects, { kind = "write", path = target })
-                    table.insert(writes, {
-                        key = resolve_against_cwd(target),
-                        truncate = redirect_is_truncate(child),
-                    })
-                end
-            else
+            -- A heredoc body with an expansion (`<<EOF` with `$var`/`$(…)`) runs
+            -- it at write time.
+            if
+                (t == "heredoc_redirect" and not heredoc_pure_body(child, src))
+                or (t ~= "heredoc_redirect" and t ~= "file_redirect")
+            then
                 return false
             end
         end
     end
 
-    -- `cat > f.sh <<'EOF' … EOF` writes the verbatim heredoc body to f.sh (cat is
-    -- a stdin→stdout passthrough). Reconstructable only for that exact shape: a
-    -- bare `cat`, exactly one truncating write, exactly one pure-text heredoc.
-    -- `grep`, `>>`, or multiple redirects yield no content, so the target taints.
-    local content = nil
-    if
-        heredoc_count == 1
-        and #writes == 1
-        and writes[1].truncate
-        and is_bare_cat(body_node, src)
-    then
-        content = heredoc_text
+    local paths, content, resolved = redirect_writes(node, src, known)
+    if not resolved then
+        return false
     end
-    for _, w in ipairs(writes) do
-        -- A second write to a path overwrites the first's reconstruction → taint.
-        -- `content` is non-nil only when there is exactly one write (the gate
-        -- above), so it applies to this single key when unset.
-        ctx.written[w.key] = ctx.written[w.key] == nil and (content or false)
-            or false
+    for _, path in ipairs(paths) do
+        table.insert(ctx.effects, { kind = "write", path = path })
     end
+    record_writes(ctx.written, paths, content)
     return true
 end
 
@@ -2038,7 +1647,7 @@ end
 -- decision, so a `safe_write` like `git add` never lights up even at the
 -- read_only tier.
 
---- @alias agentic.utils.PermissionRules.TallyCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[], for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed }
+--- @alias agentic.utils.PermissionRules.TallyCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[], written: table<string, string|false>, for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed }
 
 --- Forward declaration — the tally handlers are mutually recursive, and
 --- `command_known_safe` recurses through `tally_walk` for inline `-c` bodies.
@@ -2178,7 +1787,7 @@ end
 local function command_known_safe(node, src, ctx, known, funcs)
     --- @type agentic.utils.PermissionRules.Range[]
     local subst_ranges = {}
-    local args, arg_nodes, args_dynamic, name_node = extract_args(
+    local args, arg_nodes, args_dynamic = extract_args(
         node,
         src,
         ctx,
@@ -2191,10 +1800,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
         return false
     end
 
-    if not name_node then
-        return false
-    end
-    local name = command_name_text(name_node, src)
+    local name = ShellParse.command_name(node, src)
     if not name then
         return false
     end
@@ -2213,10 +1819,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
         return false
     end
 
-    local leaf = name
-    if #args > 0 then
-        leaf = leaf .. " " .. table.concat(args, " ")
-    end
+    local leaf = leaf_text(name, args)
 
     if
         M.matches_any_pattern(leaf, ctx.deny)
@@ -2264,12 +1867,12 @@ local function command_known_safe(node, src, ctx, known, funcs)
         return false
     end
 
-    -- Non-`-c` script execution: tally the on-disk body. Clean → known-safe. A
+    -- Non-`-c` script execution: tally the body it runs. Clean → known-safe. A
     -- file body has no representation in the chat buffer (no origin to anchor
     -- ranges to), so an unsafe body washes the whole leaf and is not
     -- rememberable (no leaf return).
     if script_path and ctx.depth < NESTED_MAX_DEPTH then
-        local body = read_script(script_path)
+        local body = script_body(script_path, ctx.written)
         if not body then
             return false
         end
@@ -2297,8 +1900,6 @@ local function command_known_safe(node, src, ctx, known, funcs)
 
     local struct_safe = false
     if next(ctx.structured_entries) ~= nil then
-        local PermissionStructured =
-            require("agentic.utils.permission_structured")
         local c = PermissionStructured.classify_leaf(ctx.structured_entries, {
             cmd_name = cmd_name,
             args = args,
@@ -2363,7 +1964,7 @@ local function tally_function_definition(node, src, ctx, ranges, funcs)
         tally_walk(
             body,
             src,
-            vim.tbl_extend("force", ctx, { leaves = {} }),
+            vim.tbl_extend("force", ctx, { leaves = {}, written = {} }),
             body_ranges
         )
     end
@@ -2377,6 +1978,31 @@ local function tally_function_definition(node, src, ctx, ranges, funcs)
             ctx.shadowed[name] = true
         end
     end
+end
+
+--- Tally a `redirected_statement`: the body recurses; any redirect that is not
+--- a safe form (`> /dev/null`, FD duplication) records as unapproved. The
+--- files it writes go into `ctx.written`.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.TallyCtx
+--- @param ranges agentic.utils.PermissionRules.Range[]
+--- @param known table<string, string>|nil constant environment of the enclosing sequence
+local function tally_redirected(node, src, ctx, ranges, known)
+    for child, field in node:iter_children() do
+        if field == "body" then
+            tally_walk(child, src, ctx, ranges)
+        elseif child:named() then
+            if
+                child:type() ~= "file_redirect"
+                or not redirect_is_safe(child, src)
+            then
+                record(ranges, child)
+            end
+        end
+    end
+    local paths, content = redirect_writes(node, src, known)
+    record_writes(ctx.written, paths, content)
 end
 
 --- Tally a straight-line sequence, threading the constant environment so a
@@ -2414,31 +2040,12 @@ local function tally_sequence(node, src, ctx, ranges, seed)
                 end
             elseif t == "function_definition" then
                 tally_function_definition(child, src, ctx, ranges, funcs)
+            elseif t == "redirected_statement" then
+                tally_redirected(child, src, ctx, ranges, known)
             else
                 tally_walk(child, src, ctx, ranges)
             end
             update_known(known, child, src)
-        end
-    end
-end
-
---- Tally a `redirected_statement`: the body recurses; any redirect that is not
---- a safe form (`> /dev/null`, FD duplication) records as unapproved.
---- @param node TSNode
---- @param src string
---- @param ctx agentic.utils.PermissionRules.TallyCtx
---- @param ranges agentic.utils.PermissionRules.Range[]
-local function tally_redirected(node, src, ctx, ranges)
-    for child, field in node:iter_children() do
-        if field == "body" then
-            tally_walk(child, src, ctx, ranges)
-        elseif child:named() then
-            if
-                child:type() ~= "file_redirect"
-                or not redirect_is_safe(child, src)
-            then
-                record(ranges, child)
-            end
         end
     end
 end
@@ -2601,7 +2208,7 @@ function tally_walk(node, src, ctx, ranges)
             end
         end
     elseif t == "redirected_statement" then
-        tally_redirected(node, src, ctx, ranges)
+        tally_redirected(node, src, ctx, ranges, nil)
     elseif t == "variable_assignment" then
         local value = node:field("value")[1]
         if not safe_assignment_name(node, src) then
@@ -2648,14 +2255,7 @@ end
 --- @return string[] leaves
 --- @return boolean complete
 function M.tally_unapproved(command, config_dir)
-    if type(command) ~= "string" or command == "" then
-        return nil, {}, false
-    end
-    if #command > 65536 then
-        return nil, {}, false
-    end
-
-    local root = parse_zsh(command)
+    local root = ShellParse.parse_command(command)
     if not root then
         return nil, {}, false
     end
@@ -2663,7 +2263,7 @@ function M.tally_unapproved(command, config_dir)
     local allow = M.get_settings_patterns("allow", config_dir)
     local deny = M.get_settings_patterns("deny", config_dir)
     local ask = M.get_settings_patterns("ask", config_dir)
-    local structured_entries = M.get_structured_entries()
+    local structured_entries = PermissionStructured.get_entries()
     local run = walk_until_shadowed_settles(function(shadowed)
         --- @type agentic.utils.PermissionRules.TallyCtx
         local ctx = {
@@ -2673,6 +2273,7 @@ function M.tally_unapproved(command, config_dir)
             structured_entries = structured_entries,
             depth = 0,
             leaves = {},
+            written = {},
             for_budget = FOR_UNROLL_CAP,
             shadowed = shadowed,
         }
@@ -2721,7 +2322,7 @@ local reject_walk
 --- @param ctx agentic.utils.PermissionRules.RejectCtx
 --- @return "deny"|"glob_deny"|nil
 local function command_is_denied(node, src, ctx)
-    local args, arg_nodes, args_dynamic, name_node = extract_args(
+    local args, arg_nodes, args_dynamic = extract_args(
         node,
         src,
         ctx,
@@ -2730,10 +2331,10 @@ local function command_is_denied(node, src, ctx)
             return true
         end
     )
-    if not args or not name_node then
+    if not args then
         return nil
     end
-    local name = command_name_text(name_node, src)
+    local name = ShellParse.command_name(node, src)
     if not name then
         return nil
     end
@@ -2757,17 +2358,12 @@ local function command_is_denied(node, src, ctx)
         end
     end
 
-    local leaf = name
-    if #args > 0 then
-        leaf = leaf .. " " .. table.concat(args, " ")
-    end
+    local leaf = leaf_text(name, args)
     if #ctx.deny > 0 and M.matches_any_pattern(leaf, ctx.deny) then
         return "glob_deny"
     end
 
     if next(ctx.structured_entries) ~= nil then
-        local PermissionStructured =
-            require("agentic.utils.permission_structured")
         if
             PermissionStructured.deny_leaf(ctx.structured_entries, {
                 cmd_name = cmd_name,
@@ -2827,20 +2423,13 @@ end
 --- @return boolean rejected
 --- @return "deny"|"glob_deny"|nil source The rejecting leaf's match: a structured deny gate (`"deny"`) or a settings.json deny pattern (`"glob_deny"`); nil unless rejected
 function M.should_auto_reject(command, config_dir)
-    if type(command) ~= "string" or command == "" then
-        return false
-    end
-    if #command > 65536 then
-        return false
-    end
-
     local deny = M.get_settings_patterns("deny", config_dir)
-    local structured_entries = M.get_structured_entries()
+    local structured_entries = PermissionStructured.get_entries()
     if #deny == 0 and next(structured_entries) == nil then
         return false
     end
 
-    local root = parse_zsh(command)
+    local root = ShellParse.parse_command(command)
     if not root then
         return false
     end
@@ -2867,16 +2456,7 @@ end
 --- @return agentic.utils.PermissionRules.Effect[] effects Concrete file-mutating effects (redirect writes, `rm` operands) the command would produce, in order
 --- @return table<agentic.utils.PermissionRules.Source, true> sources Every source that allowed a single command; empty unless ok
 local function run_walk(command, rules)
-    if type(command) ~= "string" or command == "" then
-        return false, {}, {}
-    end
-    -- A pathologically long generated command could make parsing slow on this
-    -- cold path. 64 KB is far above any real command — refuse rather than parse.
-    if #command > 65536 then
-        return false, {}, {}
-    end
-
-    local structured_entries = M.get_structured_entries()
+    local structured_entries = PermissionStructured.get_entries()
     -- Skip the parse entirely when neither layer has any allow source — the
     -- walker has nothing to approve against.
     if
@@ -2887,7 +2467,7 @@ local function run_walk(command, rules)
         return false, {}, {}
     end
 
-    local root = parse_zsh(command)
+    local root = ShellParse.parse_command(command)
     if not root then
         return false, {}, {}
     end
@@ -2957,8 +2537,11 @@ end
 --- @param command string
 --- @return boolean
 function M.is_read_only(command)
-    -- Clears the memo when the rules changed.
-    M.get_structured_entries()
+    local entries = PermissionStructured.get_entries()
+    if entries ~= read_only_entries then
+        read_only_entries = entries
+        cached_read_only = {}
+    end
     local cached = cached_read_only[command]
     if cached ~= nil then
         return cached
@@ -2997,17 +2580,15 @@ end
 --- @return agentic.utils.PermissionRules.CompiledPattern
 function M.literal_pattern(leaf)
     local stripped = M.strip_command_path(leaf)
-    local escaped = stripped:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0")
-    return { original = stripped, lua_pattern = "^" .. escaped .. "$" }
+    return {
+        original = stripped,
+        lua_pattern = "^" .. vim.pesc(stripped) .. "$",
+    }
 end
 
---- Invalidate cached patterns (forces re-read on next check).
+--- Invalidate the settings.json patterns (forces a re-read on next check).
 function M.invalidate_cache()
     cached_settings_patterns = {}
-    cached_plugin_structured_entries = nil
-    cached_plugin_structured_mtime = 0
-    cached_config_structured_ref = nil
-    cached_config_structured_entries = {}
 end
 
 return M

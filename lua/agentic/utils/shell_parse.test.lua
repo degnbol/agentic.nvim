@@ -987,6 +987,44 @@ describe("ShellParse.extract_commands", function()
         end)
     end)
 
+    describe("parse_command", function()
+        it("is nil for a non-string, empty or over-cap command", function()
+            assert.is_nil(ShellParse.parse_command(nil))
+            assert.is_nil(ShellParse.parse_command(42))
+            assert.is_nil(ShellParse.parse_command(""))
+            assert.is_nil(
+                ShellParse.parse_command(
+                    ("x"):rep(ShellParse.MAX_SOURCE_BYTES + 1)
+                )
+            )
+        end)
+
+        it("parses a command at the cap", function()
+            assert.equal(65536, ShellParse.MAX_SOURCE_BYTES)
+            assert.is_not_nil(ShellParse.parse_command(("x"):rep(65536)))
+        end)
+    end)
+
+    describe("command_name", function()
+        --- @param src string a single command
+        --- @return string|nil
+        local function name_of(src)
+            local root = ShellParse.parse_zsh(src) --[[@as TSNode]]
+            return ShellParse.command_name(
+                root:named_child(0) --[[@as TSNode]],
+                src
+            )
+        end
+
+        it("keeps the path as written", function()
+            assert.equal("/usr/bin/timeout", name_of("/usr/bin/timeout 5 ls"))
+        end)
+
+        it("is nil for a dynamic name", function()
+            assert.is_nil(name_of("$x foo"))
+        end)
+    end)
+
     describe("runs_without_call", function()
         it("is true for names zsh calls on its own", function()
             for _, name in ipairs({

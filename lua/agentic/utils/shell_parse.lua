@@ -540,6 +540,16 @@ local function command_name_text(command_name, src)
     return literal_token(inner, src)
 end
 
+--- The name of a `command` node as written (path kept). Nil when the node
+--- has no name or the name is dynamic (see `command_name_text`).
+--- @param node TSNode `command` node
+--- @param src string source of `node`
+--- @return string|nil name
+function M.command_name(node, src)
+    local name_node = node:field("name")[1]
+    return name_node and command_name_text(name_node, src)
+end
+
 --- Every name a `function_definition` defines (`function a b { … }` defines
 --- two), unescaped (`l\s() …` defines `ls`).
 --- @param node TSNode a `function_definition`
@@ -1337,6 +1347,24 @@ local function parse_zsh(src)
         return nil
     end
     return root
+end
+
+--- Byte cap on shell source to parse.
+M.MAX_SOURCE_BYTES = 65536
+
+--- Parse a whole command string. Nil when `command` is not a string, is
+--- empty, is over `MAX_SOURCE_BYTES`, or does not parse (see `parse_zsh`).
+--- @param command any
+--- @return TSNode|nil root
+function M.parse_command(command)
+    if
+        type(command) ~= "string"
+        or command == ""
+        or #command > M.MAX_SOURCE_BYTES
+    then
+        return nil
+    end
+    return parse_zsh(command)
 end
 
 --- Absolute path to the headless parse-termination oracle script (sibling file).
@@ -2346,13 +2374,7 @@ end
 --- @param src string
 --- @return agentic.ShellCommand[]|nil records nil = what runs is unknown
 function M.extract_commands(src)
-    if type(src) ~= "string" or src == "" then
-        return nil
-    end
-    if #src > 65536 then
-        return nil
-    end
-    local root = parse_zsh(src)
+    local root = M.parse_command(src)
     if not root then
         return nil
     end

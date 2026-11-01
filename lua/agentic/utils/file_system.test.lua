@@ -288,6 +288,53 @@ describe("FileSystem", function()
         end)
     end)
 
+    describe("mtime", function()
+        it("is 0 for a missing file", function()
+            assert.equal(0, FileSystem.mtime(vim.fn.tempname()))
+        end)
+
+        it("is the modification time of an existing file", function()
+            local path = vim.fn.tempname()
+            vim.fn.writefile({ "x" }, path)
+            vim.uv.fs_utime(path, 1000, 1000)
+
+            assert.equal(1000, FileSystem.mtime(path))
+        end)
+    end)
+
+    describe("read_json_if_present", function()
+        local Logger = require("agentic.utils.logger")
+        local notify
+
+        before_each(function()
+            notify = spy.stub(Logger, "notify")
+        end)
+
+        after_each(function()
+            notify:revert()
+        end)
+
+        it("is nil without a warning for a missing file", function()
+            assert.is_nil(FileSystem.read_json_if_present(vim.fn.tempname()))
+            assert.equal(0, notify.call_count)
+        end)
+
+        it("is nil and warns for invalid JSON", function()
+            local path = vim.fn.tempname()
+            vim.fn.writefile({ "not json {{{" }, path)
+
+            assert.is_nil(FileSystem.read_json_if_present(path))
+            assert.equal(1, notify.call_count)
+        end)
+
+        it("decodes the file", function()
+            local path = vim.fn.tempname()
+            vim.fn.writefile({ '{"a": 1}' }, path)
+
+            assert.same({ a = 1 }, FileSystem.read_json_if_present(path))
+        end)
+    end)
+
     describe("save_to_disk", function()
         it("writes content to file", function()
             local tmp = os.tmpname()
