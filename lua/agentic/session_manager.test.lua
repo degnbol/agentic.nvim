@@ -14,7 +14,6 @@ local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 local MiniTest = require("mini.test")
 local SessionManager = require("agentic.session_manager")
-local Theme = require("agentic.theme")
 
 --- @param mode_id string
 --- @return agentic.acp.CurrentModeUpdate
@@ -776,8 +775,7 @@ describe("agentic.SessionManager", function()
                 _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _build_handlers = SessionManager._build_handlers,
-                _apply_default_grants = noop,
-                _resolve_grant_input = SessionManager._resolve_grant_input,
+                _grant_command = { apply_defaults = noop },
                 _on_session_update = noop,
                 _on_tool_call = noop,
                 _on_tool_call_update = noop,
@@ -910,15 +908,6 @@ describe("agentic.SessionManager", function()
                 end
             )
         end
-
-        it("resolves `.` grants against the loaded session's cwd", function()
-            local session = make_load_session()
-
-            session:_do_load_acp_session("test-session-id", "/saved/proj")
-
-            assert.equal("/saved/proj", session:_resolve_grant_input("."))
-            assert.equal("/saved/proj/src", session:_resolve_grant_input("src"))
-        end)
 
         it("clears _restoring on successful load", function()
             local session = make_load_session()
@@ -1407,29 +1396,6 @@ describe("agentic.SessionManager", function()
             assert.truthy(
                 header:match("^# %d%d%d%d%-%d%d%-%d%d %d%d:%d%d · unknown$")
             )
-        end)
-    end)
-
-    describe("_get_system_info", function()
-        --- @param shell string|nil
-        --- @return string
-        local function system_info(shell)
-            local session = {
-                agent = {
-                    exec_shell = function()
-                        return shell
-                    end,
-                },
-            } --[[@as agentic.SessionManager]]
-            return SessionManager._get_system_info(session)
-        end
-
-        it("names the agent's shell", function()
-            assert.truthy(system_info("zsh"):find("\n- Shell: zsh\n", 1, true))
-        end)
-
-        it("leaves out the Shell line for an unknown shell", function()
-            assert.is_nil(system_info(nil):find("Shell:", 1, true))
         end)
     end)
 
@@ -4395,7 +4361,7 @@ describe("agentic.SessionManager", function()
                 diagnostics_list = { is_empty = empty },
                 new_session = new_session_spy,
                 _rename_session = rename_spy,
-                _handle_grant_command = grant_spy,
+                _grant_command = { run = grant_spy },
                 _delete_session = delete_spy,
                 _dispatch_turn = dispatch_spy,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
@@ -5329,231 +5295,6 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
-    describe("/grant", function()
-        local PermissionManager = require("agentic.ui.permission_manager")
-        --- @type TestStub
-        local select_stub
-        --- @type TestStub
-        local input_stub
-        --- @type TestStub
-        local notify_stub
-        --- @type TestStub
-        local git_root_stub
-        --- @type agentic.SessionManager
-        local session
-        --- @type agentic.ui.MessageWriter.Notice[]
-        local notices
-        --- @type any[]
-        local errors
-        --- Resolved temp dir standing in for the session cwd's git root.
-        --- @type string
-        local repo
-        local orig_defaults
-
-        local SessionManagerModule
-
-        --- @return string[] keys The active grant scope keys, in order
-        local function grant_keys()
-            return vim.tbl_map(function(scope)
-                return scope.key
-            end, session.permission_manager:get_grant_scopes())
-        end
-
-        --- @param needle string
-        --- @return integer count WARN notifications whose message contains `needle`
-        local function warn_count(needle)
-            local count = 0
-            for _, c in ipairs(notify_stub.calls) do
-                if
-                    c[2] == vim.log.levels.WARN
-                    and c[1]:find(needle, 1, true)
-                then
-                    count = count + 1
-                end
-            end
-            return count
-        end
-
-        before_each(function()
-            SessionManagerModule = require("agentic.session_manager")
-
-            local dir = vim.fn.tempname()
-            vim.fn.mkdir(dir .. "/sub", "p")
-            repo = vim.uv.fs_realpath(dir) --[[@as string]]
-
-            select_stub = spy.stub(vim.ui, "select")
-            input_stub = spy.stub(vim.ui, "input")
-            notify_stub = spy.stub(Logger, "notify")
-            git_root_stub = spy.stub(vim.fs, "root")
-            git_root_stub:returns(repo)
-
-            orig_defaults = Config.permissions.default_grant
-
-            notices = {}
-            errors = {}
-
-            session = {
-                id = fresh_id(),
-                _cwd = repo .. "/sub",
-                permission_manager = {
-                    _grant_scopes = {},
-                    add_grant_scope = PermissionManager.add_grant_scope,
-                    remove_grant_scope = PermissionManager.remove_grant_scope,
-                    clear_grant_scopes = PermissionManager.clear_grant_scopes,
-                    get_grant_scopes = PermissionManager.get_grant_scopes,
-                },
-                message_writer = {
-                    write_notice = spy.new(function(_, notice)
-                        table.insert(notices, notice)
-                    end),
-                    write_error_action = spy.new(function(_, msg)
-                        table.insert(errors, msg)
-                    end),
-                },
-                _resolve_grant_input = SessionManagerModule._resolve_grant_input,
-                _write_grant_notice = SessionManagerModule._write_grant_notice,
-                _add_grant = SessionManagerModule._add_grant,
-                _apply_default_grants = SessionManagerModule._apply_default_grants,
-                _clear_grants = SessionManagerModule._clear_grants,
-                _show_grant_picker = SessionManagerModule._show_grant_picker,
-                _handle_grant_command = SessionManagerModule._handle_grant_command,
-            } --[[@as agentic.SessionManager]]
-        end)
-
-        after_each(function()
-            select_stub:revert()
-            input_stub:revert()
-            notify_stub:revert()
-            git_root_stub:revert()
-            Config.permissions.default_grant = orig_defaults
-            vim.fs.rm(repo, { recursive = true, force = true })
-        end)
-
-        it("`.` grants the session cwd and confirms in the chat", function()
-            session:_handle_grant_command(".")
-            assert.same({ repo .. "/sub" }, grant_keys())
-            assert.equal(".", notices[1].title)
-            assert.equal(Glyphs.COMMAND.grant, notices[1].glyph)
-            assert.is_nil(notices[1].glyph_hl)
-        end)
-
-        it("grants combine", function()
-            session:_handle_grant_command("root")
-            session:_handle_grant_command(".")
-            assert.same({ repo, repo .. "/sub" }, grant_keys())
-        end)
-
-        it("re-adding a grant only reports it", function()
-            session:_handle_grant_command(".")
-            session:_handle_grant_command("./")
-            assert.equal(1, #grant_keys())
-            assert.equal("already granted: ./", notices[2].title)
-        end)
-
-        it("nests the notice in the turn it widens", function()
-            -- A scope added mid-turn governs the tool calls after it, so it
-            -- renders inside the running turn rather than at the boundary.
-            session.is_generating = true
-            session:_handle_grant_command(".")
-            assert.is_true(notices[1].mid_turn)
-        end)
-
-        it("off clears every grant", function()
-            session:_handle_grant_command(".")
-            session:_handle_grant_command("off")
-            assert.equal(0, #grant_keys())
-            -- The cleared notice reuses the add glyph, struck through.
-            assert.equal(Glyphs.COMMAND.grant, notices[2].glyph)
-            assert.equal(Theme.HL_GROUPS.GLYPH_OFF, notices[2].glyph_hl)
-        end)
-
-        it("a relative glob resolves against the session cwd", function()
-            session:_handle_grant_command("src/**/*.lua")
-            assert.same({ repo .. "/sub/src/**/*.lua" }, grant_keys())
-            assert.equal("src/**/*.lua", notices[1].title)
-        end)
-
-        it("root without a git root errors", function()
-            git_root_stub:returns(nil)
-            session:_handle_grant_command("root")
-            assert.equal(0, #grant_keys())
-            assert.equal(1, #errors)
-        end)
-
-        it("warns for a wide grant, not for a tmp root", function()
-            session:_handle_grant_command("/")
-            assert.equal(1, warn_count("Wide grant"))
-            session:_handle_grant_command("/tmp")
-            assert.equal(1, warn_count("Wide grant"))
-        end)
-
-        it("adds a missing path and warns", function()
-            session:_handle_grant_command("typo/dir")
-            assert.same({ repo .. "/sub/typo/dir" }, grant_keys())
-            assert.equal(1, warn_count("does not exist yet"))
-        end)
-
-        describe("picker", function()
-            --- @return { label: string }[] items
-            --- @return fun(item: table|nil) on_choice
-            local function open_picker()
-                session:_handle_grant_command("")
-                local call = select_stub.calls[select_stub.call_count]
-                return call[1], call[3]
-            end
-
-            it("toggles `.`, `root` and active grants", function()
-                session:_handle_grant_command("/tmp")
-                session:_handle_grant_command(".")
-                local items, on_choice = open_picker()
-                local labels = vim.tbl_map(function(item)
-                    return item.label
-                end, items)
-                assert.is_true(vim.startswith(labels[1], "✓ . ("))
-                assert.is_true(vim.startswith(labels[2], "root ("))
-                assert.equal("✓ /tmp", labels[3])
-                assert.same(
-                    { "Path or glob…", "Off" },
-                    { labels[4], labels[5] }
-                )
-
-                on_choice(items[1])
-                assert.same({ "/tmp" }, grant_keys())
-                assert.equal("grant removed: .", notices[#notices].title)
-
-                on_choice(items[2])
-                assert.same({ "/tmp", repo }, grant_keys())
-            end)
-
-            it("lists root once when it is the cwd", function()
-                session._cwd = repo
-                local items = open_picker()
-                assert.equal(3, #items)
-            end)
-        end)
-
-        describe("default grants", function()
-            it("are added silently", function()
-                Config.permissions.default_grant = { "/tmp", "." }
-                session:_apply_default_grants()
-                assert.same({ "/tmp", repo .. "/sub" }, grant_keys())
-                assert.equal(0, #notices)
-                assert.equal(0, warn_count(""))
-            end)
-
-            it("skip an unset variable and warn for a missing path", function()
-                Config.permissions.default_grant = {
-                    "$AGENTIC_UNSET_VAR",
-                    "$AGENTIC_UNSET_VAR/sub",
-                    "/nonexistent-agentic-root",
-                }
-                session:_apply_default_grants()
-                assert.same({ "/nonexistent-agentic-root" }, grant_keys())
-                assert.equal(1, warn_count("does not exist yet"))
-            end)
-        end)
-    end)
-
     describe("block sequencing", function()
         local dispatch_spy
         local new_session_spy
@@ -5641,7 +5382,7 @@ describe("agentic.SessionManager", function()
                 diagnostics_list = { is_empty = empty },
                 new_session = new_session_spy,
                 _display_context_usage = context_spy,
-                _handle_grant_command = grant_spy,
+                _grant_command = { run = grant_spy },
                 _delete_session = delete_spy,
                 _rename_session = rename_spy,
                 _dispatch_turn = dispatch_spy,

@@ -18,8 +18,10 @@ local CodeSelection = require("agentic.ui.code_selection")
 local Config = require("agentic.config")
 local DiagnosticsList = require("agentic.ui.diagnostics_list")
 local DiffJump = require("agentic.ui.diff_jump")
+local EnvironmentInfo = require("agentic.environment_info")
 local FileSystem = require("agentic.utils.file_system")
 local Glyphs = require("agentic.glyphs")
+local GrantCommand = require("agentic.grant_command")
 local GrantSafety = require("agentic.utils.grant_safety")
 local InfoPanel = require("agentic.ui.info_panel")
 local Json = require("agentic.utils.json")
@@ -34,7 +36,6 @@ local SequenceTail = require("agentic.utils.sequence_tail")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
 local SubagentInput = require("agentic.ui.subagent_input")
-local Theme = require("agentic.theme")
 local WidgetLayout = require("agentic.ui.widget_layout")
 local WindowDecoration = require("agentic.ui.window_decoration")
 
@@ -90,6 +91,7 @@ end
 --- @field agent agentic.acp.ACPClient
 --- @field message_writer agentic.ui.MessageWriter
 --- @field permission_manager agentic.ui.PermissionManager
+--- @field _grant_command agentic.GrantCommand
 --- @field status_indicator agentic.ui.StatusIndicator
 --- @field _agents table<string, agentic.SessionManager.Agent> Subagents of the conversation by child session id
 --- @field _inputs table<string, agentic.ui.SubagentInput> Message inputs of background subagents by child session id
@@ -428,6 +430,16 @@ function SessionManager:new(provider)
         end,
         function()
             return self.agent:claude_config_dir()
+        end
+    )
+    self._grant_command = GrantCommand:new(
+        self.permission_manager,
+        self.message_writer,
+        function()
+            return self._cwd
+        end,
+        function()
+            return self.is_generating
         end
     )
     self.permission_manager.on_hidden = function(badge_bufnr, anchor_bufnr)
@@ -1969,215 +1981,6 @@ function SessionManager:_rename_session(new_title)
     self:_persist_history(self.chat_history)
 end
 
---- Resolve a `/grant` argument to an absolute path or glob. `root` is the git
---- root of the session cwd. Anything else (`.` included) has `~` and env vars
---- expanded and, when relative, resolves against the session cwd. An unset
---- env var stays literal.
---- @param input string
---- @return string|nil pattern
---- @return string|nil err Why `input` does not resolve
-function SessionManager:_resolve_grant_input(input)
-    if input == "root" then
-        local root = vim.fs.root(self._cwd, ".git")
-        if not root then
-            return nil, "no git root"
-        end
-        return root, nil
-    end
-    local expanded = vim.fs.normalize(input)
-    if expanded:sub(1, 1) ~= "/" then
-        expanded = vim.fs.normalize(vim.fs.joinpath(self._cwd, expanded))
-    end
-    return expanded, nil
-end
-
---- Write a `/grant` chat notice.
---- @param title string
---- @param off boolean The notice withdraws a grant
-function SessionManager:_write_grant_notice(title, off)
-    self.message_writer:write_notice({
-        glyph = Glyphs.COMMAND.grant,
-        -- Same glyph as the add notice, struck through — Nerd Fonts has no
-        -- struck-through handshake to switch to.
-        glyph_hl = off and Theme.HL_GROUPS.GLYPH_OFF or nil,
-        title = title,
-        mid_turn = self.is_generating,
-    })
-end
-
---- Add a grant scope for the `/grant` argument `input`. A root that does not
---- exist yet is still granted, with a warning. Unless `quiet`, also reports
---- an argument that does not resolve, confirms in the chat, and warns about a
---- wide scope.
---- @param input string
---- @param quiet boolean
-function SessionManager:_add_grant(input, quiet)
-    local pattern, err = self:_resolve_grant_input(input)
-    if not pattern then
-        if not quiet then
-            self.message_writer:write_error_action(
-                string.format("/grant %s: %s", input, err)
-            )
-        end
-        return
-    end
-
-    local scope = GrantSafety.compile_scope(pattern, input)
-    local added = self.permission_manager:add_grant_scope(scope)
-
-    if not vim.uv.fs_stat(scope.root) then
-        Logger.notify(
-            string.format("/grant: %s does not exist yet", scope.root),
-            vim.log.levels.WARN,
-            { title = "Agentic /grant" }
-        )
-    end
-
-    if quiet then
-        return
-    end
-    if not added then
-        self:_write_grant_notice("already granted: " .. scope.display, false)
-        return
-    end
-    self:_write_grant_notice(scope.display, false)
-    local wide, reason =
-        GrantSafety.is_wide_scope(scope, GrantSafety.tmp_roots())
-    if wide then
-        Logger.notify(
-            string.format(
-                "Wide grant (%s): %s — auto-approves edit/write/create/delete/move",
-                reason or "wide",
-                scope.display
-            ),
-            vim.log.levels.WARN,
-            { title = "Agentic /grant" }
-        )
-    end
-end
-
---- Grant every `Config.permissions.default_grant` entry. An entry naming an
---- unset env var (`$TMPDIR` on most Linux systems) is skipped.
-function SessionManager:_apply_default_grants()
-    for _, entry in ipairs(Config.permissions.default_grant) do
-        if not vim.fs.normalize(entry):find("%$[%w_]") then
-            self:_add_grant(entry, true)
-        end
-    end
-end
-
---- Remove every grant scope.
-function SessionManager:_clear_grants()
-    self.permission_manager:clear_grant_scopes()
-    self:_write_grant_notice("grant cleared", true)
-end
-
---- @param prompt string
---- @param items table[]
---- @param on_choice fun(item: any|nil)
-local function ui_select(prompt, items, on_choice, format_item)
-    vim.ui.select(items, {
-        prompt = prompt,
-        format_item = format_item,
-    }, on_choice)
-end
-
---- Open the /grant selector menu: `.`, `root` and every active scope as
---- toggles (active ones marked `✓`), a path or glob prompt, and Off.
---- @param on_done fun()|nil Called once the grant question is settled, cancelling
----   included. Both dialogs here outlive the call, so this is what the
----   sequencer waits on before dispatching the next queued block.
-function SessionManager:_show_grant_picker(on_done)
-    on_done = on_done or function() end
-
-    --- @type table<string, agentic.utils.GrantSafety.Scope>
-    local active = {}
-    for _, scope in ipairs(self.permission_manager:get_grant_scopes()) do
-        active[scope.key] = scope
-    end
-
-    --- @type { kind: "toggle"|"path"|"off", label: string, input?: string, key?: string }[]
-    local items = {}
-    --- @type table<string, boolean>
-    local listed = {}
-    --- @param input string
-    --- @param key string|nil Scope key `input` resolves to; nil skips it
-    local function add_toggle(input, key)
-        if not key or listed[key] then
-            return
-        end
-        listed[key] = true
-        local label = input
-        if input == "." or input == "root" then
-            label =
-                string.format("%s (%s)", input, vim.fn.fnamemodify(key, ":~"))
-        end
-        table.insert(items, {
-            kind = "toggle",
-            label = (active[key] and "✓ " or "") .. label,
-            input = input,
-            key = key,
-        })
-    end
-    add_toggle(".", (self:_resolve_grant_input(".")))
-    add_toggle("root", (self:_resolve_grant_input("root")))
-    for _, scope in ipairs(self.permission_manager:get_grant_scopes()) do
-        add_toggle(scope.display, scope.key)
-    end
-    table.insert(items, { kind = "path", label = "Path or glob…" })
-    table.insert(items, { kind = "off", label = "Off" })
-
-    ui_select("Agentic grant:", items, function(choice)
-        if not choice then
-            on_done()
-        elseif choice.kind == "off" then
-            self:_clear_grants()
-            on_done()
-        elseif choice.kind == "path" then
-            vim.ui.input({ prompt = "Path or glob: " }, function(input)
-                if input and vim.trim(input) ~= "" then
-                    self:_handle_grant_command(vim.trim(input), on_done)
-                else
-                    on_done()
-                end
-            end)
-        elseif active[choice.key] then
-            self.permission_manager:remove_grant_scope(choice.key)
-            self:_write_grant_notice(
-                "grant removed: " .. active[choice.key].display,
-                true
-            )
-            on_done()
-        else
-            self:_add_grant(choice.input, false)
-            on_done()
-        end
-    end, function(item)
-        return item.label
-    end)
-end
-
---- Dispatch /grant: an empty arg opens the picker, `off` clears every grant,
---- anything else is added as a path or glob.
---- @param arg string Trimmed argument
---- @param on_done fun()|nil Called once the grant question is settled — every
----   branch here answers it before returning except the picker, which owns it.
-function SessionManager:_handle_grant_command(arg, on_done)
-    on_done = on_done or function() end
-
-    if arg == "" then
-        self:_show_grant_picker(on_done)
-        return
-    end
-
-    if arg == "off" then
-        self:_clear_grants()
-    else
-        self:_add_grant(arg, false)
-    end
-    on_done()
-end
-
 --- Delete the current session from disk and clear the UI.
 --- With confirm_delete enabled (default), prompts before proceeding.
 function SessionManager:_delete_session()
@@ -3434,7 +3237,7 @@ function SessionManager:_run_local_command(word, arg, on_done)
         end
         self:_rename_session(arg)
     elseif word == "grant" then
-        self:_handle_grant_command(arg, on_done)
+        self._grant_command:run(arg, on_done)
     elseif word == "login" then
         Recovery.login(self, arg, on_done --[[@as fun()]])
     elseif word == "delete" then
@@ -3877,7 +3680,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
         table.insert(prompt, {
             type = "text",
-            text = self:_get_system_info(),
+            text = EnvironmentInfo.build(self._cwd, self.agent:exec_shell()),
         })
     end
 
@@ -4318,7 +4121,7 @@ function SessionManager:new_session(opts)
         self.session_id = response.sessionId
         self.chat_history.session_id = response.sessionId
         self.chat_history.timestamp = os.time()
-        self:_apply_default_grants()
+        self._grant_command:apply_defaults()
         vim.api.nvim_exec_autocmds("User", {
             pattern = "AgenticSessionChanged",
             data = { session_id = response.sessionId },
@@ -4454,7 +4257,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     self._cwd = cwd and FileSystem.canonical_path(cwd)
         or saved_data and saved_data.cwd
         or vim.fn.getcwd()
-    self:_apply_default_grants()
+    self._grant_command:apply_defaults()
     vim.api.nvim_exec_autocmds("User", {
         pattern = "AgenticSessionChanged",
         data = { session_id = session_id },
@@ -4820,88 +4623,6 @@ end
 function SessionManager:_handle_new_config_options(new_config_options)
     self.config_options:set_options(new_config_options)
     self:render_info()
-end
-
-function SessionManager:_get_system_info()
-    local os_name = vim.uv.os_uname().sysname
-    local os_version = vim.uv.os_uname().release
-    local os_machine = vim.uv.os_uname().machine
-    local shell = self.agent:exec_shell()
-    local neovim_version = tostring(vim.version())
-    local today = os.date("%Y-%m-%d")
-
-    local res =
-        string.format("- Platform: %s-%s-%s", os_name, os_version, os_machine)
-    if shell then
-        res = res .. "\n- Shell: " .. shell
-    end
-    res = res
-        .. string.format(
-            "\n- Editor: Neovim %s\n- Current date: %s",
-            neovim_version,
-            today
-        )
-
-    local project_root = vim.uv.cwd()
-
-    local git_root = vim.fs.root(project_root or 0, ".git")
-    if git_root and vim.fn.executable("git") == 1 then
-        project_root = git_root
-        res = res .. "\n- This is a Git repository."
-
-        -- Started together so the wait is the slowest command, not the sum.
-        local branch_job = vim.system(
-            { "git", "rev-parse", "--abbrev-ref", "HEAD" },
-            { text = true }
-        )
-        local changed_job = vim.system(
-            { "git", "status", "--porcelain" },
-            { text = true }
-        )
-        local commits_job = vim.system({
-            "git",
-            "log",
-            "-3",
-            "--oneline",
-            "--format=%h (%ar) %an: %s",
-        }, { text = true })
-
-        local branch = branch_job:wait()
-        if branch.code == 0 and vim.trim(branch.stdout) ~= "" then
-            res = res
-                .. string.format(
-                    "\n- Current branch: %s",
-                    vim.trim(branch.stdout)
-                )
-        end
-
-        local changed = changed_job:wait()
-        local files =
-            vim.split(changed.stdout or "", "\n", { trimempty = true })
-        if changed.code == 0 and #files > 0 then
-            res = res .. "\n- Changed files:"
-            for _, file in ipairs(files) do
-                res = res .. "\n  - " .. file
-            end
-        end
-
-        local commits = commits_job:wait()
-        local commit_lines =
-            vim.split(commits.stdout or "", "\n", { trimempty = true })
-        if commits.code == 0 and #commit_lines > 0 then
-            res = res .. "\n- Recent commits:"
-            for _, commit in ipairs(commit_lines) do
-                res = res .. "\n  - " .. commit
-            end
-        end
-    end
-
-    if project_root then
-        res = res .. string.format("\n- Project root: %s", project_root)
-    end
-
-    res = "<environment_info>\n" .. res .. "\n</environment_info>"
-    return res
 end
 
 function SessionManager:destroy()

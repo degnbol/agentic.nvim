@@ -582,7 +582,7 @@ local MAX_TRANSIENT_RETRIES = 3
 --- leave the failure with nothing reporting it.
 ---
 --- Classification is keyed on the bridge's structured `errorKind` rather than
---- message text, and deliberately kept off MessageWriter's display axis:
+--- message text, and deliberately kept off ErrorReport's display axis:
 --- mapping `server_error` into `error_kind_class` would outrank an embedded 529
 --- `overloaded_error` and cost it its hint. Retryability and display class are
 --- independent axes.

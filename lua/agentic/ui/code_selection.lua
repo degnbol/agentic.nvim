@@ -4,6 +4,13 @@ local Treesitter = require("agentic.utils.treesitter")
 local TextWrap = require("agentic.utils.text_wrap")
 local ContextList = require("agentic.ui.context_list")
 
+--- @class agentic.Selection
+--- @field lines string[] The selected code lines
+--- @field start_line integer Starting line number (1-indexed)
+--- @field end_line integer Ending line number (1-indexed, inclusive)
+--- @field file_path string Relative file path
+--- @field file_type string File type/extension
+
 --- @class agentic.ui.CodeSelection : agentic.ui.ContextList
 --- @field protected __items agentic.Selection[]
 local CodeSelection = setmetatable({}, { __index = ContextList })
@@ -72,7 +79,7 @@ function CodeSelection.get_selected_text()
 
         local buf_name = vim.api.nvim_buf_get_name(0)
 
-        --- @class agentic.Selection
+        --- @type agentic.Selection
         local selection = {
             lines = lines,
             start_line = start_line,

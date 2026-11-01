@@ -63,7 +63,6 @@ calls to).
 1. [`PLAN-peer-session-name.md`](notes/PLAN-peer-session-name.md)
 
 **No ordering:**
-[`PLAN-split-modules.md`](notes/PLAN-split-modules.md),
 [`PLAN-widget-clear-chat.md`](notes/PLAN-widget-clear-chat.md),
 [`PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md),
 [`PLAN-heading-command-flag.md`](notes/PLAN-heading-command-flag.md) (on hold;
@@ -72,10 +71,7 @@ after `PLAN-placeholder-titles.md`),
 [`PLAN-updated-input-display.md`](notes/PLAN-updated-input-display.md),
 [`PLAN-completion-current-buf.md`](notes/PLAN-completion-current-buf.md),
 [`PLAN-deny-gate-flag-cap.md`](notes/PLAN-deny-gate-flag-cap.md),
-[`PLAN-exec-action-walk.md`](notes/PLAN-exec-action-walk.md) (either order
-with `PLAN-split-modules.md`; it edits `shell_parse.lua`
-`collect_command`/`inner_source`, outside move 5's parser range, so the second
-to land rebases),
+[`PLAN-exec-action-walk.md`](notes/PLAN-exec-action-walk.md),
 [`PLAN-inline-math-dollar-pairing.md`](notes/PLAN-inline-math-dollar-pairing.md),
 [`PLAN-placeholder-titles.md`](notes/PLAN-placeholder-titles.md).
 

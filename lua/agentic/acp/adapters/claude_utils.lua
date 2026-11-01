@@ -10,6 +10,36 @@ M.MODE_SWITCH_TOOLS = {
     ExitPlanMode = "Normal",
 }
 
+--- One hunk of a `structuredPatch`. Line numbers and counts are of the
+--- post-edit file; `newLines` is 0 for a hunk that only deletes.
+--- @class agentic.acp.ClaudePatchHunk
+--- @field newStart integer
+--- @field newLines integer
+
+--- A tool's own return value, forwarded verbatim. Only the Edit/Write and Agent
+--- shapes are modelled, since those are the ones the client reads: `type` is
+--- Write-only and says whether the file was created or overwritten, Edit omits
+--- it entirely.
+--- @class agentic.acp.ClaudeToolResponse
+--- @field filePath? string
+--- @field type? "create"|"update"
+--- @field structuredPatch? agentic.acp.ClaudePatchHunk[]
+--- @field status? string Outcome of an Agent call: `completed`, `async_launched` or `remote_launched`
+--- @field agentId? string Id of the agent an Agent call launched in the background
+
+--- claude-agent-acp per-notification metadata. `parentToolUseId` is set on
+--- subagent (Task) notifications — present ⟺ subagent content. `toolName` is
+--- the provider's internal tool name, set on every tool-call notification.
+--- @class agentic.acp.ClaudeCodeMeta
+--- @field parentToolUseId? string
+--- @field toolName? string
+--- @field toolResponse? agentic.acp.ClaudeToolResponse
+--- @field skill? string Skill name, on a Skill tool call
+--- @field skillPath? string The skill's SKILL.md, resolved by the bridge against `cwd` and `$HOME` only — absent for a skill discovered under any other root
+
+--- @class agentic.acp.ClaudeMeta
+--- @field claudeCode? agentic.acp.ClaudeCodeMeta
+
 --- claude-agent-acp's per-notification metadata, or an empty table when the
 --- notification carries none — `_meta` is genuinely optional (the bridge's
 --- untracked-tool fallback emits a `tool_call_update` without it), so a bare

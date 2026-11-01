@@ -31,11 +31,11 @@ limit is not what was hit.
    `RequestError.internalError({ errorKind: lastAssistantError }, message.result)`
    (`acp-agent.js:4326`, `errorKindData` at `:7477`).
 4. **The plugin does not map `rate_limit`.** `error_kind_class`
-   (`message_writer.lua:1503`) maps only `authentication_failed`,
+   (`error_report.lua:25`) maps only `authentication_failed`,
    `oauth_org_not_allowed` and `billing_error`. For `rate_limit`,
-   `format_error_lines` (`:1564`) falls through to the text path. The
-   usage-limit regex (`:1641-1650`) needs `resets <time> (<tz>)`. A message
-   without that clause reaches the raw fallback (`:1652`) and returns class
+   `ErrorReport.format` (`:87`) falls through to the text path. The
+   usage-limit regex (`:161-171`) needs `resets <time> (<tz>)`. A message
+   without that clause reaches the raw fallback (`:173`) and returns class
    `nil`.
 5. **The dispatch site does nothing for class `nil`.** The `send_prompt`
    callback (`session_manager.lua:3741-3762`) acts only on
@@ -68,7 +68,7 @@ A message with the reset clause still works through the regex, for example
 site only: an API error whose message contains `credit balance is too low`
 (Console/API-key prepaid credits). Subscription spend caps never produce it.
 
-Thus the current hint (`message_writer.lua:1493`) is wrong for the one case
+Thus the current hint (`error_report.lua:15`) is wrong for the one case
 that reaches it. It says "Organisation spend limit reached … run /usage-credits".
 The correct action for low credit balance is to add funds in the Console. The
 display-only dispatch (no reauth, no respawn, no auto-continue) is correct for
@@ -77,13 +77,13 @@ it.
 ## Fix direction
 
 1. Map `rate_limit` → `usage_limit` in `error_kind_class`. The mapped branch
-   (`:1621-1633`) then returns `reset_epoch = nil`. Thus the mapped branch must
+   (`error_report.lua:144-155`) then returns `reset_epoch = nil`. Thus the mapped branch must
    also scrape the reset clause from the text when present, or leave the
    epoch to the dispatch site.
 2. At the dispatch site, take the reset epoch from the `exhausted` window's
    `resets_at` in `vim.g.agentic_budget` (`agentic.budget`; the adapter
    already normalises units). Use the text-scraped `reset_epoch` as the
-   fallback. Keep the 3-value return of `format_error_lines`.
+   fallback. Keep the 3-value return of `ErrorReport.format`.
 3. Call `offer_auto_continue` only when one of the two sources gives an epoch.
    With no epoch, show a hint and set no gate.
 4. Correct the `billing_error` hint text to the low-credit-balance case.

@@ -154,9 +154,9 @@ are not rememberable, so the whole-command entry is kept as a fallback.
 A per-session **set** of path scopes (`PermissionManager._grant_scopes`):
 `/grant X` adds, `/grant off` clears, the picker toggles.
 `Config.permissions.default_grant` (`/tmp`, `$TMPDIR`, `.`, `root`; `{}` for none) is added silently at
-session start (`SessionManager:_apply_default_grants`). Every scope is a path
+session start (`GrantCommand:apply_defaults`). Every scope is a path
 or glob compiled by `GrantSafety.compile_scope`; the keywords `.` and `root`
-resolve against the session's ACP cwd in `SessionManager:_resolve_grant_input`.
+resolve against the session's ACP cwd in `GrantCommand.resolve_input`.
 
 Two mutation producers feed one policy: ACP file tool calls (`_check_grant`)
 and Bash effects — redirect writes and plain `rm` operands that

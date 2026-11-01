@@ -115,14 +115,14 @@ a dynamic token never widens an approval.
 **Arithmetic that reads a value fails the parse.** zsh, like bash, evaluates a
 variable's value as arithmetic when arithmetic names it, and a subscript in that
 value runs its command substitutions (`n='y[$(cmd)]'; echo $((n))`). So
-`parse_zsh` returns nil for any arithmetic with a letter or a `$` other than
+`ZshParse.parse` returns nil for any arithmetic with a letter or a `$` other than
 `$#`/`$?`/`$$`/`$!`: a `$((…))`/`$[…]` body, a subscript, a `${x:off:len}`
 offset or length, an array literal's `[key]=`, a `[[ … -eq … ]]` operand. The
 walk applies the same test to the arguments of builtins that evaluate them
 (`shift`, `return`, `exit`, `logout`, `break`, `continue`; for `printf`/`print`
 the subscript of a `-v` target and the arguments after a format with any
 directive but `%s`/`%b`/`%c`/`%q`, a `*` width or a `$`). Rules per node type:
-`SIDE_EFFECT_SYNTAX` in `shell_parse.lua`.
+`SIDE_EFFECT_SYNTAX` in `zsh_parse.lua`.
 
 **Static arithmetic** — an `arithmetic_expansion` that passes the parse
 (`$((40))`, `"$((40))p"`, `-$((5))`) is *static* at argument position, in
@@ -180,7 +180,7 @@ handling.
    (a hidden backtick substitution, a line continuation inside a word), or a
    parameter flag / glob qualifier that runs code (`${(e)x}`, `*(+cmd)`,
    `${~x}`) or an assigning default (`${x::=y}`; `SIDE_EFFECT_SYNTAX` in
-   `shell_parse.lua`) → prompt. The zsh parser is a
+   `zsh_parse.lua`) → prompt. The zsh parser is a
    hard dependency.
 2. **Walk** reject-by-default. Bail on dynamic command names and code-taking
    builtins (`eval`/`source`/`.`). A **transparent prefix** is not a leaf:

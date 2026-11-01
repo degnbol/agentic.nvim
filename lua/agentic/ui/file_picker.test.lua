@@ -1,4 +1,5 @@
 local assert = require("tests.helpers.assert")
+local GitEnv = require("tests.helpers.git_env")
 local spy = require("tests.helpers.spy")
 
 local FilePicker = require("agentic.ui.file_picker")
@@ -45,29 +46,6 @@ local function touch(path)
         error(err)
     end
     file:close()
-end
-
---- Unsets every GIT_* environment variable for the duration of a test,
---- returning a function that restores the saved values. An ambient GIT_DIR
---- makes git ignore the `cwd` and operate on whatever it points at: a fixture
---- `git init` then reinitialises that repo instead, and for a submodule (whose
---- gitdir does not end in `.git`) with no work-tree on the command line git
---- sets core.bare=true, contradicting the submodule's core.worktree and
---- corrupting the real config. Scrubbing the env makes the fixture hermetic.
---- @return fun() restore
-local function scrub_git_env()
-    local saved = {}
-    for name, value in pairs(vim.fn.environ()) do
-        if name:match("^GIT_") then
-            saved[name] = value
-            vim.uv.os_unsetenv(name)
-        end
-    end
-    return function()
-        for name, value in pairs(saved) do
-            vim.uv.os_setenv(name, value)
-        end
-    end
 end
 
 describe("FilePicker:scan_files", function()
@@ -140,7 +118,7 @@ describe("FilePicker:scan_files", function()
         local restore_git_env
 
         before_each(function()
-            restore_git_env = scrub_git_env()
+            restore_git_env = GitEnv.scrub()
             original_cwd = vim.fn.getcwd()
             fixture = vim.fn.tempname()
             vim.fn.mkdir(fixture, "p")

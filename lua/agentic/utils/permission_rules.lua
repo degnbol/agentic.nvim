@@ -9,8 +9,10 @@ local M = {}
 -- `tally_walk` traversals below decide auto-approval on top of these; the same
 -- module's `extract_commands` builds the flat command list from them.
 local ShellParse = require("agentic.utils.shell_parse")
-local parse_zsh = ShellParse.parse_zsh
-local parse_zsh_untrusted = ShellParse.parse_zsh_untrusted
+local ZshArithmetic = require("agentic.utils.zsh_arithmetic")
+local ZshParse = require("agentic.utils.zsh_parse")
+local parse_zsh = ZshParse.parse
+local parse_zsh_untrusted = ZshParse.parse_untrusted
 local literal_token = ShellParse.literal_token
 local pure_literal_token = ShellParse.pure_literal_token
 local subtree_has_substitution = ShellParse.subtree_has_substitution
@@ -46,7 +48,7 @@ M.strip_command_path = ShellParse.strip_command_path
 local function refuses_builtin(cmd_name, args, args_dynamic, script_path)
     if
         (CODE_TAKING_BUILTINS[cmd_name] and not script_path)
-        or ShellParse.arithmetic_args_read_value(cmd_name, args)
+        or ZshArithmetic.builtin_args_read_value(cmd_name, args)
     then
         return true
     end
@@ -844,7 +846,7 @@ local function leaf_text(name, args)
 end
 
 --- The bytes of a script file. Nil unless it is a regular file of at most
---- `ShellParse.MAX_SOURCE_BYTES` (a fifo or device would hang or mislead),
+--- `ZshParse.MAX_SOURCE_BYTES` (a fifo or device would hang or mislead),
 --- or when any stat or read fails.
 --- @param path string resolved absolute path
 --- @return string|nil
@@ -854,7 +856,7 @@ local function read_script(path)
     -- the post-callback IPC window to the shell's open is not closeable
     -- client-side anyway.
     local st = vim.uv.fs_stat(path)
-    if not st or st.type ~= "file" or st.size > ShellParse.MAX_SOURCE_BYTES then
+    if not st or st.type ~= "file" or st.size > ZshParse.MAX_SOURCE_BYTES then
         return nil
     end
     local fd = vim.uv.fs_open(path, "r", 438)
@@ -2255,7 +2257,7 @@ end
 --- @return string[] leaves
 --- @return boolean complete
 function M.tally_unapproved(command, config_dir)
-    local root = ShellParse.parse_command(command)
+    local root = ZshParse.parse_command(command)
     if not root then
         return nil, {}, false
     end
@@ -2429,7 +2431,7 @@ function M.should_auto_reject(command, config_dir)
         return false
     end
 
-    local root = ShellParse.parse_command(command)
+    local root = ZshParse.parse_command(command)
     if not root then
         return false
     end
@@ -2467,7 +2469,7 @@ local function run_walk(command, rules)
         return false, {}, {}
     end
 
-    local root = ShellParse.parse_command(command)
+    local root = ZshParse.parse_command(command)
     if not root then
         return false, {}, {}
     end

@@ -117,13 +117,13 @@ return M
 --- @field sessionUpdate "agent_message_chunk"
 --- @field content agentic.acp.Content
 --- @field messageId? string|vim.NIL Id of the model response the chunk belongs to
---- @field public _meta? agentic.acp.ClaudeMeta
+--- @field public _meta? table
 
 --- @class agentic.acp.AgentThoughtChunk
 --- @field sessionUpdate "agent_thought_chunk"
 --- @field content agentic.acp.Content
 --- @field messageId? string|vim.NIL Id of the model response the chunk belongs to
---- @field public _meta? agentic.acp.ClaudeMeta
+--- @field public _meta? table
 
 --- @class agentic.acp.ResourceLinkContent
 --- @field type "resource_link"

@@ -78,6 +78,7 @@ end
 --- @class agentic.acp.ClaudeAgentToolCallUpdate : agentic.acp.ToolCallUpdate
 --- @field rawInput? agentic.acp.ClaudeAgentRawInput
 --- @field title? string
+--- @field public _meta? agentic.acp.ClaudeMeta
 
 --- @class agentic.acp.ClaudeAgentACPAdapter : agentic.acp.ACPClient
 --- @field provider_config agentic.acp.ClaudeProviderConfig

@@ -85,7 +85,7 @@ rail only, for a region whose identity mark lives in another namespace — see
 which would dim it.
 
 An error is a region too: `## Error` under `Glyphs.ERROR`, the wrapped body
-`format_error_lines` builds (the provider's words, then any class hint), and a
+`ErrorReport.format` builds (the provider's words, then any class hint), and a
 rail that `write_error_action` re-stamps as the
 countdown or login offer that follows joins the block. Its identity sign is in
 `NS_DECORATIONS`, not `NS_USER_ACTIONS` — `[[`/`]]` walks user actions. See
