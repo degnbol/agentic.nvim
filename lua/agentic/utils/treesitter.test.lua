@@ -1,5 +1,7 @@
 local Treesitter = require("agentic.utils.treesitter")
+local ZshParseGuard = require("agentic.utils.zsh_parse_guard")
 local assert = require("tests.helpers.assert")
+local spy = require("tests.helpers.spy")
 
 --- Check whether a parser for `lang` is installed. Skips tests otherwise.
 --- @param lang string
@@ -204,6 +206,82 @@ describe("Treesitter", function()
                 "expected a capture from the vim injection, got "
                     .. vim.inspect(map[0])
             )
+        end)
+
+        describe("with a zsh hang trigger in the file", function()
+            local trigger = "${x//[^)]}"
+            local get_string_parser = vim.treesitter.get_string_parser
+            --- @type TestStub
+            local parser_stub
+
+            -- A trigger that reaches the parser hangs this process, which
+            -- has no timeout. Fail the case instead.
+            before_each(function()
+                parser_stub = spy.stub(vim.treesitter, "get_string_parser")
+                parser_stub:invokes(function(source, ...)
+                    if ZshParseGuard.contains_hang_trigger(source) then
+                        error("hang trigger reached the parser")
+                    end
+                    return get_string_parser(source, ...)
+                end)
+            end)
+
+            after_each(function()
+                parser_stub:revert()
+            end)
+
+            it("highlights rows below a trigger on a context row", function()
+                if not has_parser("lua") then
+                    return
+                end
+
+                local map = Treesitter.highlight_map_in_context(
+                    { 'local s = "' .. trigger .. '"', "local y = 1" },
+                    "lua",
+                    1,
+                    2,
+                    { "local z = 2" }
+                )
+                assert.is_not_nil(map)
+            end)
+
+            it("highlights a trigger on the target row in place", function()
+                if not has_parser("lua") then
+                    return
+                end
+
+                local line = 'local s = "' .. trigger .. '"'
+                local map = Treesitter.highlight_map_in_context(
+                    { line },
+                    "lua",
+                    0,
+                    1,
+                    { line }
+                )
+                assert.is_not_nil(map)
+                --- @cast map -nil
+
+                local cap = (map[0] or {})[line:find("$", 1, true) - 1]
+                assert.is_true(
+                    cap ~= nil and cap:match("string") ~= nil,
+                    "expected string capture, got " .. tostring(cap)
+                )
+            end)
+
+            it("highlights a zsh file that holds a trigger", function()
+                if not has_parser("zsh") then
+                    return
+                end
+
+                local map = Treesitter.highlight_map_in_context(
+                    { "c=" .. trigger, "echo hi" },
+                    "zsh",
+                    1,
+                    2,
+                    { "echo bye" }
+                )
+                assert.is_not_nil(map)
+            end)
         end)
     end)
 

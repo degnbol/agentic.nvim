@@ -57,12 +57,9 @@ function M.highlight_map_in_context(
     vim.list_extend(reconstructed, new_lines)
     vim.list_extend(reconstructed, suffix)
 
-    local source = table.concat(reconstructed, "\n")
-    -- A zsh-hang trigger anywhere in the reconstructed file would freeze the
-    -- editor at parse() (see zsh_parse_guard); skip highlighting instead.
-    if ZshParseGuard.contains_hang_trigger(source) then
-        return nil
-    end
+    -- Any language can inject zsh, so defuse the whole text.
+    local source =
+        ZshParseGuard.defuse_hang_triggers(table.concat(reconstructed, "\n"))
     local ok_lang, lang_tree =
         pcall(vim.treesitter.get_string_parser, source, lang)
     if not ok_lang or not lang_tree then
