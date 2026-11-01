@@ -12,7 +12,7 @@ A `session/load` renders and keeps the file's messages (`b909dda`), so side-reco
 - Skills: `session-lifecycle`
 
 ## Background
-Side records (hooks, loaded files, and discovered skills once `PLAN-discovered-skills.md` lands) go only to the chat buffer. Every path that rebuilds the chat from `ChatHistory` loses them: `_reload_chat`, `restore_from_history`, and the local fallback after a failed `session/load`.
+Side records (hooks, loaded files and discovered skills) go only to the chat buffer. Every path that rebuilds the chat from `ChatHistory` loses them: `_reload_chat`, `restore_from_history`, and the local fallback after a failed `session/load`.
 
 One history message per drain, holding the drained `SideRecord[]` as they are, so that replay runs the same code as the live drain:
 - A per-kind message would need a new variant, a new replay branch and a new test for each kind.

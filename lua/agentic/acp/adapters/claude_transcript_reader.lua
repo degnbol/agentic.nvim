@@ -54,9 +54,7 @@ local function peer_message_side_record(record)
 end
 
 --- Tails one Claude Code transcript jsonl, a session's or a subagent's, for
---- what the ACP bridge does not forward: hook activity, files the CLI loaded
---- into the model's context without a tool call, the input of `SendMessage`
---- calls, and messages from other sessions and subagents. One reader per
+--- records of what the ACP bridge does not forward. One reader per
 --- transcript.
 ---
 --- The bridge forwards no peer message: live it forwards only messages a
@@ -227,6 +225,8 @@ function ClaudeTranscriptReader:_read_line(line)
                 side = self:_loaded_file_side_record(record, place)
             elseif record.kind == "peer_message" then
                 side = peer_message_side_record(record)
+            elseif record.kind == "discovered_skills" then
+                side = self:_discovered_skills_side_record(record, place)
             else
                 side = tool_use_side_record(record)
             end
@@ -348,6 +348,17 @@ function ClaudeTranscriptReader:_loaded_file_side_record(record, place)
     return { kind = "loaded_file", loaded_file = loaded_file }
 end
 
+--- Discovered skills as a side record at the anchor of their chain.
+--- @param record agentic.acp.ClaudeDiscoveredSkillsRecord
+--- @param place agentic.acp.TranscriptLink The link ending the record's chain
+--- @return agentic.acp.SideRecord side
+function ClaudeTranscriptReader:_discovered_skills_side_record(record, place)
+    local skills = anchor_of(place) --[[@as agentic.acp.DiscoveredSkills]]
+    skills.title = record.title
+    skills.body = record.body
+    return { kind = "discovered_skills", discovered_skills = skills }
+end
+
 --- Tell the user side records are lost, once per reader — a transcript that
 --- cannot be read fails again on every later drain.
 --- @param err string|nil
@@ -357,7 +368,7 @@ function ClaudeTranscriptReader:_notify_unreadable(err)
     end
     self._notified = true
     Logger.notify(
-        "Claude transcript unreadable, hook activity, loaded files, SendMessage input and received messages will not show: "
+        "Claude transcript unreadable, activity it records outside ACP will not show: "
             .. (err or "unknown error")
     )
 end

@@ -140,6 +140,19 @@ describe("agentic.ui.MessageWriter", function()
         return nil
     end
 
+    --- 1-indexed row of the first line equal to `text`.
+    --- @param text string
+    --- @return integer|nil
+    local function row_of(text)
+        local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        for i, line in ipairs(lines) do
+            if line == text then
+                return i
+            end
+        end
+        return nil
+    end
+
     --- One sign per row is the whole premise of the gutter: the chat window is
     --- `signcolumn=yes:1`, so a second sign on a row is silently dropped and the
     --- loser is decided by namespace id. Asserts no row carries two, across both
@@ -738,17 +751,17 @@ describe("agentic.ui.MessageWriter", function()
             writer:write_notice({ glyph = GLYPH, title = "after" })
 
             local lines = buffer_lines()
-            local function row_of(text)
+            local function row0_of(text)
                 for i, line in ipairs(lines) do
                     if line == text then
                         return i - 1
                     end
                 end
             end
-            assert.equal("m1", writer:notice_at(row_of("## linked")))
-            assert.equal("m1", writer:notice_at(row_of("two")))
-            assert.is_nil(writer:notice_at(row_of("## plain")))
-            assert.is_nil(writer:notice_at(row_of("## after")))
+            assert.equal("m1", writer:notice_at(row0_of("## linked")))
+            assert.equal("m1", writer:notice_at(row0_of("two")))
+            assert.is_nil(writer:notice_at(row0_of("## plain")))
+            assert.is_nil(writer:notice_at(row0_of("## after")))
         end)
 
         it("reset forgets the ids", function()
@@ -1076,18 +1089,6 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(TITLE, lines[7])
         end)
 
-        --- 1-indexed row of the first line equal to `text`.
-        --- @param text string
-        --- @return integer|nil
-        local function row_of(text)
-            for i, line in ipairs(buffer_lines()) do
-                if line == text then
-                    return i
-                end
-            end
-            return nil
-        end
-
         --- A completed tool call followed by a two-paragraph prose run, so an
         --- anchored region has content both above and below it.
         local function call_then_prose()
@@ -1283,6 +1284,79 @@ describe("agentic.ui.MessageWriter", function()
                 assert.equal(row_of("after the call"), opener)
             end
         )
+    end)
+
+    describe("discovered skills", function()
+        local TITLE = "New skills discovered in sub/.claude/skills:"
+
+        --- @param body string[]
+        --- @param tool_call_id string|nil
+        --- @return agentic.acp.DiscoveredSkills
+        local function skills(body, tool_call_id)
+            return { title = TITLE, body = body, tool_call_id = tool_call_id }
+        end
+
+        local function call_then_prose()
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            writer:write_message_chunk(make_message_update("after the call\n"))
+        end
+
+        it("goes under its call, closed, under the skill sign", function()
+            call_then_prose()
+
+            writer:write_discovered_skills(skills({ "- foo", "- bar" }, "t1"))
+
+            local title = row_of(TITLE)
+            assert.is_not_nil(title)
+            ---@cast title -nil
+            assert.is_true(title < row_of("after the call"))
+            assert.same(
+                { "- foo", "- bar" },
+                vim.api.nvim_buf_get_lines(bufnr, title, title + 2, false)
+            )
+            local sign
+            for _, mark in ipairs(rail()) do
+                if mark[1] == title - 1 then
+                    sign = mark[2]
+                end
+            end
+            assert.equal(Glyphs.KIND.skill .. " ", sign)
+            local ops = writer._pending_fold_ops
+            assert.is_false(ops[#ops].open)
+            assert_one_sign_per_row()
+        end)
+
+        it("leaves a region with one name open", function()
+            writer:write_discovered_skills(skills({ "- foo" }))
+
+            local ops = writer._pending_fold_ops
+            assert.equal(1, #ops)
+            assert.is_true(ops[1].open)
+        end)
+
+        it("appends when its call is not in the buffer", function()
+            call_then_prose()
+
+            writer:write_discovered_skills(skills({ "- foo", "- bar" }, "t9"))
+
+            assert.is_true(row_of(TITLE) > row_of("after the call"))
+        end)
+
+        it("goes below a hook region already at its call", function()
+            call_then_prose()
+            writer:write_hook_block({
+                body = { "injected", "context" },
+                title = "`guard.sh`",
+                tool_call_id = "t1",
+            })
+
+            writer:write_discovered_skills(skills({ "- foo", "- bar" }, "t1"))
+
+            assert.is_true(row_of("`guard.sh`") < row_of(TITLE))
+            assert.is_true(row_of(TITLE) < row_of("after the call"))
+        end)
     end)
 
     describe("loaded files and anchors", function()

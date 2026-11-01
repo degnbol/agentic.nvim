@@ -1109,11 +1109,7 @@ end
 --- @param body string[] Already prose-wrapped
 --- @param sign string `sign_text` identifying the region
 --- @param opts agentic.ui.MessageWriter.CollapsedRegionOpts
-function MessageWriter:_write_collapsed_region(body, sign, opts)
-    if #body == 0 then
-        return
-    end
-
+function MessageWriter:_append_collapsed_region(body, sign, opts)
     local region, region_offset = collapsed_region_lines(body)
     local lines = self:_take_section_break()
     local body_offset = #lines + region_offset
@@ -1327,7 +1323,7 @@ function MessageWriter:flush_thought_run()
         vim.split(vim.trim(text), "\n", { plain = true }),
         Config.windows.wrap_width
     )
-    self:_write_collapsed_region(body, Glyphs.THINKING_SIGN, {
+    self:_append_collapsed_region(body, Glyphs.THINKING_SIGN, {
         table_row_ends = table_row_ends,
     })
 end
@@ -1337,51 +1333,38 @@ end
 --- @field title? string First row of the region, above the body and never wrapped
 --- @field failed? boolean The hook timed out or exited non-zero with an error
 
---- Render hook activity as a collapsed region carrying the hook glyph and led
---- by `block.title`, which its closed fold's foldtext leads with too. An empty
---- body writes nothing. A failed hook's region carries `Glyphs.HOOK_FAILED`
---- and is left open, so its reason reads without `zo`.
----
---- A region of its own rather than part of the tool call that triggered it: an
---- injection is a separate input the model received. It carries no heading for
---- the reason `queries/agentic/context.scm` documents — a titled heading over a
---- fenced body pins the treesitter-context breadcrumb.
----
---- Placed at the block's anchor when that is still in the buffer, so the
---- record reads under the call or prompt it ran on rather than under whatever
---- has been written since the hook ran — nothing signals when a provider's
+--- Write a collapsed region under `anchor` when that is still in the buffer,
+--- so it reads under the call or prompt it belongs to rather than under
+--- whatever has been written since. Nothing signals when a provider's
 --- records arrive, so a record can arrive after later output. Appended at the
 --- end otherwise: a record from a turn-boundary event has no anchor, and one
 --- whose block was never rendered has nothing to sit under.
 ---
---- Not persisted: `ChatHistory` has no hook message variant yet, so a restored
---- session shows none of these. Missing work, not a rendering bug.
---- @param block agentic.ui.MessageWriter.HookBlock
-function MessageWriter:write_hook_block(block)
-    local wrapped, table_row_ends =
-        TextWrap.wrap_prose(block.body, Config.windows.wrap_width)
-    if #wrapped == 0 then
+--- An empty body writes nothing, even with a title. A one-row body is left
+--- open, titled or not.
+--- @param anchor agentic.acp.Anchor
+--- @param title string|nil First row of the region, above the body
+--- @param body string[] Already wrapped
+--- @param sign string `sign_text` identifying the region
+--- @param opts agentic.ui.MessageWriter.CollapsedRegionOpts `titled` is set from `title`; `table_row_ends` index into `body`
+function MessageWriter:_place_collapsed_region(anchor, title, body, sign, opts)
+    if #body == 0 then
         return
     end
-    -- A one-row body is open under its title, as it is without one.
-    local open = block.failed or #wrapped == 1
-    if block.title then
-        wrapped = vim.list_extend({ block.title }, wrapped)
-        table_row_ends = vim.tbl_map(function(i)
+    opts = vim.tbl_extend("force", opts, {
+        titled = title ~= nil,
+        open = opts.open or #body == 1,
+    })
+    if title then
+        body = vim.list_extend({ title }, body)
+        opts.table_row_ends = vim.tbl_map(function(i)
             return i + 1
-        end, table_row_ends or {})
+        end, opts.table_row_ends or {})
     end
-    local sign = (block.failed and Glyphs.HOOK_FAILED or Glyphs.HOOK) .. " "
-    --- @type agentic.ui.MessageWriter.CollapsedRegionOpts
-    local opts = {
-        titled = block.title ~= nil,
-        open = open,
-        table_row_ends = table_row_ends,
-    }
 
-    local placed, last_row = self:_resolve_anchor(block)
+    local placed, last_row = self:_resolve_anchor(anchor)
     if placed and last_row then
-        local lines, body_offset = collapsed_region_lines(wrapped)
+        local lines, body_offset = collapsed_region_lines(body)
         self:_schedule_follow()
         self:_own_edit(function(bufnr)
             local first_row =
@@ -1389,7 +1372,7 @@ function MessageWriter:write_hook_block(block)
             self:_decorate_collapsed_region(
                 bufnr,
                 first_row + body_offset,
-                first_row + body_offset + #wrapped - 1,
+                first_row + body_offset + #body - 1,
                 sign,
                 opts
             )
@@ -1400,7 +1383,47 @@ function MessageWriter:write_hook_block(block)
     -- Appending under a buffered thought run would put the region above the
     -- thinking it followed; an anchored one has no such ordering to keep.
     self:flush_thought_run()
-    self:_write_collapsed_region(wrapped, sign, opts)
+    self:_append_collapsed_region(body, sign, opts)
+end
+
+--- Render hook activity as a collapsed region carrying the hook glyph and led
+--- by `block.title`, which its closed fold's foldtext leads with too. Placed
+--- under the block's anchor while that is in the buffer, appended at the end
+--- otherwise. An empty body writes nothing. A failed hook's region carries
+--- `Glyphs.HOOK_FAILED` and is left open, so its reason reads without `zo`.
+---
+--- A region of its own rather than part of the tool call that triggered it: an
+--- injection is a separate input the model received. It carries no heading for
+--- the reason `queries/agentic/context.scm` documents — a titled heading over a
+--- fenced body pins the treesitter-context breadcrumb.
+---
+--- Not persisted: `ChatHistory` has no hook message variant yet, so a restored
+--- session shows none of these. Missing work, not a rendering bug.
+--- @param block agentic.ui.MessageWriter.HookBlock
+function MessageWriter:write_hook_block(block)
+    local wrapped, table_row_ends =
+        TextWrap.wrap_prose(block.body, Config.windows.wrap_width)
+    local sign = (block.failed and Glyphs.HOOK_FAILED or Glyphs.HOOK) .. " "
+    self:_place_collapsed_region(block, block.title, wrapped, sign, {
+        open = block.failed,
+        table_row_ends = table_row_ends,
+    })
+end
+
+--- Render skills the provider made available to the model as a collapsed
+--- region carrying the skill glyph and led by `skills.title`. Placed under
+--- its anchor while that is in the buffer, appended at the end otherwise. Left
+--- open for a single skill. The rows are not wrapped, so each skill name stays
+--- whole. Not persisted, as hook regions are not.
+--- @param skills agentic.acp.DiscoveredSkills
+function MessageWriter:write_discovered_skills(skills)
+    self:_place_collapsed_region(
+        skills,
+        skills.title,
+        skills.body,
+        Glyphs.KIND.skill .. " ",
+        {}
+    )
 end
 
 --- @class agentic.ui.MessageWriter.HookRow : agentic.acp.Anchor

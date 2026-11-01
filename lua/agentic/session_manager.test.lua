@@ -2464,12 +2464,13 @@ describe("agentic.SessionManager", function()
         --- @return agentic.acp.LoadedFile[] loaded one per write_loaded_file call
         --- @return agentic.ui.MessageWriter.HookRow[] rows one per write_hook_row call
         --- @return string[] calls the writer methods called, in order
+        --- @return agentic.acp.DiscoveredSkills[] skills one per write_discovered_skills call
         local function make_session(records)
             local sides = vim.tbl_map(function(record)
                 return record.kind and record
                     or { kind = "hook", hook = record }
             end, records)
-            local written, loaded, rows, calls = {}, {}, {}, {}
+            local written, loaded, rows, calls, skills = {}, {}, {}, {}, {}
             --- @param list table[]
             --- @param method string
             --- @return fun(self: table, arg: table)
@@ -2501,9 +2502,13 @@ describe("agentic.SessionManager", function()
                         loaded,
                         "write_loaded_file"
                     ),
+                    write_discovered_skills = record_into(
+                        skills,
+                        "write_discovered_skills"
+                    ),
                 },
             } --[[@as agentic.SessionManager]]
-            return session, written, loaded, rows, calls
+            return session, written, loaded, rows, calls, skills
         end
 
         it("sends a loaded file to its writer method", function()
@@ -2517,6 +2522,29 @@ describe("agentic.SessionManager", function()
 
             assert.same({ file }, loaded)
             assert.equal(1, #written)
+        end)
+
+        it("sends each kind of a mixed drain to its writer method", function()
+            local session, _, _, _, calls = make_session({
+                {
+                    kind = "discovered_skills",
+                    discovered_skills = {
+                        title = "New skills",
+                        body = { "- foo" },
+                        tool_call_id = "toolu_1",
+                    },
+                },
+                { kind = "loaded_file", loaded_file = { path = "/r/a.md" } },
+                { group = "context", body = { "ctx" } },
+            })
+
+            session:_drain_side_records()
+
+            assert.same({
+                "write_discovered_skills",
+                "write_loaded_file",
+                "write_hook_block",
+            }, calls)
         end)
 
         it("forwards a hook record's prompt and compaction anchors", function()
@@ -2719,7 +2747,8 @@ describe("agentic.SessionManager", function()
         describe(
             "a record naming a call that delegated to a subagent",
             function()
-                --- A context record, a pass and a loaded file, all naming `id`.
+                --- A context record, a pass, a loaded file and discovered
+                --- skills, all naming `id`.
                 --- @param id string
                 --- @return table[]
                 local function records_naming(id)
@@ -2737,11 +2766,19 @@ describe("agentic.SessionManager", function()
                                 tool_call_id = id,
                             },
                         },
+                        {
+                            kind = "discovered_skills",
+                            discovered_skills = {
+                                title = "New skills",
+                                body = { "- foo" },
+                                tool_call_id = id,
+                            },
+                        },
                     }
                 end
 
                 it("goes under the subagent's block", function()
-                    local session, written, loaded, rows =
+                    local session, written, loaded, rows, _, skills =
                         make_session(records_naming("toolu_1"))
                     session._agent_by_task.toolu_1 = "child-1"
 
@@ -2750,12 +2787,13 @@ describe("agentic.SessionManager", function()
                     assert.equal("child-1", written[1].tool_call_id)
                     assert.equal("child-1", loaded[1].tool_call_id)
                     assert.equal("child-1", rows[1].tool_call_id)
+                    assert.equal("child-1", skills[1].tool_call_id)
                 end)
 
                 it(
                     "keeps its id when the call has a block of its own",
                     function()
-                        local session, written, loaded, rows =
+                        local session, written, loaded, rows, _, skills =
                             make_session(records_naming("toolu_1"))
                         session._agent_by_task.toolu_1 = "child-1"
                         session.message_writer.tool_call_blocks.toolu_1 = {}
@@ -2765,6 +2803,7 @@ describe("agentic.SessionManager", function()
                         assert.equal("toolu_1", written[1].tool_call_id)
                         assert.equal("toolu_1", loaded[1].tool_call_id)
                         assert.equal("toolu_1", rows[1].tool_call_id)
+                        assert.equal("toolu_1", skills[1].tool_call_id)
                     end
                 )
 

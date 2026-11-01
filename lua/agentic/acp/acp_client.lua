@@ -203,6 +203,11 @@ end
 --- @class agentic.acp.LoadedFile : agentic.acp.Anchor
 --- @field path string Absolute
 
+--- Skills the provider made available to the model during the session.
+--- @class agentic.acp.DiscoveredSkills : agentic.acp.Anchor
+--- @field title string The row announcing the skills
+--- @field body string[] One row per skill
+
 --- A message the session received from another session or a subagent.
 --- @class agentic.acp.ReceivedMessage
 --- @field message_id string
@@ -214,6 +219,7 @@ end
 --- @alias agentic.acp.SideRecord
 --- | { kind: "hook", hook: agentic.acp.HookRecord }
 --- | { kind: "loaded_file", loaded_file: agentic.acp.LoadedFile }
+--- | { kind: "discovered_skills", discovered_skills: agentic.acp.DiscoveredSkills }
 --- | { kind: "tool_call", tool_call: agentic.ui.MessageWriter.ToolCallBase }
 --- | { kind: "received_message", received_message: agentic.acp.ReceivedMessage }
 

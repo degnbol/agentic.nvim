@@ -88,7 +88,7 @@ no rendering work and left for the note that owns the submit paths.
 6. Hook activity — shipped. The ACP bridge drops the hook lifecycle events, so
    it is recovered from the CLI's transcript jsonl and rendered through
    `MessageWriter:write_hook_block`, which took 5's shape wholesale: the two
-   share `MessageWriter:_write_collapsed_region`. Persistence is
+   share `MessageWriter:_append_collapsed_region`. Persistence is
    `PLAN-side-record-history.md`. Still open: blocking-hook feedback, a site unit 1
    left as prose, arrives as a genuine `agent_message_chunk`, identifiable by a
    bridge-generated severity prefix.

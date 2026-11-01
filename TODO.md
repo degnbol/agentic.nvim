@@ -11,7 +11,6 @@ Tracks are independent unless a note says otherwise.
 
 **Session resume**
 1. [`PLAN-side-record-history.md`](notes/PLAN-side-record-history.md).
-   After `PLAN-discovered-skills.md` only to avoid a rebase.
 2. [`PLAN-subagent-task-id.md`](notes/PLAN-subagent-task-id.md). Before 3
    only to avoid a rebase; it can land earlier.
 3. [`PLAN-split-subagents.md`](notes/PLAN-split-subagents.md)
@@ -32,9 +31,6 @@ renames its references first.
    After `PLAN-reapply-model.md`, which deletes the model-line dedupe this
    plan would otherwise move. After Session resume 3 only to avoid a rebase.
 - [`PLAN-nested-subagent-blocks.md`](notes/PLAN-nested-subagent-blocks.md).
-
-**Harness context in chat:**
-- [`PLAN-discovered-skills.md`](notes/PLAN-discovered-skills.md)
 
 **Executed code**
 1. [`PLAN-walk-file-model.md`](notes/PLAN-walk-file-model.md)

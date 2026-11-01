@@ -445,6 +445,48 @@ describe("ClaudeTranscriptRecords", function()
         end)
     end)
 
+    describe("discovered skills", function()
+        --- A `dynamic_skill` attachment line.
+        --- @param fields table fields to override on the attachment
+        --- @return string
+        local function dynamic_skill(fields)
+            return line(vim.tbl_extend("force", {
+                type = "dynamic_skill",
+                skillDir = "/repo/sub/.claude/skills",
+                skillNames = { "foo", "bar" },
+                displayPath = "sub/.claude/skills",
+            }, fields))
+        end
+
+        it("titles the record by displayPath, one row per name", function()
+            assert.same({
+                kind = "discovered_skills",
+                title = "New skills discovered in sub/.claude/skills, now available via the Skill tool:",
+                body = { "- foo", "- bar" },
+                timestamp = "2026-08-28T10:00:00.000Z",
+            }, decode_one(dynamic_skill({})))
+        end)
+
+        it("passes a namespaced name through unchanged", function()
+            local record =
+                decode_one(dynamic_skill({ skillNames = { "foo.nvim:bar" } }))
+
+            assert.same({ "- foo.nvim:bar" }, record.body)
+        end)
+
+        it("gives none without a displayPath", function()
+            assert.same({}, decode(dynamic_skill({ displayPath = vim.NIL })))
+        end)
+
+        it("gives none when skillNames is not a list", function()
+            assert.same({}, decode(dynamic_skill({ skillNames = "foo" })))
+        end)
+
+        it("gives none for an empty skillNames", function()
+            assert.same({}, decode(dynamic_skill({ skillNames = {} })))
+        end)
+    end)
+
     describe("tool uses", function()
         it("gives a record per tool_use block of an assistant entry", function()
             local records = decode(vim.json.encode({

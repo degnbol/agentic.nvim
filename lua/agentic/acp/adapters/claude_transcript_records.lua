@@ -1,8 +1,6 @@
 --- Decoder for the records the Claude Code CLI writes to its transcript jsonl
 --- (`~/.claude/projects/<slug>/<session-id>.jsonl`) about what the ACP bridge
---- does not forward: hook activity, files the CLI added to the model's
---- context without a tool call, the input of tool calls, and messages from
---- other sessions and subagents.
+--- does not forward.
 ---
 --- Pure and stateless: one entry in, zero or more records out. Records do not
 --- carry the place they belong: that takes joins across entries. `link` gives
@@ -24,6 +22,12 @@ local M = {}
 --- @field kind "loaded_file"
 --- @field path string Absolute
 --- @field is_mention boolean An `@` file, not a rule
+--- @field timestamp? string
+
+--- @class agentic.acp.ClaudeDiscoveredSkillsRecord
+--- @field kind "discovered_skills"
+--- @field title string
+--- @field body string[] One `- <name>` row per skill
 --- @field timestamp? string
 
 --- @class agentic.acp.ClaudeToolUseRecord
@@ -295,6 +299,50 @@ local function loaded_file_record(entry)
     return record
 end
 
+--- The text the CLI gives the model for a `dynamic_skill` attachment, above
+--- one `- <name>` row per skill. `%s` is the attachment's `displayPath`.
+--- Version-coupled to the CLI: recheck the wording on a bump.
+local DISCOVERED_SKILLS_TITLE =
+    "New skills discovered in %s, now available via the Skill tool:"
+
+--- The skills a transcript entry's `dynamic_skill` attachment made available.
+---
+--- The CLI rebuilds the model's text from the attachment on each request, and
+--- drops it when `skillDir` is no longer under the current project root, so
+--- after a project root change the model may not have received this record.
+--- @param entry table one decoded transcript line
+--- @return agentic.acp.ClaudeDiscoveredSkillsRecord|nil record nil when the entry carries none
+local function discovered_skills_record(entry)
+    local attachment = entry.attachment
+    if
+        entry.type ~= "attachment"
+        or type(attachment) ~= "table"
+        or attachment.type ~= "dynamic_skill"
+        or type(attachment.displayPath) ~= "string"
+        or type(attachment.skillNames) ~= "table"
+    then
+        return nil
+    end
+    local body = {}
+    for _, name in ipairs(attachment.skillNames) do
+        if type(name) == "string" then
+            table.insert(body, "- " .. name)
+        end
+    end
+    if #body == 0 then
+        return nil
+    end
+
+    --- @type agentic.acp.ClaudeDiscoveredSkillsRecord
+    local record = {
+        kind = "discovered_skills",
+        title = DISCOVERED_SKILLS_TITLE:format(attachment.displayPath),
+        body = body,
+        timestamp = entry.timestamp,
+    }
+    return record
+end
+
 --- One record per `tool_use` block of an assistant entry.
 --- @param entry table one decoded transcript line
 --- @return agentic.acp.ClaudeToolUseRecord[] records empty when the entry is not an assistant entry calling a tool
@@ -408,17 +456,21 @@ end
 --- @alias agentic.acp.ClaudeTranscriptRecord
 --- | agentic.acp.ClaudeHookRecord
 --- | agentic.acp.ClaudeLoadedFileRecord
+--- | agentic.acp.ClaudeDiscoveredSkillsRecord
 --- | agentic.acp.ClaudeToolUseRecord
 --- | agentic.acp.ClaudePeerMessageRecord
 
---- The hook records, loaded file, tool uses and peer message a transcript
---- entry carries.
+--- The records a transcript entry carries.
 --- @param entry table one decoded transcript line
 --- @return agentic.acp.ClaudeTranscriptRecord[] records empty for an entry that carries none
 function M.records(entry)
     local loaded_file = loaded_file_record(entry)
     if loaded_file then
         return { loaded_file }
+    end
+    local discovered_skills = discovered_skills_record(entry)
+    if discovered_skills then
+        return { discovered_skills }
     end
     local peer_message = peer_message_record(entry)
     if peer_message then

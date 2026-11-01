@@ -978,6 +978,32 @@ describe("ClaudeTranscriptReader", function()
         end)
     end)
 
+    it("names the call whose result discovered skills load under", function()
+        local reader = reader_at(transcript)
+        append({
+            tool_result("r-1", "a-1", "toolu_read"),
+            transcript_entry("attachment", "d-1", "r-1", {
+                attachment = {
+                    type = "dynamic_skill",
+                    skillDir = "/repo/sub/.claude/skills",
+                    skillNames = { "foo" },
+                    displayPath = "sub/.claude/skills",
+                },
+            }),
+        })
+
+        assert.same({
+            {
+                kind = "discovered_skills",
+                discovered_skills = {
+                    tool_call_id = "toolu_read",
+                    title = "New skills discovered in sub/.claude/skills, now available via the Skill tool:",
+                    body = { "- foo" },
+                },
+            },
+        }, reader:drain())
+    end)
+
     it("notifies once when the transcript cannot be read", function()
         local notify = spy.stub(Logger, "notify")
         local reader = reader_at(transcript)

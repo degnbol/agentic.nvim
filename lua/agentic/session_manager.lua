@@ -2683,11 +2683,11 @@ local function hook_title(record)
     return title
 end
 
---- Write the hook activity, loaded files and received messages recorded since
---- the last drain to the chat buffer, each hook record and loaded file at the
---- anchor it names, and add recorded tool call fields to their calls. Hooks
---- that passed follow the rest, one row each. A record naming a call that
---- delegated to a subagent goes under the subagent's block.
+--- Write the side records recorded since the last drain to the chat buffer,
+--- each that names an anchor at that anchor, and add recorded tool call
+--- fields to their calls. Hooks that passed follow the rest, one row each. A
+--- record naming a call that delegated to a subagent goes under the
+--- subagent's block.
 function SessionManager:_drain_side_records()
     if self.destroyed or not self.session_id then
         return
@@ -2708,6 +2708,10 @@ function SessionManager:_drain_side_records()
             self:_apply_side_tool_call(side.tool_call)
         elseif side.kind == "received_message" then
             self:_write_received_message(side.received_message)
+        elseif side.kind == "discovered_skills" then
+            local skills = side.discovered_skills
+            skills.tool_call_id = self:_block_id(skills.tool_call_id)
+            self.message_writer:write_discovered_skills(skills)
         else
             local record = side.hook
             record.tool_call_id = self:_block_id(record.tool_call_id)
@@ -2834,7 +2838,7 @@ function SessionManager:_finalize_turn(usage)
     -- Last of the three: a region appended before the footer would move the row
     -- the footer is stamped on, and this drain still appends the remaining
     -- records that have no anchor in the buffer. Where an appended region falls
-    -- relative to the prose run does not matter; `_write_collapsed_region`
+    -- relative to the prose run does not matter; `_append_collapsed_region`
     -- brackets the run it ends.
     self:_drain_side_records()
     -- A call not reported by the turn's end never will be.

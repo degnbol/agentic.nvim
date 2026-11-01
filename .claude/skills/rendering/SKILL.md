@@ -31,8 +31,8 @@ Buffer-wide rules:
   docstring).
 - The chat is in time order: content shows where it happened relative to
   everything else. Content the client learns of after later output is written,
-  such as hook records and loaded files read from the CLI transcript, goes
-  beneath the item it belongs to and below anything already placed there
+  such as records read from the CLI transcript, goes beneath the item it
+  belongs to and below anything already placed there
   (`MessageWriter:_resolve_anchor`, `_insert_after`). Only
   content whose item is not in the buffer goes at the end.
 
@@ -146,7 +146,8 @@ injected zsh diff can hang the editor (`ZshParseGuard`).
 A fold marker on the fence language is the only fold trigger — and, because
 levels come from the root tree alone, the chat buffer's only fold source at
 all. Two variants: `<lang>-fold` (sidecar bodies past their threshold,
-thought runs and hook blocks via `_write_collapsed_region`, edit diffs), and
+thought runs via `_append_collapsed_region`, hook output and discovered
+skills via `_place_collapsed_region`, edit diffs), and
 `<lang>-foldnext` (execute and search commands, failed edits), which folds
 through the `console`/`console-fold` fence after it; the output's own fold
 nests inside. Mechanism is split across four files;
