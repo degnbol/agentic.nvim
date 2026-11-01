@@ -1584,9 +1584,10 @@ end
 
 --- Resolve the merged cmd-keyed structured-entries table from the bundled
 --- permissions.json plus any user additions in `Config.permissions.structured`.
---- The two layers merge via `vim.tbl_deep_extend("force", bundled, user)` — a
---- user cmd key wins wholesale (its kind-arrays replace the bundled ones), and
---- a `vim.NIL` value disables the bundled cmd entirely (stripped before return).
+--- The two layers merge via `vim.tbl_deep_extend("force", bundled, user)`: a
+--- user kind-array replaces the bundled array of that kind, other kinds and
+--- `arity` lists the user omits stay bundled, and a `vim.NIL` value disables
+--- the bundled cmd entirely (stripped before return).
 --- Re-reads the bundled file when its mtime or `use_plugin_defaults`
 --- changes; user additions are recompiled when the table reference changes.
 --- The same table is returned until either layer changes.

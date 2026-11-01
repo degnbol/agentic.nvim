@@ -503,7 +503,7 @@ local ConfigDefault = {
     --- @field use_claude_settings boolean Match the Bash(...) allow/deny/ask patterns in the global and project Claude settings.json
     --- @field auto_approve_kinds string[] ACP tool kinds approved without a prompt, whatever the target path
     --- @field auto_approve_tier agentic.PermAutoApproveTier Which allow rules auto-approve execute calls. Settings.json allow patterns count under either tier. nil approves none (deny/ask still apply).
-    --- @field structured agentic.StructuredEntries Cmd-keyed structured rules merged over the bundled permissions.json (deep-extend "force"). A cmd key replaces the bundled entry's kind-arrays wholesale; set a cmd to vim.NIL to disable the bundled entry.
+    --- @field structured agentic.StructuredEntries Cmd-keyed structured rules merged over the bundled permissions.json (deep-extend "force"). A user kind-array replaces the bundled array of that kind; kinds the user omits stay bundled. Set a cmd to vim.NIL to disable the bundled entry.
     --- @field highlight_unapproved boolean Highlight the non-known-safe parts of an execute permission prompt while it is shown (independent of `auto_approve_tier`).
     --- @field tmp_cleanup boolean In a granted path under a tmp root, auto-approve a plain `rm` of an untracked tmp file redirected to earlier in the same Bash command.
     --- @field default_grant string[] Paths or globs granted at session start, as with `/grant`. `$VAR` and `~` expand (an entry naming an unset var is skipped), and a relative entry resolves against the session cwd. `{}` starts a session without grants.

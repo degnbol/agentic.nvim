@@ -916,9 +916,9 @@ A token is a letter (`-x`, also inside a cluster) or a long name
 the first positional, a literal first positional (`config`) is after it,
 and `"*"` is every scope. A missing hint only adds prompts; a wrong hint
 can auto-approve a write.
-`permissions.structured` is deep-merged over the bundled defaults: a cmd key
-replaces that command's bundled kind-arrays wholesale, `arity` merges per
-scope and field, and `vim.NIL` disables the bundled entry. >lua
+`permissions.structured` is deep-merged over the bundled defaults: a kind-array
+replaces the bundled array of that kind, kinds you omit stay bundled, `arity`
+merges per scope and field, and `vim.NIL` disables the bundled entry. >lua
     require("agentic").setup({
         permissions = {
             structured = {
