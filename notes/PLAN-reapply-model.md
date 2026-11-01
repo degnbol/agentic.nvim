@@ -10,7 +10,7 @@ Status: reviewed
 - `lua/agentic/session_manager.test.lua`: the `announce_model_loaded` cases
 - Skills: `session-lifecycle` (resume paths, `_restoring`/epoch/`destroyed` guards)
 - Related: `notes/PLAN-agent-view-consolidation.md` moves `announce_model_loaded` into `AgentView`. It lands after this plan, without the dedupe this plan deletes.
-- After `PLAN-load-file-first.md`, which adds `_render_history`. `1d6432e` added the epoch guard of the path A load callback.
+- `b909dda` (landed) added `_render_history`. `1d6432e` added the epoch guard of the path A load callback.
 
 ## Background
 A session is loaded, or re-created from history, by these paths:
@@ -26,7 +26,7 @@ So on paths B and C the session continues on the provider's default model, and t
 
 Further facts the changes depend on:
 - **Path A ignores legacy options.** Its load callback reads only `result.configOptions`, after `config_options:clear()` at the start of the load. `new_session` also reads `response.modes` and `response.models`. So a legacy-models provider has no model options after a load.
-- **Path A has no `destroyed` guard.** The load callback does not check `self.destroyed` (`PLAN-load-file-first.md` adds only the epoch check). The `session-lifecycle` skill requires a `destroyed` check for any async callback that writes to the buffers; `:bd` during the load destroys the session.
+- **Path A has no `destroyed` guard.** The load callback does not check `self.destroyed`, only the epoch. The `session-lifecycle` skill requires a `destroyed` check for any async callback that writes to the buffers; `:bd` during the load destroys the session.
 - **History models go stale.** `restart_session` and the respawn copy the in-memory history, whose `model` is refreshed only at save (`_sync_history_context`). It can be older than the live model.
 - **`announce_model_loaded` dedupes on `_announced_model_id`**, for one case: `new_session` announces `preserved_model` before the switch to it returns, and the switch callback announces the same id again. `_notice_model_switched` and `new_session` maintain the field for that. The dedupe also drops wanted lines: `restart_session` on a live session has already announced its model, so the re-create on the same model writes no line after the replay.
 - **The "offered" check is repeated:** `get_model(id) or legacy_agent_models:get_model(id)` appears in `set_pending_initial_model` and in the flush.
@@ -62,7 +62,7 @@ The `Loaded` line means "from here on, model X". After a load or a re-create it 
 4. **Remove the dedupe.** Delete `_announced_model_id` and its reads and writes (`SessionManager:new`, `announce_model_loaded`, `_notice_model_switched`, `new_session`). `new_session` announces `current_model_id()` in place of `preserved_model`, and the switch to `preserved_model` announces itself, as in step 3.
 5. **`restore_from_history`**: new `opts.model?: string`. In its `new_session` `on_created`, `self:_reapply_model(opts.model or history.model)` after `_render_history()`. Not in `_render_history`: path A calls it before the load and reapplies after the resume notice (step 6).
 6. **`_do_load_acp_session`**:
-   - Return early in the load callback when `self.destroyed`, beside the epoch check `PLAN-load-file-first.md` adds.
+   - Return early in the load callback when `self.destroyed`, beside the epoch check.
    - Replace the `set_pending_initial_model` call with `self:_reapply_model(model)`, after the resume notice.
 7. **`restart_session`**: pass the live model, `config_options:current_model_id()`, captured before `_cancel_session`. `restore_from_history` takes it as `opts.model`, which overrides `history.model`.
 8. **`respawn_preserving_history`**: capture `sm.config_options:current_model_id()` before invalidating the instance. In `on_created`, reapply it. Whether to announce it is Open question 2.

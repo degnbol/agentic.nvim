@@ -10,30 +10,27 @@ Plans in `notes/`. Within a track, each plan needs the ones above it.
 Tracks are independent unless a note says otherwise.
 
 **Session resume**
-1. [`PLAN-load-file-first.md`](notes/PLAN-load-file-first.md)
-2. [`PLAN-side-record-history.md`](notes/PLAN-side-record-history.md).
+1. [`PLAN-side-record-history.md`](notes/PLAN-side-record-history.md).
    After `PLAN-discovered-skills.md` only to avoid a rebase.
-3. [`PLAN-subagent-task-id.md`](notes/PLAN-subagent-task-id.md). Before 4
+2. [`PLAN-subagent-task-id.md`](notes/PLAN-subagent-task-id.md). Before 3
    only to avoid a rebase; it can land earlier.
-4. [`PLAN-split-subagents.md`](notes/PLAN-split-subagents.md)
+3. [`PLAN-split-subagents.md`](notes/PLAN-split-subagents.md)
 
 **Resume terminology:** a mechanical rename: a plan that lands after it
 renames its references first.
 1. [`PLAN-resume-terminology.md`](notes/PLAN-resume-terminology.md)
 
-**Reapply model:** after Session resume 1 (it rewrites the resume paths
-this plan edits and adds the `_render_history` it builds on).
+**Reapply model**
 1. [`PLAN-reapply-model.md`](notes/PLAN-reapply-model.md). Before
    `PLAN-agent-view-consolidation.md`.
 
-**Session log:** after Session resume 2 (it relies on the load and re-create
-paths 1 leaves, and saves 2's `side_records` type).
+**Session log:** after Session resume 1 (it saves 1's `side_records` type).
 1. [`PLAN-append-session-log.md`](notes/PLAN-append-session-log.md)
 
 **Subagents**
 1. [`PLAN-agent-view-consolidation.md`](notes/PLAN-agent-view-consolidation.md).
    After `PLAN-reapply-model.md`, which deletes the model-line dedupe this
-   plan would otherwise move. After Session resume 4 only to avoid a rebase.
+   plan would otherwise move. After Session resume 3 only to avoid a rebase.
 - [`PLAN-cancel-subagent-session.md`](notes/PLAN-cancel-subagent-session.md)
   and [`PLAN-nested-subagent-blocks.md`](notes/PLAN-nested-subagent-blocks.md):
   any order.
@@ -64,9 +61,9 @@ needs the fix in
 
 **Budget:** merge branch `shared-budget`.
 
-**Peer name:** after Session resume 1 and `PLAN-usage-limit-queue.md` only
-to avoid a rebase (they rewrite the `new_session` and `_do_load_acp_session`
-sites it adds calls to).
+**Peer name:** after `PLAN-usage-limit-queue.md` only to avoid a rebase (it
+rewrites the `new_session` and `_do_load_acp_session` sites this plan adds
+calls to).
 1. [`PLAN-peer-session-name.md`](notes/PLAN-peer-session-name.md)
 
 **No ordering:**

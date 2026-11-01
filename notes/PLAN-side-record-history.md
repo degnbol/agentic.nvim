@@ -1,7 +1,7 @@
 # Plan: keep side-record rows in the chat history
 Status: spec
 
-Requires `notes/PLAN-load-file-first.md`. Today a `session/load` rebuilds `messages` from the provider's replay, which has no side-record rows, and the first save after it deletes them from the file. With that plan, a load renders and keeps the file's messages. Passed hooks are rows (`MessageWriter:write_hook_row`), and the drain maps Agent-call ids to their SubAgent block in place (`SessionManager:_block_id`).
+A `session/load` renders and keeps the file's messages (`b909dda`), so side-record rows saved in the file survive a load. Passed hooks are rows (`MessageWriter:write_hook_row`), and the drain maps Agent-call ids to their SubAgent block in place (`SessionManager:_block_id`).
 
 ## Relevant files
 - `lua/agentic/ui/chat_history.lua` and `.test.lua` — `agentic.ui.ChatHistory.Message` alias, `TOOL_CALL_FIELDS`, `add_message`, `prepend_restored_messages`
@@ -9,7 +9,6 @@ Requires `notes/PLAN-load-file-first.md`. Today a `session/load` rebuilds `messa
 - `lua/agentic/session_manager.lua` and `.test.lua` — `_drain_side_records`, `format_duration`, `hook_title`, `_block_id`, `_history_changed`, `_persist_history`, `_reload_chat`, `restore_from_history`, `_fallback_restore_from_local`, the prompt callback's turn-end save
 - `lua/agentic/acp/acp_client.lua` — `agentic.acp.SideRecord`
 - `lua/agentic/ui/message_writer.lua` — `write_hook_block` docstring ("Not persisted"), `_resolve_anchor`, `is_compaction` / `_last_compaction_id`
-- `notes/PLAN-load-file-first.md`
 - Skills: `session-lifecycle`
 
 ## Background
@@ -61,7 +60,7 @@ The messages are not sent to a new session (`prepend_restored_messages`). That s
 ## Non-goals
 - Showing side records in the picker preview.
 - Side records of subagents. The reader does not follow subagent transcripts.
-- The `session/load` path. `PLAN-load-file-first.md` covers it.
+- The `session/load` path, which keeps the file's rows already.
 
 ## Open questions
 None.

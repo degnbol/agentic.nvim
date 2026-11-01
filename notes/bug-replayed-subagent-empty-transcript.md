@@ -19,9 +19,6 @@ read from code.
   The record lookup (`_read_agent_record` → `agent:subagent_record`, a meta
   file named by the agent id) misses that id, so the block's
   `subagent` info has no `agent_type`, a predicted mode and `confirmed = false`.
-- While `_loading`, the subagent gates in `_on_session_update` and
-  `_on_tool_call` return before `_note_agent_task`. So the replay id never gets
-  its `task_id`.
 - `_restore_transcripts` maps the file's messages (keyed by `task_id`) to the
   live child id from the file. It makes one transcript for that id, which holds
   the messages, and one empty transcript for the replay id, which the block
@@ -29,9 +26,13 @@ read from code.
 
 ## Scope
 
-- With `notes/PLAN-load-file-first.md`, the part of a session that the file
-  covers no longer goes through the replay. The bug remains for subagents in
-  the replay's tail, and for a load with no session file.
+- With a session file, the part of a session that the file covers no longer
+  goes through the replay (`b909dda`). The bug remains for subagents in the
+  replay's tail, and for a load with no session file.
+- The same ids keep a subagent's updates out of the replay alignment
+  (`SessionManager:_replay_entry`). So a tail that starts at a main-chat
+  message row, with no new prompt before it, loses the subagent output held
+  just before that row.
 - The replay id ends in the `toolu` id of the `Agent` call, and that id equals
   the `task_id` that the file records for the live child. A fix can map the
   replay id to its task id from that suffix. This is provider knowledge, so it
