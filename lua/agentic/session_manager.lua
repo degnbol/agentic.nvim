@@ -3701,11 +3701,11 @@ end
 --- against a deleted session has no destination left. Warning about work left
 --- undone beats inventing somewhere to send it.
 function SessionManager:_truncate_queue()
-    local count = self.widget:queued_block_count()
+    local count = self.widget.input_dispatch:queued_block_count()
     if count == 0 then
         return
     end
-    self.widget:cancel_queue()
+    self.widget.input_dispatch:cancel_queue()
     self.message_writer:write_error_action(
         string.format(
             "/delete: %d queued block(s) left as draft, unsent.",
@@ -3737,7 +3737,7 @@ function SessionManager:_confirm_queued_command(text)
     if not (spec and spec.session_ending) then
         return true
     end
-    local count = self.widget:queued_block_count()
+    local count = self.widget.input_dispatch:queued_block_count()
     local choice = vim.fn.confirm( -- no nvim_* equivalent
         string.format(
             "Run /%s? It is the first of %d queued block(s).",
@@ -3750,7 +3750,7 @@ function SessionManager:_confirm_queued_command(text)
     if choice == 1 then
         return true
     end
-    self.widget:cancel_queue()
+    self.widget.input_dispatch:cancel_queue()
     self.message_writer:write_error_action(
         string.format(
             "/%s declined — %d queued block(s) left as draft.",
@@ -3777,7 +3777,7 @@ function SessionManager:_drain_queue()
     if self._draining_queue then
         return false
     end
-    local candidate = self.widget:next_queued_block()
+    local candidate = self.widget.input_dispatch:next_queued_block()
     if not candidate then
         return false
     end
@@ -3792,7 +3792,7 @@ function SessionManager:_drain_queue()
     local block
     -- A destroy can also have run while the dialog was open.
     if run and not self.destroyed then
-        block = self.widget:consume_queued_block()
+        block = self.widget.input_dispatch:consume_queued_block()
     end
     self._draining_queue = false
 
@@ -4623,7 +4623,7 @@ function SessionManager:_fallback_restore_from_local(session_id, history)
         )
         -- Queued for the conversation that failed to load, not for an empty
         -- agent.
-        self.widget:cancel_queue()
+        self.widget.input_dispatch:cancel_queue()
         self:new_session({ keep_cwd = true })
         return
     end

@@ -3215,10 +3215,12 @@ describe("agentic.SessionManager", function()
                     set_waiting = noop,
                     set_running = noop,
                     set_chat_title = noop,
-                    next_queued_block = function()
-                        return nil
-                    end,
-                    consume_queued_block = noop,
+                    input_dispatch = {
+                        next_queued_block = function()
+                            return nil
+                        end,
+                        consume_queued_block = noop,
+                    },
                 },
                 permission_manager = {
                     current_request = nil,
@@ -3426,11 +3428,13 @@ describe("agentic.SessionManager", function()
                     set_waiting = noop,
                     set_running = noop,
                     set_chat_title = noop,
-                    next_queued_block = function()
-                        sink.drains = (sink.drains or 0) + 1
-                        return nil
-                    end,
-                    consume_queued_block = noop,
+                    input_dispatch = {
+                        next_queued_block = function()
+                            sink.drains = (sink.drains or 0) + 1
+                            return nil
+                        end,
+                        consume_queued_block = noop,
+                    },
                 },
                 permission_manager = { current_request = nil, queue = {} },
                 todo_list = { close_if_all_completed = noop },
@@ -3546,10 +3550,10 @@ describe("agentic.SessionManager", function()
                     stopped = stopped + 1
                 end
                 local consumed = 0
-                session.widget.next_queued_block = function()
+                session.widget.input_dispatch.next_queued_block = function()
                     return { text = "queued", sr = 0, er = 0 }
                 end
-                session.widget.consume_queued_block = function()
+                session.widget.input_dispatch.consume_queued_block = function()
                     consumed = consumed + 1
                 end
 
@@ -4375,13 +4379,15 @@ describe("agentic.SessionManager", function()
                     buf_nrs = { input = 0 },
                     set_idle = noop,
                     set_chat_title = noop,
-                    cancel_queue = noop,
-                    next_queued_block = function()
-                        return nil
-                    end,
-                    queued_block_count = function()
-                        return 0
-                    end,
+                    input_dispatch = {
+                        cancel_queue = noop,
+                        next_queued_block = function()
+                            return nil
+                        end,
+                        queued_block_count = function()
+                            return 0
+                        end,
+                    },
                 },
                 todo_list = { close_if_all_completed = noop },
                 code_selection = { is_empty = empty },
@@ -5610,22 +5616,24 @@ describe("agentic.SessionManager", function()
                     buf_nrs = { input = 0 },
                     set_idle = noop,
                     set_chat_title = noop,
-                    next_queued_block = function()
-                        local text = queued[1]
-                        return text and { text = text, sr = 0, er = 0 }
-                    end,
-                    consume_queued_block = function()
-                        local text = table.remove(queued, 1)
-                        return text and { text = text, sr = 0, er = 0 }
-                    end,
-                    queued_block_count = function()
-                        return #queued
-                    end,
-                    cancel_queue = function()
-                        for i = #queued, 1, -1 do
-                            table.remove(queued, i)
-                        end
-                    end,
+                    input_dispatch = {
+                        next_queued_block = function()
+                            local text = queued[1]
+                            return text and { text = text, sr = 0, er = 0 }
+                        end,
+                        consume_queued_block = function()
+                            local text = table.remove(queued, 1)
+                            return text and { text = text, sr = 0, er = 0 }
+                        end,
+                        queued_block_count = function()
+                            return #queued
+                        end,
+                        cancel_queue = function()
+                            for i = #queued, 1, -1 do
+                                table.remove(queued, i)
+                            end
+                        end,
+                    },
                 },
                 todo_list = { close_if_all_completed = noop },
                 code_selection = { is_empty = empty },
@@ -5864,21 +5872,24 @@ describe("agentic.SessionManager", function()
                 inner_spy = spy.new(function() end),
                 message_writer = { write_error_action = function() end },
                 widget = {
-                    next_queued_block = function()
-                        return block
-                    end,
-                    queued_block_count = function()
-                        return 1
-                    end,
-                    -- Returns what it deleted, as the real one does: the drain
-                    -- dispatches that rather than the block it read first.
-                    consume_queued_block = function()
-                        sm.consumed = true
-                        return block
-                    end,
-                    cancel_queue = function()
-                        sm.cancelled = true
-                    end,
+                    input_dispatch = {
+                        next_queued_block = function()
+                            return block
+                        end,
+                        queued_block_count = function()
+                            return 1
+                        end,
+                        -- Returns what it deleted, as the real one does: the
+                        -- drain dispatches that rather than the block it read
+                        -- first.
+                        consume_queued_block = function()
+                            sm.consumed = true
+                            return block
+                        end,
+                        cancel_queue = function()
+                            sm.cancelled = true
+                        end,
+                    },
                 },
                 _submit_defer_reason = function()
                     return gate

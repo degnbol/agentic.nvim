@@ -97,8 +97,8 @@ _G.s:_do_load_acp_session("sid-none", "/tmp")
 _G.chunk("sid-none", "partial text")
 -- A prompt submitted during the load, held for the loaded conversation.
 vim.api.nvim_buf_set_lines(_G.s.widget.buf_nrs.input, 0, -1, false, { "follow up" })
-_G.s.widget:submit()
-assert(_G.s.widget:queued_block_count() == 1)
+_G.s.widget.input_dispatch:submit()
+assert(_G.s.widget.input_dispatch:queued_block_count() == 1)
 -- What a replayed plan and edit leave in the panels.
 _G.s.todo_list:render({ { content = "step", status = "pending", priority = "medium" } })
 local edited = vim.fn.tempname()
@@ -116,7 +116,10 @@ _G.new_cb({ sessionId = "sid-new" }, nil)
         assert.is_true(child.lua_get("_G.s.todo_list:is_empty()"))
         assert.equal(0, child.lua_get("_G.s.file_activity:count()"))
         -- The held prompt stays as draft and reaches no agent.
-        assert.equal(0, child.lua_get("_G.s.widget:queued_block_count()"))
+        assert.equal(
+            0,
+            child.lua_get("_G.s.widget.input_dispatch:queued_block_count()")
+        )
         assert.same(
             { "follow up" },
             child.lua_get(

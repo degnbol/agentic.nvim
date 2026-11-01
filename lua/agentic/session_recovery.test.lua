@@ -747,7 +747,7 @@ describe("agentic.session_recovery", function()
             local input = widget.buf_nrs.input
             vim.api.nvim_buf_set_lines(input, 0, -1, false, lines)
             for _, range in ipairs(queued) do
-                widget:_queue_line_range(range[1], range[2])
+                widget.input_dispatch:_queue_line_range(range[1], range[2])
             end
             local session = {
                 widget = widget,
@@ -812,7 +812,7 @@ describe("agentic.session_recovery", function()
                 { "refused", "", "held", "", "one", "", "two", "draft" },
                 input_lines(session)
             )
-            assert.equal(0, session.widget:queued_block_count())
+            assert.equal(0, session.widget.input_dispatch:queued_block_count())
             assert.is_nil(session._pending_bufferless_prompt)
             assert.same({
                 "Prompt returned to the input. Switch model with [<M>] to send it again.",

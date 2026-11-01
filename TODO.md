@@ -45,9 +45,8 @@ renames its references first.
 2. [`PLAN-failed-execute-body-offset.md`](notes/PLAN-failed-execute-body-offset.md):
    the offset is fixed; open question 2 stays.
 
-**Input and queue:** either order.
-[`PLAN-chat-widget-dedup.md`](notes/PLAN-chat-widget-dedup.md),
-[`PLAN-usage-limit-queue.md`](notes/PLAN-usage-limit-queue.md). The second
+**Input and queue:**
+[`PLAN-usage-limit-queue.md`](notes/PLAN-usage-limit-queue.md). It
 needs the fix in
 [`bug-respawn-invalidates-shared-client.md`](notes/bug-respawn-invalidates-shared-client.md).
 

@@ -1,5 +1,5 @@
 ---
-paths: "lua/agentic/init.lua,lua/agentic/bootstrap.lua,lua/agentic/session_registry.lua,lua/agentic/session_manager.lua,lua/agentic/ui/chat_widget.lua,lua/agentic/ui/window_decoration.lua,lua/agentic/ui/message_writer.lua,lua/agentic/ui/permission_float.lua"
+paths: "lua/agentic/init.lua,lua/agentic/bootstrap.lua,lua/agentic/session_registry.lua,lua/agentic/session_manager.lua,lua/agentic/ui/chat_widget.lua,lua/agentic/ui/input_dispatch.lua,lua/agentic/ui/window_decoration.lua,lua/agentic/ui/message_writer.lua,lua/agentic/ui/permission_float.lua"
 ---
 
 # Session isolation
@@ -17,7 +17,10 @@ of any tab.
   maps, commands) resolve their session with `SessionRegistry.current()`,
   `get_or_create()` when they may start one, or `create()` when they always
   start one.
-- No module-level shared state for per-session runtime data
+- No module-level shared state for per-session runtime data. Exception:
+  `InputDispatch`'s bufnr-keyed `_dispatches` registry. 'operatorfunc' takes
+  only a named function, so the operator resolves its dispatch from the
+  current buffer.
 - Namespaces are global, extmarks are buffer-scoped — module-level `nvim_create_namespace` is fine
 - Highlight groups defined once globally in `lua/agentic/theme.lua`
 - Keymaps and autocommands must be buffer-local, except where buffer scoping

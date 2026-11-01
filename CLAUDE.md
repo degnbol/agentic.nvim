@@ -104,7 +104,7 @@ over every buffer in `self.buf_nrs`.
 ## Prompt dispatch
 
 A submit splits into blocks (`lua/agentic/utils/prompt_blocks.lua`): one line
-per `/command`, each run of other lines as prose. `ChatWidget:submit`
+per `/command`, each run of other lines as prose. `InputDispatch:submit`
 dispatches the first block and tags the rest as queued regions;
 `SessionManager:_drain_queue` takes one block per benign gate-clear edge.
 Command-ness is line shape, never membership of the advertised list (measured

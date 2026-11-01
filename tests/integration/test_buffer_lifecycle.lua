@@ -187,7 +187,7 @@ _G.new_cb({ sessionId = "sid-2" }, nil)
         local function accept_prompts()
             child.lua([[
 _G.sent = {}
-_G.s.widget.on_submit_input = function(text)
+_G.s.widget.input_dispatch.on_submit = function(text)
     table.insert(_G.sent, text)
     _G.s:_set_prompt_pending(1)
     return true
@@ -308,9 +308,9 @@ require("agentic.utils.buf_helpers").sync_modified(input)
             child.lua([[
 local widget = _G.s.widget
 vim.api.nvim_buf_set_lines(widget.buf_nrs.input, 0, -1, false, { "queued" })
-widget:_queue_line_range(0, 0)
+widget.input_dispatch:_queue_line_range(0, 0)
 vim.api.nvim_set_current_win(widget:home_win())
-widget:consume_queued_block()
+widget.input_dispatch:consume_queued_block()
 ]])
 
             assert.is_false(

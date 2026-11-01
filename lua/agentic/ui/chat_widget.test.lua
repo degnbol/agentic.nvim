@@ -1094,7 +1094,7 @@ describe("agentic.ui.ChatWidget", function()
                 return dispatched
             end)
             show(widget)
-            submit_spy = spy.on(widget, "submit")
+            submit_spy = spy.on(widget.input_dispatch, "submit")
         end)
 
         after_each(function()
@@ -1133,7 +1133,7 @@ describe("agentic.ui.ChatWidget", function()
                 { "held" }
             )
 
-            widget:submit()
+            widget.input_dispatch:submit()
 
             assert.is_true(vim.bo[widget.buf_nrs.input].modified)
         end)
@@ -1237,6 +1237,11 @@ describe("agentic.ui.ChatWidget", function()
 
             assert.equal(new, widget:panel_buf("input"))
             assert.spy(on_panel_buf).was.called(1)
+
+            vim.api.nvim_buf_set_lines(new, 0, -1, false, { "queued" })
+            widget.input_dispatch:_queue_line_range(0, 0)
+            assert.equal(1, widget.input_dispatch:queued_block_count())
+            assert.equal(1, #vim.api.nvim_buf_get_extmarks(new, -1, 0, -1, {}))
         end)
 
         it("replaces a stray buffer holding the panel's name", function()
@@ -1255,10 +1260,10 @@ describe("agentic.ui.ChatWidget", function()
         it("reads a wiped input as an empty queue", function()
             vim.cmd.bwipeout(widget.buf_nrs.input)
 
-            assert.is_nil(widget:next_queued_block())
-            assert.equal(0, widget:queued_block_count())
-            assert.is_nil(widget:consume_queued_block())
-            widget:cancel_queue()
+            assert.is_nil(widget.input_dispatch:next_queued_block())
+            assert.equal(0, widget.input_dispatch:queued_block_count())
+            assert.is_nil(widget.input_dispatch:consume_queued_block())
+            widget.input_dispatch:cancel_queue()
             assert.is_false(vim.api.nvim_buf_is_valid(widget.buf_nrs.input))
         end)
 
@@ -1353,6 +1358,35 @@ describe("agentic.ui.ChatWidget", function()
             assert.equal(rows[2], cursor_row())
         end)
 
+        it("[[ on row 0 stays put with a marker below", function()
+            fill_buffer(widget, "agent", { "top" })
+            writer:write_user_prompt("A prompt")
+            assert.is_true(marker_rows()[1] > 0)
+
+            vim.api.nvim_win_set_cursor(0, { 1, 0 })
+            press("[[")
+
+            assert.equal(0, cursor_row())
+        end)
+
+        it(
+            "[[ on a marker goes to the previous one; ]] past the last stays",
+            function()
+                writer:write_user_prompt("First prompt")
+                writer:write_user_prompt("Second prompt")
+                local rows = marker_rows()
+
+                vim.api.nvim_win_set_cursor(0, { rows[2] + 1, 0 })
+                press("[[")
+                assert.equal(rows[1], cursor_row())
+
+                local last = vim.api.nvim_buf_line_count(widget.buf_nrs.agent)
+                vim.api.nvim_win_set_cursor(0, { last, 0 })
+                press("]]")
+                assert.equal(last - 1, cursor_row())
+            end
+        )
+
         it("reset() removes user-action markers", function()
             writer:write_user_prompt("A prompt")
             assert.equal(1, #marker_rows())
@@ -1428,295 +1462,16 @@ describe("agentic.ui.ChatWidget", function()
         end)
     end)
 
-    describe("partial_send", function()
+    describe("submit", function()
         local widget
-        local input_win
-        local submit_spy
-        local debug_spy
-        local original_send_register
 
         before_each(function()
             vim.cmd("tabnew")
-            submit_spy = spy.new(function()
+            widget = new_widget(function()
                 return true
             end)
-            widget = new_widget(submit_spy --[[@as function]])
             show(widget)
-            input_win = widget:input_win() --[[@as integer]]
-            vim.api.nvim_set_current_win(input_win)
-            debug_spy = spy.on(Logger, "debug")
-            original_send_register = Config.settings.send_register
-            Config.settings.send_register = nil
-        end)
-
-        after_each(function()
-            Config.settings.send_register = original_send_register
-            debug_spy:revert()
-            pcall(function()
-                widget:destroy()
-            end)
-            pcall(function()
-                vim.cmd("tabclose")
-            end)
-        end)
-
-        local function set_input(lines)
-            vim.api.nvim_buf_set_lines(
-                widget.buf_nrs.input,
-                0,
-                -1,
-                false,
-                lines
-            )
-        end
-
-        local function input_lines()
-            return vim.api.nvim_buf_get_lines(
-                widget.buf_nrs.input,
-                0,
-                -1,
-                false
-            )
-        end
-
-        describe("_send_line", function()
-            it("sends current line and removes it from buffer", function()
-                set_input({ "alpha", "beta", "gamma" })
-                vim.api.nvim_win_set_cursor(input_win, { 1, 0 })
-
-                widget:_send_line()
-
-                assert.spy(submit_spy).was.called(1)
-                assert.equal("alpha", submit_spy.calls[1][1])
-                assert.same({ "beta", "gamma" }, input_lines())
-            end)
-
-            it("no-op on empty buffer", function()
-                set_input({ "" })
-                vim.api.nvim_win_set_cursor(input_win, { 1, 0 })
-
-                widget:_send_line()
-
-                assert.spy(submit_spy).was.called(0)
-            end)
-
-            it("no-op on whitespace-only line", function()
-                set_input({ "   \t ", "beta" })
-                vim.api.nvim_win_set_cursor(input_win, { 1, 0 })
-
-                widget:_send_line()
-
-                assert.spy(submit_spy).was.called(0)
-                assert.same({ "   \t ", "beta" }, input_lines())
-            end)
-        end)
-
-        describe("_send_operator", function()
-            it("linewise: sends line range and removes from buffer", function()
-                set_input({ "alpha", "beta", "gamma", "delta" })
-                vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "[", 2, 0, {})
-                vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "]", 3, 0, {})
-
-                widget:_send_operator("line")
-
-                assert.spy(submit_spy).was.called(1)
-                assert.equal("beta\ngamma", submit_spy.calls[1][1])
-                assert.same({ "alpha", "delta" }, input_lines())
-            end)
-
-            it("charwise: sends substring and splices it out", function()
-                set_input({ "hello world" })
-                -- Select "world" (chars 6..10 inclusive, 0-indexed cols)
-                vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "[", 1, 6, {})
-                vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "]", 1, 10, {})
-
-                widget:_send_operator("char")
-
-                assert.spy(submit_spy).was.called(1)
-                assert.equal("world", submit_spy.calls[1][1])
-                assert.same({ "hello " }, input_lines())
-            end)
-
-            it("block: no-op with debug log", function()
-                set_input({ "alpha", "beta" })
-
-                widget:_send_operator("block")
-
-                assert.spy(submit_spy).was.called(0)
-                assert.is_true(debug_spy.call_count >= 1)
-            end)
-        end)
-
-        describe("submit regression", function()
-            local ns = vim.api.nvim_create_namespace("agentic_queued_region")
-
-            it("no-arg path still sends whole buffer and clears it", function()
-                set_input({ "line1", "line2" })
-
-                widget:submit()
-
-                assert.spy(submit_spy).was.called(1)
-                assert.equal("line1\nline2", submit_spy.calls[1][1])
-                assert.same({ "" }, input_lines())
-            end)
-
-            it("tags and keeps the text when the session defers", function()
-                Config.settings.send_register = "a"
-                vim.fn.setreg("a", "untouched")
-                set_input({ "line1", "line2" })
-                submit_spy = spy.new(function()
-                    return false
-                end)
-                widget.on_submit_input = submit_spy
-
-                widget:submit()
-
-                assert.spy(submit_spy).was.called(1)
-                assert.same({ "line1", "line2" }, input_lines())
-                -- One tag over the whole submitted range.
-                local marks = vim.api.nvim_buf_get_extmarks(
-                    widget.buf_nrs.input,
-                    ns,
-                    0,
-                    -1,
-                    { details = true }
-                )
-                assert.equal(1, #marks)
-                assert.equal(0, marks[1][2])
-                assert.equal(1, marks[1][4].end_row)
-                -- Nothing was sent, so the register is not written.
-                assert.equal("untouched", vim.fn.getreg("a"))
-                -- Unsent text is unsaved text.
-                assert.is_true(vim.bo[widget.buf_nrs.input].modified)
-            end)
-
-            it("dispatches the first block and tags the rest", function()
-                set_input({ "/compact", "then continue" })
-
-                widget:submit()
-
-                assert.spy(submit_spy).was.called(1)
-                assert.equal("/compact", submit_spy.calls[1][1])
-                -- The remainder stays visible and editable, tagged for the
-                -- drain that runs at the command's turn end.
-                assert.same({ "then continue" }, input_lines())
-                local marks = vim.api.nvim_buf_get_extmarks(
-                    widget.buf_nrs.input,
-                    ns,
-                    0,
-                    -1,
-                    { details = true }
-                )
-                assert.equal(1, #marks)
-                assert.same({ 0, 0 }, { marks[1][2], marks[1][4].end_row })
-            end)
-
-            it("tags the deferred head above the untouched rest", function()
-                set_input({ "/compact", "then continue" })
-                widget.on_submit_input = spy.new(function()
-                    return false
-                end)
-
-                widget:submit()
-
-                assert.same({ "/compact", "then continue" }, input_lines())
-                local marks = vim.api.nvim_buf_get_extmarks(
-                    widget.buf_nrs.input,
-                    ns,
-                    0,
-                    -1,
-                    { details = true }
-                )
-                assert.equal(2, #marks)
-                assert.same({ 0, 0 }, { marks[1][2], marks[1][4].end_row })
-                assert.same({ 1, 1 }, { marks[2][2], marks[2][4].end_row })
-            end)
-
-            it("passes force through from the write commands", function()
-                set_input({ "line1" })
-
-                local schedule_stub = spy.stub(vim, "schedule")
-                schedule_stub:invokes(function(fn)
-                    fn()
-                end)
-                vim.api.nvim_exec_autocmds("BufWriteCmd", {
-                    buffer = widget.buf_nrs.input,
-                })
-                schedule_stub:revert()
-
-                assert.spy(submit_spy).was.called(1)
-                assert.is_true(submit_spy.calls[1][2].force)
-            end)
-
-            it("moves the cursor to the chat when configured", function()
-                local original = Config.settings.move_cursor_to_agent_on_submit
-                Config.settings.move_cursor_to_agent_on_submit = true
-                MiniTest.finally(function()
-                    Config.settings.move_cursor_to_agent_on_submit = original
-                end)
-                local deferred = capture_deferred()
-                set_input({ "line1" })
-
-                widget:submit()
-                deferred.drain()
-
-                assert.equal(widget:home_win(), vim.api.nvim_get_current_win())
-            end)
-        end)
-
-        describe("send_register", function()
-            it("writes sent text when configured (linewise)", function()
-                Config.settings.send_register = "a"
-                vim.fn.setreg("a", "")
-                set_input({ "alpha", "beta" })
-                vim.api.nvim_win_set_cursor(input_win, { 1, 0 })
-
-                widget:_send_line()
-
-                assert.equal("alpha\n", vim.fn.getreg("a"))
-                assert.equal("V", vim.fn.getregtype("a"))
-            end)
-
-            it("leaves register untouched when nil", function()
-                vim.fn.setreg("a", "preserved")
-                set_input({ "alpha" })
-                vim.api.nvim_win_set_cursor(input_win, { 1, 0 })
-
-                widget:_send_line()
-
-                assert.equal("preserved", vim.fn.getreg("a"))
-            end)
-
-            it("uses charwise regtype for char delete_range", function()
-                Config.settings.send_register = "a"
-                vim.fn.setreg("a", "")
-                set_input({ "hello world" })
-                vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "[", 1, 6, {})
-                vim.api.nvim_buf_set_mark(widget.buf_nrs.input, "]", 1, 10, {})
-
-                widget:_send_operator("char")
-
-                assert.equal("world", vim.fn.getreg("a"))
-                assert.equal("v", vim.fn.getregtype("a"))
-            end)
-        end)
-    end)
-
-    describe("queue", function()
-        local ns = vim.api.nvim_create_namespace("agentic_queued_region")
-        local widget
-        local input_win
-        local submit_spy
-
-        before_each(function()
-            vim.cmd("tabnew")
-            submit_spy = spy.new(function()
-                return true
-            end)
-            widget = new_widget(submit_spy --[[@as function]])
-            show(widget)
-            input_win = widget:input_win() --[[@as integer]]
-            vim.api.nvim_set_current_win(input_win)
+            vim.api.nvim_set_current_win(widget:input_win() --[[@as integer]])
         end)
 
         after_each(function()
@@ -1728,199 +1483,19 @@ describe("agentic.ui.ChatWidget", function()
             end)
         end)
 
-        local function set_input(lines)
-            vim.api.nvim_buf_set_lines(
-                widget.buf_nrs.input,
-                0,
-                -1,
-                false,
-                lines
-            )
-        end
+        it("moves the cursor to the chat when configured", function()
+            local original = Config.settings.move_cursor_to_agent_on_submit
+            Config.settings.move_cursor_to_agent_on_submit = true
+            MiniTest.finally(function()
+                Config.settings.move_cursor_to_agent_on_submit = original
+            end)
+            local deferred = capture_deferred()
+            fill_buffer(widget, "input", { "line1" })
 
-        local function input_lines()
-            return vim.api.nvim_buf_get_lines(
-                widget.buf_nrs.input,
-                0,
-                -1,
-                false
-            )
-        end
+            widget.input_dispatch:submit()
+            deferred.drain()
 
-        --- Tagged regions as `{ start_row, end_row }` pairs in buffer order.
-        local function tags()
-            local marks = vim.api.nvim_buf_get_extmarks(
-                widget.buf_nrs.input,
-                ns,
-                0,
-                -1,
-                { details = true }
-            )
-            return vim.tbl_map(function(m)
-                return { m[2], m[4].end_row }
-            end, marks)
-        end
-
-        it("tags the cursor line and never sends, even when idle", function()
-            set_input({ "one", "two", "three" })
-            vim.api.nvim_win_set_cursor(input_win, { 1, 0 })
-
-            widget:_queue_line()
-
-            assert.same({ { 0, 0 } }, tags())
-            assert.spy(submit_spy).was.called(0)
-            assert.same({ "one", "two", "three" }, input_lines())
-        end)
-
-        it("re-queueing an overlapping range replaces, never stacks", function()
-            set_input({ "one", "two", "three", "four" })
-            widget:_queue_line_range(1, 1)
-            widget:_queue_line_range(0, 2)
-
-            assert.same({ { 0, 2 } }, tags())
-        end)
-
-        -- Sending the line above a region must not drop it to draft: the
-        -- delete abuts the region, which is indistinguishable from an edit
-        -- inside it unless the dispatch says so.
-        it("keeps a region tagged when the line above it is sent", function()
-            set_input({ "send me", "queued task" })
-            widget:_queue_line_range(1, 1)
-            vim.api.nvim_win_set_cursor(input_win, { 1, 0 })
-
-            widget:_send_line()
-
-            assert.same({ "queued task" }, input_lines())
-            assert.same({ { 0, 0 } }, tags())
-        end)
-
-        it("editing inside a region drops its tag", function()
-            set_input({ "one", "two", "three" })
-            widget:_queue_line_range(0, 1)
-            assert.equal(1, #tags())
-
-            vim.api.nvim_buf_set_text(widget.buf_nrs.input, 0, 3, 0, 3, { "X" })
-
-            assert.equal(0, #tags())
-        end)
-
-        it("editing outside a region leaves its tag", function()
-            set_input({ "one", "two", "three" })
-            widget:_queue_line_range(0, 0)
-
-            vim.api.nvim_buf_set_text(widget.buf_nrs.input, 2, 0, 2, 0, { "X" })
-
-            assert.equal(1, #tags())
-        end)
-
-        it("entering insert inside a region drops its tag", function()
-            set_input({ "one", "two", "three" })
-            widget:_queue_line_range(1, 1)
-            vim.api.nvim_win_set_cursor(input_win, { 2, 0 })
-
-            vim.api.nvim_exec_autocmds(
-                "InsertEnter",
-                { buffer = widget.buf_nrs.input }
-            )
-
-            assert.equal(0, #tags())
-        end)
-
-        it("cancel_queue clears every tag, leaving text in place", function()
-            set_input({ "one", "two", "three" })
-            widget:_queue_line_range(0, 0)
-            widget:_queue_line_range(2, 2)
-            assert.equal(2, #tags())
-
-            widget:cancel_queue()
-
-            assert.equal(0, #tags())
-            assert.same({ "one", "two", "three" }, input_lines())
-        end)
-
-        it("reads the topmost region's first block, consuming none", function()
-            set_input({ "one", "two", "three" })
-            -- Queue bottom then top: buffer order must still be top-to-bottom.
-            widget:_queue_line_range(2, 2)
-            widget:_queue_line_range(0, 0)
-
-            assert.equal("one", widget:next_queued_block().text)
-            -- A caller that decides not to dispatch leaves them visible.
-            assert.equal(2, #tags())
-            assert.same({ "one", "two", "three" }, input_lines())
-        end)
-
-        it("splits a region into one block per command line", function()
-            set_input({ "/compact", "then continue", "with X" })
-            widget:_queue_line_range(0, 2)
-
-            assert.equal(2, widget:queued_block_count())
-            assert.equal("/compact", widget:next_queued_block().text)
-        end)
-
-        it("consuming a region's only block takes the region", function()
-            set_input({ "one", "two", "three" })
-            widget:_queue_line_range(2, 2)
-            widget:_queue_line_range(0, 0)
-
-            widget:consume_queued_block()
-
-            assert.same({ { 1, 1 } }, tags())
-            assert.same({ "two", "three" }, input_lines())
-        end)
-
-        -- Consuming a region's last block must delete its mark: a collapsed
-        -- zero-width mark would read the untagged draft line below it as the
-        -- next queued block and send it.
-        it("never reads the draft line below a consumed region", function()
-            set_input({ "queued", "draft" })
-            widget:_queue_line_range(0, 0)
-
-            widget:consume_queued_block()
-
-            assert.same({}, tags())
-            assert.is_nil(widget:next_queued_block())
-            assert.same({ "draft" }, input_lines())
-        end)
-
-        it("consuming one block of a region leaves the rest tagged", function()
-            set_input({ "/compact", "then continue", "draft" })
-            widget:_queue_line_range(0, 1)
-
-            widget:consume_queued_block()
-
-            assert.same({ { 0, 0 } }, tags())
-            assert.same({ "then continue", "draft" }, input_lines())
-            assert.equal("then continue", widget:next_queued_block().text)
-        end)
-
-        it("reads nil when nothing is queued", function()
-            set_input({ "one" })
-            assert.is_nil(widget:next_queued_block())
-            assert.equal(0, widget:queued_block_count())
-        end)
-
-        it("clamps a count past buffer end (no crash)", function()
-            set_input({ "one", "two" })
-            vim.api.nvim_win_set_cursor(input_win, { 1, 0 })
-            -- Drive via a real mapping so vim.v.count1 reflects the typed count.
-            vim.keymap.set("n", "<Plug>(agentic-test-queue)", function()
-                widget:_queue_line()
-            end, { buffer = widget.buf_nrs.input })
-            vim.api.nvim_feedkeys(
-                "9"
-                    .. vim.api.nvim_replace_termcodes(
-                        "<Plug>(agentic-test-queue)",
-                        true,
-                        true,
-                        true
-                    ),
-                "x",
-                false
-            )
-
-            -- Clamped to the last line (row 1), not row 8.
-            assert.same({ { 0, 1 } }, tags())
+            assert.equal(widget:home_win(), vim.api.nvim_get_current_win())
         end)
     end)
 
@@ -2101,7 +1676,7 @@ describe("agentic.ui.ChatWidget", function()
         it("keeps a queued region on the last line", function()
             local ns = vim.api.nvim_create_namespace("agentic_queued_region")
             fill_buffer(widget, "input", { "queued" })
-            widget:_queue_line_range(0, 0)
+            widget.input_dispatch:_queue_line_range(0, 0)
 
             widget:_stage_input("Continue")
 

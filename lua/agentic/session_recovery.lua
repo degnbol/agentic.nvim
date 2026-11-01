@@ -98,8 +98,8 @@ function M.restore_refused_prompt(sm, text, consumed, bufnr)
     local function input()
         return sm.widget:panel_buf("input") --[[@as integer]]
     end
-    local count = sm.widget:queued_block_count()
-    sm.widget:cancel_queue()
+    local count = sm.widget.input_dispatch:queued_block_count()
+    sm.widget.input_dispatch:cancel_queue()
     if sm._pending_bufferless_prompt then
         BufHelpers.prepend_draft(input(), sm._pending_bufferless_prompt)
         sm._pending_bufferless_prompt = nil

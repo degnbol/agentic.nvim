@@ -10,7 +10,7 @@ describe("Partial-send", function()
             vim.cmd("Agentic")
             local session = require("agentic.session_registry").current()
             _G._sent_prompts = {}
-            session.widget.on_submit_input = function(prompt)
+            session.widget.input_dispatch.on_submit = function(prompt)
                 table.insert(_G._sent_prompts, prompt)
                 return true
             end
@@ -113,6 +113,55 @@ describe("Partial-send", function()
         assert.same({ "alpha", "delta" }, input_lines())
     end)
 
+    it("backward charwise visual <CR> sends the substring", function()
+        set_input({ "hello world" })
+        focus_input_normal()
+        child.lua(
+            [[vim.api.nvim_win_set_cursor(_G._widget.win_nrs.input, {1, 10})]]
+        )
+        feed("v4h<CR>")
+
+        assert.same({ "world" }, sent_prompts())
+        assert.same({ "hello " }, input_lines())
+    end)
+
+    --- Tagged regions as `{ start_row, end_row }` pairs in buffer order.
+    local function tags()
+        return child.lua_get([[
+            vim.tbl_map(function(m)
+                return { m[2], m[4].end_row }
+            end, vim.api.nvim_buf_get_extmarks(
+                _G._widget.buf_nrs.input,
+                vim.api.nvim_create_namespace("agentic_queued_region"),
+                0, -1, { details = true }
+            ))
+        ]])
+    end
+
+    it("<S-CR>{motion} tags the motion's lines", function()
+        set_input({ "alpha", "beta", "gamma" })
+        focus_input_normal()
+        child.lua(
+            [[vim.api.nvim_win_set_cursor(_G._widget.win_nrs.input, {1, 0})]]
+        )
+        feed("<S-CR>j")
+
+        assert.same({ { 0, 1 } }, tags())
+        assert.same({}, sent_prompts())
+    end)
+
+    it("visual <S-CR> tags the selection", function()
+        set_input({ "alpha", "beta", "gamma" })
+        focus_input_normal()
+        child.lua(
+            [[vim.api.nvim_win_set_cursor(_G._widget.win_nrs.input, {2, 0})]]
+        )
+        feed("Vj<S-CR>")
+
+        assert.same({ { 1, 2 } }, tags())
+        assert.same({}, sent_prompts())
+    end)
+
     it(":w still sends whole buffer", function()
         set_input({ "alpha", "beta" })
         focus_input_normal()
@@ -158,7 +207,7 @@ describe("Partial-send", function()
             local session_2 =
                 require("agentic.session_registry").current()
             _G._sent_prompts_2 = {}
-            session_2.widget.on_submit_input = function(prompt)
+            session_2.widget.input_dispatch.on_submit = function(prompt)
                 table.insert(_G._sent_prompts_2, prompt)
                 return true
             end
@@ -188,6 +237,33 @@ describe("Partial-send", function()
         )
         assert.same({}, sent_prompts())
         assert.same({ "one-alpha", "one-beta", "one-gamma" }, input_lines())
+    end)
+
+    it("<S-CR>{motion} on a second tab tags only its own input", function()
+        child.lua([[
+            vim.cmd("tabnew")
+            require("agentic").new_session({ auto_add_to_context = false })
+        ]])
+        child.flush()
+        set_input({ "one-alpha", "one-beta" })
+        child.lua([[
+            _G._widget_2 = require("agentic.session_registry").current().widget
+            vim.api.nvim_buf_set_lines(
+                _G._widget_2.buf_nrs.input,
+                0, -1, false, { "two-alpha", "two-beta" }
+            )
+            vim.api.nvim_set_current_win(_G._widget_2:input_win())
+            vim.cmd("stopinsert")
+            vim.api.nvim_win_set_cursor(_G._widget_2.win_nrs.input, {1, 0})
+        ]])
+
+        feed("<S-CR>j")
+
+        assert.equal(
+            1,
+            child.lua_get([[_G._widget_2.input_dispatch:queued_block_count()]])
+        )
+        assert.same({}, tags())
     end)
 end)
 
@@ -223,7 +299,7 @@ describe("Context panels across a /command head", function()
             [[
             local widget = _G._session.widget
             vim.api.nvim_buf_set_lines(widget.buf_nrs.input, 0, -1, false, { %q })
-            widget:submit()
+            widget.input_dispatch:submit()
         ]],
             text
         ))

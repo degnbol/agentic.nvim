@@ -398,7 +398,7 @@ vim.fn.getwininfo(_G.win)[1].topline <= 100
         child.lua([[
 _G.s._handle_input_submit = function() return true end
 vim.api.nvim_buf_set_lines(_G.s.widget.buf_nrs.input, 0, -1, false, { "hi" })
-_G.s.widget:submit()
+_G.s.widget.input_dispatch:submit()
 ]])
         settle()
 
