@@ -1326,7 +1326,7 @@ describe("agentic.SessionManager", function()
             assert.is_nil(make_session():_replay_entry({
                 kind = "on_tool_call",
                 args = {
-                    { tool_call_id = "t1", parent_tool_use_id = "toolu_1" },
+                    { tool_call_id = "t1", task_id = "toolu_1" },
                     "root",
                 },
             }))
@@ -4635,7 +4635,7 @@ describe("agentic.SessionManager", function()
                 _delegated = {},
                 chat_history = require("agentic.ui.chat_history"):new(),
                 _message_info = SessionManager._message_info,
-                _task_of = SessionManager._task_of,
+                _agent_key = SessionManager._agent_key,
             } --[[@as agentic.SessionManager]]
         end
 
@@ -4646,7 +4646,7 @@ describe("agentic.SessionManager", function()
                 state = "completed",
                 text = "x",
                 provider_name = "p",
-                parent_tool_use_id = "c1",
+                agent_key = "c1",
             })
         end
 
@@ -5944,7 +5944,7 @@ describe("agentic.SessionManager", function()
         --- write, in call order.
         --- @type string[]
         local main_calls
-        --- Task id each update is tagged with.
+        --- The task id each update is tagged with.
         --- @type table<agentic.acp.AgentMessageChunk, string>
         local tags = {}
 
@@ -5958,7 +5958,7 @@ describe("agentic.SessionManager", function()
             drain = spy.new(function()
                 table.insert(main_calls, "drain")
             end)
-            -- A running subagent spawned by Task `task`.
+            -- A running subagent with task id `task`.
             local transcript = {
                 writer = { write_message_chunk = subagent_write },
                 status_indicator = { reposition = function() end },

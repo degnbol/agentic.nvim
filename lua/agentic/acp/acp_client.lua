@@ -166,7 +166,7 @@ end
 --- @class agentic.acp.SubagentRecord
 --- @field agent_type string Subagent type the agent was spawned as
 --- @field background boolean The agent runs in the background rather than blocking its spawner
---- @field task_id string Id of the tool use that spawned the agent
+--- @field task_id string Id of the tool call that spawned the agent
 
 --- What the provider recorded about a subagent's spawn. Adapters for
 --- providers that keep such a record override this.
@@ -241,8 +241,9 @@ function ACPClient:sender_session(sender_id, child_ids)
     return vim.tbl_contains(child_ids, sender_id) and sender_id or nil
 end
 
---- The id of the tool use that spawned the subagent an update belongs to.
---- Adapters for providers that tag subagent updates override this.
+--- The task id an update is tagged with: the id of the tool call that gave
+--- its subagent its current work, the one that spawned it or one that
+--- resumed it. Adapters for providers that tag subagent updates override this.
 --- @param _update agentic.acp.SessionUpdateMessage
 --- @return string|nil task_id Nil for an update that is not a subagent's
 function ACPClient:subagent_task_id(_update)
@@ -913,7 +914,7 @@ function ACPClient:__build_tool_call_message(update, _session_id)
         argument = update.title,
         body = self:extract_content_body(update),
         -- Read only on the initial tool_call: updates can omit it.
-        parent_tool_use_id = self:subagent_task_id(update),
+        task_id = self:subagent_task_id(update),
         -- On every kind, as a later update or the adapter can re-kind a call.
         shell = self:exec_shell(),
     }

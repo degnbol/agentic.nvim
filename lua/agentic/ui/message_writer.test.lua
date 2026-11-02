@@ -2027,8 +2027,8 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         it("brackets the runs on each side of end_runs apart", function()
-            -- The subagent pane ends runs per Task as it closes, long before
-            -- the turn does.
+            -- The subagent pane ends runs per subagent as it closes, long
+            -- before the turn does.
             writer:write_message_chunk(
                 make_message_update("before one\n\nbefore two")
             )

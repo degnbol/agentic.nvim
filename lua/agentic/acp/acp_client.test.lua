@@ -1396,7 +1396,7 @@ describe("agentic.acp.ACPClient", function()
             assert.same({}, client._children)
         end)
 
-        it("knows no spawn record or spawning Task id", function()
+        it("knows no spawn record or spawning task id", function()
             local client = make_client()
 
             assert.is_nil(client:subagent_record("root", "child"))

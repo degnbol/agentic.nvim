@@ -641,7 +641,7 @@ _G.spawn("c1")
 _G.chunk("c1", "child finding", "toolu_c1")
 _G.s:_on_tool_call({
     tool_call_id = "t1", kind = "read", status = "pending", argument = "a.txt",
-    parent_tool_use_id = "toolu_c1",
+    task_id = "toolu_c1",
 }, "c1")
 ]])
 
@@ -661,7 +661,7 @@ _G.s:_on_tool_call({
         assert.same(
             { "toolu_c1", "toolu_c1", "toolu_c1" },
             child.lua_get([[vim.tbl_map(function(m)
-    return m.parent_tool_use_id
+    return m.agent_key
 end, _G.s.chat_history.subagent_messages)]])
         )
     end)
@@ -685,7 +685,7 @@ _G.chunk("c1", "two", "toolu_c1")
     end)
 
     it(
-        "a root-session update tagged with a known Task id lands in its agent",
+        "a root-session update tagged with a known task id lands in its agent",
         function()
             child.lua([[
 _G.write_meta("c1", "background", "toolu_1")
@@ -1063,13 +1063,13 @@ _G.saved.subagents = { c1 = { task_id = "toolu_1" } }
 _G.saved.subagent_messages = {
     { type = "session_message", message_id = "toolu_1", kind = "task", view = "received",
       sender_session_id = "sid-x", recipient_session_id = "c1", text = "Find it.",
-      parent_tool_use_id = "toolu_1" },
+      agent_key = "toolu_1" },
     { type = "session_message", message_id = "toolu_h", kind = "result", view = "sent",
       sender_session_id = "c1", recipient_session_id = "sid-x", text = "Report.",
-      parent_tool_use_id = "toolu_1" },
+      agent_key = "toolu_1" },
     { type = "agent", text = "saved finding", provider_name = "p",
-      parent_tool_use_id = "toolu_1" },
-    { type = "subagent_end", state = "completed", parent_tool_use_id = "toolu_1" },
+      agent_key = "toolu_1" },
+    { type = "subagent_end", state = "completed", agent_key = "toolu_1" },
     { type = "agent", text = "legacy finding", provider_name = "p",
       parent_tool_use_id = "toolu_old" },
 }
@@ -1260,20 +1260,18 @@ _G.load_cb({}, nil)
         )
     end)
 
-    it(
-        "output saved without an agent record gets its own transcript",
-        function()
-            load()
+    it("an old file's subagent output loads with no transcript", function()
+        load()
 
-            child.lua([[vim.fn.bufload(_G.transcript("toolu_old").bufnr)]])
-
-            assert.truthy(
-                child
-                    .lua_get([[_G.ttext("toolu_old")]])
-                    :find("legacy finding", 1, true)
+        assert.is_true(child.lua_get([[_G.s._agents.toolu_old == nil]]))
+        assert.is_true(
+            child.lua_get(
+                [[vim.iter(_G.s.chat_history.subagent_messages):any(function(m)
+    return m.text == "legacy finding" and m.agent_key == nil
+end)]]
             )
-        end
-    )
+        )
+    end)
 
     it("load then save keeps subagents", function()
         load()
@@ -1385,7 +1383,7 @@ _G.cb("allow")
     )
 
     it(
-        "output from before the Task id is known replays with the rest",
+        "output from before the task id is known replays with the rest",
         function()
             child.lua([[
 _G.announce("c1")
@@ -1399,7 +1397,7 @@ _G.s:_replay_transcript("c1")
             assert.same(
                 { "toolu_1", "toolu_1", "toolu_1" },
                 child.lua_get([[vim.tbl_map(function(m)
-    return m.parent_tool_use_id
+    return m.agent_key
 end, _G.s.chat_history.subagent_messages)]])
             )
             local text = child.lua_get([[_G.ttext("c1")]])

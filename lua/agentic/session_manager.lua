@@ -96,7 +96,7 @@ end
 --- @field status_indicator agentic.ui.StatusIndicator
 --- @field _agents table<string, agentic.SessionManager.Agent> Subagents of the conversation by child session id
 --- @field _inputs table<string, agentic.ui.SubagentInput> Message inputs of background subagents by child session id
---- @field _agent_by_task table<string, string> Id of the Task tool use that spawned a subagent -> its child session id
+--- @field _agent_by_task table<string, string> Task id -> child session id of the subagent it gave work
 --- @field _tool_call_owner table<string, string> toolCallId -> child session id of the subagent whose transcript holds the call
 --- @field _output_tails table<string, agentic.utils.FileTail> toolCallId -> tail of the output file of a command still running
 --- @field _held_tool_call_updates table<string, { update: agentic.ui.MessageWriter.ToolCallBase, child_id?: string }> toolCallId -> fields a side record gave a call the chat does not show yet, and the subagent whose records gave them. Dropped at the turn's end for the main agent, at the subagent's end for a subagent
@@ -718,9 +718,9 @@ function SessionManager:_writers_of_message(message_id)
     local writers = { self.message_writer }
     for _, msg in ipairs(self.chat_history.subagent_messages) do
         if msg.type == "session_message" and msg.message_id == message_id then
-            local task_id = msg.parent_tool_use_id --[[@as string]]
-            local child_id = self._agent_by_task[task_id] or task_id
-            if self._agents[child_id] then
+            local agent_key = msg.agent_key
+            local child_id = self._agent_by_task[agent_key] or agent_key
+            if child_id and self._agents[child_id] then
                 table.insert(writers, self:_transcript_for(child_id).writer)
             end
         end
@@ -864,14 +864,10 @@ function SessionManager:_reload_chat()
     self:_sync_modified(self.chat_history)
 end
 
---- The block of a subagent in the main chat, as the history holds it. Nil for
---- output saved before subagents were sessions, which no block names.
+--- The block of a subagent in the main chat, as the history holds it.
 --- @param child_id string
 --- @return agentic.ui.ChatHistory.ToolCall|nil
 function SessionManager:_agent_block(child_id)
-    if not self.chat_history.subagents[child_id] then
-        return nil
-    end
     for _, msg in ipairs(self.chat_history.messages) do
         if msg.type == "tool_call" and msg.tool_call_id == child_id then
             return msg
@@ -880,12 +876,11 @@ function SessionManager:_agent_block(child_id)
     return nil
 end
 
---- The `parent_tool_use_id` of a subagent's messages: the id of the Task tool
---- use that spawned it, else the child id itself, which is also the key of a
---- transcript restored from a file saved before subagents were sessions.
+--- The key of a subagent's stored messages: its task id, else, while that
+--- is unknown, the child id.
 --- @param child_id string
---- @return string
-function SessionManager:_task_of(child_id)
+--- @return string agent_key
+function SessionManager:_agent_key(child_id)
     return vim.tbl_get(self.chat_history.subagents, child_id, "task_id")
         or child_id
 end
@@ -929,7 +924,7 @@ function SessionManager:_replay_transcript(child_id)
     local agent = self._agents[child_id]
     local transcript = agent.transcript --[[@as agentic.ui.SubagentTranscript]]
     local block = self:_agent_block(child_id)
-    local rows = self.chat_history:messages_for_task(self:_task_of(child_id))
+    local rows = self.chat_history:messages_for_agent(self:_agent_key(child_id))
     transcript:restart(block and block.subagent)
     SessionRestore.replay_messages(transcript.writer, rows, function(id)
         return self:_buffer_name(id)
@@ -976,28 +971,12 @@ function SessionManager:_transcript_for(child_id)
 end
 
 --- Give each subagent the history holds a transcript, unloaded, so it renders
---- on its first load, and point its block at the transcript's name. Output
---- saved without an agent record gets a transcript named after its Task id,
---- which no block points to.
+--- on its first load, and point its block at the transcript's name.
 function SessionManager:_restore_transcripts()
     for child_id, record in pairs(self.chat_history.subagents) do
         if record.task_id then
             self._agent_by_task[record.task_id] = child_id
         end
-    end
-    --- @type table<string, true>
-    local child_ids = {}
-    for child_id in pairs(self.chat_history.subagents) do
-        child_ids[child_id] = true
-    end
-    for _, msg in ipairs(self.chat_history.subagent_messages) do
-        local task_id = msg.parent_tool_use_id --[[@as string]]
-        if not self._agent_by_task[task_id] then
-            child_ids[task_id] = true
-        end
-    end
-
-    for child_id in pairs(child_ids) do
         local agent = self._agents[child_id]
         if not (agent and agent.transcript) then
             local block = self:_agent_block(child_id)
@@ -1058,9 +1037,9 @@ function SessionManager:_indicator_for(tool_call_id)
 end
 
 --- The subagent an update belongs to: the one whose child session sent it,
---- else the one its Task tag names. Nil for the main agent's.
+--- else the one its task id names. Nil for the main agent's.
 --- @param source_session_id string|nil
---- @param task_id string|nil Id of the tool use the update is tagged with, nil when untagged
+--- @param task_id string|nil Task id the update is tagged with, nil when untagged
 --- @return string|nil child_id
 function SessionManager:_agent_of(source_session_id, task_id)
     if source_session_id and self._agents[source_session_id] then
@@ -1084,11 +1063,11 @@ function SessionManager:_block_id(tool_call_id)
     return self._agent_by_task[tool_call_id] or tool_call_id
 end
 
---- Route a tool use's id to a subagent, and record it as the subagent's Task
---- id while none is known. A resumed subagent's updates carry the id of the
---- call that resumed it; its record keeps the launch's.
+--- Map a task id to its subagent, and record it as the subagent's while none
+--- is known. A resumed subagent's updates carry the id of what resumed it, and
+--- its recorded task id stays the earlier one.
 --- @param child_id string
---- @param task_id string|nil Id of a tool use that delegated to the subagent, nil when untagged
+--- @param task_id string|nil Nil when untagged
 function SessionManager:_note_agent_task(child_id, task_id)
     if not task_id or self._agent_by_task[task_id] then
         return
@@ -1100,7 +1079,7 @@ function SessionManager:_note_agent_task(child_id, task_id)
 end
 
 --- Read the provider's record of a subagent's spawn (`ACPClient:subagent_record`),
---- once, and apply it: the Task id to the Task lookup and the history, the
+--- once, and apply it: the task id to the lookup and the history, the
 --- type and confirmed mode to the block and the transcript header. Does
 --- nothing until the record exists.
 --- @param child_id string
@@ -1308,7 +1287,7 @@ end
 --- chat. A row leaves a running turn open, the main agent's or a working
 --- subagent's, and otherwise closes the turn.
 --- @param session_id string
---- @param row agentic.ui.ChatHistory.SessionMessage|agentic.ui.ChatHistory.SubagentEnd Gets `parent_tool_use_id` set on a subagent's row
+--- @param row agentic.ui.ChatHistory.SessionMessage|agentic.ui.ChatHistory.SubagentEnd Gets `agent_key` set on a subagent's row
 function SessionManager:_write_row(session_id, row)
     local writer, indicator, mid_turn
     if self._agents[session_id] then
@@ -1317,7 +1296,7 @@ function SessionManager:_write_row(session_id, row)
         local transcript = self:_transcript_for(session_id)
         writer, indicator = transcript.writer, transcript.status_indicator
         mid_turn = self._agents[session_id].open
-        row.parent_tool_use_id = self:_task_of(session_id)
+        row.agent_key = self:_agent_key(session_id)
     else
         writer, indicator = self.message_writer, self.status_indicator
         -- A load replays a running conversation.
@@ -1427,7 +1406,7 @@ function SessionManager:_message_info(message_id, sender, recipient)
             info = { kind = "task", summary = to.description }
         else
             local rows =
-                self.chat_history:messages_for_task(self:_task_of(recipient))
+                self.chat_history:messages_for_agent(self:_agent_key(recipient))
             if vim.tbl_get(rows, #rows, "type") == "subagent_end" then
                 info.kind = "task"
             end
@@ -1779,7 +1758,7 @@ function SessionManager:_on_agent_chunk(update, source_session_id)
             type = is_message and "agent" or "thought",
             text = chunk.content.text,
             provider_name = self.agent.provider_config.name,
-            parent_tool_use_id = child_id and self:_task_of(child_id),
+            agent_key = child_id and self:_agent_key(child_id),
         }, starts_response)
         -- Subagent text is never written per chunk, even outside a turn
         -- (see `_on_tool_call_update`).
@@ -2177,7 +2156,7 @@ function SessionManager:_replay_entry(held)
         return nil
     end
     if held.kind == "on_tool_call" then
-        if update.parent_tool_use_id then
+        if update.task_id then
             return nil
         end
         return { key = "tool:" .. update.tool_call_id, starts = true }
@@ -2278,16 +2257,16 @@ end
 --- @param source_session_id string|nil The session that sent it: the root, or a subagent's child session
 function SessionManager:_on_tool_call(tool_call, source_session_id)
     local id = tool_call.tool_call_id
-    local task_id = tool_call.parent_tool_use_id
+    local task_id = tool_call.task_id
     local child_id = self._tool_call_owner[id]
         or self:_agent_of(source_session_id, task_id)
     --- @type string|nil
-    local parent
+    local agent_key
     if child_id then
         self._tool_call_owner[id] = child_id
         self:_note_agent_task(child_id, task_id)
         self:_read_agent_record(child_id)
-        parent = self:_task_of(child_id)
+        agent_key = self:_agent_key(child_id)
     elseif self._prompt_pending == 0 and not self._loading then
         -- Records already recorded go above a turn no prompt started, which
         -- can open with a tool call. Drain before taking the held fields:
@@ -2306,9 +2285,9 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
     self:_indicator_for(id):reposition()
 
     local tool_msg = ChatHistory.tool_call_record(tool_call)
-    tool_msg.parent_tool_use_id = parent
+    tool_msg.agent_key = agent_key
     self.chat_history:add_message(tool_msg)
-    if parent then
+    if agent_key then
         self:_sync_modified(self.chat_history)
     else
         self:_history_changed(self.chat_history)

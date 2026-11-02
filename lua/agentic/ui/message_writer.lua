@@ -139,7 +139,7 @@ end
 --- @field extmark_id? integer Range extmark spanning the block
 --- @field decoration_extmark_ids? integer[] IDs of decoration extmarks from ExtmarkBlock
 --- @field cached_diff_blocks? agentic.ui.ToolCallDiff.DiffBlock[] Captured at render time so navigation (diff_jump) survives a later file refresh that breaks OLD-based matching
---- @field parent_tool_use_id? string Spawning Task tool id when this call belongs to a subagent; nil for main-agent calls
+--- @field task_id? string Task id the call is tagged with (`ACPClient:subagent_task_id`); nil for main-agent calls
 --- @field placed? agentic.ui.MessageWriter.Placed What was placed beneath the block after it was written
 --- @field is_compaction? boolean The block reports a compaction of the conversation
 --- @field folds? agentic.ui.MessageWriter.BlockFold[] The block's folds, outermost first.

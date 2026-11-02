@@ -1547,7 +1547,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                 _meta = { claudeCode = { parentToolUseId = "toolu_1" } },
             }, "s1")
 
-            assert.equal("toolu_1", message.parent_tool_use_id)
+            assert.equal("toolu_1", message.task_id)
         end)
     end)
 

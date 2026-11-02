@@ -620,7 +620,7 @@ _G.sub = _G.s._agents[id].transcript.bufnr
 local id, parent = ...
 _G.h.on_tool_call({
     tool_call_id = id,
-    parent_tool_use_id = "toolu-" .. parent,
+    task_id = "toolu-" .. parent,
     kind = "execute",
     status = "pending",
     argument = "ls " .. id,
@@ -847,7 +847,7 @@ end)()]]))
             child.lua([[
 _G.s:_on_tool_call({
     tool_call_id = "e-1",
-    parent_tool_use_id = "toolu-task-1",
+    task_id = "toolu-task-1",
     kind = "edit",
     status = "pending",
     argument = vim.fn.tempname(),

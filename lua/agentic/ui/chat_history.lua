@@ -15,7 +15,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field type "agent"
 --- @field provider_name string
 --- @field text string Agent response text (concatenated chunks)
---- @field parent_tool_use_id? string The spawning Task's tool call id, on a subagent's message
+--- @field agent_key? string Key of the subagent that owns the message: its task id, else its child session id while that is unknown
 
 --- @class agentic.ui.ChatHistory.ThoughtMessage : agentic.ui.ChatHistory.AgentMessage
 --- @field type "thought"
@@ -23,7 +23,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @class agentic.ui.ChatHistory.ToolCall : agentic.ui.MessageWriter.ToolCallBase
 --- @field tool_call_id? string
 --- @field type "tool_call"
---- @field parent_tool_use_id? string The spawning Task's tool call id, on a subagent's call
+--- @field agent_key? string Key of the subagent that owns the call: its task id, else its child session id while that is unknown
 
 --- @alias agentic.SessionMessageKind "task"|"message"|"result"
 
@@ -41,14 +41,14 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field sender_name? string The display name the provider gave the sender
 --- @field recipient_session_id? string
 --- @field text string
---- @field parent_tool_use_id? string The spawning Task's tool call id, on a subagent's row
+--- @field agent_key? string Key of the subagent that owns the row: its task id, else its child session id while that is unknown
 
 --- The end of a subagent's run.
 --- @class agentic.ui.ChatHistory.SubagentEnd
 --- @field type "subagent_end"
 --- @field state string How the run ended: `completed`, `cancelled`, `failed`, `ended`, `unknown` or a stop reason
 --- @field error? string The provider's error text
---- @field parent_tool_use_id? string The spawning Task's tool call id
+--- @field agent_key? string Key of the subagent that owns the row: its task id, else its child session id while that is unknown
 
 --- @alias agentic.ui.ChatHistory.Message
 --- | agentic.ui.ChatHistory.UserMessage
@@ -85,7 +85,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- What a session records about one of its subagents beyond its main-chat
 --- block.
 --- @class agentic.ui.ChatHistory.Subagent
---- @field task_id? string Id of the Agent tool use that spawned it, the `parent_tool_use_id` of its messages. Absent until known
+--- @field task_id? string Task id of the subagent, the `agent_key` of its messages: the first one seen, replaced by the spawn's once the provider's record is read. Absent until known
 
 --- @class agentic.ui.ChatHistory
 --- @field session_id? string
@@ -203,11 +203,11 @@ function ChatHistory.read_saved(session_id)
 end
 
 --- The list a message belongs in: `subagent_messages` for one with
---- `parent_tool_use_id`, else `messages`.
---- @param msg { parent_tool_use_id?: string }
+--- `agent_key`, else `messages`.
+--- @param msg { agent_key?: string }
 --- @return agentic.ui.ChatHistory.Message[]
 function ChatHistory:_list_for(msg)
-    return msg.parent_tool_use_id and self.subagent_messages or self.messages
+    return msg.agent_key and self.subagent_messages or self.messages
 end
 
 --- @param msg agentic.ui.ChatHistory.Message
@@ -222,10 +222,9 @@ function ChatHistory:set_title(title)
     self.dirty = true
 end
 
---- Record the Agent tool use that spawned a subagent, replacing any earlier
---- record, and mark the history dirty. Messages stored under the child id or
---- the earlier record move to the new Task id, so one key holds all of the
---- subagent's messages.
+--- Record a subagent's task id, replacing any earlier one, and mark the
+--- history dirty. Messages keyed by the child id or by the earlier task id
+--- move to the new one, so one key holds all of the subagent's messages.
 --- @param child_id string The subagent's child session id
 --- @param task_id string|nil Nil while unknown
 function ChatHistory:set_subagent_task(child_id, task_id)
@@ -234,35 +233,35 @@ function ChatHistory:set_subagent_task(child_id, task_id)
     if task_id then
         for _, msg in ipairs(self.subagent_messages) do
             if
-                msg.parent_tool_use_id == child_id
-                or msg.parent_tool_use_id == previous
+                msg.agent_key == child_id
+                or (previous and msg.agent_key == previous)
             then
-                msg.parent_tool_use_id = task_id
+                msg.agent_key = task_id
             end
         end
     end
     self.dirty = true
 end
 
---- The stored messages of the agent one Task spawned, in stored order.
---- @param task_id string The spawning Task's tool call id
+--- The stored messages of one subagent, in stored order.
+--- @param agent_key string Key of the subagent (`AgentMessage.agent_key`)
 --- @return agentic.ui.ChatHistory.Message[]
-function ChatHistory:messages_for_task(task_id)
+function ChatHistory:messages_for_agent(agent_key)
     return vim.tbl_filter(function(msg)
-        return msg.parent_tool_use_id == task_id
+        return msg.agent_key == agent_key
     end, self.subagent_messages)
 end
 
---- Append text to the same agent's last message (same `parent_tool_use_id`)
+--- Append text to the same agent's last message (same `agent_key`)
 --- when it has the same type, or add a new message.
---- @param msg { type: "agent"|"thought", text: string, provider_name: string, parent_tool_use_id?: string }
+--- @param msg { type: "agent"|"thought", text: string, provider_name: string, agent_key?: string }
 --- @param starts_response boolean|nil `msg.text` starts a new model response, so a merge into the last message puts a blank line before it
 function ChatHistory:append_agent_text(msg, starts_response)
     local list = self:_list_for(msg)
     --- @type agentic.ui.ChatHistory.Message|nil
     local last
     for i = #list, 1, -1 do
-        if list[i].parent_tool_use_id == msg.parent_tool_use_id then
+        if list[i].agent_key == msg.agent_key then
             last = list[i]
             break
         end

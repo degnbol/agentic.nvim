@@ -573,7 +573,7 @@ describe("ChatHistory", function()
                     type = "agent",
                     text = "child",
                     provider_name = "p",
-                    parent_tool_use_id = "tc-1",
+                    agent_key = "tc-1",
                 },
             }) do
                 history:add_message(msg)
@@ -656,39 +656,44 @@ describe("ChatHistory", function()
             assert.is_true(history.dirty)
         end)
 
-        it("moves a subagent's messages to its Task id once known", function()
+        it("moves a subagent's messages to its task id once known", function()
             local history = ChatHistory:new()
             history:add_message({
                 type = "agent",
                 text = "early",
                 provider_name = "p",
-                parent_tool_use_id = "child-1",
+                agent_key = "child-1",
             })
 
             history:set_subagent_task("child-1", "toolu_1")
 
-            assert.equal(
-                "toolu_1",
-                history.subagent_messages[1].parent_tool_use_id
-            )
+            assert.equal("toolu_1", history.subagent_messages[1].agent_key)
         end)
 
-        it("moves a subagent's messages from its earlier Task id", function()
+        it("moves a subagent's messages from its earlier task id", function()
             local history = ChatHistory:new()
             history:set_subagent_task("child-1", "child-1:prompt:1")
             history:add_message({
                 type = "agent",
                 text = "early",
                 provider_name = "p",
-                parent_tool_use_id = "child-1:prompt:1",
+                agent_key = "child-1:prompt:1",
             })
 
             history:set_subagent_task("child-1", "toolu_1")
 
-            assert.equal(
-                "toolu_1",
-                history.subagent_messages[1].parent_tool_use_id
-            )
+            assert.equal("toolu_1", history.subagent_messages[1].agent_key)
+        end)
+
+        it("leaves a message with no agent_key unowned", function()
+            local history = ChatHistory:new()
+            history.subagent_messages = {
+                { type = "agent", text = "old", provider_name = "p" },
+            }
+
+            history:set_subagent_task("c1", "t1")
+
+            assert.is_nil(history.subagent_messages[1].agent_key)
         end)
 
         it("keeps a subagent end with the subagent's messages", function()
@@ -697,7 +702,7 @@ describe("ChatHistory", function()
             history:add_message({
                 type = "subagent_end",
                 state = "completed",
-                parent_tool_use_id = "toolu_1",
+                agent_key = "toolu_1",
             })
 
             assert.equal(0, #history.messages)
@@ -705,31 +710,31 @@ describe("ChatHistory", function()
                 { "completed" },
                 vim.tbl_map(function(m)
                     return m.state
-                end, history:messages_for_task("toolu_1"))
+                end, history:messages_for_agent("toolu_1"))
             )
         end)
 
-        it("messages_for_task keeps one agent's messages, in order", function()
+        it("messages_for_agent keeps one agent's messages, in order", function()
             local history = ChatHistory:new()
             history.subagent_messages = {
                 {
                     type = "agent",
                     text = "a1",
                     provider_name = "p",
-                    parent_tool_use_id = "a",
+                    agent_key = "a",
                 },
                 {
                     type = "agent",
                     text = "b1",
                     provider_name = "p",
-                    parent_tool_use_id = "b",
+                    agent_key = "b",
                 },
                 {
                     type = "tool_call",
                     tool_call_id = "a-tool",
                     kind = "read",
                     status = "completed",
-                    parent_tool_use_id = "a",
+                    agent_key = "a",
                 },
             }
 
@@ -737,7 +742,7 @@ describe("ChatHistory", function()
                 { "a1", "a-tool" },
                 vim.tbl_map(function(msg)
                     return msg.text or msg.tool_call_id
-                end, history:messages_for_task("a"))
+                end, history:messages_for_agent("a"))
             )
         end)
 
@@ -850,17 +855,17 @@ describe("ChatHistory", function()
                 assert.equal("one.\n  \nTwo", merged("one.\n  \n", "Two", true))
             end)
 
-            it("merges by parent across another parent's messages", function()
+            it("merges by agent across another agent's messages", function()
                 local history = ChatHistory:new()
-                --- @param parent string
+                --- @param agent_key string
                 --- @param text string
                 --- @param starts_response boolean|nil
-                local function append(parent, text, starts_response)
+                local function append(agent_key, text, starts_response)
                     history:append_agent_text({
                         type = "agent",
                         text = text,
                         provider_name = "test-provider",
-                        parent_tool_use_id = parent,
+                        agent_key = agent_key,
                     }, starts_response)
                 end
 
@@ -876,7 +881,7 @@ describe("ChatHistory", function()
                 assert.is_true(history.dirty)
             end)
 
-            it("merges across another parent's tool call", function()
+            it("merges across another agent's tool call", function()
                 local history = ChatHistory:new()
                 --- @param text string
                 local function append_a(text)
@@ -884,7 +889,7 @@ describe("ChatHistory", function()
                         type = "agent",
                         text = text,
                         provider_name = "test-provider",
-                        parent_tool_use_id = "task-a",
+                        agent_key = "task-a",
                     })
                 end
 
@@ -894,7 +899,7 @@ describe("ChatHistory", function()
                     tool_call_id = "tc-b",
                     status = "pending",
                     kind = "read",
-                    parent_tool_use_id = "task-b",
+                    agent_key = "task-b",
                 })
                 append_a("a2")
 
@@ -916,7 +921,7 @@ describe("ChatHistory", function()
                 tool_call_id = "tc-sub",
                 status = "pending",
                 kind = "read",
-                parent_tool_use_id = "task-1",
+                agent_key = "task-1",
             })
 
             assert.same({}, history.messages)
@@ -953,7 +958,7 @@ describe("ChatHistory", function()
                     tool_call_id = "tc-sub",
                     status = "pending",
                     kind = "read",
-                    parent_tool_use_id = "task-1",
+                    agent_key = "task-1",
                 })
 
                 history:update_tool_call("tc-sub", {
@@ -963,10 +968,7 @@ describe("ChatHistory", function()
                 })
 
                 assert.equal("completed", history.subagent_messages[1].status)
-                assert.equal(
-                    "task-1",
-                    history.subagent_messages[1].parent_tool_use_id
-                )
+                assert.equal("task-1", history.subagent_messages[1].agent_key)
             end)
 
             it("does nothing if tool_call not found", function()
@@ -1072,7 +1074,7 @@ describe("ChatHistory", function()
             local record = vim.tbl_extend(
                 "force",
                 fields,
-                { type = "tool_call", parent_tool_use_id = "task-1" }
+                { type = "tool_call", agent_key = "task-1" }
             ) --[[@as agentic.ui.ChatHistory.ToolCall]]
 
             assert.same(fields, ChatHistory.to_tool_call_block(record))
@@ -1168,7 +1170,7 @@ describe("ChatHistory", function()
                 type = "agent",
                 text = "Found it",
                 provider_name = "test-provider",
-                parent_tool_use_id = "task-1",
+                agent_key = "task-1",
             })
             assert.is_nil(original:save(TEST_CWD))
 
