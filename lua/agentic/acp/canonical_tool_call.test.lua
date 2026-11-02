@@ -127,4 +127,142 @@ describe("agentic.acp.CanonicalToolCall", function()
             )
         end)
     end)
+
+    describe("deciders_line", function()
+        it("gives the line of each rejecting decider", function()
+            assert.equal(
+                "Rejected at the prompt",
+                CanonicalToolCall.deciders_line({ "prompt-reject" })
+            )
+            assert.equal(
+                "Rejected for this session",
+                CanonicalToolCall.deciders_line({ "session-reject" })
+            )
+            assert.equal(
+                "Rejected by a permission rule",
+                CanonicalToolCall.deciders_line({ "deny" })
+            )
+            assert.equal(
+                "Rejected by a permission rule",
+                CanonicalToolCall.deciders_line({ "glob-deny" })
+            )
+            assert.equal(
+                "Cancelled at the prompt",
+                CanonicalToolCall.deciders_line({ "prompt-cancel" })
+            )
+        end)
+
+        it("gives nil for allowing deciders and for none", function()
+            assert.is_nil(
+                CanonicalToolCall.deciders_line({ "read-only", "grant" })
+            )
+            assert.is_nil(CanonicalToolCall.deciders_line(nil))
+        end)
+
+        it("takes the first match by presence, not position", function()
+            assert.equal(
+                "Rejected at the prompt",
+                CanonicalToolCall.deciders_line({ "deny", "prompt-reject" })
+            )
+        end)
+    end)
+
+    describe("rejection_line", function()
+        it("prefers the deciders' line over the provider's", function()
+            assert.equal(
+                "Rejected at the prompt",
+                CanonicalToolCall.rejection_line({
+                    decided_by = { "prompt-reject" },
+                    rejection = "Rejected by the auto-mode classifier",
+                })
+            )
+        end)
+
+        it("falls back to the provider's line", function()
+            assert.equal(
+                "Rejected by the permission mode",
+                CanonicalToolCall.rejection_line({
+                    decided_by = { "read-only" },
+                    rejection = "Rejected by the permission mode",
+                })
+            )
+        end)
+
+        it("gives nil for a call that was not rejected", function()
+            assert.is_nil(CanonicalToolCall.rejection_line({}))
+        end)
+    end)
+
+    describe("status_word", function()
+        it("says rejected for a rejected call", function()
+            assert.equal(
+                "rejected",
+                CanonicalToolCall.status_word({
+                    status = "failed",
+                    ended_as = "interrupted",
+                    rejection = "Rejected",
+                })
+            )
+        end)
+
+        for _, ended_as in ipairs({ "interrupted", "max_tokens" }) do
+            it("says the end word of a failed call: " .. ended_as, function()
+                assert.equal(
+                    ended_as,
+                    CanonicalToolCall.status_word({
+                        status = "failed",
+                        ended_as = ended_as,
+                    })
+                )
+            end)
+        end
+
+        it("gives the status of an interrupted call still open", function()
+            assert.equal(
+                "in_progress",
+                CanonicalToolCall.status_word({
+                    status = "in_progress",
+                    ended_as = "interrupted",
+                })
+            )
+        end)
+
+        it("gives the status of an interrupted call that completed", function()
+            assert.equal(
+                "completed",
+                CanonicalToolCall.status_word({
+                    status = "completed",
+                    ended_as = "interrupted",
+                })
+            )
+        end)
+
+        it("says interrupted for a saved cancelled status", function()
+            assert.equal(
+                "interrupted",
+                CanonicalToolCall.status_word({ status = "cancelled" })
+            )
+        end)
+
+        it("gives the status otherwise", function()
+            assert.equal(
+                "failed",
+                CanonicalToolCall.status_word({ status = "failed" })
+            )
+        end)
+    end)
+
+    describe("stop_reason_word", function()
+        for reason, word in pairs({
+            end_turn = "completed",
+            cancelled = "interrupted",
+            error = "failed",
+            max_tokens = "max_tokens",
+            refusal = "refusal",
+        }) do
+            it("gives " .. word .. " for " .. reason, function()
+                assert.equal(word, CanonicalToolCall.stop_reason_word(reason))
+            end)
+        end
+    end)
 end)

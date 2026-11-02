@@ -489,4 +489,101 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
             }))
         end)
     end)
+
+    describe("denial_line", function()
+        for reason_type, label in pairs({
+            rule = "Rejected by a permission rule",
+            subcommandResults = "Rejected by a permission rule for part of the command",
+            mode = "Rejected by the permission mode",
+            classifier = "Rejected by the auto-mode classifier",
+            asyncAgent = "Rejected: no permission prompt here",
+            workingDir = "Rejected: outside the allowed directories",
+            safetyCheck = "Rejected by a safety check",
+            sandboxOverride = "Rejected by the sandbox",
+            permissionPromptTool = "Rejected by the permission prompt tool",
+            hook = "Rejected",
+            unknownType = "Rejected",
+        }) do
+            it("labels " .. reason_type, function()
+                assert.equal(label, ClaudeUtils.denial_line(reason_type, nil))
+                assert.equal(
+                    label .. ": why",
+                    ClaudeUtils.denial_line(reason_type, "why")
+                )
+            end)
+        end
+
+        it("labels a missing type", function()
+            assert.equal("Rejected", ClaudeUtils.denial_line(nil, nil))
+        end)
+
+        it("ignores an empty reason", function()
+            assert.equal(
+                "Rejected by the permission mode",
+                ClaudeUtils.denial_line("mode", "")
+            )
+        end)
+
+        it("joins a multi-line reason with spaces", function()
+            assert.equal(
+                "Rejected by the auto-mode classifier: [Secret-Store Writes] writes a key",
+                ClaudeUtils.denial_line(
+                    "classifier",
+                    "[Secret-Store Writes]\nwrites a key"
+                )
+            )
+        end)
+    end)
+
+    describe("non_execution_line", function()
+        for kind, line in pairs({
+            ["permission-rule"] = "Rejected",
+            ["automode-blocked"] = "Rejected by the auto-mode classifier",
+            ["automode-unavailable"] = "Rejected: the auto-mode classifier is unavailable",
+            ["automode-parsing-error"] = "Rejected: the auto-mode classifier gave no verdict",
+        }) do
+            it("gives a line for " .. kind, function()
+                assert.equal(line, ClaudeUtils.non_execution_line(kind))
+            end)
+        end
+
+        for _, kind in ipairs({
+            "user-rejected",
+            "interrupted",
+            "cancelled",
+            "unknown-kind",
+        }) do
+            it("gives nil for " .. kind, function()
+                assert.is_nil(ClaudeUtils.non_execution_line(kind))
+            end)
+        end
+
+        it("gives nil for no kind", function()
+            assert.is_nil(ClaudeUtils.non_execution_line(nil))
+        end)
+    end)
+
+    describe("is_denial_response", function()
+        it("accepts the bridge's denial shape", function()
+            assert.is_true(ClaudeUtils.is_denial_response({
+                decisionReasonType = "rule",
+                message = "Permission to use Bash has been denied.",
+            }))
+        end)
+
+        it("accepts the shape with an extra key", function()
+            assert.is_true(ClaudeUtils.is_denial_response({
+                decisionReasonType = "classifier",
+                decisionReason = "[Secret-Store Writes]",
+                message = "…",
+                extra = true,
+            }))
+        end)
+
+        it("rejects a message alone, an empty table and nil", function()
+            assert.is_false(ClaudeUtils.is_denial_response({ message = "m" }))
+            assert.is_false(ClaudeUtils.is_denial_response({}))
+            assert.is_false(ClaudeUtils.is_denial_response(nil))
+        end)
+    end)
 end)

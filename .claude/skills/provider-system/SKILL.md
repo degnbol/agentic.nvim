@@ -111,12 +111,30 @@ whether treesitter has disabled it (default) or a user re-enables it with
 `vim.bo.syntax = 'ON'`. No deferred freezing, and blocks remain tracked after a
 terminal status.
 
-One cleanup pass runs at the turn tail: on `stopReason == "cancelled"`,
-`SessionManager:_mark_unresolved_tool_calls_cancelled` stamps `cancelled` on
-every still-non-final block in the chat and history — no provider is
-obliged to report back on a call it abandoned. `cancelled` is client-side only;
-the wire enum stays at four values. The sweep selects by current status, not by
-turn, so it assumes sequential turns (claude-agent-acp's `session.turnQueue`).
+A call open when its run ends gets `ended_as`, the word
+`CanonicalToolCall.status_word` shows once the call is `failed`; the status
+stays on the wire enum. A stop sets `interrupted` on the calls open at that
+moment, keeping their status: `stop_generation` on the main chat's and each
+working foreground subagent's, `Subagents:stop` on one subagent's. It is
+keyed by call, not by turn, because claude-agent-acp ends every open call
+`failed` at a `session/cancel`, a queued prompt's turn can resolve before
+those `failed` updates arrive, and a subagent's end can come before its own.
+A call keeps its first `ended_as` (`MessageWriter:stamp_open_calls`).
+
+A turn that ends with any stop reason but `end_turn`, or with an error, then
+ends every still-non-final block in the main chat and history `failed` with
+its word (`CanonicalToolCall.stop_reason_word`) — no provider is obliged to
+report back on a call it abandoned. `Subagents:end_agent` does the same for a
+subagent's calls, except at an `unknown` end. The sweep selects by current
+status, not by turn, so it assumes sequential turns (claude-agent-acp's
+`session.turnQueue`).
+
+claude-agent-acp: `__apply_rejection` sets `rejection` from two sources. A
+call the CLI denied before asking the host gets one `failed` update with
+`_meta.claudeCode.toolResponse.decisionReasonType`, then the failed result; a
+main-agent call's failed result carries `_meta.claudeCode.nonExecutionKind`
+(`ClaudeUtils.non_execution_line`). A PreToolUse hook deny emits no denial
+update (`SDKPermissionDeniedMessage` in `claude-agent-sdk/sdk.d.ts`).
 
 ### What each update carries
 

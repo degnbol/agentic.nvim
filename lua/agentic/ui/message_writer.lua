@@ -1,4 +1,5 @@
 local BufHelpers = require("agentic.utils.buf_helpers")
+local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local ChatBuffer = require("agentic.ui.chat_buffer")
 local Config = require("agentic.config")
 local ErrorReport = require("agentic.acp.error_report")
@@ -72,18 +73,21 @@ end
 
 --- The word a tool call's status footer shows: `stopped` when the call
 --- completed and another call stopped its background job, `background` while
---- its output is followed, else its status. The status itself stays the provider's, so a
---- running background command is not taken for an unresolved call.
+--- its output is followed, else `CanonicalToolCall.status_word`. The status
+--- itself stays the provider's, so a running background command is not taken
+--- for an unresolved call.
 --- @param block agentic.ui.MessageWriter.ToolCallBlock
---- @return string
+--- @return string|nil
 local function footer_status(block)
     if block.stopped_by and block.status == "completed" then
         return "stopped"
     end
-    return block.output_live and "background" or block.status
+    return block.output_live and "background"
+        or CanonicalToolCall.status_word(block)
 end
 
---- Tool call statuses that will not change again (safe to force a final parse).
+--- Tool call statuses that will not change again (safe to force a final parse),
+--- `cancelled` included for blocks saved by earlier versions.
 --- @param status string|nil
 --- @return boolean
 local function is_final_status(status)
@@ -100,10 +104,9 @@ end
 --- @field start_line integer
 --- @field end_line integer
 
---- A tool call status as this plugin renders it: the wire enum plus the
---- client-stamped `cancelled`, which a turn's cancellation puts on the calls
---- the provider abandoned without a final update of its own.
---- @alias agentic.ui.ToolCallStatus agentic.acp.ToolCallStatus|"cancelled"
+--- A tool call status: the wire enum. Blocks saved by earlier versions can
+--- also hold `cancelled`.
+--- @alias agentic.ui.ToolCallStatus agentic.acp.ToolCallStatus
 
 --- How an Agent-tool subagent runs: `blocking` holds the parent's tool call
 --- open until the agent ends, `background` returns it at launch.
@@ -134,6 +137,8 @@ end
 --- @field skill_path? string Absolute path to the SKILL.md a Skill call loaded, verified to exist when it was resolved. Absent when no root held the skill.
 --- @field subagent? agentic.ui.MessageWriter.SubagentInfo Set on a subagent's block in the main chat
 --- @field decided_by? agentic.PermissionDecider[] What let the call run or stopped it; nil when the provider decided
+--- @field rejection? string One line from the provider saying why the call was rejected before it ran
+--- @field ended_as? string How the run holding the call ended while the call was open: `interrupted` for a stop, else a `CanonicalToolCall.stop_reason_word`. Shown when the call fails
 --- @field background_job_id? string Id the provider gave the command when it went to the background
 --- @field output_file? string Absolute path of the file the command's own output goes to
 --- @field output_ended? boolean The command has ended. Only meaningful with `output_file`
@@ -2871,6 +2876,15 @@ function MessageWriter:_paint_tool_call_block(block, start_row, layout)
         Renderer.render_decorations(bufnr, start_row, end_row, block.kind)
 
     self:_render_block_folds(block, start_row, layout.folds)
+    for _, row in ipairs(layout.titled) do
+        vim.api.nvim_buf_set_extmark(
+            bufnr,
+            Folds.NS_TITLED,
+            start_row + row,
+            0,
+            {}
+        )
+    end
     if layout.dim then
         local dim_id = Renderer.set_dim_range(
             bufnr,
@@ -2950,15 +2964,26 @@ function MessageWriter:nonfinal_tool_call_ids()
     return ids
 end
 
---- Set `cancelled` on this writer's tool call blocks that have no final
---- status yet.
---- @return string[] tool_call_ids The ids that were stamped
-function MessageWriter:stamp_cancelled()
-    local ids = self:nonfinal_tool_call_ids()
-    for _, id in ipairs(ids) do
-        self:update_tool_call_block({ tool_call_id = id, status = "cancelled" })
+--- Give this writer's tool call blocks that have no final status yet an
+--- `ended_as`, and `status` when given. A block keeps the `ended_as` it has:
+--- the first end of its run is the one that closed it.
+--- @param ended_as string
+--- @param status? agentic.ui.ToolCallStatus nil keeps each block's own
+--- @return agentic.ui.MessageWriter.ToolCallBase[] updates The updates applied
+function MessageWriter:stamp_open_calls(ended_as, status)
+    local updates = {}
+    for _, id in ipairs(self:nonfinal_tool_call_ids()) do
+        local block = self.tool_call_blocks[id]
+        --- @type agentic.ui.MessageWriter.ToolCallBase
+        local update = {
+            tool_call_id = id,
+            status = status or block.status,
+            ended_as = block.ended_as or ended_as,
+        }
+        self:update_tool_call_block(update)
+        table.insert(updates, update)
     end
-    return ids
+    return updates
 end
 
 --- Follow a prose row across a tool call block's resize, so a row recorded
@@ -3101,12 +3126,19 @@ function MessageWriter:_rerender_tool_call_block(tracker, diff_frozen)
     self:_own_edit(function(bufnr)
         -- Diff blocks don't change after the initial render
         -- only update status highlights - don't replace content.
-        -- Exception: the transition to `failed` re-renders so the failure
-        -- reason renders below the diff and the diff folds closed
-        -- (`diff_body` in tool_call_layout). Re-extraction is safe — a failed
-        -- file-mutating tool never applied its change, so the file is
-        -- unchanged and reproduces the same diff.
-        if diff_frozen and tracker.status ~= "failed" then
+        -- Exceptions: the transition to `failed`, so the failure reason
+        -- renders below the diff and the diff folds closed (`diff_body` in
+        -- tool_call_layout), and a rejected call, laid out anew on every
+        -- update so the reason section renders below the closed diff.
+        -- Re-extraction is safe — a failed or rejected file-mutating tool
+        -- never applied its change, so the file is unchanged and reproduces
+        -- the same diff. A call its run's end closed (`ended_as`) may have
+        -- applied it, so it keeps its frozen diff.
+        if
+            diff_frozen
+            and (tracker.status ~= "failed" or tracker.ended_as)
+            and not CanonicalToolCall.rejection_line(tracker)
+        then
             if old_end_row > vim.api.nvim_buf_line_count(bufnr) then
                 Logger.notify(
                     string.format(
@@ -3170,6 +3202,13 @@ function MessageWriter:_rerender_tool_call_block(tracker, diff_frozen)
             tracker.decoration_extmark_ids
         )
         Renderer.clear_status_namespace(bufnr, start_row, old_end_row)
+        -- A mark in replaced rows survives `set_lines` at the range's edge.
+        vim.api.nvim_buf_clear_namespace(
+            bufnr,
+            Folds.NS_TITLED,
+            start_row,
+            old_end_row + 1
+        )
 
         -- Clear diff highlights BEFORE set_lines. `line_hl_group` (DIFF_ADD/
         -- DIFF_DELETE) extmarks migrate to the edge of the replaced range when

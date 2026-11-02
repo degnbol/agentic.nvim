@@ -26,9 +26,10 @@ local PERMISSION_KIND_PRIORITY = {
 }
 
 --- What allowed or rejected a tool call: a rule kind, a remembered decision,
---- a grant, the user at the prompt, or (any other string) the
---- `AcpKind.normalise` form of a kind in `auto_approve_kinds`.
---- @alias agentic.PermissionDecider "read-only"|"safe-write"|"deny"|"glob-allow"|"glob-deny"|"session-allow"|"session-reject"|"grant"|"prompt-allow"|"prompt-reject"|string
+--- a grant, the user at the prompt, a prompt withdrawn unanswered
+--- (`prompt-cancel`), or (any other string) the `AcpKind.normalise` form of a
+--- kind in `auto_approve_kinds`.
+--- @alias agentic.PermissionDecider "read-only"|"safe-write"|"deny"|"glob-allow"|"glob-deny"|"session-allow"|"session-reject"|"grant"|"prompt-allow"|"prompt-reject"|"prompt-cancel"|string
 
 --- @class agentic.ui.PermissionManager
 --- @field message_writer agentic.ui.MessageWriter Main-chat writer; default when no per-tool-call resolver is set
@@ -1122,10 +1123,15 @@ function PermissionManager:_complete_request(option_id)
     self:_process_next()
 end
 
---- Close the prompt and resolve the open and queued requests with nil.
---- Remembered decisions and edit records stay.
+--- Close the prompt and resolve the open and queued requests with nil,
+--- recording `prompt-cancel` for each. Remembered decisions and edit records
+--- stay.
 function PermissionManager:cancel_requests()
     if self.current_request then
+        self:record_deciders(
+            self.current_request.toolCallId,
+            { "prompt-cancel" }
+        )
         self.permission_float:close()
         self:_clear_unapproved_highlight()
         self:_release_request()
@@ -1141,6 +1147,7 @@ function PermissionManager:cancel_requests()
     end
 
     for _, item in ipairs(self.queue) do
+        self:record_deciders(item[1], { "prompt-cancel" })
         local callback = item[3]
         local ok, err = pcall(callback, nil)
         if not ok then
@@ -1170,6 +1177,8 @@ end
 --- Reject the current request and cancel all remaining queued requests.
 --- Unlike `cancel_requests`, sends reject_once (not cancelled) for the current
 --- request so the provider sees an active rejection and can adapt its approach.
+--- Records `prompt-reject` for the current request, or `prompt-cancel` when it
+--- has no reject_once option, and `prompt-cancel` for each queued one.
 function PermissionManager:reject_and_cancel_remaining()
     if not self.current_request then
         return
@@ -1184,12 +1193,10 @@ function PermissionManager:reject_and_cancel_remaining()
         end
     end
 
-    if reject_option_id then
-        self:record_deciders(
-            self.current_request.toolCallId,
-            { "prompt-reject" }
-        )
-    end
+    self:record_deciders(
+        self.current_request.toolCallId,
+        { reject_option_id and "prompt-reject" or "prompt-cancel" }
+    )
 
     -- Remove UI and keymaps for current request
     self.permission_float:close()
@@ -1204,6 +1211,7 @@ function PermissionManager:reject_and_cancel_remaining()
     self.current_request = nil
 
     for _, item in ipairs(self.queue) do
+        self:record_deciders(item[1], { "prompt-cancel" })
         local callback = item[3]
         local ok2, err2 = pcall(callback, nil)
         if not ok2 then

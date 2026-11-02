@@ -3052,6 +3052,7 @@ describe("agentic.SessionManager", function()
                     any_following = empty,
                     tool_call_blocks = {},
                 },
+                _end_open_tool_calls = noop,
                 _finalize_turn = SessionManager._finalize_turn,
                 _drain_side_records = SessionManager._drain_side_records,
                 _held_tool_call_updates = {},
@@ -3235,10 +3236,10 @@ describe("agentic.SessionManager", function()
                     any_following = empty,
                     tool_call_blocks = {},
                     nonfinal_tool_call_ids = MessageWriter.nonfinal_tool_call_ids,
-                    stamp_cancelled = MessageWriter.stamp_cancelled,
+                    stamp_open_calls = MessageWriter.stamp_open_calls,
                     update_tool_call_block = record_stamp("main"),
                 },
-                _mark_unresolved_tool_calls_cancelled = SessionManager._mark_unresolved_tool_calls_cancelled,
+                _end_open_tool_calls = SessionManager._end_open_tool_calls,
                 _finalize_turn = SessionManager._finalize_turn,
                 _drain_side_records = SessionManager._drain_side_records,
                 _held_tool_call_updates = {},
@@ -3251,7 +3252,7 @@ describe("agentic.SessionManager", function()
                     update_tool_call = function(_self, id, update)
                         table.insert(sink.history_updates, { id, update })
                     end,
-                    cancel_tool_calls = ChatHistory.cancel_tool_calls,
+                    update_tool_calls = ChatHistory.update_tool_calls,
                     set_title = ChatHistory.set_title,
                     has_prompt = ChatHistory.has_prompt,
                     save = function(this)
@@ -3317,7 +3318,7 @@ describe("agentic.SessionManager", function()
                     writer = {
                         tool_call_blocks = {},
                         nonfinal_tool_call_ids = MessageWriter.nonfinal_tool_call_ids,
-                        stamp_cancelled = MessageWriter.stamp_cancelled,
+                        stamp_open_calls = MessageWriter.stamp_open_calls,
                         update_tool_call_block = record_stamp("subagent"),
                     },
                     set_modified = noop,
@@ -3430,7 +3431,7 @@ describe("agentic.SessionManager", function()
             end)
         end)
 
-        describe("cancelled tool call sweep", function()
+        describe("unfinished turn's tool call sweep", function()
             --- Run one turn that resolves with `response`, over a session
             --- holding one non-final and one completed call in the chat and in
             --- a running subagent's transcript.
@@ -3457,14 +3458,46 @@ describe("agentic.SessionManager", function()
 
             -- A running subagent can outlive the turn, so its own end stamps
             -- its calls.
-            it("stamps the chat's non-final calls, not a subagent's", function()
-                local sink =
-                    turn_over_pending_calls({ stopReason = "cancelled" })
+            for reason, word in pairs({
+                cancelled = "interrupted",
+                max_tokens = "max_tokens",
+                refusal = "refusal",
+            }) do
+                it(
+                    "stamps the chat's non-final calls, not a subagent's, at "
+                        .. reason,
+                    function()
+                        local sink =
+                            turn_over_pending_calls({ stopReason = reason })
+
+                        assert.same({
+                            {
+                                tool_call_id = "main-pending",
+                                status = "failed",
+                                ended_as = word,
+                            },
+                        }, sink.stamped.main)
+                        assert.same({}, sink.stamped.subagent)
+                    end
+                )
+            end
+
+            it("ends the chat's non-final calls failed at an error", function()
+                local sink = {}
+                local session =
+                    make_session(nil, { code = -32603, message = "boom" }, sink)
+                session.message_writer.tool_call_blocks = {
+                    ["main-pending"] = { status = "pending" },
+                }
+                session:_handle_input_submit("hello")
 
                 assert.same({
-                    { tool_call_id = "main-pending", status = "cancelled" },
+                    {
+                        tool_call_id = "main-pending",
+                        status = "failed",
+                        ended_as = "failed",
+                    },
                 }, sink.stamped.main)
-                assert.same({}, sink.stamped.subagent)
             end)
 
             it("persists the chat's stamps", function()
@@ -3477,7 +3510,8 @@ describe("agentic.SessionManager", function()
                         {
                             type = "tool_call",
                             tool_call_id = "main-pending",
-                            status = "cancelled",
+                            status = "failed",
+                            ended_as = "interrupted",
                         },
                     },
                 }, sink.history_updates)
@@ -4513,6 +4547,7 @@ describe("agentic.SessionManager", function()
                     set_idle = function() end,
                 },
                 stop_generation = SessionManager.stop_generation,
+                message_writer = MessageWriter:new(bufnr),
                 _cancel_session = SessionManager._cancel_session,
                 _reset_conversation = SessionManager._reset_conversation,
                 _set_available_commands = SessionManager._set_available_commands,
@@ -4911,6 +4946,376 @@ describe("agentic.SessionManager", function()
 
                 assert.same({}, session._held_tool_call_updates)
             end)
+        end)
+
+        describe("rejected and ended calls", function()
+            local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
+            --- @type TestStub[]
+            local float_stubs
+
+            before_each(function()
+                local noop = function() end
+                local pm = session.permission_manager
+                float_stubs = {
+                    spy.stub(pm.permission_float, "open"),
+                    spy.stub(pm.permission_float, "close"),
+                }
+                session.session_id = "s-1"
+                session.destroyed = false
+                session.agent = {
+                    stop_generation = spy.new(noop),
+                } --[[@as agentic.acp.ACPClient]]
+                session.status_indicator.stop = noop
+                session._set_generating = noop
+                session.stop_generation = SessionManager.stop_generation
+                session._end_open_tool_calls =
+                    SessionManager._end_open_tool_calls
+            end)
+
+            after_each(function()
+                for _, stub in ipairs(float_stubs) do
+                    stub:revert()
+                end
+            end)
+
+            --- Report an edit outside every grant scope, so no rule decides
+            --- it, and open a prompt for it.
+            --- @param id string
+            local function prompt(id)
+                session:_on_tool_call({
+                    tool_call_id = id,
+                    kind = "edit",
+                    argument = "/etc/agentic-test.lua",
+                    status = "pending",
+                })
+                session.permission_manager:add_request({
+                    sessionId = "s-1",
+                    toolCall = {
+                        toolCallId = id,
+                        kind = "edit",
+                        rawInput = { file_path = "/etc/agentic-test.lua" },
+                    },
+                    options = {
+                        {
+                            optionId = "allow-once",
+                            name = "Allow",
+                            kind = "allow_once",
+                        },
+                        {
+                            optionId = "reject-once",
+                            name = "Reject",
+                            kind = "reject_once",
+                        },
+                    },
+                }, function() end)
+                deferred.drain()
+            end
+
+            --- @param id string
+            --- @param writer? agentic.ui.MessageWriter default the main writer
+            --- @return string|nil
+            local function word(id, writer)
+                local tracker = (writer or session.message_writer).tool_call_blocks[id]
+                return CanonicalToolCall.status_word(tracker)
+            end
+
+            --- @param id string
+            local function fail(id)
+                session:_on_tool_call_update({
+                    tool_call_id = id,
+                    status = "failed",
+                    failure_reason = { "stopped" },
+                })
+            end
+
+            it("draws a prompt reject as rejected", function()
+                prompt("tc-1")
+                session.permission_manager:_complete_request("reject-once")
+                deferred.drain()
+                fail("tc-1")
+
+                assert.equal("rejected", word("tc-1"))
+                local text = table.concat(
+                    vim.api.nvim_buf_get_lines(bufnr, 0, -1, false),
+                    "\n"
+                )
+                assert.is_not_nil(
+                    text:find(" rejected · prompt-reject", 1, true)
+                )
+                assert.is_not_nil(text:find("Rejected at the prompt", 1, true))
+            end)
+
+            for _, ending in ipairs({ "ends both failed", "leaves both open" }) do
+                it(
+                    "draws a cancel's prompt rejected and its running call interrupted when the provider "
+                        .. ending,
+                    function()
+                        tool_call("tc-run")
+                        session:_on_tool_call_update({
+                            tool_call_id = "tc-run",
+                            status = "in_progress",
+                        })
+                        prompt("tc-prompt")
+
+                        session:stop_generation()
+                        deferred.drain()
+                        if ending == "ends both failed" then
+                            fail("tc-run")
+                            fail("tc-prompt")
+                        else
+                            session:_end_open_tool_calls("interrupted")
+                        end
+
+                        assert.equal("interrupted", word("tc-run"))
+                        assert.equal("rejected", word("tc-prompt"))
+                        local records = session.chat_history.messages
+                        assert.equal(
+                            "interrupted",
+                            CanonicalToolCall.status_word(records[1])
+                        )
+                        assert.equal(
+                            "rejected",
+                            CanonicalToolCall.status_word(records[2])
+                        )
+                    end
+                )
+            end
+
+            it("keeps a failure before the stop failed", function()
+                tool_call("tc-1")
+                fail("tc-1")
+                session:stop_generation()
+                assert.equal("failed", word("tc-1"))
+            end)
+
+            it("reads a failure after an idle stop as failed", function()
+                session:stop_generation()
+                tool_call("tc-1")
+                fail("tc-1")
+                assert.equal("failed", word("tc-1"))
+            end)
+
+            it("keeps a stopped call interrupted at another end", function()
+                tool_call("tc-1")
+                session:stop_generation()
+                session:_end_open_tool_calls("max_tokens")
+                fail("tc-1")
+                assert.equal("interrupted", word("tc-1"))
+            end)
+
+            it("keeps the first rejection line", function()
+                tool_call("tc-1")
+                session:_on_tool_call_update({
+                    tool_call_id = "tc-1",
+                    status = "failed",
+                    rejection = "Rejected by the auto-mode classifier: [X]",
+                })
+                session:_on_tool_call_update({
+                    tool_call_id = "tc-1",
+                    status = "failed",
+                    rejection = "Rejected by the auto-mode classifier",
+                })
+
+                local expected = "Rejected by the auto-mode classifier: [X]"
+                assert.equal(
+                    expected,
+                    session.message_writer.tool_call_blocks["tc-1"].rejection
+                )
+                assert.equal(
+                    expected,
+                    session.chat_history.messages[1].rejection
+                )
+            end)
+
+            it("draws a prompt withdrawn without a stop as rejected", function()
+                prompt("tc-1")
+                -- What a respawn or a provider switch does to open prompts.
+                session.permission_manager:cancel_requests()
+                deferred.drain()
+
+                assert.equal("rejected", word("tc-1"))
+                assert.same(
+                    { "prompt-cancel" },
+                    session.chat_history.messages[1].decided_by
+                )
+            end)
+
+            describe("of a subagent", function()
+                local child_buf
+                --- @type agentic.ui.MessageWriter
+                local child_writer
+                --- @type agentic.ui.MessageWriter
+                local other_writer
+                --- @type agentic.Subagents
+                local subagents
+
+                before_each(function()
+                    local noop = function() end
+                    child_buf = vim.api.nvim_create_buf(false, true)
+                    child_writer = MessageWriter:new(child_buf)
+                    other_writer = MessageWriter:new(child_buf)
+                    subagents = session._subagents
+                    for child_id, writer in pairs({
+                        c1 = child_writer,
+                        c2 = other_writer,
+                    }) do
+                        subagents._agents[child_id] = {
+                            open = true,
+                            record_read = true,
+                            transcript = {
+                                bufnr = child_buf,
+                                writer = writer,
+                                status_indicator = {
+                                    reposition = noop,
+                                    start = noop,
+                                    stop = noop,
+                                },
+                                set_running = noop,
+                                set_context = noop,
+                            },
+                        } --[[@as agentic.Subagents.Agent]]
+                    end
+                    subagents._agent_block = function()
+                        return { subagent = { mode = "blocking" } }
+                    end
+                    subagents._write_row = noop
+                    subagents._host.sync_modified = noop
+                    subagents._host.end_side_records = noop
+                    subagents._tool_call_owner["sub-1"] = "c1"
+                    subagents._tool_call_owner["sub-2"] = "c2"
+                    child_writer:write_tool_call_block({
+                        tool_call_id = "sub-1",
+                        kind = "execute",
+                        argument = "sleep 10",
+                        status = "in_progress",
+                    })
+                    other_writer:write_tool_call_block({
+                        tool_call_id = "sub-2",
+                        kind = "execute",
+                        argument = "sleep 20",
+                        status = "in_progress",
+                    })
+                end)
+
+                after_each(function()
+                    vim.api.nvim_buf_delete(child_buf, { force = true })
+                end)
+
+                it(
+                    "reads a foreground call failed at the main cancel as interrupted",
+                    function()
+                        session:stop_generation()
+                        fail("sub-1")
+                        assert.equal("interrupted", word("sub-1", child_writer))
+                    end
+                )
+
+                it(
+                    "leaves a background subagent's calls out of a main cancel",
+                    function()
+                        subagents._agent_block = function()
+                            return { subagent = { mode = "background" } }
+                        end
+                        session:stop_generation()
+                        fail("sub-1")
+                        assert.equal("failed", word("sub-1", child_writer))
+                    end
+                )
+
+                it("marks only the stopped subagent's calls", function()
+                    subagents:stop("c1")
+
+                    assert.equal(
+                        "interrupted",
+                        child_writer.tool_call_blocks["sub-1"].ended_as
+                    )
+                    assert.is_nil(
+                        other_writer.tool_call_blocks["sub-2"].ended_as
+                    )
+                    assert
+                        .spy(session.agent.stop_generation).was
+                        .called_with(session.agent, "c1")
+                end)
+
+                for _, case in ipairs({
+                    {
+                        state = { state = "idle", stopReason = "max_tokens" },
+                        word = "max_tokens",
+                    },
+                    { state = { state = "idle" }, word = "ended" },
+                    { state = { state = "failed" }, word = "failed" },
+                }) do
+                    it("ends its open calls " .. case.word, function()
+                        subagents:end_agent("c1", case.state)
+                        assert.equal(case.word, word("sub-1", child_writer))
+                    end)
+                end
+
+                it("leaves its open calls open at an unknown end", function()
+                    subagents:end_agent("c1", { state = "unknown" })
+                    assert.equal("in_progress", word("sub-1", child_writer))
+                end)
+
+                describe("ended by the cancel", function()
+                    local CANCELLED =
+                        { state = "idle", stopReason = "cancelled" }
+
+                    before_each(function()
+                        session:stop_generation()
+                    end)
+
+                    it(
+                        "reads interrupted when the close comes first",
+                        function()
+                            fail("sub-1")
+                            subagents:end_agent("c1", CANCELLED)
+                            assert.equal(
+                                "interrupted",
+                                word("sub-1", child_writer)
+                            )
+                        end
+                    )
+
+                    it("reads interrupted when the end comes first", function()
+                        subagents:end_agent("c1", CANCELLED)
+                        fail("sub-1")
+                        assert.equal("interrupted", word("sub-1", child_writer))
+                    end)
+
+                    it(
+                        "keeps a stopped call interrupted at another end",
+                        function()
+                            subagents:end_agent("c1", { state = "idle" })
+                            assert.equal(
+                                "interrupted",
+                                word("sub-1", child_writer)
+                            )
+                        end
+                    )
+                end)
+            end)
+
+            it(
+                "queues the closed folds of a restored rejected block",
+                function()
+                    session.message_writer:write_tool_call_block(
+                        ChatHistory.to_tool_call_block({
+                            type = "tool_call",
+                            tool_call_id = "tc-1",
+                            kind = "execute",
+                            argument = "rm -rf build",
+                            status = "failed",
+                            decided_by = { "prompt-reject" },
+                            failure_reason = { "No.", "Stop." },
+                        })
+                    )
+
+                    local states = vim.tbl_map(function(op)
+                        return op.open
+                    end, session.message_writer._pending_fold_ops)
+                    assert.same({ false, false }, states)
+                end
+            )
         end)
 
         it("records no rendering state in history", function()

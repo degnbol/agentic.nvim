@@ -17,15 +17,19 @@ M.MODE_SWITCH_TOOLS = {
 --- @field newLines integer
 
 --- A tool's own return value, forwarded verbatim. Only the Edit/Write and Agent
---- shapes are modelled, since those are the ones the client reads: `type` is
---- Write-only and says whether the file was created or overwritten, Edit omits
---- it entirely.
+--- shapes, and the one the bridge builds for a call denied before it ran, are
+--- modelled, since those are the ones the client reads: `type` is Write-only
+--- and says whether the file was created or overwritten, Edit omits it
+--- entirely.
 --- @class agentic.acp.ClaudeToolResponse
 --- @field filePath? string
 --- @field type? "create"|"update"
 --- @field structuredPatch? agentic.acp.ClaudePatchHunk[]
 --- @field status? string Outcome of an Agent call: `completed`, `async_launched` or `remote_launched`
 --- @field agentId? string Id of the agent an Agent call launched in the background
+--- @field decisionReasonType? string Of a call denied before it ran: what denied it
+--- @field decisionReason? string Of a call denied before it ran: the deciding component's short reason
+--- @field message? string Of a call denied before it ran: the text sent to the model
 
 --- claude-agent-acp per-notification metadata. `parentToolUseId` is set on
 --- subagent (Task) notifications — present ⟺ subagent content. `toolName` is
@@ -34,6 +38,7 @@ M.MODE_SWITCH_TOOLS = {
 --- @field parentToolUseId? string
 --- @field toolName? string
 --- @field toolResponse? agentic.acp.ClaudeToolResponse
+--- @field nonExecutionKind? string Why a main-agent call's failed result did not run: `user-rejected`, `permission-rule`, `automode-*`, `interrupted` or `cancelled`
 --- @field skill? string Skill name, on a Skill tool call
 --- @field skillPath? string The skill's SKILL.md, resolved by the bridge against `cwd` and `$HOME` only — absent for a skill discovered under any other root
 
@@ -280,6 +285,62 @@ function M.unwrap_tool_use_error(lines)
         return nil
     end
     return vim.split(inner, "\n", { plain = true })
+end
+
+--- Label of each `decisionReasonType` the CLI reports for a deny it decided
+--- before asking the host (`SDKPermissionDeniedMessage` in
+--- `claude-agent-sdk/sdk.d.ts`).
+--- @type table<string, string>
+local DENIAL_LABELS = {
+    rule = "Rejected by a permission rule",
+    subcommandResults = "Rejected by a permission rule for part of the command",
+    mode = "Rejected by the permission mode",
+    classifier = "Rejected by the auto-mode classifier",
+    asyncAgent = "Rejected: no permission prompt here",
+    workingDir = "Rejected: outside the allowed directories",
+    safetyCheck = "Rejected by a safety check",
+    sandboxOverride = "Rejected by the sandbox",
+    permissionPromptTool = "Rejected by the permission prompt tool",
+}
+
+--- One line saying why the CLI denied a call before it ran: the label of
+--- `reason_type`, then `: <reason>`, the reason's lines joined with spaces.
+--- @param reason_type string|nil The denial's `decisionReasonType`
+--- @param reason string|nil The deciding component's own short reason
+--- @return string
+function M.denial_line(reason_type, reason)
+    local label = DENIAL_LABELS[reason_type] or "Rejected"
+    if type(reason) ~= "string" or reason == "" then
+        return label
+    end
+    return label .. ": " .. table.concat(vim.split(reason, "\n"), " ")
+end
+
+--- @type table<string, string>
+local NON_EXECUTION_LINES = {
+    ["permission-rule"] = "Rejected",
+    ["automode-blocked"] = "Rejected by the auto-mode classifier",
+    ["automode-unavailable"] = "Rejected: the auto-mode classifier is unavailable",
+    ["automode-parsing-error"] = "Rejected: the auto-mode classifier gave no verdict",
+}
+
+--- One line saying why a call was refused before it ran, from the
+--- `nonExecutionKind` of its failed result. Nil for `user-rejected`, which
+--- the CLI also stamps on a command an interrupt killed, for the aborts
+--- (`interrupted`, `cancelled`) and for unknown kinds.
+--- @param kind string|nil
+--- @return string|nil
+function M.non_execution_line(kind)
+    return NON_EXECUTION_LINES[kind]
+end
+
+--- Whether a `toolResponse` is the one the bridge sends for a call the CLI
+--- denied before it ran: it names a `decisionReasonType`.
+--- @param response agentic.acp.ClaudeToolResponse|nil
+--- @return boolean
+function M.is_denial_response(response)
+    return type(response) == "table"
+        and type(response.decisionReasonType) == "string"
 end
 
 --- The task id and output file of a Bash result that announces a background

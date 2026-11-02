@@ -1466,7 +1466,7 @@ function SessionManager:_build_handlers()
 
         on_disconnect = function()
             if not self.destroyed then
-                self._subagents:close_all({ state = "unknown" })
+                self._subagents:close_all({ state = "idle" })
                 -- No command end can arrive any more.
                 self:_stop_output_tails(true)
             end
@@ -2078,17 +2078,20 @@ function SessionManager:_apply_side_tool_call(update, child_id)
     self:_history_changed(self.chat_history)
 end
 
---- Give every tool call in the chat left hanging by a cancelled turn a
---- `cancelled` footer. A subagent's calls are left alone: the subagent can
---- outlive the turn that started it.
+--- End every tool call in the chat left open by a turn that ended unfinished
+--- `failed`, with the turn's end word. A subagent's calls are left alone: the
+--- subagent can outlive the turn that started it.
 ---
 --- Whether the provider sends a late update for a call it abandoned is
---- provider-dependent, so without this sweep a block interrupted while pending
---- keeps that footer for the rest of the session, and after a restore too.
-function SessionManager:_mark_unresolved_tool_calls_cancelled()
+--- provider-dependent, so without this sweep such a block keeps its pending
+--- footer for the rest of the session, and after a restore too.
+--- @param word string How the turn ended, a `CanonicalToolCall.stop_reason_word`
+function SessionManager:_end_open_tool_calls(word)
     -- Not through `_on_tool_call_update`: that would also restart the status
     -- indicator and re-record edit ranges.
-    self.chat_history:cancel_tool_calls(self.message_writer:stamp_cancelled())
+    self.chat_history:update_tool_calls(
+        self.message_writer:stamp_open_calls(word, "failed")
+    )
 end
 
 --- Close out a turn dispatched to the agent: end it in the chat buffer, stamp
@@ -2126,6 +2129,11 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         tool_call_update,
         tool_call_update.kind or (existing and existing.kind)
     )
+    -- A call's first rejection line is kept: a provider reports the most
+    -- specific reason first.
+    if existing and existing.rejection then
+        tool_call_update.rejection = nil
+    end
 
     writer:update_tool_call_block(tool_call_update)
     self:_indicator_for(id):reposition()
@@ -2776,7 +2784,9 @@ function SessionManager:_advance_session_epoch()
 end
 
 --- Stop the running turn without ending the session. Safe when nothing is
---- running.
+--- running. The open calls of the main agent and of each working subagent not
+--- running in the background, which the turn's cancel also stops, are marked
+--- `interrupted`, for when they fail.
 ---
 --- Leaves `_prompt_pending` alone: the cancelled prompt's callback still
 --- fires (with `stopReason = "cancelled"`) and decrements it there. Clearing
@@ -2786,6 +2796,10 @@ function SessionManager:stop_generation()
     if not self.session_id then
         return
     end
+    self.chat_history:update_tool_calls(
+        self.message_writer:stamp_open_calls("interrupted")
+    )
+    self._subagents:mark_foreground_stopped()
     self.agent:stop_generation(self.session_id)
     self.permission_manager:cancel_requests()
     self:_set_generating(false)
@@ -3234,8 +3248,9 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
         local turn_usage
         --- Set when this failure is being resent as a fresh turn. Everything
         --- that would tell the user the turn ended is suppressed, so a
-        --- recovered failure leaves no trace: no error block, no bell or idle
-        --- state, no on_response_complete, and no queue drain.
+        --- recovered failure leaves no trace but its calls left open, which end
+        --- `failed`: no error block, no bell or idle state, no
+        --- on_response_complete, and no queue drain.
         local retrying = err ~= nil
             and Recovery.should_retry_transient(self, err, session_id)
 
@@ -3295,8 +3310,13 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
         -- persisted. `stop_generation` reaches this callback two ways — the
         -- `session/cancel` it sends, and the outstanding permission request its
         -- `permission_manager:cancel_requests()` resolves with nil.
-        if type(response) == "table" and response.stopReason == "cancelled" then
-            self:_mark_unresolved_tool_calls_cancelled()
+        local stop_reason = err and "error"
+            or type(response) == "table"
+                and Json.present(response.stopReason)
+        if stop_reason and stop_reason ~= "end_turn" then
+            self:_end_open_tool_calls(
+                CanonicalToolCall.stop_reason_word(stop_reason)
+            )
         end
 
         self:_finalize_turn(turn_usage)

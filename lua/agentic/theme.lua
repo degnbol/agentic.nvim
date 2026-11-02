@@ -54,7 +54,12 @@ local status_hl = {
     in_progress = Theme.HL_GROUPS.STATUS_PENDING,
     completed = Theme.HL_GROUPS.STATUS_COMPLETED,
     failed = Theme.HL_GROUPS.STATUS_FAILED,
-    cancelled = Theme.HL_GROUPS.STATUS_CANCELLED,
+    rejected = Theme.HL_GROUPS.STATUS_CANCELLED,
+    interrupted = Theme.HL_GROUPS.STATUS_CANCELLED,
+    ended = Theme.HL_GROUPS.STATUS_CANCELLED,
+    max_tokens = Theme.HL_GROUPS.STATUS_CANCELLED,
+    max_turn_requests = Theme.HL_GROUPS.STATUS_CANCELLED,
+    refusal = Theme.HL_GROUPS.STATUS_CANCELLED,
     background = Theme.HL_GROUPS.STATUS_PENDING,
     stopped = Theme.HL_GROUPS.STATUS_CANCELLED,
 }

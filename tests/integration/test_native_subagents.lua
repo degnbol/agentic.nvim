@@ -866,7 +866,7 @@ _G.call("c1", "t1")
         },
         {
             state = { state = "idle", stopReason = "cancelled" },
-            word = "cancelled",
+            word = "interrupted",
         },
         { state = { state = "idle", stopReason = "error" }, word = "failed" },
         {
@@ -915,10 +915,11 @@ _G.state("c1", ...)
                     icon ~= "" and icon or child.lua_get("_G.G.RUN_ENDED"),
                     child.lua_get(([[_G.sign_of("c1", %q)]]):format(case.word))
                 )
+                local open = case.word == "completed" or case.word == "unknown"
                 assert.equal(
-                    case.word == "completed" and "pending" or "cancelled",
+                    open and "pending" or case.word,
                     child.lua_get(
-                        [[_G.transcript("c1").writer.tool_call_blocks.t1.status]]
+                        [[require("agentic.acp.canonical_tool_call").status_word(_G.transcript("c1").writer.tool_call_blocks.t1)]]
                     )
                 )
                 assert.equal(
@@ -1040,36 +1041,40 @@ _G.prompt_cb({ stopReason = "cancelled" }, nil)
             )
 
             assert.equal(
-                "cancelled",
+                "interrupted",
                 child.lua_get(
-                    [[_G.transcript("c1").writer.tool_call_blocks.t1.status]]
+                    [[require("agentic.acp.canonical_tool_call").status_word(_G.transcript("c1").writer.tool_call_blocks.t1)]]
                 )
             )
         end
     )
 
-    it(
-        "disconnect ends open agents as unknown and leaves ended ones",
-        function()
-            child.lua([[
+    it("disconnect ends open agents as ended and leaves ended ones", function()
+        child.lua([[
 _G.spawn("c1")
+_G.call("c1", "t1")
 _G.spawn("c2")
 _G.state("c2", _G.COMPLETED)
 _G.c2_text = _G.ttext("c2")
 _G.s:_build_handlers().on_disconnect()
 ]])
 
-            assert.is_false(child.lua_get("_G.s._subagents._agents.c1.open"))
-            assert.truthy(
-                child.lua_get([[_G.ttext("c1")]]):find("## unknown", 1, true)
+        assert.is_false(child.lua_get("_G.s._subagents._agents.c1.open"))
+        assert.truthy(
+            child.lua_get([[_G.ttext("c1")]]):find("## ended", 1, true)
+        )
+        assert.equal("ended", child.lua_get([[_G.context("c1")]]))
+        assert.equal(
+            "ended",
+            child.lua_get(
+                [[require("agentic.acp.canonical_tool_call").status_word(_G.transcript("c1").writer.tool_call_blocks.t1)]]
             )
-            assert.equal("unknown", child.lua_get([[_G.context("c1")]]))
-            assert.equal(
-                child.lua_get("_G.c2_text"),
-                child.lua_get([[_G.ttext("c2")]])
-            )
-        end
-    )
+        )
+        assert.equal(
+            child.lua_get("_G.c2_text"),
+            child.lua_get([[_G.ttext("c2")]])
+        )
+    end)
 
     it("an epoch advance closes quietly", function()
         child.lua([[

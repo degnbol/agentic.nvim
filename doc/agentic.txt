@@ -247,6 +247,10 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     when the call did not fail and is a search or a command that structured
     `read_only` rules alone approve (|agentic-permissions-shell|).
 
+    The thresholds do not apply to a rejected call: its command or diff is
+    folded closed, and the text the agent was sent is folded closed under
+    the reason it was rejected.
+
     `search_max_lines`         integer (default: 8)
         Lines before a search block's output fold closes.
     `execute_max_lines`        integer (default: 25)
@@ -429,8 +433,11 @@ All options with defaults are in `lua/agentic/config_default.lua`.
                                                  *agentic-config-status_icons*
 `status_icons` table
     Tool call state icons: `pending`, `in_progress`, `completed`, `failed`,
-    `cancelled`, `background` for a background command still running, and
-    `stopped` for one the agent stopped.
+    `rejected` for a call rejected before it ran, `interrupted` for a call
+    open when its turn or subagent was stopped, `background` for a background
+    command still running, and `stopped` for one the agent stopped. A call
+    open when its turn or subagent ended otherwise shows how it ended, such
+    as `max_tokens` or `ended`, without an icon.
 
                                              *agentic-config-diagnostic_icons*
 `diagnostic_icons` table
@@ -818,8 +825,8 @@ each item is what the call's status footer shows (`✔ completed · grant`).
 
 Several words mean each was needed. `deny`, `glob-deny` and `session-reject`
 name what rejected a call. A prompted call shows `prompt-allow` or
-`prompt-reject`. A call with no word was decided by the provider, or was
-cancelled while its prompt was open.
+`prompt-reject`, or `prompt-cancel` when its prompt closed unanswered. A call
+with no word was decided by the provider.
 
 ------------------------------------------------------------------------------
 8.3 GRANTS                                         *agentic-permissions-grant*
@@ -1113,7 +1120,7 @@ With claude-agent-acp, each subagent has its own transcript: a listed buffer
 named `agentic://<id>/subagent/<agent id tail>-<name>` holding its prose,
 thinking and tool calls under a `##` heading like its block's. A transcript
 shows its subagent as working while it works. It also has a row for each end
-of a run, titled `completed`, `cancelled`, `failed`, `ended`, `unknown` or
+of a run, titled `completed`, `interrupted`, `failed`, `ended`, `unknown` or
 the provider's stop reason, and signed with that status's icon
 (|agentic-config-status_icons|), else 󰈼. The header reads
 `#<id> › <heading>`, shows 󰔟 while the subagent works, and how the last run

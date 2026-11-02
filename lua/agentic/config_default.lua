@@ -372,7 +372,8 @@ local ConfigDefault = {
         in_progress = "󰁪",
         completed = "✔",
         failed = "",
-        cancelled = "󰜺",
+        rejected = "󰜺",
+        interrupted = "󰓛",
         -- Same glyph as the header's running state: both mean "still running".
         background = "󰔟",
         stopped = "󰓛",

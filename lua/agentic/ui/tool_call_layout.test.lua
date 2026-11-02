@@ -1393,6 +1393,174 @@ describe("agentic.ui.ToolCallLayout", function()
         end)
     end)
 
+    describe("rejected call", function()
+        local REJECTED = { "prompt-reject" }
+
+        it("folds a one-row command closed by its fence", function()
+            local layout = Layout.build({
+                tool_call_id = "rej",
+                kind = "execute",
+                argument = "rm -rf build",
+                status = "failed",
+                shell = "zsh",
+                decided_by = REJECTED,
+                failure_reason = { "The user doesn't want to proceed." },
+            }, 0)
+
+            assert.same({
+                "###",
+                "```zsh-foldfence",
+                "rm -rf build",
+                "```",
+                "```console-fold",
+                "Rejected at the prompt",
+                "The user doesn't want to proceed.",
+                "```",
+                "",
+            }, layout.lines)
+            assert.same({
+                { anchor = 2, state = "closed" },
+                { anchor = 5, state = "closed" },
+            }, layout.folds)
+            assert.same({ 4 }, layout.titled)
+            assert.same({ 5, 6 }, layout.dim)
+        end)
+
+        it("folds a three-row command closed by its fence", function()
+            local layout = Layout.build({
+                tool_call_id = "rej",
+                kind = "execute",
+                argument = "a\nb\nc",
+                status = "failed",
+                shell = "zsh",
+                decided_by = REJECTED,
+            }, 0)
+
+            assert.equal("```zsh-foldfence", layout.lines[2])
+            assert.same({ anchor = 2, state = "closed" }, layout.folds[1])
+        end)
+
+        it("keeps an execute without agent text closed", function()
+            local layout = Layout.build({
+                tool_call_id = "rej",
+                kind = "execute",
+                argument = "rm x",
+                status = "pending",
+                decided_by = REJECTED,
+            }, 0)
+
+            assert.same({
+                "###",
+                "```bash-foldfence",
+                "rm x",
+                "```",
+                "```console",
+                "Rejected at the prompt",
+                "```",
+                "",
+            }, layout.lines)
+            assert.same({ { anchor = 2, state = "closed" } }, layout.folds)
+            assert.same({ 4 }, layout.titled)
+        end)
+
+        it("shows a rejected read's line in place of its summary", function()
+            local layout = Layout.build({
+                tool_call_id = "rej",
+                kind = "read",
+                argument = "/tmp/secret",
+                status = "failed",
+                rejection = "Rejected by a permission rule",
+                failure_reason = { "Permission to read denied." },
+                body = { "a", "b" },
+            }, 0)
+
+            assert.equal(-1, vim.fn.index(layout.lines, "Read 2 lines"))
+            local line_i =
+                vim.fn.index(layout.lines, "Rejected by a permission rule")
+            assert.equal("```console-fold", layout.lines[line_i])
+            assert.equal("Permission to read denied.", layout.lines[line_i + 2])
+            assert.same({ line_i - 1 }, layout.titled)
+        end)
+
+        it("folds a rejected search's command by its fence", function()
+            local layout = Layout.build({
+                tool_call_id = "rej",
+                kind = "search",
+                argument = "rg foo",
+                status = "failed",
+                rejection = "Rejected by the permission mode",
+            }, 0)
+
+            assert.equal("```bash-foldfence", layout.lines[2])
+            assert.equal("Rejected by the permission mode", layout.lines[6])
+        end)
+
+        it("folds a rejected edit's diff alone, the reason outside", function()
+            read_stub:returns({ "a", "old", "c" })
+            local layout = Layout.build({
+                tool_call_id = "rej",
+                kind = "edit",
+                argument = "/tmp/rej.lua",
+                status = "failed",
+                diff = { old = { "old" }, new = { "new" } },
+                decided_by = REJECTED,
+                failure_reason = { "Denied." },
+            }, 0)
+
+            local fence_i = vim.fn.index(layout.lines, "```text-foldfence")
+            assert.is_true(fence_i > 0)
+            local line_i = vim.fn.index(layout.lines, "Rejected at the prompt")
+            assert.equal("```console-fold", layout.lines[line_i])
+            assert.same({
+                { anchor = fence_i + 1, state = "closed" },
+                { anchor = line_i, state = "closed" },
+            }, layout.folds)
+            assert.same({ line_i - 1 }, layout.titled)
+        end)
+
+        it("gives a reject without agent text a one-row reason", function()
+            local layout = Layout.build({
+                tool_call_id = "rej",
+                kind = "fetch",
+                argument = "https://example.com",
+                status = "pending",
+                decided_by = { "prompt-cancel" },
+            }, 0)
+
+            assert.same({
+                "### `https://example.com`",
+                "```console",
+                "Cancelled at the prompt",
+                "```",
+                "",
+            }, layout.lines)
+            assert.same({}, layout.folds)
+        end)
+
+        it("lays out an interrupted execute as failed", function()
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local failed = {
+                tool_call_id = "int",
+                kind = "execute",
+                argument = "sleep 10",
+                status = "failed",
+                shell = "zsh",
+                failure_reason = { "Interrupted" },
+            }
+            assert.same(
+                Layout.build(failed, 0),
+                Layout.build(
+                    vim.tbl_extend(
+                        "force",
+                        failed,
+                        { ended_as = "interrupted" }
+                    ),
+                    0
+                )
+            )
+        end)
+    end)
+
     describe("no fold markers in rendered output", function()
         --- @param lines string[]
         local function assert_no_markers(lines)

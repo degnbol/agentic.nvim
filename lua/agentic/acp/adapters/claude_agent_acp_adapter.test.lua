@@ -231,6 +231,117 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         end)
     end)
 
+    describe("rejection", function()
+        --- The bridge's update for a call the CLI denied before it ran.
+        --- @param claude_code agentic.acp.ClaudeCodeMeta|nil extra fields
+        --- @return agentic.acp.ClaudeAgentToolCallUpdate
+        local function denial(claude_code)
+            return {
+                toolCallId = "tc-1",
+                status = "failed",
+                content = {
+                    {
+                        type = "content",
+                        content = {
+                            type = "text",
+                            text = "Permission denied: [Secret-Store Writes]",
+                        },
+                    },
+                },
+                _meta = {
+                    claudeCode = vim.tbl_extend("force", {
+                        toolName = "Bash",
+                        toolResponse = {
+                            decisionReasonType = "classifier",
+                            decisionReason = "[Secret-Store Writes]",
+                            message = "Permission for this action has been denied. IMPORTANT: …",
+                        },
+                    }, claude_code or {}),
+                },
+            }
+        end
+
+        --- The failed result that follows a call's end.
+        --- @param non_execution_kind string|nil
+        --- @return agentic.acp.ClaudeAgentToolCallUpdate
+        local function failed_result(non_execution_kind)
+            return {
+                toolCallId = "tc-1",
+                status = "failed",
+                rawOutput = "Permission for this action has been denied.",
+                _meta = {
+                    claudeCode = {
+                        toolName = "Bash",
+                        nonExecutionKind = non_execution_kind,
+                    },
+                },
+            }
+        end
+
+        it("gives a denial its line and no body", function()
+            local msg = make_adapter():__build_tool_call_update(denial())
+
+            assert.equal(
+                "Rejected by the auto-mode classifier: [Secret-Store Writes]",
+                msg.rejection
+            )
+            assert.is_nil(msg.body)
+        end)
+
+        it("keeps the CLI text of the result after a denial", function()
+            local adapter = make_adapter()
+            adapter:__build_tool_call_update(denial())
+
+            local plain = adapter:__build_tool_call_update(failed_result())
+            assert.same(
+                { "Permission for this action has been denied." },
+                plain.failure_reason
+            )
+            assert.is_nil(plain.rejection)
+
+            local kinded = adapter:__build_tool_call_update(
+                failed_result("automode-blocked")
+            )
+            assert.same(
+                { "Permission for this action has been denied." },
+                kinded.failure_reason
+            )
+            assert.equal(
+                "Rejected by the auto-mode classifier",
+                kinded.rejection
+            )
+        end)
+
+        it("gives a subagent's denial its line", function()
+            local adapter = make_adapter()
+            local msg = adapter:__build_tool_call_update(
+                denial({ parentToolUseId = "toolu_parent" })
+            )
+            assert.equal(
+                "Rejected by the auto-mode classifier: [Secret-Store Writes]",
+                msg.rejection
+            )
+            assert.is_nil(
+                adapter:__build_tool_call_update(failed_result()).rejection
+            )
+        end)
+
+        it("gives a refused result its line", function()
+            local msg = make_adapter():__build_tool_call_update(
+                failed_result("automode-blocked")
+            )
+            assert.equal("Rejected by the auto-mode classifier", msg.rejection)
+        end)
+
+        for _, kind in ipairs({ "user-rejected", "interrupted" }) do
+            it("gives a " .. kind .. " result no line", function()
+                local msg =
+                    make_adapter():__build_tool_call_update(failed_result(kind))
+                assert.is_nil(msg.rejection)
+            end)
+        end
+    end)
+
     it("unwraps a failure reason's tool_use_error envelope", function()
         local msg = make_adapter():__build_tool_call_update({
             toolCallId = "tc-1",

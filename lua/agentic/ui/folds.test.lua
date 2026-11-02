@@ -51,7 +51,7 @@ describe("agentic.ui.folds", function()
     --- Render `lines` as a chat buffer and return its `Folds.levels`.
     --- @param lines string[]
     --- @return string[] levels
-    --- @return table<integer, true> joined
+    --- @return table<integer, integer> skip
     local function levels_of(lines)
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
         vim.bo[bufnr].filetype = "AgenticChat"
@@ -139,7 +139,7 @@ describe("agentic.ui.folds", function()
         it(
             "nests a `console-fold` fold in a `-foldnext` fold before it",
             function()
-                local levels, joined = levels_of({
+                local levels, skip = levels_of({
                     "### block",
                     "```zsh-foldnext",
                     "rg foo",
@@ -155,14 +155,14 @@ describe("agentic.ui.folds", function()
                     { "0", "0", ">1", "1", "1", ">2", "2", "0", "0" },
                     levels
                 )
-                assert.same({ [3] = true }, joined)
+                assert.same({ [3] = 2 }, skip)
             end
         )
 
         it(
             "folds a `-foldnext` fence through a one-row `console` fence",
             function()
-                local levels, joined = levels_of({
+                local levels, skip = levels_of({
                     "```zsh-foldnext",
                     "rg foo",
                     "```",
@@ -172,9 +172,39 @@ describe("agentic.ui.folds", function()
                 })
 
                 assert.same({ "0", ">1", "1", "1", "1", "0" }, levels)
-                assert.same({ [2] = true }, joined)
+                assert.same({ [2] = 2 }, skip)
             end
         )
+
+        it(
+            "folds a one-row `-foldfence` body through its closing fence",
+            function()
+                local levels, skip = levels_of({
+                    "### block",
+                    "```zsh-foldfence",
+                    "rm -rf build",
+                    "```",
+                    "after",
+                })
+
+                assert.same({ "0", "0", ">1", "1", "0" }, levels)
+                assert.same({ [3] = 1 }, skip)
+            end
+        )
+
+        it("does not take a `-foldfence` fold as `-fold`", function()
+            local levels = levels_of({
+                "```text-foldfence",
+                "a",
+                "b",
+                "```",
+                "```console",
+                "out",
+                "```",
+            })
+
+            assert.same({ "0", ">1", "1", "1", "0", "0", "0" }, levels)
+        end)
 
         it("forms no fold for a `-foldnext` fence alone", function()
             local levels = levels_of({
@@ -189,7 +219,7 @@ describe("agentic.ui.folds", function()
         end)
 
         it("does not join a `console` fence after a blank line", function()
-            local levels, joined = levels_of({
+            local levels, skip = levels_of({
                 "```zsh-foldnext",
                 "git add a",
                 "git commit",
@@ -202,11 +232,11 @@ describe("agentic.ui.folds", function()
             })
 
             assert.same({ "0", "0", "0", "0", "0", "0", "0", "0", "0" }, levels)
-            assert.same({}, joined)
+            assert.same({}, skip)
         end)
 
         it("does not join a `-fold` fence to a `console` fence", function()
-            local levels, joined = levels_of({
+            local levels, skip = levels_of({
                 "```markdown-fold",
                 "thought 1",
                 "thought 2",
@@ -218,7 +248,7 @@ describe("agentic.ui.folds", function()
             })
 
             assert.same({ "0", ">1", "1", "0", "0", "0", "0", "0" }, levels)
-            assert.same({}, joined)
+            assert.same({}, skip)
         end)
 
         it("skips a one-line body, which vim cannot close", function()
@@ -369,13 +399,13 @@ describe("agentic.ui.folds", function()
                 local Folds = require("agentic.ui.folds")
                 local line_count = vim.api.nvim_buf_line_count(bufnr)
                 local got = foldexpr_levels()
-                local levels, joined = Folds.levels(bufnr)
+                local levels, skip = Folds.levels(bufnr)
                 local state = Folds._state(bufnr)
                 assert.is_not_nil(state)
                 --- @cast state -nil
 
                 assert.same(levels, got)
-                assert.same(joined, state.joined)
+                assert.same(skip, state.skip)
                 assert.equal(line_count, #state.levels)
             end
 
@@ -693,7 +723,50 @@ describe("agentic.ui.folds", function()
             it("leads with the line count when unmarked", function()
                 assert.equal("    ··· 2 lines ···", foldtext_of(3, 4))
             end)
+
+            it("leads a titled `console-fold` with its first row", function()
+                vim.api.nvim_buf_set_lines(bufnr, 1, 2, false, {
+                    "```console-fold",
+                })
+                vim.api.nvim_buf_set_extmark(bufnr, NS_TITLED, 1, 0, {})
+
+                assert.equal(
+                    "    ··· `guard.sh` · 30 ms · 2 lines ···",
+                    foldtext_of(3, 4)
+                )
+            end)
         end)
+
+        it(
+            "leads a one-row `-foldfence` fold with the row and counts 1",
+            function()
+                levels_of({
+                    "### block",
+                    "```zsh-foldfence",
+                    "rm -rf build",
+                    "```",
+                    "after",
+                })
+                vim.wo[winid].foldmethod = "expr"
+                vim.wo[winid].foldexpr =
+                    'v:lua.require("agentic.ui.folds").foldexpr()'
+                vim.wo[winid].foldtext =
+                    'v:lua.require("agentic.ui.folds").foldtext()'
+                local text = vim.api.nvim_win_call(winid, function()
+                    vim.cmd("3foldclose")
+                    return {
+                        closed = vim.fn.foldclosed(3),
+                        text = vim.fn.foldtextresult(3),
+                    }
+                end)
+
+                assert.equal(3, text.closed)
+                assert.equal(
+                    "    ··· rm -rf build · 1 lines ···",
+                    text.text
+                )
+            end
+        )
 
         describe("of a joined fold", function()
             --- Render an execute block with `command` as the chat buffer

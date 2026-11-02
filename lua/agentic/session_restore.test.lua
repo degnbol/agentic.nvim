@@ -264,12 +264,35 @@ describe("SessionRestore", function()
             assert.truthy(tool_line[1]:match("✔"))
         end)
 
-        it("marks a cancelled tool call as over, not running", function()
+        for icon_key, fields in pairs({
+            interrupted = { status = "failed", ended_as = "interrupted" },
+            rejected = { status = "failed", decided_by = { "prompt-reject" } },
+        }) do
+            it("shows the " .. icon_key .. " icon", function()
+                local lines = SessionRestore.format_preview({
+                    vim.tbl_extend("force", {
+                        type = "tool_call",
+                        kind = "edit",
+                        argument = "file.lua",
+                    }, fields) --[[@as agentic.ui.ChatHistory.ToolCall]],
+                })
+                local tool_line = vim.tbl_filter(function(l)
+                    return l:match("edit")
+                end, lines)
+                assert.equal(1, #tool_line)
+                assert.truthy(
+                    tool_line[1]:find(Config.status_icons[icon_key], 1, true)
+                )
+            end)
+        end
+
+        it("marks a saved cancelled tool call as interrupted", function()
             local lines = SessionRestore.format_preview({
                 {
                     type = "tool_call",
                     kind = "edit",
                     argument = "file.lua",
+                    --- @diagnostic disable-next-line: assign-type-mismatch
                     status = "cancelled",
                 },
             })
@@ -278,10 +301,10 @@ describe("SessionRestore", function()
             end, lines)
             assert.equal(1, #tool_line)
             -- The preview reads the same glyph vocabulary as the live footer,
-            -- so a cancelled call no longer takes the "…" that means the turn
+            -- so a cancelled call does not take the "…" that means the turn
             -- is still working on it.
             assert.truthy(
-                tool_line[1]:find(Config.status_icons.cancelled, 1, true)
+                tool_line[1]:find(Config.status_icons.interrupted, 1, true)
             )
             assert.is_nil(tool_line[1]:find("…", 1, true))
         end)
@@ -687,7 +710,7 @@ describe("SessionRestore", function()
                 Config.status_icons = original_icons
             end)
             Config.status_icons =
-                { failed = "F", cancelled = "", completed = "❌" }
+                { failed = "F", interrupted = "", completed = "❌" }
 
             local notices = replayed_notices({
                 {
@@ -705,6 +728,8 @@ describe("SessionRestore", function()
             assert.same({ "boom", "two" }, notices[1].body)
             assert.is_true(notices[1].mid_turn)
             assert.equal(Glyphs.RUN_ENDED, notices[2].glyph)
+            -- A saved `cancelled` end reads as `interrupted`.
+            assert.equal("interrupted", notices[2].title)
             assert.equal(Glyphs.RUN_ENDED, notices[3].glyph)
             -- Too wide for the sign column.
             assert.equal(Glyphs.RUN_ENDED, notices[4].glyph)

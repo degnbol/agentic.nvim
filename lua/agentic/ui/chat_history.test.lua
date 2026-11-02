@@ -444,6 +444,25 @@ describe("ChatHistory", function()
             )
         end)
 
+        it("writes a rejection line in place of the body", function()
+            local prompt = {}
+            ChatHistory.prepend_restored_messages({
+                {
+                    type = "tool_call",
+                    tool_call_id = "tc-rm",
+                    kind = "execute",
+                    status = "failed",
+                    argument = "rm -rf build",
+                    body = { "Permission denied: no" },
+                    decided_by = { "prompt-reject" },
+                },
+            }, prompt)
+            assert.equal(
+                "Tool call (execute): rm -rf build\nResult: Rejected at the prompt",
+                prompt[1].text
+            )
+        end)
+
         it("writes the open range of a read", function()
             local prompt = {}
             ChatHistory.prepend_restored_messages({
@@ -1107,8 +1126,8 @@ describe("ChatHistory", function()
             end)
         end)
 
-        describe("cancel_tool_calls", function()
-            it("cancels a main and a subagent tool call", function()
+        describe("update_tool_calls", function()
+            it("updates a main and a subagent tool call", function()
                 local history = ChatHistory:new()
                 history:add_message({
                     type = "tool_call",
@@ -1124,11 +1143,19 @@ describe("ChatHistory", function()
                     agent_key = "task-1",
                 })
 
-                history:cancel_tool_calls({ "tc-main", "tc-sub" })
+                history:update_tool_calls({
+                    {
+                        tool_call_id = "tc-main",
+                        status = "failed",
+                        ended_as = "interrupted",
+                    },
+                    { tool_call_id = "tc-sub", status = "failed" },
+                })
 
-                assert.equal("cancelled", history.messages[1].status)
+                assert.equal("failed", history.messages[1].status)
+                assert.equal("interrupted", history.messages[1].ended_as)
                 assert.equal("read", history.messages[1].kind)
-                assert.equal("cancelled", history.subagent_messages[1].status)
+                assert.equal("failed", history.subagent_messages[1].status)
             end)
         end)
     end)
@@ -1153,6 +1180,8 @@ describe("ChatHistory", function()
             skill_path = "/s/SKILL.md",
             subagent = { label = "a", mode = "blocking", confirmed = true },
             decided_by = { "grant" },
+            rejection = "Rejected by the permission mode",
+            ended_as = "interrupted",
         }
 
         it(

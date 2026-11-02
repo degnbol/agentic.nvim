@@ -35,7 +35,8 @@ local M = {}
 --- @field rows string[]
 --- @field lang? string Fence language; nil leaves the rows unfenced, "" fences with an empty language
 --- @field fold? agentic.ui.FoldState Fold state; adds `-fold` to the info string
---- @field fold_next? boolean With `fold`, the marker is `-foldnext` instead of `-fold`: the fold runs through the next section's `console` or `console-fold` fence. Without `fold` it adds no marker
+--- @field fold_through? "next"|"fence" With `fold`, where the fold ends instead of at the last row: `next` gives the marker `-foldnext`, through the next section's `console` or `console-fold` fence; `fence` gives `-foldfence`, through the section's own closing fence row, so a one-row section folds too. Without `fold` it adds no marker
+--- @field titled? boolean The fold text of the section leads with its first row
 --- @field dim? boolean Dim the rows with AgenticDimmedBlock. A layout keeps one dimmed range, the last dimmed section's
 --- @field highlights? agentic.ui.ToolCallLayout.HighlightRange[] `line_index` 0-based within `rows`
 --- @field ansi? agentic.utils.Ansi.Span[][] Spans per row of `rows`
@@ -49,6 +50,7 @@ local M = {}
 --- @field ansi { first: integer, spans: agentic.utils.Ansi.Span[][] }[] Spans for the rows from each `first`
 --- @field matches agentic.utils.GrepHighlights.Match[]
 --- @field folds agentic.ui.ToolCallLayout.Fold[] Outermost first
+--- @field titled integer[] Opening fence row of each titled section
 --- @field dim? [integer, integer] First and last dimmed row
 --- @field diff_blocks? agentic.ui.ToolCallDiff.DiffBlock[] Matched hunks, nil when none matched
 
@@ -64,6 +66,7 @@ local M = {}
 --- @field wrap_width integer 0 = soft wrap
 --- @field measure agentic.utils.MarkdownTable.Measure
 --- @field failure? string[] `failure_reason` of a failed call; nil when not failed or empty
+--- @field rejection_line? string `CanonicalToolCall.rejection_line` of the block; nil when the call was not rejected
 --- @field head_line? integer Line appended to a path head as `path:N`
 --- @field diff? { hunks: agentic.ui.ToolCallDiff.DiffBlock[], source_lines: string[], is_create: boolean }
 
@@ -256,6 +259,10 @@ local function search_title_flags(argument)
     return flags
 end
 
+--- Fold marker of each `Section.fold_through`.
+--- @type table<string, string>
+local FOLD_THROUGH_MARKERS = { next = "-foldnext", fence = "-foldfence" }
+
 --- Place sections in order, fence each one that has a `lang` with
 --- `TextWrap.safe_fence(section.rows)`, shift every index by the section's
 --- first content row (after the opening fence; also the fold anchor), and
@@ -264,8 +271,14 @@ end
 --- @return agentic.ui.ToolCallLayout.Layout
 local function assemble(sections)
     --- @type agentic.ui.ToolCallLayout.Layout
-    local layout =
-        { lines = {}, highlights = {}, ansi = {}, matches = {}, folds = {} }
+    local layout = {
+        lines = {},
+        highlights = {},
+        ansi = {},
+        matches = {},
+        folds = {},
+        titled = {},
+    }
     local lines = layout.lines
     for _, section in ipairs(sections) do
         local fence = section.lang and TextWrap.safe_fence(section.rows)
@@ -273,8 +286,11 @@ local function assemble(sections)
             -- A command fence keeps its bare language until output exists:
             -- `permission_highlight.lua`'s `OPEN_FENCE` matches only that.
             local marker = section.fold
-                    and (section.fold_next and "-foldnext" or "-fold")
+                    and (FOLD_THROUGH_MARKERS[section.fold_through] or "-fold")
                 or ""
+            if section.titled then
+                table.insert(layout.titled, #lines)
+            end
             table.insert(lines, fence .. section.lang .. marker)
         end
         local first = #lines
@@ -423,7 +439,8 @@ local function default_head(call)
 end
 
 --- Start state of the fold over a call's command and its output (the
---- failure reason or body): nil without output rows, so a command alone is
+--- failure reason or body): closed for a rejected call, whose command never
+--- ran and folds alone; nil without output rows, so a command alone is
 --- never hidden; closed when the call did not fail and is safe; else open.
 --- Nil for a call with an output file: its tail is re-rendered as the file
 --- grows, and a re-render would reopen a fold the user closed.
@@ -431,6 +448,9 @@ end
 --- @param safe boolean True when the command is read-only
 --- @return agentic.ui.FoldState|nil
 local function command_fold_state(call, safe)
+    if call.rejection_line then
+        return "closed"
+    end
     local output = call.failure or call.block.body or {}
     if #output == 0 or call.block.output_file then
         return nil
@@ -478,7 +498,7 @@ local HEADS = {
                     call,
                     PermissionRules.is_read_only(call.argument)
                 ),
-                fold_next = true,
+                fold_through = call.rejection_line and "fence" or "next",
             },
         }
     end,
@@ -500,7 +520,7 @@ local HEADS = {
                 lang = shell_fence_lang(call.argument, "bash"),
                 -- A search is read-only by kind.
                 fold = command_fold_state(call, true),
-                fold_next = true,
+                fold_through = call.rejection_line and "fence" or "next",
             },
         }
     end,
@@ -807,10 +827,10 @@ local function hunk_rows(hunk, source_lines, context_lang)
     return rows, highlights
 end
 
---- The diff of a file-mutating call as one section, then the failure reason
---- when the call failed.
---- @type agentic.ui.ToolCallLayout.Builder
-local function diff_body(call)
+--- The diff of a file-mutating call as one unfolded section.
+--- @param call agentic.ui.ToolCallLayout.Call A call with `diff`
+--- @return agentic.ui.ToolCallLayout.Section
+local function diff_section(call)
     local block = call.block
     local diff = block.diff
     local call_diff = call.diff
@@ -878,6 +898,25 @@ local function diff_body(call)
         vim.list_extend(rows, hunk_lines)
     end
 
+    -- The `text` label names no parser, so the diff is never injected: an
+    -- injected zsh diff can hang the editor (see ZshParseGuard). Colour
+    -- comes from block_col_hl extmarks where a context parse ran.
+    --- @type agentic.ui.ToolCallLayout.Section
+    local section = { rows = rows, lang = "text", highlights = highlights }
+    return section
+end
+
+--- The diff of a file-mutating call as one section, then the failure reason
+--- when the call failed.
+--- @type agentic.ui.ToolCallLayout.Builder
+local function diff_body(call)
+    local block = call.block
+    local diff = block.diff
+    local call_diff = call.diff
+    --- @cast diff -nil
+    --- @cast call_diff -nil
+    local section = diff_section(call)
+
     -- A created file's diff is the whole file, so a large one is closed. An
     -- edit shows only fragments and stays open unless it failed.
     local create_max = Config.tool_call_display.create_max_lines or 0
@@ -886,26 +925,55 @@ local function diff_body(call)
         and #diff.new > create_max
     local open = block.status ~= "failed" and not collapse
 
-    -- The `text` label names no parser, so the diff is never injected: an
-    -- injected zsh diff can hang the editor (see ZshParseGuard). Colour
-    -- comes from block_col_hl extmarks where a context parse ran.
-    --- @type agentic.ui.ToolCallLayout.Section
-    local diff_section = { rows = rows, lang = "text", highlights = highlights }
     --- @type agentic.ui.ToolCallLayout.Section[]
-    local sections = { diff_section }
+    local sections = { section }
     if call.failure then
         -- A failed edit keeps the diff with the reason beneath it, both in
         -- one closed fold, so a diff of any length can be hidden. An empty
         -- diff has no fence content for the fold to anchor on (E490).
-        if #rows > 0 then
-            diff_section.fold = "closed"
-            diff_section.fold_next = true
+        if #section.rows > 0 then
+            section.fold = "closed"
+            section.fold_through = "next"
         end
         table.insert(sections, reason_section(call.failure))
-    elseif #rows > 1 then
+    elseif #section.rows > 1 then
         -- A body of one row gets no fold (`Folds.levels`).
-        diff_section.fold = open and "open" or "closed"
+        section.fold = open and "open" or "closed"
     end
+    return sections
+end
+
+--- The rows in `rows` when it has any, else nil.
+--- @param rows string[]|nil
+--- @return string[]|nil
+local function nonempty(rows)
+    return rows and #rows > 0 and rows or nil
+end
+
+--- The body of a call rejected before it ran: its diff, if any, folded
+--- closed alone, then a titled reason section that leads with the rejection
+--- line and holds the text the agent was sent (`failure_reason`, else
+--- `body`).
+--- @type agentic.ui.ToolCallLayout.Builder
+local function rejected_body(call)
+    --- @type agentic.ui.ToolCallLayout.Section[]
+    local sections = {}
+    if call.diff then
+        local section = diff_section(call)
+        -- No rows, no fence content for the fold to anchor on (E490).
+        if #section.rows > 0 then
+            section.fold = "closed"
+            section.fold_through = "fence"
+        end
+        table.insert(sections, section)
+    end
+    local agent_text = nonempty(call.block.failure_reason)
+        or nonempty(call.block.body)
+        or {}
+    local reason =
+        reason_section(vim.list_extend({ call.rejection_line }, agent_text))
+    reason.titled = true
+    table.insert(sections, reason)
     return sections
 end
 
@@ -928,6 +996,7 @@ function M.build(block, wrap_width, measure)
                 and #failure > 0
                 and failure
             or nil,
+        rejection_line = CanonicalToolCall.rejection_line(block),
     }
 
     -- The first line the call touches, appended to the path head as `path:N`
@@ -971,7 +1040,9 @@ function M.build(block, wrap_width, measure)
     local sections = (HEADS[call.kind] or default_head)(call)
     --- @type agentic.ui.ToolCallLayout.Section[]
     local body
-    if block.diff then
+    if call.rejection_line then
+        body = rejected_body(call)
+    elseif block.diff then
         body = diff_body(call)
     elseif call.failure and call.kind ~= "execute" then
         -- The summary a kind normally shows ("Read N lines", search results)

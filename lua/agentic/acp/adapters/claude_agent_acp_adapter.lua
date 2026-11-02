@@ -496,8 +496,33 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update, session_id)
     if update._meta and update._meta.terminal_exit then
         message.output_ended = true
     end
+    self:__apply_rejection(message, update)
 
     return message
+end
+
+--- Set `message.rejection` from `update` when the CLI refused the call before
+--- it ran, by a denial or by its `nonExecutionKind`. A denial also drops
+--- `message.body`, a `Permission denied: …` that repeats the rejection.
+--- @protected
+--- @param message agentic.ui.MessageWriter.ToolCallBase
+--- @param update agentic.acp.ClaudeAgentToolCallUpdate
+function ClaudeAgentACPAdapter:__apply_rejection(message, update)
+    local meta = ClaudeUtils.claude_meta(update)
+    local response = meta.toolResponse
+    if
+        update.status == "failed" and ClaudeUtils.is_denial_response(response)
+    then
+        --- @cast response -nil
+        message.rejection = ClaudeUtils.denial_line(
+            response.decisionReasonType,
+            response.decisionReason
+        )
+        message.body = nil
+    else
+        message.rejection =
+            ClaudeUtils.non_execution_line(meta.nonExecutionKind)
+    end
 end
 
 --- Move the output held for a tool call into its status update: as

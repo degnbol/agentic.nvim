@@ -194,6 +194,15 @@ for the rest, so the provider can adapt on the next turn; `<C-c>`
 `option.kind` (`"reject_once"`). Look the option up by `optionId` and read its
 `kind`.
 
+## Deciders
+
+What decided a call is recorded on it (`decided_by`, `record_deciders`) and
+shown in its footer. A request resolved unanswered — by `cancel_requests`, or
+queued behind `Lx`, or current under `Lx` with no `reject_once` option —
+records `prompt-cancel`. A rejecting decider also gives the call its rejection
+line (`CanonicalToolCall.deciders_line`), which wins over a provider's own
+`rejection`.
+
 ## Permission float
 
 `PermissionFloat` — one instance per session, paired with its

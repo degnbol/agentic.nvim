@@ -9,6 +9,9 @@
 ; execute block's command and output are one fold. Folds nest by
 ; containment, so that output's own "-fold" is a fold inside it.
 ;
+; A "-foldfence" fence (```zsh-foldfence) folds its content through its own
+; closing fence row, so a one-row body still forms a fold that closes.
+;
 ; This is the chat buffer's ONLY fold source. `agentic.ui.folds` runs it over
 ; the root tree alone, so an injected language's own folds.scm — zsh heredocs,
 ; lua argument lists — never reaches the transcript; see that module for why.
@@ -34,3 +37,10 @@
     (code_fence_content) @fold.end)
   (#lua-match? @_lang "%-foldnext$")
   (#any-of? @_output "console" "console-fold"))
+
+(fenced_code_block
+  (info_string (language) @_lang)
+  (code_fence_content) @fold
+  .
+  (fenced_code_block_delimiter) @fold.fence
+  (#lua-match? @_lang "%-foldfence$"))

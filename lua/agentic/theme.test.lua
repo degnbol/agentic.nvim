@@ -44,7 +44,8 @@ describe("agentic.Theme", function()
                 "in_progress",
                 "completed",
                 "failed",
-                "cancelled",
+                "rejected",
+                "interrupted",
             }) do
                 local group = Theme.get_status_hl_group(status)
                 assert.is_not.equal(group, "Comment")

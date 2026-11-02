@@ -22,9 +22,10 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- `parser:for_each_tree` instead.
 ---
 --- So folds here come only from `queries/agentic/folds.scm` — one per
---- writer-marked `*-fold` body, and one from each `*-foldnext`
+--- writer-marked `*-fold` body, one from each `*-foldnext`
 --- body through the `console` body right after it, which encloses that
---- body's own fold. The writer always appends a body with both its fences in a
+--- body's own fold, and one from each `*-foldfence` body through its closing
+--- fence row. The writer always appends a body with both its fences in a
 --- single `nvim_buf_set_lines`, so such a fold is never transiently
 --- unterminated.
 ---
@@ -47,7 +48,7 @@ local M = {}
 
 --- @class agentic.ui.Folds.State
 --- @field levels string[] Foldexpr value per 1-indexed line
---- @field joined table<integer, true> 1-indexed first line of each fold that ends at a `@fold.end` capture
+--- @field skip table<integer, integer> By 1-indexed first line of a fold, the fence rows it holds that the foldtext count leaves out: 2 for one ending at a `@fold.end` capture, 1 for one ending at a `@fold.fence` capture
 --- @field parser? vim.treesitter.LanguageTree Parser the callbacks are registered on
 --- @field dirty_first? integer First 1-indexed row whose level is unknown
 --- @field dirty_last? integer Last 1-indexed row whose level is unknown
@@ -106,24 +107,24 @@ end
 --- opening fence row above them) meets rows `first`..`last`, each over its
 --- whole extent. Matches come from the root tree only, so injected languages
 --- contribute nothing. A match folds from the start of its `@fold` capture to
---- the end of its `@fold.end` capture. A match with a `@fold.end` capture
---- forms no fold unless that fence opens on the row after `@fold`'s fence
---- closes.
+--- the end of its `@fold.end` or `@fold.fence` capture. A match with a
+--- `@fold.end` capture forms no fold unless that fence opens on the row after
+--- `@fold`'s fence closes.
 --- @param bufnr integer
 --- @param first integer 1-indexed first row
 --- @param last integer 1-indexed last row, inclusive
 --- @return [integer, integer][] ranges 1-indexed first and last line
---- @return table<integer, true> joined first line of each range that ends at a `@fold.end` capture
+--- @return table<integer, integer> skip by first line of a range, its fence rows the foldtext count leaves out (`State.skip`)
 local function ranges_in(bufnr, first, last)
     --- @type [integer, integer][]
     local ranges = {}
-    --- @type table<integer, true>
-    local joined = {}
+    --- @type table<integer, integer>
+    local skip = {}
 
     local parser = vim.treesitter.get_parser(bufnr, nil, { error = false })
     local query = parser and vim.treesitter.query.get(parser:lang(), "folds")
     if not parser or not query then
-        return ranges, joined
+        return ranges, skip
     end
 
     for _, tree in pairs(parser:parse() or {}) do
@@ -144,36 +145,36 @@ local function ranges_in(bufnr, first, last)
                 "a folds.scm pattern lacks a @fold capture"
             )
             local tail = captured["fold.end"]
+            local fence = captured["fold.fence"]
             -- The `.` anchor skips blank lines, which form no node, so a
             -- second fence joins only when it opens on the row right after
-            -- the first one closes.
+            -- the first one closes. A closing fence row always follows its
+            -- content directly.
             local adjacent = not tail or tail[1] == last_row(start) + 2
             local fold_first = start[1] + 1
-            local fold_last = last_row(tail or start)
+            local fold_last = last_row(tail or fence or start)
             local meets = fold_first - 1 <= last and fold_last >= first
             -- Vim cannot close a one-line fold at 'foldminlines' = 1,
             -- which `chat_win_opts` pins for exactly this reason.
             if meets and adjacent and fold_last > fold_first then
                 table.insert(ranges, { fold_first, fold_last })
-                if tail then
-                    joined[fold_first] = true
-                end
+                skip[fold_first] = tail and 2 or fence and 1 or nil
             end
         end
     end
 
-    return ranges, joined
+    return ranges, skip
 end
 
 --- Foldexpr value for every line of a buffer, from its `folds` query over the
 --- root tree only.
 --- @param bufnr integer
 --- @return string[] levels foldexpr value per 1-indexed line number: the line's fold depth, prefixed `>` on a fold's first line
---- @return table<integer, true> joined 1-indexed first line of each fold that ends at a `@fold.end` capture
+--- @return table<integer, integer> skip by 1-indexed first line of a fold, its fence rows the foldtext count leaves out (`State.skip`)
 function M.levels(bufnr)
     local line_count = vim.api.nvim_buf_line_count(bufnr)
-    local ranges, joined = ranges_in(bufnr, 1, line_count)
-    return M.levels_of_ranges(ranges, line_count), joined
+    local ranges, skip = ranges_in(bufnr, 1, line_count)
+    return M.levels_of_ranges(ranges, line_count), skip
 end
 
 --- Rows `first`..`last` widened to the footprints (a fold's rows and the
@@ -185,7 +186,7 @@ end
 --- @return integer span_first 1-indexed
 --- @return integer span_last 1-indexed, inclusive
 --- @return [integer, integer][] ranges 1-indexed first and last line
---- @return table<integer, true> joined first line of each range that ends at a `@fold.end` capture
+--- @return table<integer, integer> skip by first line of a range, its fence rows the foldtext count leaves out (`State.skip`)
 local function fold_span(bufnr, first, last)
     local span_first, span_last = first, last
     for _, range in ipairs((ranges_in(bufnr, first, last))) do
@@ -194,18 +195,18 @@ local function fold_span(bufnr, first, last)
     end
     -- Footprints nest or are disjoint, so this finds every range the widened
     -- rows need and widens nothing further.
-    local ranges, joined = ranges_in(bufnr, span_first, span_last)
-    return span_first, span_last, ranges, joined
+    local ranges, skip = ranges_in(bufnr, span_first, span_last)
+    return span_first, span_last, ranges, skip
 end
 
---- Recompute the levels and `joined` entries of `state` over rows
+--- Recompute the levels and `skip` entries of `state` over rows
 --- `first`..`last`, widened to the footprints of the folds meeting them.
 --- @param bufnr integer
 --- @param state agentic.ui.Folds.State
 --- @param first integer 1-indexed first row
 --- @param last integer 1-indexed last row, inclusive
 local function stamp(bufnr, state, first, last)
-    local span_first, span_last, ranges, joined = fold_span(bufnr, first, last)
+    local span_first, span_last, ranges, skip = fold_span(bufnr, first, last)
     local offset = span_first - 1
     --- @type [integer, integer][]
     local local_ranges = {}
@@ -215,7 +216,7 @@ local function stamp(bufnr, state, first, last)
     local levels = M.levels_of_ranges(local_ranges, span_last - offset)
     for row = span_first, span_last do
         state.levels[row] = levels[row - offset]
-        state.joined[row] = joined[row]
+        state.skip[row] = skip[row]
     end
 end
 
@@ -245,9 +246,9 @@ local function fit(state, line_count)
     end
 end
 
---- Apply one `on_bytes` edit: shift the levels, `joined` entries and dirty
+--- Apply one `on_bytes` edit: shift the levels, `skip` entries and dirty
 --- range below the replaced rows by the edit's line delta, put `"0"` in the
---- new rows, drop the replaced rows' `joined` entries, and mark dirty every
+--- new rows, drop the replaced rows' `skip` entries, and mark dirty every
 --- row the new text touches, its end row included: a `set_text` changes part
 --- of that row, and a `set_lines` ends at column 0 of the row after it.
 --- @param bufnr integer
@@ -286,14 +287,14 @@ local function splice(bufnr, state, start_row, old_rows, new_rows)
         end
         return row >= below and row + delta or start_row + 1
     end
-    --- @type table<integer, true>
-    local joined = {}
-    for row in pairs(state.joined) do
+    --- @type table<integer, integer>
+    local skip = {}
+    for row, fence_rows in pairs(state.skip) do
         if row <= start_row or row >= below then
-            joined[moved(row)] = true
+            skip[moved(row)] = fence_rows
         end
     end
-    state.joined = joined
+    state.skip = skip
     if state.dirty_first then
         state.dirty_first = moved(state.dirty_first)
         state.dirty_last = moved(state.dirty_last)
@@ -341,9 +342,9 @@ local function state_of(bufnr)
         return nil
     end
 
-    local levels, joined = M.levels(bufnr)
+    local levels, skip = M.levels(bufnr)
     --- @type agentic.ui.Folds.State
-    local state = { levels = levels, joined = joined, parser = parser }
+    local state = { levels = levels, skip = skip, parser = parser }
     watch(state, parser)
     local attached = vim.api.nvim_buf_attach(bufnr, false, {
         on_bytes = function(
@@ -361,7 +362,7 @@ local function state_of(bufnr)
             splice(buf, state, start_row, old_rows, new_rows)
         end,
         on_reload = function(_, buf)
-            state.joined = {}
+            state.skip = {}
             local line_count = vim.api.nvim_buf_line_count(buf)
             fit(state, line_count)
             mark_dirty(state, 1, line_count)
@@ -376,7 +377,7 @@ local function state_of(bufnr)
     return state
 end
 
---- Recompute the levels and `joined` entries of `state` over its dirty rows,
+--- Recompute the levels and `skip` entries of `state` over its dirty rows,
 --- widened to the outermost footprints around them before and after the
 --- edits, and clear the dirty range. A parser other than `state.parser` is
 --- watched instead and all levels are recomputed, so a parser replaced
@@ -390,7 +391,7 @@ local function refresh(bufnr, state)
         if parser then
             watch(state, parser)
         end
-        state.levels, state.joined = M.levels(bufnr)
+        state.levels, state.skip = M.levels(bufnr)
         state.dirty_first, state.dirty_last = nil, nil
         return
     end
@@ -469,26 +470,26 @@ local FOLDTEXT_HL = "Comment"
 
 --- 'foldtext' for the chat buffer: a line-count summary styled as Comment. A
 --- fold spans `code_fence_content` nodes, so its line count is the rows of
---- content `zo` shows: a joined fold (`M.levels`) leaves out the two fence
---- rows between its fences.
+--- content `zo` shows: it leaves out the fence rows a fold holds
+--- (`State.skip`).
 ---
---- A joined fold, and one whose opening fence row is marked in `NS_TITLED`,
---- lead with their first row, cut so the fold text fits the window's text
---- width: a closed execute block shows which command ran, and a titled body
---- what it is. The line count is read back out of the folded rows rather than
---- recorded at write time, so it describes what `zo` will actually show.
+--- A fold holding fence rows, and one whose opening fence row is marked in
+--- `NS_TITLED`, lead with their first row, cut so the fold text fits the
+--- window's text width: a closed execute block shows its command, and
+--- a titled body what it is. The line count is read back out of the folded
+--- rows rather than recorded at write time, so it describes what `zo` will
+--- actually show.
 --- @return {[1]: string, [2]: string}[] chunks
 function M.foldtext()
     local bufnr = vim.api.nvim_get_current_buf()
     local first, last = vim.v.foldstart, vim.v.foldend
     local state = states[bufnr]
-    local joined = state ~= nil and state.joined[first] == true
-    local summary =
-        string.format("%d lines", last - first + 1 - (joined and 2 or 0))
+    local skip = state and state.skip[first]
+    local summary = string.format("%d lines", last - first + 1 - (skip or 0))
 
     -- `first` is 1-indexed, so the 0-indexed fence row above it is first - 2.
     local fence_row = first - 2
-    if joined or is_marked(bufnr, M.NS_TITLED, fence_row) then
+    if skip or is_marked(bufnr, M.NS_TITLED, fence_row) then
         local row = vim.trim(
             vim.api.nvim_buf_get_lines(bufnr, first - 1, first, false)[1]
         )

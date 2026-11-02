@@ -2120,7 +2120,7 @@ describe("agentic.ui.PermissionManager", function()
         end)
 
         it(
-            "reject all records prompt-reject for the current request only",
+            "reject all records prompt-reject for the current request and prompt-cancel for the queued",
             function()
                 pm:add_request(
                     make_request("tc-first", "edit", all_options),
@@ -2132,7 +2132,36 @@ describe("agentic.ui.PermissionManager", function()
                 )
                 pm:reject_and_cancel_remaining()
                 assert.same({ "prompt-reject" }, pm:take_deciders("tc-first"))
-                assert.is_nil(pm:take_deciders("tc-queued"))
+                assert.same({ "prompt-cancel" }, pm:take_deciders("tc-queued"))
+            end
+        )
+
+        it(
+            "reject all records prompt-cancel for a current request without reject_once",
+            function()
+                pm:add_request(
+                    make_request("tc-first", "edit", { "allow_once" }),
+                    function() end
+                )
+                pm:reject_and_cancel_remaining()
+                assert.same({ "prompt-cancel" }, pm:take_deciders("tc-first"))
+            end
+        )
+
+        it(
+            "cancel_requests records prompt-cancel for the current and queued requests",
+            function()
+                pm:add_request(
+                    make_request("tc-first", "edit", all_options),
+                    function() end
+                )
+                pm:add_request(
+                    make_request("tc-queued", "edit", all_options),
+                    function() end
+                )
+                pm:cancel_requests()
+                assert.same({ "prompt-cancel" }, pm:take_deciders("tc-first"))
+                assert.same({ "prompt-cancel" }, pm:take_deciders("tc-queued"))
             end
         )
 

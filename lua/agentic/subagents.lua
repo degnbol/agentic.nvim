@@ -1,5 +1,6 @@
 local AgentConfigOptions = require("agentic.acp.agent_config_options")
 local BufHelpers = require("agentic.utils.buf_helpers")
+local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
 local Json = require("agentic.utils.json")
@@ -175,7 +176,7 @@ function Subagents:_replay_transcript(child_id)
     if not agent.open then
         for i = #rows, 1, -1 do
             if rows[i].type == "subagent_end" then
-                end_state = rows[i].state
+                end_state = SessionRestore.end_state(rows[i])
                 break
             end
         end
@@ -485,15 +486,8 @@ function Subagents:_start_agent(child_id)
     self:_open_input(child_id)
 end
 
---- @type table<string, string>
-local END_WORD_OF_STOP_REASON = {
-    end_turn = "completed",
-    cancelled = "cancelled",
-    error = "failed",
-}
-
 --- The word for how a subagent's work ended. An `idle` without a stop reason
---- ended for a reason the provider does not know, which claims no failure.
+--- ended for a reason the provider does not give: `ended`.
 --- @param state agentic.acp.SubagentWorkState
 --- @return string
 local function end_word(state)
@@ -504,14 +498,14 @@ local function end_word(state)
     if not reason then
         return "ended"
     end
-    return END_WORD_OF_STOP_REASON[reason] or reason
+    return CanonicalToolCall.stop_reason_word(reason)
 end
 
---- End a subagent's work as `state` reports it: stop its indicator, stamp its
---- unfinished calls `cancelled` unless it ended its turn, write an end row and
---- show the end in the header. On an ended agent, only a report with error
---- text writes a row, holding that text: the provider can report a failure a
---- second time to add it.
+--- End a subagent's work as `state` reports it: stop its indicator, end its
+--- unfinished calls `failed` with the end's word unless it ended its turn or
+--- the end is `unknown`, write an end row and show the end in the header. On
+--- an ended agent, only a report with error text writes a row, holding that
+--- text: the provider can report a failure a second time to add it.
 --- @param child_id string
 --- @param state agentic.acp.SubagentWorkState
 function Subagents:end_agent(child_id, state)
@@ -534,10 +528,13 @@ function Subagents:end_agent(child_id, state)
     self:_set_open(agent, false)
     local transcript = self:transcript(child_id)
     transcript.status_indicator:stop()
-    if word ~= "completed" then
+    -- An `unknown` end does not say the calls stopped.
+    if word ~= "completed" and word ~= "unknown" then
         self._host
             .history()
-            :cancel_tool_calls(transcript.writer:stamp_cancelled())
+            :update_tool_calls(
+                transcript.writer:stamp_open_calls(word, "failed")
+            )
     end
     self:_write_row(child_id, row)
     transcript:set_context(word)
@@ -893,7 +890,7 @@ function Subagents:_open_input(child_id)
                     Config.keymaps.widget.stop_generation,
                     bufnr,
                     function()
-                        self._host.agent():stop_generation(child_id)
+                        self:stop(child_id)
                     end,
                     { desc = "Agentic: Stop subagent" }
                 )
@@ -934,10 +931,38 @@ function Subagents:_bind_agent_keymaps(child_id, bufnr)
         Config.keymaps.widget.stop_generation,
         bufnr,
         function()
-            self._host.agent():stop_generation(child_id)
+            self:stop(child_id)
         end,
         { desc = "Agentic: Stop subagent" }
     )
+end
+
+--- Mark a subagent's open tool calls `interrupted`, in its transcript and in
+--- the history, for when they fail.
+--- @param child_id string
+function Subagents:_mark_stopped(child_id)
+    self._host.history():update_tool_calls(
+        self:transcript(child_id).writer:stamp_open_calls("interrupted")
+    )
+end
+
+--- Stop a subagent's current work.
+--- @param child_id string
+function Subagents:stop(child_id)
+    self:_mark_stopped(child_id)
+    self._host.agent():stop_generation(child_id)
+end
+
+--- Mark the open tool calls of each working subagent not running in the
+--- background `interrupted`: a stop of the main agent's turn stops them too.
+function Subagents:mark_foreground_stopped()
+    for child_id, agent in pairs(self._agents) do
+        local block = self:_agent_block(child_id)
+        local mode = block and block.subagent and block.subagent.mode
+        if agent.open and mode ~= "background" then
+            self:_mark_stopped(child_id)
+        end
+    end
 end
 
 --- A subagent's display name, else its child session id.

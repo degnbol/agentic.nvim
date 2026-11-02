@@ -53,6 +53,72 @@ function M.split_read_range(message, kind)
     return split
 end
 
+--- Each rejecting decider's line, in precedence order.
+--- @type { decider: agentic.PermissionDecider, line: string }[]
+local DECIDER_LINES = {
+    { decider = "prompt-reject", line = "Rejected at the prompt" },
+    { decider = "session-reject", line = "Rejected for this session" },
+    { decider = "deny", line = "Rejected by a permission rule" },
+    { decider = "glob-deny", line = "Rejected by a permission rule" },
+    { decider = "prompt-cancel", line = "Cancelled at the prompt" },
+}
+
+--- The line saying why the plugin rejected a call: that of the first
+--- rejecting decider in precedence order that `deciders` holds, wherever it
+--- holds it: `decided_by` lists merge by index, so position says nothing.
+--- @param deciders agentic.PermissionDecider[]|nil
+--- @return string|nil line nil when no decider rejected the call
+function M.deciders_line(deciders)
+    for _, entry in ipairs(DECIDER_LINES) do
+        if vim.tbl_contains(deciders or {}, entry.decider) then
+            return entry.line
+        end
+    end
+    return nil
+end
+
+--- The line saying why a call was rejected before it ran: the plugin's, from
+--- `decided_by`, else the provider's `rejection`.
+--- @param call agentic.ui.MessageWriter.ToolCallBase
+--- @return string|nil line nil when the call was not rejected
+function M.rejection_line(call)
+    return M.deciders_line(call.decided_by) or call.rejection
+end
+
+--- @type table<string, string>
+local STOP_REASON_WORDS = {
+    end_turn = "completed",
+    cancelled = "interrupted",
+    error = "failed",
+}
+
+--- The word for how a run ended with an ACP stop reason: `completed`,
+--- `interrupted`, `failed`, else the reason itself (`max_tokens`, `refusal`,
+--- …).
+--- @param reason string
+--- @return string
+function M.stop_reason_word(reason)
+    return STOP_REASON_WORDS[reason] or reason
+end
+
+--- The word a call's status shows: `rejected` for a call rejected before it
+--- ran, its `ended_as` for a failed call, `interrupted` for a saved
+--- `cancelled` status, else its status.
+--- @param call agentic.ui.MessageWriter.ToolCallBase
+--- @return string|nil word nil when the call has no status
+function M.status_word(call)
+    if M.rejection_line(call) then
+        return "rejected"
+    end
+    if call.ended_as and call.status == "failed" then
+        return call.ended_as
+    end
+    if call.status == "cancelled" then
+        return "interrupted"
+    end
+    return call.status
+end
+
 --- A tool call message in canonical form: `split_read_range`, and an execute
 --- body that is one fenced block becomes its inner rows. Fields the message
 --- lacks stay absent. Not idempotent: an execute body whose inner rows are

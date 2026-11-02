@@ -47,7 +47,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- The end of a subagent's run.
 --- @class agentic.ui.ChatHistory.SubagentEnd
 --- @field type "subagent_end"
---- @field state string How the run ended: `completed`, `cancelled`, `failed`, `ended`, `unknown` or a stop reason
+--- @field state string How the run ended: `completed`, `interrupted`, `failed`, `ended`, `unknown` or a stop reason. Saved by earlier versions as `cancelled` for `interrupted`
 --- @field error? string The provider's error text
 --- @field agent_key? string Key of the subagent that owns the row: its task id, else its child session id while that is unknown
 
@@ -313,16 +313,13 @@ function ChatHistory:update_tool_call(tool_call_id, update)
     end
 end
 
---- Set the status of tool calls, main or subagent, to `cancelled`.
---- @param tool_call_ids string[]
-function ChatHistory:cancel_tool_calls(tool_call_ids)
-    for _, id in ipairs(tool_call_ids) do
+--- Apply updates to tool calls, main or subagent.
+--- @param updates agentic.ui.MessageWriter.ToolCallBase[]
+function ChatHistory:update_tool_calls(updates)
+    for _, update in ipairs(updates) do
         self:update_tool_call(
-            id,
-            ChatHistory.tool_call_record({
-                tool_call_id = id,
-                status = "cancelled",
-            })
+            update.tool_call_id,
+            ChatHistory.tool_call_record(update)
         )
     end
 end
@@ -348,6 +345,8 @@ local TOOL_CALL_FIELDS = {
     "skill_path",
     "subagent",
     "decided_by",
+    "rejection",
+    "ended_as",
     "background_job_id",
     "output_file",
     "output_ended",
@@ -465,8 +464,10 @@ function ChatHistory.prepend_restored_messages(messages, prompt)
                 range and " " .. CanonicalToolCall.format_read_range(range)
                     or ""
             )
-            -- Include tool output if available
-            if msg.body and #msg.body > 0 then
+            local rejection_line = CanonicalToolCall.rejection_line(msg)
+            if rejection_line then
+                tool_text = tool_text .. "\nResult: " .. rejection_line
+            elseif msg.body and #msg.body > 0 then
                 tool_text = tool_text
                     .. "\nResult:\n"
                     .. table.concat(msg.body, "\n")

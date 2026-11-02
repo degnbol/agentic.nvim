@@ -207,13 +207,14 @@ describe("ToolCallRenderer", function()
     end)
 
     describe("status footer", function()
-        --- @type agentic.ui.ToolCallStatus[]
+        --- @type string[]
         local statuses = {
             "pending",
             "in_progress",
             "completed",
             "failed",
-            "cancelled",
+            "rejected",
+            "interrupted",
         }
 
         --- @param status string

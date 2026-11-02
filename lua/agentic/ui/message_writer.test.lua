@@ -3605,6 +3605,31 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_true(found_completed)
         end)
 
+        for word, fields in pairs({
+            rejected = { status = "failed", decided_by = { "prompt-reject" } },
+            interrupted = { status = "failed", ended_as = "interrupted" },
+        }) do
+            it("shows " .. word .. " in the footer", function()
+                writer:write_tool_call_block(
+                    make_tool_call_block("status-word", "pending")
+                )
+                writer:update_tool_call_block(
+                    vim.tbl_extend(
+                        "force",
+                        { tool_call_id = "status-word" },
+                        fields
+                    ) --[[@as agentic.ui.MessageWriter.ToolCallBase]]
+                )
+
+                local text = table.concat(
+                    vim.api.nvim_buf_get_lines(bufnr, 0, -1, false),
+                    "\n"
+                )
+                assert.is_not_nil(text:find(" " .. word .. " ", 1, true))
+                assert.is_nil(text:find("failed", 1, true))
+            end)
+        end
+
         it(
             "no overlay extmarks — only line highlights in NS_STATUS",
             function()
@@ -4786,8 +4811,10 @@ describe("agentic.ui.MessageWriter", function()
                 running = "in_progress",
                 done = "completed",
                 broke = "failed",
+                -- Saved by earlier versions.
                 stopped = "cancelled",
             }) do
+                --- @diagnostic disable-next-line: param-type-mismatch
                 writer:write_tool_call_block(make_tool_call_block(id, status))
             end
             -- An adapter may pass a tracker through with no status at all.
@@ -4804,20 +4831,48 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
-    describe("stamp_cancelled", function()
-        it("stamps the non-final blocks and returns their ids", function()
+    describe("stamp_open_calls", function()
+        before_each(function()
             writer:write_tool_call_block(
                 make_tool_call_block("running", "pending")
             )
             writer:write_tool_call_block(
                 make_tool_call_block("done", "completed")
             )
+        end)
 
-            local ids = writer:stamp_cancelled()
+        it("stamps the non-final blocks and returns the updates", function()
+            local updates = writer:stamp_open_calls("max_tokens", "failed")
 
-            assert.same({ "running" }, ids)
-            assert.equal("cancelled", writer.tool_call_blocks.running.status)
+            assert.same({
+                {
+                    tool_call_id = "running",
+                    status = "failed",
+                    ended_as = "max_tokens",
+                },
+            }, updates)
+            assert.equal("failed", writer.tool_call_blocks.running.status)
             assert.equal("completed", writer.tool_call_blocks.done.status)
+            assert.is_nil(writer.tool_call_blocks.done.ended_as)
+        end)
+
+        it("keeps the status without one", function()
+            writer:stamp_open_calls("interrupted")
+
+            local block = writer.tool_call_blocks.running
+            assert.equal("pending", block.status)
+            assert.equal("interrupted", block.ended_as)
+        end)
+
+        it("keeps a block's first end word", function()
+            writer:stamp_open_calls("interrupted")
+            local updates = writer:stamp_open_calls("ended", "failed")
+
+            assert.equal("interrupted", updates[1].ended_as)
+            assert.equal(
+                "interrupted",
+                writer.tool_call_blocks.running.ended_as
+            )
         end)
     end)
 
@@ -5487,44 +5542,48 @@ describe("agentic.ui.MessageWriter", function()
             end
         )
 
-        it("stamps a cancel on the footer, leaving the diff open", function()
-            --- @return string
-            local function buffer_text()
-                return table.concat(
-                    vim.api.nvim_buf_get_lines(bufnr, 0, -1, false),
-                    "\n"
-                )
+        it(
+            "shows a saved cancel as interrupted, leaving the diff open",
+            function()
+                --- @return string
+                local function buffer_text()
+                    return table.concat(
+                        vim.api.nvim_buf_get_lines(bufnr, 0, -1, false),
+                        "\n"
+                    )
+                end
+
+                writer:write_tool_call_block({
+                    tool_call_id = "diff-cancel",
+                    status = "in_progress",
+                    kind = "edit",
+                    argument = "/tmp/agentic_diff_cancel.lua",
+                    diff = { old = { "stub" }, new = diff_new },
+                })
+                local fence = diff_fence_line()
+                assert.equal(-1, vim.fn.foldclosed(fence + 1))
+                assert.is_not_nil(buffer_text():find("in_progress", 1, true))
+
+                writer:update_tool_call_block({
+                    tool_call_id = "diff-cancel",
+                    --- @diagnostic disable-next-line: assign-type-mismatch
+                    status = "cancelled",
+                })
+
+                -- The footer word is the whole reported symptom.
+                local text = buffer_text()
+                assert.is_not_nil(text:find("interrupted", 1, true))
+                assert.is_nil(text:find("in_progress", 1, true))
+
+                -- A cancellation can have hit disk mid-flight, so `cancelled` takes
+                -- the highlight-only path: the diff is neither re-extracted from
+                -- the file nor folded away, as a `failed` edit's is.
+                assert.is_not_nil(text:find("local function foo()", 1, true))
+                assert.equal(fence, diff_fence_line())
+                deferred.drain()
+                assert.equal(-1, vim.fn.foldclosed(fence + 1))
             end
-
-            writer:write_tool_call_block({
-                tool_call_id = "diff-cancel",
-                status = "in_progress",
-                kind = "edit",
-                argument = "/tmp/agentic_diff_cancel.lua",
-                diff = { old = { "stub" }, new = diff_new },
-            })
-            local fence = diff_fence_line()
-            assert.equal(-1, vim.fn.foldclosed(fence + 1))
-            assert.is_not_nil(buffer_text():find("in_progress", 1, true))
-
-            writer:update_tool_call_block({
-                tool_call_id = "diff-cancel",
-                status = "cancelled",
-            })
-
-            -- The footer word is the whole reported symptom.
-            local text = buffer_text()
-            assert.is_not_nil(text:find("cancelled", 1, true))
-            assert.is_nil(text:find("in_progress", 1, true))
-
-            -- A cancellation can have hit disk mid-flight, so `cancelled` takes
-            -- the highlight-only path: the diff is neither re-extracted from
-            -- the file nor folded away, as a `failed` edit's is.
-            assert.is_not_nil(text:find("local function foo()", 1, true))
-            assert.equal(fence, diff_fence_line())
-            deferred.drain()
-            assert.equal(-1, vim.fn.foldclosed(fence + 1))
-        end)
+        )
 
         for _, first_status in ipairs({ "pending", "completed" }) do
             it(
@@ -5806,6 +5865,31 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(body_start, vim.fn.foldclosed(body_start))
         end)
 
+        it("keeps the open diff of an edit its run's end closed", function()
+            writer:write_tool_call_block({
+                tool_call_id = "fail-ended",
+                status = "in_progress",
+                kind = "edit",
+                argument = "/tmp/agentic_diff_ended.lua",
+                diff = { old = { "stub" }, new = diff_new },
+            })
+            deferred.drain()
+            local before = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+            writer:stamp_open_calls("interrupted", "failed")
+            deferred.drain()
+
+            local after = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            -- All but the footer and the trailing row.
+            assert.same(
+                vim.list_slice(before, 1, #before - 2),
+                vim.list_slice(after, 1, #after - 2)
+            )
+            assert.equal(" 󰓛 interrupted ", after[#after - 1])
+            local body_start = diff_fence_line() + 1
+            assert.equal(-1, vim.fn.foldclosed(body_start))
+        end)
+
         it("closes a failed edit that has no reason", function()
             writer:write_tool_call_block({
                 tool_call_id = "fail-no-reason",
@@ -5853,8 +5937,8 @@ describe("agentic.ui.MessageWriter", function()
             -- One closed fold spans diff and reason, titled by the diff row.
             assert.equal(diff_start, vim.fn.foldclosed(diff_start))
             assert.equal(diff_start, vim.fn.foldclosed(reason_start + 1))
-            local _, joined = Folds.levels(bufnr)
-            assert.is_true(joined[diff_start])
+            local _, skip = Folds.levels(bufnr)
+            assert.equal(2, skip[diff_start])
 
             -- The reason's own fold nests inside, also closed.
             vim.api.nvim_win_call(winid, function()
@@ -5862,6 +5946,77 @@ describe("agentic.ui.MessageWriter", function()
             end)
             assert.equal(-1, vim.fn.foldclosed(diff_start))
             assert.equal(reason_start, vim.fn.foldclosed(reason_start))
+        end)
+
+        describe("a diff rejected while pending", function()
+            --- 0-indexed rows of the NS_TITLED marks.
+            --- @return integer[]
+            local function titled_rows()
+                return vim.tbl_map(
+                    function(mark)
+                        return mark[2]
+                    end,
+                    vim.api.nvim_buf_get_extmarks(
+                        bufnr,
+                        Folds.NS_TITLED,
+                        0,
+                        -1,
+                        {}
+                    )
+                )
+            end
+
+            before_each(function()
+                writer:write_tool_call_block({
+                    tool_call_id = "diff-reject",
+                    status = "pending",
+                    kind = "edit",
+                    argument = "/tmp/agentic_diff_reject.lua",
+                    diff = { old = { "stub" }, new = diff_new },
+                })
+                writer:update_tool_call_block({
+                    tool_call_id = "diff-reject",
+                    status = "pending",
+                    decided_by = { "prompt-reject" },
+                })
+            end)
+
+            it(
+                "re-lays out with the diff closed and a reason section",
+                function()
+                    local fence = diff_fence_line()
+                    local lines =
+                        vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+                    assert.is_not_nil(lines[fence]:match("^`+text%-foldfence$"))
+                    local reason_fence = closing_fence_after(fence) + 1
+                    assert.is_not_nil(lines[reason_fence]:match("^`+console$"))
+                    assert.equal(
+                        "Rejected at the prompt",
+                        lines[reason_fence + 1]
+                    )
+                    assert.same({ reason_fence - 1 }, titled_rows())
+
+                    deferred.drain()
+                    assert.equal(fence + 1, vim.fn.foldclosed(fence + 1))
+                    assert.equal(-1, vim.fn.foldclosed(reason_fence + 1))
+                end
+            )
+
+            it("leaves one titled mark after a re-render", function()
+                writer:update_tool_call_block({
+                    tool_call_id = "diff-reject",
+                    status = "failed",
+                    failure_reason = { "The user rejected this.", "Stop." },
+                })
+
+                local fence = diff_fence_line()
+                local reason_fence = closing_fence_after(fence) + 1
+                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+                assert.is_not_nil(
+                    lines[reason_fence]:match("^`+console%-fold$")
+                )
+                assert.same({ reason_fence - 1 }, titled_rows())
+            end)
         end)
 
         it(

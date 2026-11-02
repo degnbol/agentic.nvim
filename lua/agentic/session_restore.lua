@@ -92,7 +92,9 @@ function SessionRestore.format_preview(messages)
             -- Same glyph vocabulary as the live footer, so a status this
             -- preview has never heard of still reads as the chat buffer
             -- renders it. Unconfigured statuses fall through to the ellipsis.
-            local status_icon = (Config.status_icons or {})[msg.status] or "…"
+            local status_icon = (Config.status_icons or {})[CanonicalToolCall.status_word(
+                msg
+            )] or "…"
             local arg = (msg.argument or ""):match("^([^\n]+)") or ""
             table.insert(
                 lines,
@@ -355,27 +357,36 @@ function SessionRestore.message_title(text, summary)
     return sentence, vim.list_extend(lines, rest)
 end
 
+--- How a subagent end row's run ended. A saved state `cancelled` reads as
+--- `interrupted`.
+--- @param row agentic.ui.ChatHistory.SubagentEnd
+--- @return string
+function SessionRestore.end_state(row)
+    return row.state == "cancelled" and "interrupted" or row.state
+end
+
 --- Write a session message or a subagent end as a notice. A message is signed
 --- with the glyph of its kind (`Glyphs.MESSAGE`), split into heading and body
 --- by `SessionRestore.message_title`, with the other end's buffer name, else
 --- the sender's name, dimmed under the heading and the body folded, and
 --- tagged with its message id. An end is signed with its state's status icon
 --- when that is one cell wide, else `Glyphs.RUN_ENDED`, and holds the error
---- text.
+--- text, titled `SessionRestore.end_state`.
 --- @param writer agentic.ui.MessageWriter
 --- @param row agentic.ui.ChatHistory.SessionMessage|agentic.ui.ChatHistory.SubagentEnd
 --- @param mid_turn boolean The writer's turn is still running, so the notice must not finalize it
 --- @param buffer_name fun(session_id: string): string|nil Name of a session's buffer, nil when it has none
 function SessionRestore.write_row(writer, row, mid_turn, buffer_name)
     if row.type == "subagent_end" then
-        local icon = (Config.status_icons or {})[row.state]
+        local state = SessionRestore.end_state(row)
+        local icon = (Config.status_icons or {})[state]
         -- One cell: a sign holds two, and the glyph takes a trailing space.
         local usable = type(icon) == "string"
             and vim.fn.strdisplaywidth(icon) == 1
         writer:write_notice({
             glyph = usable and icon or Glyphs.RUN_ENDED,
             glyph_hl = Theme.HL_GROUPS.GLYPH_AGENT,
-            title = row.state,
+            title = state,
             body = row.error and vim.split(row.error, "\n", { plain = true }),
             mid_turn = mid_turn,
         })

@@ -128,7 +128,7 @@ Glyphs.MESSAGE = {
 }
 
 --- A subagent run's end, when its state has no usable `Config.status_icons`
---- entry. A flag rather than a circle: `status_icons.cancelled` is a round
+--- entry. A flag rather than a square: `status_icons.interrupted` is a square
 --- face.
 Glyphs.RUN_ENDED = "󰈼"
 
