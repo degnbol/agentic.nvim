@@ -78,13 +78,13 @@ _G.write_meta = function(agent_id, shape)
 end
 -- Reads the record now, as the next update from the agent would.
 _G.read_record = function(child_id)
-    _G.s:_read_agent_record(child_id)
+    _G.s._subagents:read_record(child_id)
 end
 _G.transcript = function(child_id)
-    return _G.s._agents[child_id].transcript
+    return _G.s._subagents._agents[child_id].transcript
 end
 _G.input = function(child_id)
-    return _G.s._inputs[child_id]
+    return _G.s._subagents._inputs[child_id]
 end
 _G.text = function(bufnr)
     return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
@@ -328,7 +328,7 @@ _G.s.agent.state = "disconnected"
 _G.bufnr = _G.input("c1").bufnr
 vim.api.nvim_buf_set_lines(_G.bufnr, 0, -1, false, { "first" })
 _G.press(_G.bufnr, "<F5>")
-_G.s:_relay_to_agent("c1", "second", { force = false })
+_G.s._subagents:_relay_to_agent("c1", "second", { force = false })
 ]])
 
             assert.equal(0, child.lua_get("#_G.sent"))
@@ -355,7 +355,7 @@ _G.had_file = not _G.s.file_list:is_empty()
 _G.s._prompt_pending = 1
 _G.s._is_first_message = true
 _G.s._history_to_send = { { type = "user", text = "earlier" } }
-_G.s:_relay_to_agent("c1", "hi", { force = false })
+_G.s._subagents:_relay_to_agent("c1", "hi", { force = false })
 ]])
 
             assert.equal(1, child.lua_get("#_G.sent"))
@@ -415,10 +415,10 @@ _G.spawn("c2")
 _G.one = _G.input("c1").bufnr
 vim.api.nvim_buf_set_lines(_G.one, 0, -1, false, { "unsent words" })
 _G.s:_advance_session_epoch()
-_G.after_epoch = vim.tbl_count(_G.s._inputs)
+_G.after_epoch = vim.tbl_count(_G.s._subagents._inputs)
 _G.spawn("c3")
 _G.three = _G.input("c3").bufnr
-_G.s:_reset_subagents()
+_G.s._subagents:reset()
 ]])
 
             assert.equal(0, child.lua_get("_G.after_epoch"))
@@ -426,7 +426,10 @@ _G.s:_reset_subagents()
             assert.is_false(
                 child.lua_get("vim.api.nvim_buf_is_valid(_G.three)")
             )
-            assert.equal(0, child.lua_get("vim.tbl_count(_G.s._inputs)"))
+            assert.equal(
+                0,
+                child.lua_get("vim.tbl_count(_G.s._subagents._inputs)")
+            )
             assert.equal(1, child.lua_get("#_G.notices"))
             assert.truthy(
                 child.lua_get("_G.notices[1]"):find("unsent words", 1, true)
@@ -442,7 +445,7 @@ _G.spawn("c1")
 _G.show(_G.transcript("c1").bufnr)
 vim.cmd("tabnext 2")
 _G.press(_G.transcript("c1").bufnr, "i")
-_G.s:_reset_subagents()
+_G.s._subagents:reset()
 ]])
 
             assert.equal(1, child.lua_get("#vim.api.nvim_list_tabpages()"))

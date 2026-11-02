@@ -634,7 +634,7 @@ _G.h.on_session_update({
     title = "map",
     state = { state = "running" },
 }, "sid-1")
-_G.sub = _G.s._agents[id].transcript.bufnr
+_G.sub = _G.s._subagents._agents[id].transcript.bufnr
 ]],
                 { id }
             )
@@ -907,7 +907,7 @@ return _G.s._checktime_scheduled
             subagent_call("c-2", "task-1")
             local lines = sub_lines()
             child.lua([=[
-_G.writer_of = function(s) return s._agents["task-1"].transcript.writer end
+_G.writer_of = function(s) return s._subagents._agents["task-1"].transcript.writer end
 _G.second_tracker = _G.writer_of(_G.s).tool_call_blocks["c-2"]
 ]=])
 

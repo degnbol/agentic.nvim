@@ -91,7 +91,7 @@ _G.write_meta = function(agent_id, shape, tool_use_id)
     }) }, vim.fs.joinpath(dir, "agent-" .. agent_id .. ".meta.json"))
 end
 _G.transcript = function(child_id)
-    return _G.s._agents[child_id].transcript
+    return _G.s._subagents._agents[child_id].transcript
 end
 _G.text = function(bufnr)
     return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
@@ -107,7 +107,7 @@ _G.tname = function(child_id)
 end
 _G.G = require("agentic.glyphs")
 _G.block = function(child_id)
-    return _G.s:_agent_block(child_id)
+    return _G.s._subagents:_agent_block(child_id)
 end
 _G.context = function(child_id)
     return vim.b[_G.transcript(child_id).bufnr].agentic_header.context
@@ -210,7 +210,7 @@ describe("native subagent sessions", function()
                 child.lua_get([[_G.chat_sign_of("find it")]])
             )
             assert.is_true(
-                child.lua_get([[_G.s._agents.aa11bb22cc33dd44.open]])
+                child.lua_get([[_G.s._subagents._agents.aa11bb22cc33dd44.open]])
             )
         end
     )
@@ -221,11 +221,11 @@ _G.s.agent.provider_config.subagents.force_background = true
 _G.announce("c1", "find it", "root", false)
 ]])
 
-        assert.is_false(child.lua_get([[_G.s._agents.c1.open]]))
+        assert.is_false(child.lua_get([[_G.s._subagents._agents.c1.open]]))
         assert.is_false(
             child.lua_get([[_G.transcript("c1").status_indicator:is_active()]])
         )
-        assert.is_true(child.lua_get([[_G.s._inputs.c1 == nil]]))
+        assert.is_true(child.lua_get([[_G.s._subagents._inputs.c1 == nil]]))
     end)
 
     it(
@@ -239,7 +239,7 @@ _G.update("c1", {
 })
 ]])
 
-            assert.is_true(child.lua_get([[_G.s._agents.c1.open]]))
+            assert.is_true(child.lua_get([[_G.s._subagents._agents.c1.open]]))
             assert.truthy(
                 child
                     .lua_get([[_G.ttext("c1")]])
@@ -254,7 +254,7 @@ _G.spawn("c1")
 _G.state("c1", { state = "_paused" })
 ]])
 
-        assert.is_true(child.lua_get([[_G.s._agents.c1.open]]))
+        assert.is_true(child.lua_get([[_G.s._subagents._agents.c1.open]]))
         assert.is_nil(
             child.lua_get([[_G.ttext("c1")]]):find("_paused", 1, true)
         )
@@ -276,7 +276,9 @@ _G.update("c1", {
 
             assert.is_true(child.lua_get([[_G.block("c1").body == nil]]))
             assert.is_true(
-                child.lua_get([[_G.s._agent_by_task["toolu_c2:reply"] == nil]])
+                child.lua_get(
+                    [[_G.s._subagents._agent_by_task["toolu_c2:reply"] == nil]]
+                )
             )
             assert.truthy(
                 child.lua_get([[_G.ttext("c1")]]):find(
@@ -296,13 +298,13 @@ _G.update("c1", {
         child.lua([[
 _G.spawn("c1")
 -- As for an agent restored from a file.
-_G.s._agents.c1.parent_session_id = nil
+_G.s._subagents._agents.c1.parent_session_id = nil
 _G.announce("c1", "find it", "root", false)
 ]])
 
         assert.equal(
             "root",
-            child.lua_get([[_G.s._agents.c1.parent_session_id]])
+            child.lua_get([[_G.s._subagents._agents.c1.parent_session_id]])
         )
     end)
 
@@ -542,7 +544,7 @@ local bufnr = _G.transcript("c1").bufnr
 vim.bo[bufnr].modifiable = true
 vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, { "x", "y", "z" })
 ]],
-        ["its buffer re-renders"] = [[_G.s:_replay_transcript("c1")]],
+        ["its buffer re-renders"] = [[_G.s._subagents:_replay_transcript("c1")]],
     }) do
         it("CTRL-] lands on the other row after " .. case, function()
             child.lua([[
@@ -759,7 +761,9 @@ _G.state("c1", ...)
                     { case.state }
                 )
 
-                assert.is_false(child.lua_get([[_G.s._agents.c1.open]]))
+                assert.is_false(
+                    child.lua_get([[_G.s._subagents._agents.c1.open]])
+                )
                 assert.is_false(
                     child.lua_get(
                         [[_G.transcript("c1").status_indicator:is_active()]]
@@ -820,7 +824,7 @@ _G.state("c1", _G.COMPLETED)
 _G.state("c1", { state = "running" })
 ]])
 
-        assert.is_true(child.lua_get([[_G.s._agents.c1.open]]))
+        assert.is_true(child.lua_get([[_G.s._subagents._agents.c1.open]]))
         assert.is_true(child.lua_get([[_G.transcript("c1").bufnr == _G.bufnr]]))
         assert.is_true(
             child.lua_get([[_G.transcript("c1").status_indicator:is_active()]])
@@ -836,7 +840,7 @@ vim.cmd.bwipeout({ args = { tostring(_G.transcript("c1").bufnr) }, bang = true }
 _G.state("c1", { state = "running" })
 ]])
 
-        assert.is_true(child.lua_get([[_G.s._agents.c1.open]]))
+        assert.is_true(child.lua_get([[_G.s._subagents._agents.c1.open]]))
         assert.is_true(
             child.lua_get([[_G.transcript("c1").status_indicator:is_active()]])
         )
@@ -853,7 +857,7 @@ _G.state("c1", _G.COMPLETED)
 _G.message("toolu_send", "root", "c1", "Again.")
 _G.state("c1", { state = "running" })
 _G.chunk("c1", "after", "toolu_send")
-_G.s:_replay_transcript("c1")
+_G.s._subagents:_replay_transcript("c1")
 ]])
 
         assert.equal(
@@ -874,7 +878,7 @@ _G.s:_dispatch_turn({})
 _G.prompt_cb({ stopReason = "end_turn" }, nil)
 ]])
 
-        assert.is_true(child.lua_get([[_G.s._agents.c1.open]]))
+        assert.is_true(child.lua_get([[_G.s._subagents._agents.c1.open]]))
     end)
 
     it(
@@ -926,7 +930,7 @@ _G.c2_text = _G.ttext("c2")
 _G.s:_build_handlers().on_disconnect()
 ]])
 
-            assert.is_false(child.lua_get("_G.s._agents.c1.open"))
+            assert.is_false(child.lua_get("_G.s._subagents._agents.c1.open"))
             assert.truthy(
                 child.lua_get([[_G.ttext("c1")]]):find("## unknown", 1, true)
             )
@@ -944,7 +948,7 @@ _G.spawn("c1")
 _G.s:_advance_session_epoch()
 ]])
 
-        assert.is_false(child.lua_get([[_G.s._agents.c1.open]]))
+        assert.is_false(child.lua_get([[_G.s._subagents._agents.c1.open]]))
         assert.is_false(
             child.lua_get([[_G.transcript("c1").status_indicator:is_active()]])
         )
@@ -970,7 +974,9 @@ _G.update("c1", {
         )
         assert.equal(
             "child-model",
-            child.lua_get([[_G.s._agents.c1.config_options:current_model_id()]])
+            child.lua_get(
+                [[_G.s._subagents._agents.c1.config_options:current_model_id()]]
+            )
         )
     end)
 
@@ -1134,7 +1140,7 @@ client:_handle_message({ jsonrpc = "2.0", method = "session/update", params = {
 ]]
             )
 
-            assert.is_true(child.lua_get("_G.s._agents.c1.open"))
+            assert.is_true(child.lua_get("_G.s._subagents._agents.c1.open"))
         end
     )
 
@@ -1238,10 +1244,12 @@ _G.load_cb({}, nil)
         -- Never replayed: only the file holds it.
         assert.equal(
             "result",
-            child.lua_get([[_G.s._message_infos.toolu_h.kind]])
+            child.lua_get([[_G.s._subagents._message_infos.toolu_h.kind]])
         )
-        assert.is_true(child.lua_get([[_G.s._delegated.c1]]))
-        assert.is_true(child.lua_get([[_G.s._delegated["sid-x"] == nil]]))
+        assert.is_true(child.lua_get([[_G.s._subagents._delegated.c1]]))
+        assert.is_true(
+            child.lua_get([[_G.s._subagents._delegated["sid-x"] == nil]])
+        )
     end)
 
     it("an end state sent again after the load writes nothing", function()
@@ -1256,7 +1264,7 @@ _G.load_cb({}, nil)
         load()
         child.lua([[_G.state("c1", { state = "running" }, "sid-x")]])
 
-        assert.is_true(child.lua_get("_G.s._agents.c1.open"))
+        assert.is_true(child.lua_get("_G.s._subagents._agents.c1.open"))
         assert.is_true(
             child.lua_get([[_G.transcript("c1").status_indicator:is_active()]])
         )
@@ -1268,7 +1276,9 @@ _G.load_cb({}, nil)
     it("an old file's subagent output loads with no transcript", function()
         load()
 
-        assert.is_true(child.lua_get([[_G.s._agents.toolu_old == nil]]))
+        assert.is_true(
+            child.lua_get([[_G.s._subagents._agents.toolu_old == nil]])
+        )
         assert.is_true(
             child.lua_get(
                 [[vim.iter(_G.s.chat_history.subagent_messages):any(function(m)
@@ -1310,7 +1320,7 @@ _G.new_cb({ sessionId = "sid-live" }, nil)
             child.flush()
 
             local name = child.lua_get(
-                [[vim.api.nvim_buf_get_name(_G.s2._agents.c1.transcript.bufnr)]]
+                [[vim.api.nvim_buf_get_name(_G.s2._subagents._agents.c1.transcript.bufnr)]]
             )
             assert.truthy(
                 name:find(
@@ -1321,17 +1331,19 @@ _G.new_cb({ sessionId = "sid-live" }, nil)
             )
             assert.equal(
                 name,
-                child.lua_get([[_G.s2:_agent_block("c1").argument]])
+                child.lua_get([[_G.s2._subagents:_agent_block("c1").argument]])
             )
             assert.truthy(
                 child
                     .lua_get([[_G.text(_G.s2.widget.buf_nrs.agent)]])
                     :find("## Find it.\n" .. name, 1, true)
             )
-            child.lua([[vim.fn.bufload(_G.s2._agents.c1.transcript.bufnr)]])
+            child.lua(
+                [[vim.fn.bufload(_G.s2._subagents._agents.c1.transcript.bufnr)]]
+            )
             assert.truthy(
                 child
-                    .lua_get([[_G.text(_G.s2._agents.c1.transcript.bufnr)]])
+                    .lua_get([[_G.text(_G.s2._subagents._agents.c1.transcript.bufnr)]])
                     :find(
                         "## Report.\n"
                             .. child.lua_get(
@@ -1396,7 +1408,7 @@ _G.chunk("c1", "early", nil)
 _G.write_meta("c1", "background", "toolu_1")
 _G.call("c1", "t1")
 _G.chunk("c1", " late", nil)
-_G.s:_replay_transcript("c1")
+_G.s._subagents:_replay_transcript("c1")
 ]])
 
             assert.same(
@@ -1443,7 +1455,7 @@ _G.s2:_on_session_update({
     sessionUpdate = "subagent_update", sessionId = "c2",
     title = "other", state = { state = "running" },
 }, "root2")
-_G.s2:_reset_subagents()
+_G.s2._subagents:reset()
 ]])
 
         assert.is_true(

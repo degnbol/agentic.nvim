@@ -4761,6 +4761,23 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
+    describe("stamp_cancelled", function()
+        it("stamps the non-final blocks and returns their ids", function()
+            writer:write_tool_call_block(
+                make_tool_call_block("running", "pending")
+            )
+            writer:write_tool_call_block(
+                make_tool_call_block("done", "completed")
+            )
+
+            local ids = writer:stamp_cancelled()
+
+            assert.same({ "running" }, ids)
+            assert.equal("cancelled", writer.tool_call_blocks.running.status)
+            assert.equal("completed", writer.tool_call_blocks.done.status)
+        end)
+    end)
+
     --- @diagnostic disable: missing-fields, redundant-parameter
     describe("parallel tool calls", function()
         it(

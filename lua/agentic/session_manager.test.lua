@@ -14,6 +14,7 @@ local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 local MiniTest = require("mini.test")
 local SessionManager = require("agentic.session_manager")
+local Subagents = require("agentic.subagents")
 
 --- @param mode_id string
 --- @return agentic.acp.CurrentModeUpdate
@@ -28,6 +29,19 @@ local last_id = 0
 local function fresh_id()
     last_id = last_id + 1
     return last_id
+end
+
+--- Give a fake session a real `Subagents` with no subagents, reaching the
+--- session through its host.
+--- @param session agentic.SessionManager
+--- @return agentic.SessionManager session
+local function with_subagents(session)
+    session._subagents = Subagents:new(
+        session.widget,
+        session.message_writer,
+        SessionManager._subagents_host(session)
+    )
+    return session
 end
 
 describe("agentic.SessionManager", function()
@@ -134,19 +148,18 @@ describe("agentic.SessionManager", function()
 
             keymap_stub:revert()
 
-            session = {
+            session = with_subagents({
                 id = fresh_id(),
                 config_options = config_opts,
                 widget = {
                     render_header = render_header_spy,
                     buf_nrs = { agent = test_bufnr },
                 },
-                _agents = {},
                 _on_session_update = SessionManager._on_session_update,
                 render_info = function() end,
                 _update_chat_header = SessionManager._update_chat_header,
                 _handle_new_config_options = SessionManager._handle_new_config_options,
-            } --[[@as agentic.SessionManager]]
+            } --[[@as agentic.SessionManager]])
         end)
 
         after_each(function()
@@ -195,39 +208,6 @@ describe("agentic.SessionManager", function()
 
             assert.is_true(session.is_generating)
             assert.spy(set_running).was.called_with(session.widget, true)
-        end)
-
-        it("_set_agent_open sets the transcript's running", function()
-            local set_running = spy.new(function() end)
-            local session = {
-                widget = { buf_nrs = {} },
-                chat_history = {},
-                _agents = {},
-                _set_agent_open = SessionManager._set_agent_open,
-                _sync_modified = SessionManager._sync_modified,
-            } --[[@as agentic.SessionManager]]
-            local transcript = { set_running = set_running }
-            local agent = { transcript = transcript, open = false } --[[@as agentic.SessionManager.Agent]]
-
-            session:_set_agent_open(agent, true)
-
-            assert.is_true(agent.open)
-            assert.spy(set_running).was.called_with(transcript, true)
-        end)
-
-        it("_set_agent_open accepts a wiped transcript", function()
-            local session = {
-                widget = { buf_nrs = {} },
-                chat_history = {},
-                _agents = {},
-                _set_agent_open = SessionManager._set_agent_open,
-                _sync_modified = SessionManager._sync_modified,
-            } --[[@as agentic.SessionManager]]
-            local agent = { open = true } --[[@as agentic.SessionManager.Agent]]
-
-            session:_set_agent_open(agent, false)
-
-            assert.is_false(agent.open)
         end)
 
         it("_update_chat_header shows only tokens", function()
@@ -290,11 +270,11 @@ describe("agentic.SessionManager", function()
                 _persist_history = SessionManager._persist_history,
                 _history_changed = SessionManager._history_changed,
                 _sync_modified = SessionManager._sync_modified,
-                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _on_session_update = SessionManager._on_session_update,
                 render_info = function() end,
             } --[[@as agentic.SessionManager]]
+            with_subagents(session)
             return session, set_title_spy, save_spy
         end
 
@@ -360,11 +340,11 @@ describe("agentic.SessionManager", function()
                 render_info = function() end,
                 _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
-                _reset_subagents = function() end,
+                chat_history = ChatHistory:new(),
                 _sync_modified = SessionManager._sync_modified,
-                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
+            with_subagents(session)
 
             session:_cancel_session()
 
@@ -418,11 +398,11 @@ describe("agentic.SessionManager", function()
                     render_info = function() end,
                     _set_generating = SessionManager._set_generating,
                     _update_chat_header = function() end,
-                    _reset_subagents = function() end,
+                    chat_history = ChatHistory:new(),
                     _sync_modified = SessionManager._sync_modified,
-                    _agents = {},
                     _set_prompt_pending = SessionManager._set_prompt_pending,
                 } --[[@as agentic.SessionManager]]
+                with_subagents(session)
 
                 session:_cancel_session()
 
@@ -460,7 +440,7 @@ describe("agentic.SessionManager", function()
         --- @param update_chat_header fun(self: agentic.SessionManager)|nil
         --- @return agentic.SessionManager
         local function make_session(update_chat_header)
-            return {
+            return with_subagents({
                 session_id = "old-sid",
                 permission_manager = { clear = noop },
                 todo_list = { clear = noop },
@@ -486,11 +466,10 @@ describe("agentic.SessionManager", function()
                 render_info = function() end,
                 _set_generating = SessionManager._set_generating,
                 _update_chat_header = update_chat_header or noop,
-                _reset_subagents = noop,
+                chat_history = ChatHistory:new(),
                 _sync_modified = SessionManager._sync_modified,
-                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
-            } --[[@as agentic.SessionManager]]
+            } --[[@as agentic.SessionManager]])
         end
 
         it("lets the next conversation take the provider title", function()
@@ -672,12 +651,12 @@ describe("agentic.SessionManager", function()
                 render_info = function() end,
                 _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
-                _reset_subagents = function() end,
+                chat_history = ChatHistory:new(),
                 _sync_modified = SessionManager._sync_modified,
-                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
             } --[[@as agentic.SessionManager]]
+            with_subagents(session)
 
             session:_cancel_session()
 
@@ -707,7 +686,7 @@ describe("agentic.SessionManager", function()
         local function make_load_session()
             local noop = function() end
             captured_load_cb = nil
-            return {
+            return with_subagents({
                 session_id = nil,
                 _restoring = false,
                 _session_epoch = 0,
@@ -742,6 +721,7 @@ describe("agentic.SessionManager", function()
                     session_id = nil,
                     timestamp = nil,
                     messages = {},
+                    subagents = {},
                     has_prompt = ChatHistory.has_prompt,
                 },
                 widget = {
@@ -776,23 +756,16 @@ describe("agentic.SessionManager", function()
                 render_info = function() end,
                 _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
-                _reset_subagents = function() end,
-                _restore_transcripts = noop,
                 _install_history = SessionManager._install_history,
                 _render_history = noop,
-                _message_infos = {},
-                _delegated = {},
-                _forget_agents = noop,
-                _destroy_inputs = noop,
                 _sync_modified = SessionManager._sync_modified,
-                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _build_handlers = SessionManager._build_handlers,
                 _grant_command = { apply_defaults = noop },
                 _on_session_update = noop,
                 _on_tool_call = noop,
                 _on_tool_call_update = noop,
-            } --[[@as agentic.SessionManager]]
+            } --[[@as agentic.SessionManager]])
         end
 
         local original_storage_path
@@ -1247,7 +1220,6 @@ describe("agentic.SessionManager", function()
         local function make_session()
             return {
                 session_id = "root",
-                _agents = {},
                 chat_history = { subagents = { ["c-file"] = {} } },
                 agent = {
                     subagent_task_id = function(_, update)
@@ -2104,10 +2076,10 @@ describe("agentic.SessionManager", function()
                     captured_on_created = opts.on_created
                 end),
                 _sync_modified = SessionManager._sync_modified,
-                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 switch_provider = SessionManager.switch_provider,
             } --[[@as agentic.SessionManager]]
+            with_subagents(session)
 
             session:switch_provider("new-provider")
             captured_on_created()
@@ -2130,15 +2102,6 @@ describe("agentic.SessionManager", function()
             local drains = { n = 0, subagents = {} }
             --- @type agentic.SessionManager
             local session = {
-                _transcript_for = function()
-                    return {
-                        writer = {
-                            update_tool_call_block = function() end,
-                            tool_call_blocks = tool_call_blocks,
-                        },
-                    }
-                end,
-                _read_agent_record = function() end,
                 _indicator_for = function()
                     return { reposition = function() end }
                 end,
@@ -2161,7 +2124,6 @@ describe("agentic.SessionManager", function()
                 status_indicator = { start = function() end },
                 chat_history = { update_tool_call = function() end },
                 _history_changed = function() end,
-                _tool_call_owner = {},
                 _writer_for = SessionManager._writer_for,
                 _drain_side_records = function()
                     drains.n = drains.n + 1
@@ -2172,6 +2134,16 @@ describe("agentic.SessionManager", function()
                 _drain_side_records_of = SessionManager._drain_side_records_of,
                 _sync_output_tail = SessionManager._sync_output_tail,
             } --[[@as agentic.SessionManager]]
+            with_subagents(session)
+            session._subagents.read_record = function() end
+            session._subagents.transcript = function()
+                return {
+                    writer = {
+                        update_tool_call_block = function() end,
+                        tool_call_blocks = tool_call_blocks,
+                    },
+                }
+            end
             return session, drains
         end
 
@@ -2279,7 +2251,7 @@ describe("agentic.SessionManager", function()
         it("drains the subagent's records for its tool call", function()
             local session, drains =
                 make_session({ ["tc-1"] = { kind = "read" } })
-            session._tool_call_owner["tc-1"] = "task-1"
+            session._subagents._tool_call_owner["tc-1"] = "task-1"
 
             SessionManager._on_tool_call_update(
                 session,
@@ -2317,8 +2289,6 @@ describe("agentic.SessionManager", function()
                         return request.toolCall.rawInput.planFilePath
                     end,
                 },
-                _agents = {},
-                _tool_call_owner = {},
                 _last_edited_md = "/project/plan.md",
                 _writer_for = SessionManager._writer_for,
                 _handle_input_submit = spy.new(function() end),
@@ -2331,6 +2301,7 @@ describe("agentic.SessionManager", function()
                     end,
                 },
             } --[[@as agentic.SessionManager]]
+            with_subagents(session)
 
             SessionManager._on_request_permission(session, {
                 sessionId = "s-1",
@@ -2430,7 +2401,6 @@ describe("agentic.SessionManager", function()
                 destroyed = false,
                 session_id = "s-1",
                 _held_tool_call_updates = {},
-                _tool_call_owner = { ["toolu_send"] = "a1" },
                 _drain_subagent_side_records = SessionManager._drain_subagent_side_records,
                 _apply_side_tool_call = SessionManager._apply_side_tool_call,
                 _writer_for = function()
@@ -2459,6 +2429,8 @@ describe("agentic.SessionManager", function()
                 -- A write here would put the subagent's record in the main chat.
                 message_writer = {},
             } --[[@as agentic.SessionManager]]
+            with_subagents(session)
+            session._subagents._tool_call_owner["toolu_send"] = "a1"
 
             session:_drain_subagent_side_records("a1")
 
@@ -2498,20 +2470,10 @@ describe("agentic.SessionManager", function()
             local session = {
                 destroyed = false,
                 session_id = "s-1",
-                _agents = {},
-                _agent_by_task = {},
                 _drain_side_records = SessionManager._drain_side_records,
                 _block_id = SessionManager._block_id,
-                _read_agent_record = function() end,
                 _apply_side_tool_call = function()
                     table.insert(calls, "_apply_side_tool_call")
-                end,
-                _write_received_message = function(self, message)
-                    table.insert(calls, "_write_received_message")
-                    self.chat_history:add_message({
-                        type = "session_message",
-                        message_id = message.message_id,
-                    })
                 end,
                 _history_changed = function()
                     table.insert(calls, "_history_changed")
@@ -2536,6 +2498,15 @@ describe("agentic.SessionManager", function()
                     ),
                 },
             } --[[@as agentic.SessionManager]]
+            with_subagents(session)
+            session._subagents.read_record = function() end
+            session._subagents.write_received_message = function(_self, message)
+                table.insert(calls, "write_received_message")
+                session.chat_history:add_message({
+                    type = "session_message",
+                    message_id = message.message_id,
+                })
+            end
             return session, written, loaded, rows, calls, skills
         end
 
@@ -2594,7 +2565,7 @@ describe("agentic.SessionManager", function()
             }, session.chat_history.messages)
             assert.same({
                 "write_loaded_file",
-                "_write_received_message",
+                "write_received_message",
                 "write_loaded_file",
                 "_history_changed",
             }, calls)
@@ -2619,7 +2590,7 @@ describe("agentic.SessionManager", function()
                     tool_call_id = "toolu_1",
                 },
             })
-            session._agent_by_task.toolu_1 = "child-1"
+            session._subagents._agent_by_task.toolu_1 = "child-1"
 
             session:_drain_side_records()
 
@@ -2663,7 +2634,7 @@ describe("agentic.SessionManager", function()
                 it("goes under the subagent's block", function()
                     local session, written, loaded, rows, _, skills =
                         make_session(records_naming("toolu_1"))
-                    session._agent_by_task.toolu_1 = "child-1"
+                    session._subagents._agent_by_task.toolu_1 = "child-1"
 
                     session:_drain_side_records()
 
@@ -2678,7 +2649,7 @@ describe("agentic.SessionManager", function()
                     function()
                         local session, written, loaded, rows, _, skills =
                             make_session(records_naming("toolu_1"))
-                        session._agent_by_task.toolu_1 = "child-1"
+                        session._subagents._agent_by_task.toolu_1 = "child-1"
                         session.message_writer.tool_call_blocks.toolu_1 = {}
 
                         session:_drain_side_records()
@@ -2704,9 +2675,10 @@ describe("agentic.SessionManager", function()
                 it("reads every subagent's record before mapping", function()
                     local session, written =
                         make_session(records_naming("toolu_1"))
-                    session._agents = { ["child-1"] = {}, ["child-2"] = {} }
+                    session._subagents._agents =
+                        { ["child-1"] = {}, ["child-2"] = {} }
                     local read = {}
-                    session._read_agent_record = function(self, child_id)
+                    session._subagents.read_record = function(self, child_id)
                         table.insert(read, child_id)
                         if child_id == "child-1" then
                             self._agent_by_task.toolu_1 = child_id
@@ -2726,10 +2698,10 @@ describe("agentic.SessionManager", function()
                 --- @return integer
                 local function reads_after(change)
                     local session = make_session(records_naming("toolu_1"))
-                    session._agents = { ["child-1"] = {} }
+                    session._subagents._agents = { ["child-1"] = {} }
                     change(session)
                     local reads = 0
-                    session._read_agent_record = function()
+                    session._subagents.read_record = function()
                         reads = reads + 1
                     end
                     session:_drain_side_records()
@@ -2789,7 +2761,6 @@ describe("agentic.SessionManager", function()
                 message_writer = {
                     tool_call_blocks = tracker and { ["tc-1"] = tracker } or {},
                 },
-                _tool_call_owner = {},
                 file_activity = {
                     record = function(_self, op)
                         table.insert(recorded, op)
@@ -2799,6 +2770,7 @@ describe("agentic.SessionManager", function()
                 _writer_for = SessionManager._writer_for,
                 _record_file_op = SessionManager._record_file_op,
             } --[[@as agentic.SessionManager]]
+            with_subagents(session)
             return session, recorded
         end
 
@@ -2997,7 +2969,6 @@ describe("agentic.SessionManager", function()
                         },
                     },
                 },
-                _tool_call_owner = {},
                 permission_manager = {
                     has_edit_range = function()
                         return false
@@ -3009,6 +2980,7 @@ describe("agentic.SessionManager", function()
                 _writer_for = SessionManager._writer_for,
                 _try_record_edit_range = SessionManager._try_record_edit_range,
             } --[[@as agentic.SessionManager]]
+            with_subagents(session)
             return session, recorded
         end
 
@@ -3051,7 +3023,7 @@ describe("agentic.SessionManager", function()
             local empty = function()
                 return true
             end
-            return {
+            return with_subagents({
                 session_id = "s-1",
                 id = 1,
                 is_generating = false,
@@ -3132,13 +3104,12 @@ describe("agentic.SessionManager", function()
                 _persist_history = SessionManager._persist_history,
                 _history_changed = SessionManager._history_changed,
                 _sync_modified = SessionManager._sync_modified,
-                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _drain_queue = SessionManager._drain_queue,
                 _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _prompt_pending = 0,
-            } --[[@as agentic.SessionManager]]
+            } --[[@as agentic.SessionManager]])
         end
 
         it("calls _ring_bell on response complete", function()
@@ -3224,7 +3195,7 @@ describe("agentic.SessionManager", function()
                 end
             end
 
-            return {
+            local session = with_subagents({
                 session_id = "s-1",
                 id = 1,
                 is_generating = false,
@@ -3263,31 +3234,12 @@ describe("agentic.SessionManager", function()
                     any_following = empty,
                     tool_call_blocks = {},
                     nonfinal_tool_call_ids = MessageWriter.nonfinal_tool_call_ids,
+                    stamp_cancelled = MessageWriter.stamp_cancelled,
                     update_tool_call_block = record_stamp("main"),
                 },
-                -- A running subagent.
-                _agents = {
-                    c1 = {
-                        open = true,
-                        record_read = true,
-                        transcript = {
-                            writer = {
-                                tool_call_blocks = {},
-                                nonfinal_tool_call_ids = MessageWriter.nonfinal_tool_call_ids,
-                                update_tool_call_block = record_stamp(
-                                    "subagent"
-                                ),
-                            },
-                            set_modified = noop,
-                        },
-                    },
-                },
                 _mark_unresolved_tool_calls_cancelled = SessionManager._mark_unresolved_tool_calls_cancelled,
-                _stamp_cancelled = SessionManager._stamp_cancelled,
-                _tool_call_owner = {},
                 _finalize_turn = SessionManager._finalize_turn,
                 _drain_side_records = SessionManager._drain_side_records,
-                _read_agent_record = SessionManager._read_agent_record,
                 _held_tool_call_updates = {},
                 status_indicator = { start = noop, stop = noop },
                 chat_history = {
@@ -3298,6 +3250,7 @@ describe("agentic.SessionManager", function()
                     update_tool_call = function(_self, id, update)
                         table.insert(sink.history_updates, { id, update })
                     end,
+                    cancel_tool_calls = ChatHistory.cancel_tool_calls,
                     set_title = ChatHistory.set_title,
                     has_prompt = ChatHistory.has_prompt,
                     save = function(this)
@@ -3354,7 +3307,22 @@ describe("agentic.SessionManager", function()
                 _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _prompt_pending = 0,
-            } --[[@as agentic.SessionManager]]
+            } --[[@as agentic.SessionManager]])
+            -- A running subagent.
+            session._subagents._agents.c1 = {
+                open = true,
+                record_read = true,
+                transcript = {
+                    writer = {
+                        tool_call_blocks = {},
+                        nonfinal_tool_call_ids = MessageWriter.nonfinal_tool_call_ids,
+                        stamp_cancelled = MessageWriter.stamp_cancelled,
+                        update_tool_call_block = record_stamp("subagent"),
+                    },
+                    set_modified = noop,
+                },
+            }
+            return session
         end
 
         describe("in-flight gate accounting", function()
@@ -3396,11 +3364,11 @@ describe("agentic.SessionManager", function()
                 session.agent.send_prompt = function() end
 
                 session:_handle_input_submit("first")
-                session._tool_call_owner["tc-1"] = "c1"
+                session._subagents._tool_call_owner["tc-1"] = "c1"
                 session:_handle_input_submit("second")
 
-                assert.equal("c1", session._tool_call_owner["tc-1"])
-                assert.is_true(session._agents.c1.open)
+                assert.equal("c1", session._subagents._tool_call_owner["tc-1"])
+                assert.is_true(session._subagents._agents.c1.open)
             end)
 
             it(
@@ -3474,10 +3442,11 @@ describe("agentic.SessionManager", function()
                     ["main-pending"] = { status = "pending" },
                     ["main-done"] = { status = "completed" },
                 }
-                session._agents.c1.transcript.writer.tool_call_blocks = {
-                    ["sub-running"] = { status = "in_progress" },
-                    ["sub-done"] = { status = "completed" },
-                }
+                session._subagents._agents.c1.transcript.writer.tool_call_blocks =
+                    {
+                        ["sub-running"] = { status = "in_progress" },
+                        ["sub-done"] = { status = "completed" },
+                    }
                 session.agent.send_prompt = function(_self, _sid, _p, cb)
                     cb(response, nil)
                 end
@@ -3563,8 +3532,7 @@ describe("agentic.SessionManager", function()
         end)
 
         describe("refusal", function()
-            --- A session whose turns end with `response` and `err`, with a
-            --- background subagent `c1` whose message input is buffer 42.
+            --- A session whose turns end with `response` and `err`.
             --- @param response table|nil
             --- @param err table|nil
             --- @return agentic.SessionManager session
@@ -3573,23 +3541,7 @@ describe("agentic.SessionManager", function()
                 session.agent.send_prompt = function(_self, _sid, _p, cb)
                     cb(response, err)
                 end
-                session.agent.subagent_message_instruction = function(
-                    _self,
-                    _id,
-                    _label,
-                    text
-                )
-                    return "relay: " .. text
-                end
-                session._agent_label = function()
-                    return "x"
-                end
-                session._confirmed_blocking = function()
-                    return false
-                end
-                session._inputs = { c1 = { bufnr = 42 } }
                 session._relay = SessionManager._relay
-                session._relay_to_agent = SessionManager._relay_to_agent
                 return session
             end
 
@@ -3732,35 +3684,32 @@ describe("agentic.SessionManager", function()
                 assert.spy(restore_stub).was.called(0)
             end)
 
-            describe("of a subagent message", function()
-                it("returns it to the subagent's input", function()
+            describe("of a relay", function()
+                it("restores nothing without on_refusal", function()
                     local session = refusing_session({ stopReason = "refusal" })
 
-                    session:_relay_to_agent("c1", "hi", { force = false })
+                    assert.is_nil(session:_relay("hi", { force = false }, nil))
 
-                    assert.spy(restore_stub).was.called(1)
-                    local call = restore_stub.calls[1]
-                    assert.equal("hi", call[2])
-                    assert.same(
-                        { selections = {}, files = {}, diagnostics = {} },
-                        call[3]
-                    )
-                    assert.equal(42, call[4])
+                    assert.spy(restore_stub).was.called(0)
                 end)
 
-                it("returns it to the main input once that is gone", function()
-                    local session = refusing_session()
-                    --- @type function
-                    local resolve
-                    session.agent.send_prompt = function(_self, _sid, _p, cb)
-                        resolve = cb
-                    end
+                it("runs on_refusal", function()
+                    local session = refusing_session({ stopReason = "refusal" })
+                    local on_refusal = spy.new(function() end)
 
-                    session:_relay_to_agent("c1", "hi", { force = false })
-                    session._inputs.c1 = nil
-                    resolve({ stopReason = "refusal" }, nil)
+                    session:_relay("hi", { force = false }, on_refusal)
 
-                    assert.is_nil(restore_stub.calls[1][4])
+                    assert.spy(on_refusal).was.called(1)
+                end)
+
+                it("returns the notice of a held relay", function()
+                    local session = refusing_session({ stopReason = "refusal" })
+                    session._loading = true
+
+                    assert.equal(
+                        "Message held — the session is still loading.",
+                        session:_relay("hi", { force = false }, nil)
+                    )
                 end)
             end)
         end)
@@ -4179,8 +4128,6 @@ describe("agentic.SessionManager", function()
                 destroyed = false,
                 status_indicator = { start = noop, stop = noop },
                 message_writer = { tool_call_blocks = {} },
-                _agents = {},
-                _tool_call_owner = {},
                 _writer_for = SessionManager._writer_for,
                 -- chat not current => unfocused => bell would ring if notified
                 widget = {
@@ -4199,6 +4146,7 @@ describe("agentic.SessionManager", function()
                 _notify_attention = SessionManager._notify_attention,
                 _on_request_permission = SessionManager._on_request_permission,
             } --[[@as agentic.SessionManager]]
+            with_subagents(session)
             return session, hook_calls
         end
 
@@ -4482,150 +4430,15 @@ describe("agentic.SessionManager", function()
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _sync_modified = function() end,
-                _forget_agents = function() end,
-                _destroy_inputs = function() end,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
             } --[[@as agentic.SessionManager]]
+            with_subagents(session)
 
             session:_advance_session_epoch()
 
             assert.equal(4, session._session_epoch)
             assert.equal(0, session._prompt_pending)
             assert.is_nil(session:_submit_defer_reason("hello"))
-        end)
-    end)
-
-    describe("_message_info", function()
-        --- A session with the main agent `root`, its child `c1` and that
-        --- child's child `c2`, and a sibling `c3` of `c1`.
-        local function make_session()
-            return {
-                _agents = {
-                    c1 = {
-                        open = false,
-                        parent_session_id = "root",
-                        description = "Find the files",
-                    },
-                    c2 = { open = false, parent_session_id = "c1" },
-                    c3 = { open = false, parent_session_id = "root" },
-                },
-                _message_infos = {},
-                _delegated = {},
-                chat_history = require("agentic.ui.chat_history"):new(),
-                _message_info = SessionManager._message_info,
-                _agent_key = SessionManager._agent_key,
-            } --[[@as agentic.SessionManager]]
-        end
-
-        --- Add a row of type `type` to c1's history.
-        local function add_c1_row(session, type)
-            session.chat_history:add_message({
-                type = type,
-                state = "completed",
-                text = "x",
-                provider_name = "p",
-                agent_key = "c1",
-            })
-        end
-
-        it("classes the first delegation to an agent a task", function()
-            local session = make_session()
-
-            assert.equal("task", session:_message_info("m1", "root", "c1").kind)
-        end)
-
-        it(
-            "summarises only the first delegation, by the agent's description",
-            function()
-                local session = make_session()
-
-                local first = session:_message_info("m1", "root", "c1")
-                assert.equal("Find the files", first.summary)
-                -- Its second view keeps the summary.
-                assert.equal(
-                    "Find the files",
-                    session:_message_info("m1", "root", "c1").summary
-                )
-
-                add_c1_row(session, "subagent_end")
-                local later = session:_message_info("m2", "root", "c1")
-                assert.equal("task", later.kind)
-                assert.is_nil(later.summary)
-            end
-        )
-
-        it("classes a later delegation to a working agent a message", function()
-            local session = make_session()
-            session:_message_info("m1", "root", "c1")
-            add_c1_row(session, "agent")
-
-            assert.equal(
-                "message",
-                session:_message_info("m2", "root", "c1").kind
-            )
-        end)
-
-        it("classes a delegation after an end row a task", function()
-            local session = make_session()
-            session:_message_info("m1", "root", "c1")
-            add_c1_row(session, "subagent_end")
-
-            assert.equal("task", session:_message_info("m2", "root", "c1").kind)
-            -- Its received row now follows the end.
-            add_c1_row(session, "session_message")
-            assert.equal(
-                "message",
-                session:_message_info("m3", "root", "c1").kind
-            )
-        end)
-
-        it("classes a delegation after a saved end row a task", function()
-            -- After a load, the history and the delegations come from the file.
-            local session = make_session()
-            session._delegated.c1 = true
-            add_c1_row(session, "subagent_end")
-
-            assert.equal("task", session:_message_info("m1", "root", "c1").kind)
-        end)
-
-        it("classes a child's message to its parent a result", function()
-            local session = make_session()
-
-            assert.equal(
-                "result",
-                session:_message_info("m1", "c1", "root").kind
-            )
-            assert.equal("result", session:_message_info("m2", "c2", "c1").kind)
-            assert.is_nil(session._delegated.root)
-        end)
-
-        it("classes a message to a sibling a delegation to it", function()
-            local session = make_session()
-
-            assert.equal("task", session:_message_info("m1", "c1", "c3").kind)
-            assert.equal(
-                "message",
-                session:_message_info("m2", "c1", "c3").kind
-            )
-        end)
-
-        it("classes a message to an unknown session a message", function()
-            local session = make_session()
-
-            assert.equal("message", session:_message_info("m1", "c1", "x").kind)
-            assert.equal("message", session:_message_info("m2", nil, nil).kind)
-        end)
-
-        it("reuses the kind decided at the first view", function()
-            local session = make_session()
-            assert.equal("task", session:_message_info("m1", "root", "c1").kind)
-
-            -- The second view keeps its kind, where a new message would not.
-            assert.equal("task", session:_message_info("m1", "root", "c1").kind)
-            assert.equal(
-                "message",
-                session:_message_info("m2", "root", "c1").kind
-            )
         end)
     end)
 
@@ -4705,11 +4518,11 @@ describe("agentic.SessionManager", function()
                 render_info = function() end,
                 _set_generating = SessionManager._set_generating,
                 _update_chat_header = function() end,
-                _reset_subagents = function() end,
+                chat_history = ChatHistory:new(),
                 _sync_modified = SessionManager._sync_modified,
-                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
+            with_subagents(session)
 
             request_edit("tc-1")
             pm:_complete_request("allow-always")
@@ -4767,15 +4580,12 @@ describe("agentic.SessionManager", function()
                 permission_manager = pm,
                 chat_history = ChatHistory:new(),
                 status_indicator = { reposition = noop, start = noop },
-                _tool_call_owner = {},
                 _held_tool_call_updates = {},
-                _agents = {},
                 _loading = false,
                 _drain_side_records = noop,
                 _drain_subagent_side_records = noop,
                 _drain_side_records_of = SessionManager._drain_side_records_of,
                 _sync_output_tail = SessionManager._sync_output_tail,
-                _agent_of = SessionManager._agent_of,
                 _writer_for = SessionManager._writer_for,
                 _indicator_for = SessionManager._indicator_for,
                 _history_changed = spy.new(noop),
@@ -4785,6 +4595,7 @@ describe("agentic.SessionManager", function()
                 _on_tool_call_update = SessionManager._on_tool_call_update,
                 _on_permission_decided = SessionManager._on_permission_decided,
             } --[[@as agentic.SessionManager]]
+            with_subagents(session)
             pm.on_decided = function(id, deciders)
                 session:_on_permission_decided(id, deciders)
             end
@@ -5760,7 +5571,7 @@ describe("agentic.SessionManager", function()
         --- @param saves table Collects each history that reached `save`
         --- @return agentic.SessionManager
         local function make_session(saves)
-            return {
+            return with_subagents({
                 chat_history = {
                     session_id = "current",
                     save = function(this)
@@ -5777,9 +5588,8 @@ describe("agentic.SessionManager", function()
                 _sync_history_context = SessionManager._sync_history_context,
                 _persist_history = SessionManager._persist_history,
                 _sync_modified = SessionManager._sync_modified,
-                _agents = {},
                 _set_prompt_pending = SessionManager._set_prompt_pending,
-            } --[[@as agentic.SessionManager]]
+            } --[[@as agentic.SessionManager]])
         end
 
         -- A turn callback holds the history captured at dispatch, which the
@@ -5874,19 +5684,15 @@ describe("agentic.SessionManager", function()
                 },
                 widget = { buf_nrs = {} },
                 _prompt_pending = 1,
-                _agents = {
-                    c1 = {
-                        transcript = transcript,
-                        open = true,
-                        record_read = true,
-                    },
-                },
-                _agent_by_task = { task = "c1" },
-                _transcript_for = function()
-                    return transcript
-                end,
                 _drain_side_records = drain,
             }, { __index = SessionManager }) --[[@as agentic.SessionManager]]
+            with_subagents(session)
+            session._subagents._agents.c1 =
+                { transcript = transcript, open = true, record_read = true }
+            session._subagents._agent_by_task = { task = "c1" }
+            session._subagents.transcript = function()
+                return transcript
+            end
         end)
 
         --- @param message_id string|vim.NIL
@@ -6029,20 +5835,20 @@ describe("agentic.SessionManager", function()
             end)
             session = {
                 _output_tails = {},
-                _tool_call_owner = {},
                 message_writer = {
                     bufnr = vim.api.nvim_get_current_buf(),
                     tool_call_blocks = {},
                     set_output_tail = set_output_tail,
                 },
                 widget = { clear = function() end },
-                _reset_subagents = function() end,
+                _sync_modified = function() end,
                 _writer_for = SessionManager._writer_for,
                 _sync_output_tail = SessionManager._sync_output_tail,
                 _show_final_tail = SessionManager._show_final_tail,
                 _stop_output_tails = SessionManager._stop_output_tails,
                 clear_chat = SessionManager.clear_chat,
             } --[[@as agentic.SessionManager]]
+            with_subagents(session)
             session.message_writer.reset = function() end
         end)
 

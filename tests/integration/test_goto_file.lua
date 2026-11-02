@@ -179,7 +179,7 @@ _G.s:_on_session_update({
     state = { state = "running" },
 }, "root")
 ]])
-        local sub = child.lua_get("_G.s._agents.c1.transcript.bufnr")
+        local sub = child.lua_get("_G.s._subagents._agents.c1.transcript.bufnr")
         for _, lhs in ipairs({ "gf", "<C-W>f", "<C-W><C-F>", "<C-W>gf" }) do
             local is_buffer_local = child.lua_get(
                 string.format(

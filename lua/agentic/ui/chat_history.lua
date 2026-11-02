@@ -313,6 +313,20 @@ function ChatHistory:update_tool_call(tool_call_id, update)
     end
 end
 
+--- Set the status of tool calls, main or subagent, to `cancelled`.
+--- @param tool_call_ids string[]
+function ChatHistory:cancel_tool_calls(tool_call_ids)
+    for _, id in ipairs(tool_call_ids) do
+        self:update_tool_call(
+            id,
+            ChatHistory.tool_call_record({
+                tool_call_id = id,
+                status = "cancelled",
+            })
+        )
+    end
+end
+
 --- The fields of `agentic.ui.MessageWriter.ToolCallBase`, kept in sync by
 --- hand and compared with the class by a test. The fields `ToolCallBlock`
 --- adds, such as extmark ids and render caches, are left out.

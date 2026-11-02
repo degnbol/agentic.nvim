@@ -1106,6 +1106,31 @@ describe("ChatHistory", function()
                 assert.equal("user", history.messages[1].type)
             end)
         end)
+
+        describe("cancel_tool_calls", function()
+            it("cancels a main and a subagent tool call", function()
+                local history = ChatHistory:new()
+                history:add_message({
+                    type = "tool_call",
+                    tool_call_id = "tc-main",
+                    status = "pending",
+                    kind = "read",
+                })
+                history:add_message({
+                    type = "tool_call",
+                    tool_call_id = "tc-sub",
+                    status = "in_progress",
+                    kind = "read",
+                    agent_key = "task-1",
+                })
+
+                history:cancel_tool_calls({ "tc-main", "tc-sub" })
+
+                assert.equal("cancelled", history.messages[1].status)
+                assert.equal("read", history.messages[1].kind)
+                assert.equal("cancelled", history.subagent_messages[1].status)
+            end)
+        end)
     end)
 
     describe("tool call records", function()

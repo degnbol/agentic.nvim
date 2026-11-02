@@ -381,11 +381,11 @@ The client advertises `clientCapabilities.subagents`: each subagent is a child
 session (global `acp` skill → `references/claude-agent.md` § Native subagent
 sessions, RFD form). `ACPClient` maps child → root on `subagent_update` and
 passes the raw id to the root's subscriber as `source_session_id`.
-`SessionManager` keeps one `SubagentTranscript` per child (`_agents`), opened
-by `running`, ended by an end state or a disconnect, never by a
-turn's end. Each `session_message` view becomes a row holding the text, with
-the kind `_classify_message` decides once per message id; the two rows of a
-message link by tag.
+`Subagents` keeps one `SubagentTranscript` per child, opened by `running`,
+ended by an end state or a disconnect, never by a turn's end. Each
+`session_message` view becomes a row holding the text, with the kind
+`_message_info` decides once per message id; the two rows of a message link
+by tag.
 Adapters override `subagent_task_id`, `subagent_record`
 (type, mode, task id; claude reads `agent-<id>.meta.json`) and
 `subagent_predicted_mode`. A background subagent gets a message input only

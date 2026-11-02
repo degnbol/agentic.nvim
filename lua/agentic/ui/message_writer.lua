@@ -2927,6 +2927,17 @@ function MessageWriter:nonfinal_tool_call_ids()
     return ids
 end
 
+--- Set `cancelled` on this writer's tool call blocks that have no final
+--- status yet.
+--- @return string[] tool_call_ids The ids that were stamped
+function MessageWriter:stamp_cancelled()
+    local ids = self:nonfinal_tool_call_ids()
+    for _, id in ipairs(ids) do
+        self:update_tool_call_block({ tool_call_id = id, status = "cancelled" })
+    end
+    return ids
+end
+
 --- Follow a prose row across a tool call block's resize, so a row recorded
 --- before the edit still points at the content it was recorded for. A row that
 --- fell inside the old block range comes back just past the new one: nothing

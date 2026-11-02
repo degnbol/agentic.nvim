@@ -453,11 +453,14 @@ upd("sid-x", { sessionUpdate = "subagent_update", sessionId = "c9",
             child.flush()
             child.lua([[_G.load_cb({}, nil)]])
             child.flush()
-            child.lua([[vim.fn.bufload(_G.s._agents.c9.transcript.bufnr)]])
+            child.lua(
+                [[vim.fn.bufload(_G.s._subagents._agents.c9.transcript.bufnr)]]
+            )
 
-            local transcript =
-                child.lua_get([[table.concat(vim.api.nvim_buf_get_lines(
-    _G.s._agents.c9.transcript.bufnr, 0, -1, false), "\n")]])
+            local transcript = child.lua_get(
+                [[table.concat(vim.api.nvim_buf_get_lines(
+    _G.s._subagents._agents.c9.transcript.bufnr, 0, -1, false), "\n")]]
+            )
             assert.equal(1, count(transcript, "child found"))
             assert.equal(1, count(transcript, "Find it."))
             assert.same(
