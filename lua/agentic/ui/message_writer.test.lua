@@ -6411,6 +6411,7 @@ describe("agentic.ui.MessageWriter wrapped table rows", function()
     end)
 
     --- 0-indexed rows carrying the row-end underline, in any namespace.
+    --- Asserts each underline spans the row between its outer pipes.
     --- @return integer[]
     local function underlined_rows()
         local rows = {}
@@ -6418,7 +6419,17 @@ describe("agentic.ui.MessageWriter wrapped table rows", function()
             vim.api.nvim_buf_get_extmarks(bufnr, -1, 0, -1, { details = true })
         for _, mark in ipairs(marks) do
             if mark[4].hl_group == "AgenticTableRowEnd" then
-                assert.equal(mark[2] + 1, mark[4].end_row)
+                local line = vim.api.nvim_buf_get_lines(
+                    bufnr,
+                    mark[2],
+                    mark[2] + 1,
+                    false
+                )[1]
+                assert.equal(mark[2], mark[4].end_row)
+                assert.equal(
+                    line:match("^%s*|(.*)|%s*$"),
+                    line:sub(mark[3] + 1, mark[4].end_col)
+                )
                 rows[#rows + 1] = mark[2]
             end
         end

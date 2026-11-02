@@ -374,8 +374,9 @@ function M.restamp_border(bufnr, extmark_id, row, sign_text)
     )
 end
 
---- Highlight a whole row with `AgenticTableRowEnd`, marking the last line
---- of a markdown table row whose cells continue on further table rows.
+--- Highlight a table row between its outer pipes with `AgenticTableRowEnd`,
+--- marking the last line of a markdown table row whose cells continue on
+--- further table rows.
 ---
 --- GFM has no multi-line cells, so the continuations are real table rows.
 --- Empty separator rows would read as real empty rows and cost a line each,
@@ -383,11 +384,13 @@ end
 --- marked on the text itself.
 --- @param bufnr integer
 --- @param ns integer namespace for the extmark
---- @param row integer 0-based buffer row
+--- @param row integer 0-based buffer row holding a table row
 function M.mark_table_row_end(bufnr, ns, row)
-    vim.api.nvim_buf_set_extmark(bufnr, ns, row, 0, {
-        end_row = row + 1,
-        end_col = 0,
+    local line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
+    local first_pipe = line:find("|", 1, true) --[[@as integer]]
+    local last_pipe = line:match(".*()|") --[[@as integer]]
+    vim.api.nvim_buf_set_extmark(bufnr, ns, row, first_pipe, {
+        end_col = last_pipe - 1,
         hl_group = Theme.HL_GROUPS.TABLE_ROW_END,
         priority = 200,
         invalidate = true,
