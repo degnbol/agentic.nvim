@@ -216,6 +216,9 @@ end
 --- @field sender_name? string The display name the provider gave the sender
 
 --- `tool_call` carries fields of a tool call that the ACP feed left out.
+---
+--- Stored in the chat history as drained, so renaming a field needs a
+--- migration in `ChatHistory.from_data`.
 --- @alias agentic.acp.SideRecord
 --- | { kind: "hook", hook: agentic.acp.HookRecord }
 --- | { kind: "loaded_file", loaded_file: agentic.acp.LoadedFile }

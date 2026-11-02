@@ -1,15 +1,18 @@
 local assert = require("tests.helpers.assert")
 local Child = require("tests.helpers.child")
 
---- Lua run in each child: a bound session `_G.s` with a session id, a
---- throwaway session store and Claude config dir, and helpers that feed it
---- what the bridge sends.
+--- Lua run in each child: a bound session `_G.s` with a session id and a
+--- prompt from the user in its history, a throwaway session store and Claude
+--- config dir, and helpers that feed it what the bridge sends.
 local SETUP = [[
 require("agentic.config").session_restore.storage_path = vim.fn.tempname()
 vim.cmd("Agentic")
 _G.s = require("agentic.session_registry").current()
 _G.s.session_id = "root"
 _G.s.chat_history.session_id = "root"
+_G.s.chat_history:add_message({
+    type = "user", text = "go", timestamp = 0, provider_name = "p",
+})
 _G.config_dir = vim.fn.tempname()
 _G.s.agent.provider_config.env = { CLAUDE_CONFIG_DIR = _G.config_dir }
 
@@ -1051,6 +1054,8 @@ local ChatHistory = require("agentic.ui.chat_history")
 _G.saved = ChatHistory:new()
 _G.saved.session_id = "sid-x"
 _G.saved.messages = { {
+    type = "user", text = "go", timestamp = 0, provider_name = "p",
+}, {
     type = "tool_call", tool_call_id = "c1", kind = "SubAgent",
     status = "completed", argument = "agentic://999/subagent/finder-c1",
     body = { "Find it." },
@@ -1161,7 +1166,7 @@ _G.mid_file = table.concat(vim.fn.readfile(
             assert.equal(1, count(chat, "## Find it.\n" .. name))
             assert.equal(1, count(chat, "## replayed reply\n" .. name))
             assert.same(
-                { "tool_call", "session_message", "session_message" },
+                { "user", "tool_call", "session_message", "session_message" },
                 child.lua_get([[vim.tbl_map(function(m)
     return m.type
 end, _G.s.chat_history.messages)]])

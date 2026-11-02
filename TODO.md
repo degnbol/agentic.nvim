@@ -10,10 +10,9 @@ Plans in `notes/`. Within a track, each plan needs the ones above it.
 Tracks are independent unless a note says otherwise.
 
 **Session resume**
-1. [`PLAN-side-record-history.md`](notes/PLAN-side-record-history.md).
-2. [`PLAN-subagent-task-id.md`](notes/PLAN-subagent-task-id.md). Before 3
+1. [`PLAN-subagent-task-id.md`](notes/PLAN-subagent-task-id.md). Before 2
    only to avoid a rebase; it can land earlier.
-3. [`PLAN-split-subagents.md`](notes/PLAN-split-subagents.md)
+2. [`PLAN-split-subagents.md`](notes/PLAN-split-subagents.md)
 
 **Resume terminology:** a mechanical rename: a plan that lands after it
 renames its references first.
@@ -23,13 +22,13 @@ renames its references first.
 1. [`PLAN-reapply-model.md`](notes/PLAN-reapply-model.md). Before
    `PLAN-agent-view-consolidation.md`.
 
-**Session log:** after Session resume 1 (it saves 1's `side_records` type).
+**Session log:**
 1. [`PLAN-append-session-log.md`](notes/PLAN-append-session-log.md)
 
 **Subagents**
 1. [`PLAN-agent-view-consolidation.md`](notes/PLAN-agent-view-consolidation.md).
    After `PLAN-reapply-model.md`, which deletes the model-line dedupe this
-   plan would otherwise move. After Session resume 3 only to avoid a rebase.
+   plan would otherwise move. After Session resume 2 only to avoid a rebase.
 - [`PLAN-nested-subagent-blocks.md`](notes/PLAN-nested-subagent-blocks.md).
 
 **Executed code**

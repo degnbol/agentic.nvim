@@ -27,13 +27,13 @@ local GrantSafety = require("agentic.utils.grant_safety")
 local InfoPanel = require("agentic.ui.info_panel")
 local Json = require("agentic.utils.json")
 local Logger = require("agentic.utils.logger")
-local MarkdownGuard = require("agentic.utils.markdown_guard")
 local PromptBlocks = require("agentic.utils.prompt_blocks")
 local Recovery = require("agentic.session_recovery")
 local SessionRegistry = require("agentic.session_registry")
 local SessionRestore = require("agentic.session_restore")
 local ResponseBoundary = require("agentic.acp.response_boundary")
 local SequenceTail = require("agentic.utils.sequence_tail")
+local SideRecords = require("agentic.ui.side_records")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
 local SubagentInput = require("agentic.ui.subagent_input")
@@ -221,12 +221,13 @@ end
 --- Sync the session context onto `history` and write it to disk. A history
 --- with no session id has no file to write and is left alone, and so is one a
 --- session/load is still filling: until the load ends it is a partial copy of
---- its file, and writing it would drop the rest.
+--- its file, and writing it would drop the rest. A history without a prompt
+--- from the user is left alone too: it holds no conversation to resume.
 --- @param history agentic.ui.ChatHistory
 function SessionManager:_persist_history(history)
     -- Not delegated to `ChatHistory:save`, which reports the missing id as an
     -- error. Reaching here before a session exists is expected.
-    if not history.session_id or self._loading then
+    if not history.session_id or self._loading or not history:has_prompt() then
         return
     end
 
@@ -265,14 +266,15 @@ end
 --- a subagent works. Running work counts even once written: quitting would
 --- cut it off, so `:qa`, `:wqa` and `:bd` refuse until it ends. A
 --- history a session/load is filling is a copy of its file, so it counts as
---- saved. A no-op for any history but the current one, so a callback holding
---- a replaced history cannot touch the flags.
+--- saved, and one without a prompt from the user has nothing to save. A no-op
+--- for any history but the current one, so a callback holding a replaced
+--- history cannot touch the flags.
 --- @param history agentic.ui.ChatHistory
 function SessionManager:_sync_modified(history)
     if history ~= self.chat_history then
         return
     end
-    local unsaved = history.dirty and not self._loading
+    local unsaved = history.dirty and not self._loading and history:has_prompt()
     -- Nil once the widget is destroyed.
     local chat = self.widget.buf_nrs.agent
     if chat and vim.api.nvim_buf_is_valid(chat) then
@@ -825,7 +827,7 @@ function SessionManager:_setup_buffer_lifecycle()
                 local input = buf_nrs.input
                 if
                     not self.destroyed
-                    and #self.chat_history.messages == 0
+                    and not self.chat_history:has_prompt()
                     -- A wiped input holds no draft.
                     and not (vim.api.nvim_buf_is_valid(input) and vim.bo[input].modified)
                     and #vim.fn.win_findbuf(chat) == 0
@@ -2639,39 +2641,11 @@ function SessionManager:_on_request_permission(request, callback)
     end
 end
 
---- A duration for reading at a glance: milliseconds below a second, then
---- seconds to one decimal.
---- @param ms number
---- @return string
-local function format_duration(ms)
-    if ms < 1000 then
-        return ("%d ms"):format(ms)
-    end
-    return ("%.1f s"):format(ms / 1000)
-end
-
---- One row naming a hook record: its command as one code span, else its
---- `hook_name`, else `hook`, followed by ` · ` and its duration when one is
---- recorded.
---- @param record agentic.acp.HookRecord
---- @return string
-local function hook_title(record)
-    -- One row: a code span renders a line ending as a space anyway.
-    local command = record.command and record.command:gsub("\r?\n", " ")
-    local title = command and MarkdownGuard.whole_within(command, math.huge)
-        or record.hook_name
-        or "hook"
-    if record.duration_ms then
-        title = title .. " · " .. format_duration(record.duration_ms)
-    end
-    return title
-end
-
---- Write the side records recorded since the last drain to the chat buffer,
---- each that names an anchor at that anchor, and add recorded tool call
---- fields to their calls. Hooks that passed follow the rest, one row each. A
---- record naming a call that delegated to a subagent goes under the
---- subagent's block.
+--- Handle the side records recorded since the last drain, in order: add tool
+--- call fields to their calls, write received messages, and write the other
+--- records to the chat buffer. Each run of the other records between two
+--- received messages is kept in the history as one message. A record naming
+--- a call that delegated to a subagent goes under the subagent's block.
 function SessionManager:_drain_side_records()
     if self.destroyed or not self.session_id then
         return
@@ -2681,45 +2655,38 @@ function SessionManager:_drain_side_records()
     for child_id in pairs(self._agents) do
         self:_read_agent_record(child_id)
     end
-    --- @type agentic.acp.HookRecord[]
-    local passes = {}
+    --- @type agentic.acp.SideRecord[]
+    local placed = {}
+    local stored = false
+    local function store_placed()
+        if #placed == 0 then
+            return
+        end
+        SideRecords.write(self.message_writer, placed)
+        self.chat_history:add_message({
+            type = "side_records",
+            records = placed,
+        })
+        placed = {}
+        stored = true
+    end
     for _, side in ipairs(self.agent:drain_side_records(self.session_id)) do
-        if side.kind == "loaded_file" then
-            local file = side.loaded_file
-            file.tool_call_id = self:_block_id(file.tool_call_id)
-            self.message_writer:write_loaded_file(file)
-        elseif side.kind == "tool_call" then
+        if side.kind == "tool_call" then
             self:_apply_side_tool_call(side.tool_call)
         elseif side.kind == "received_message" then
+            -- A replay writes history messages in order, so the records
+            -- before the message are stored before its row.
+            store_placed()
             self:_write_received_message(side.received_message)
-        elseif side.kind == "discovered_skills" then
-            local skills = side.discovered_skills
-            skills.tool_call_id = self:_block_id(skills.tool_call_id)
-            self.message_writer:write_discovered_skills(skills)
         else
-            local record = side.hook
-            record.tool_call_id = self:_block_id(record.tool_call_id)
-            if record.group == "passed" then
-                table.insert(passes, record)
-            else
-                self.message_writer:write_hook_block({
-                    body = record.body,
-                    title = hook_title(record),
-                    tool_call_id = record.tool_call_id,
-                    after_prompt = record.after_prompt,
-                    after_compaction = record.after_compaction,
-                    failed = record.group == "failure",
-                })
-            end
+            local anchor = side[side.kind] --[[@as agentic.acp.Anchor]]
+            anchor.tool_call_id = self:_block_id(anchor.tool_call_id)
+            table.insert(placed, side)
         end
     end
-    for _, record in ipairs(passes) do
-        self.message_writer:write_hook_row({
-            text = hook_title(record),
-            tool_call_id = record.tool_call_id,
-            after_prompt = record.after_prompt,
-            after_compaction = record.after_compaction,
-        })
+    store_placed()
+    if stored then
+        self:_history_changed(self.chat_history)
     end
 end
 
@@ -4764,14 +4731,13 @@ end
 --- Restart the current session: cancel it and restore from chat history.
 --- Use when a session becomes stuck or unresponsive.
 function SessionManager:restart_session()
-    local saved_history = vim.deepcopy(self.chat_history)
-
-    if #saved_history.messages == 0 then
+    if not self.chat_history:has_prompt() then
         -- Nothing to restore — just create a fresh session
         self:new_session({ keep_cwd = true })
         return
     end
 
+    local saved_history = vim.deepcopy(self.chat_history)
     self:_cancel_session()
     self:restore_from_history(saved_history)
 end

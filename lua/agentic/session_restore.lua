@@ -5,6 +5,7 @@ local Config = require("agentic.config")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 local SessionRegistry = require("agentic.session_registry")
+local SideRecords = require("agentic.ui.side_records")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 
@@ -420,6 +421,8 @@ function SessionRestore.replay_messages(writer, messages, buffer_name)
             writer:write_tool_call_block(ChatHistory.to_tool_call_block(record))
         elseif msg.type == "session_message" or msg.type == "subagent_end" then
             SessionRestore.write_row(writer, msg, true, buffer_name)
+        elseif msg.type == "side_records" then
+            SideRecords.write(writer, msg.records)
         end
     end
     -- Neither caller finalizes the turn, so a history ending on a thought would

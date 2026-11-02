@@ -254,6 +254,26 @@ vim.cmd("stopinsert")
         end)
 
         it(
+            "a session without a prompt ends when its last window closes",
+            function()
+                child.cmd("vsplit")
+                open_session()
+                child.lua([[
+_G.s.chat_history:add_message({ type = "side_records", records = {} })
+_G.s:_history_changed(_G.s.chat_history)
+]])
+
+                child.cmd("quit")
+                child.flush()
+
+                assert.equal(0, live_sessions())
+                assert.is_false(child.lua_get([[vim.uv.fs_stat(
+    require("agentic.ui.chat_history").get_file_path("sid-1", _G.s._cwd)
+) ~= nil]]))
+            end
+        )
+
+        it(
             "a session with an unsent draft survives losing its windows",
             function()
                 child.cmd("vsplit")
@@ -593,6 +613,15 @@ vim.api.nvim_set_current_win(_G.s.widget:input_win())
     end)
 
     describe("subagent transcript", function()
+        --- `open_session`, with a prompt from the user in the history, as a
+        --- subagent spawns in a prompted turn.
+        local function open_prompted_session()
+            open_session()
+            child.lua(
+                [[_G.s.chat_history:add_message(_G.user_msg("delegate"))]]
+            )
+        end
+
         --- Spawn subagent `id` in `_G.s`, its transcript `_G.sub`.
         --- @param id string
         local function open_task(id)
@@ -712,7 +741,7 @@ end)(...)]]):format(bufnr_expr or "_G.sub"),
         end
 
         it("refuses :e and :bd mid-turn", function()
-            open_session()
+            open_prompted_session()
             child.lua([[_G.s:_set_prompt_pending(1)]])
             open_task("task-1")
             subagent_call("c-1", "task-1")
@@ -729,7 +758,7 @@ end)(...)]]):format(bufnr_expr or "_G.sub"),
         end)
 
         it(":e! mid-turn re-renders the same content", function()
-            open_session()
+            open_prompted_session()
             child.lua([[_G.s:_set_prompt_pending(1)]])
             open_task("task-1")
             subagent_call("c-1", "task-1")
@@ -749,7 +778,7 @@ end)(...)]]):format(bufnr_expr or "_G.sub"),
         end)
 
         it(":bd! mid-turn reloads the buffer on a later update", function()
-            open_session()
+            open_prompted_session()
             child.lua([[_G.s:_set_prompt_pending(1)]])
             open_task("task-1")
             subagent_call("c-1", "task-1")
@@ -795,7 +824,7 @@ end)()]]))
         it(
             "outside a turn, writes on a call's completion, not per chunk",
             function()
-                open_session()
+                open_prompted_session()
                 open_task("task-1")
 
                 subagent_chunk("first finding", "task-1")
@@ -811,7 +840,7 @@ end)()]]))
         )
 
         it(":w writes the session file and clears modified", function()
-            open_session()
+            open_prompted_session()
             open_task("task-1")
             subagent_chunk("first finding", "task-1")
             assert.is_true(sub_modified())
@@ -823,7 +852,7 @@ end)()]]))
         end)
 
         it("heads a running agent once across :e!", function()
-            open_session()
+            open_prompted_session()
             open_task("task-1")
             subagent_chunk("first", "task-1")
 
@@ -842,7 +871,7 @@ end)()]]))
         end)
 
         it("records a subagent edit that completes after :e!", function()
-            open_session()
+            open_prompted_session()
             open_task("task-1")
             child.lua([[
 _G.s:_on_tool_call({
@@ -867,13 +896,13 @@ return _G.s._checktime_scheduled
         end)
 
         it(":e! leaves another tabpage's transcript alone", function()
-            open_session()
+            open_prompted_session()
             open_task("task-1")
             subagent_call("c-1", "task-1")
             child.lua([[_G.first, _G.first_sub = _G.s, _G.sub]])
             child.cmd("tabnew")
             child.new_session()
-            open_session()
+            open_prompted_session()
             open_task("task-1")
             subagent_call("c-2", "task-1")
             local lines = sub_lines()
@@ -901,7 +930,7 @@ _G.second_tracker = _G.writer_of(_G.s).tool_call_blocks["c-2"]
             --- With no turn pending, start subagent `task-1` and stream a
             --- chunk from it, leaving the history unsaved.
             local function start_working()
-                open_session()
+                open_prompted_session()
                 open_task("task-1")
                 subagent_chunk("first finding", "task-1")
             end

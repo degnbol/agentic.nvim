@@ -1075,5 +1075,104 @@ describe("SessionRestore", function()
                 vim.api.nvim_buf_delete(bufnr, { force = true })
             end
         )
+
+        it("puts stored side records at their anchors", function()
+            local MessageWriter = require("agentic.ui.message_writer")
+            local bufnr = vim.api.nvim_create_buf(false, true)
+            local writer = MessageWriter:new(bufnr)
+            local schedule_stub = spy.stub(vim, "schedule")
+            MiniTest.finally(function()
+                schedule_stub:revert()
+                vim.api.nvim_buf_delete(bufnr, { force = true })
+            end)
+
+            --- @param path string
+            --- @param anchor agentic.acp.Anchor
+            --- @return agentic.acp.SideRecord
+            local function loaded(path, anchor)
+                return {
+                    kind = "loaded_file",
+                    loaded_file = vim.tbl_extend(
+                        "force",
+                        { path = path },
+                        anchor
+                    ),
+                }
+            end
+            --- @param id string
+            --- @param extra table|nil
+            --- @return agentic.ui.ChatHistory.ToolCall
+            local function tool_call(id, extra)
+                return vim.tbl_extend("force", {
+                    type = "tool_call",
+                    tool_call_id = id,
+                    kind = "execute",
+                    argument = "ls",
+                    status = "completed",
+                    body = { "output" },
+                }, extra or {}) --[[@as agentic.ui.ChatHistory.ToolCall]]
+            end
+            --- @param text string
+            --- @return agentic.ui.ChatHistory.AgentMessage
+            local function agent(text)
+                return {
+                    type = "agent",
+                    text = text .. "\n\n",
+                    provider_name = "p",
+                }
+            end
+
+            SessionRestore.replay_messages(writer, {
+                {
+                    type = "user",
+                    text = "go",
+                    timestamp = 0,
+                    provider_name = "p",
+                },
+                agent("intro"),
+                tool_call("t1"),
+                agent("after the call"),
+                tool_call("c-1", { is_compaction = true }),
+                agent("resumed"),
+                {
+                    type = "side_records",
+                    records = {
+                        loaded("/r/call.md", { tool_call_id = "t1" }),
+                        {
+                            kind = "hook",
+                            hook = {
+                                group = "context",
+                                body = { "hook context" },
+                                tool_call_id = "t1",
+                            },
+                        },
+                        loaded("/r/prompt.md", { after_prompt = true }),
+                        loaded("/r/compact.md", { after_compaction = true }),
+                        loaded("/r/end.md", {}),
+                    },
+                },
+            }, no_buffer)
+
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            --- The row of the first line holding `text`.
+            --- @param text string
+            --- @return integer|nil
+            local function row_of(text)
+                for i, line in ipairs(lines) do
+                    if line:find(text, 1, true) then
+                        return i
+                    end
+                end
+            end
+            assert.is_true(row_of("go") < row_of("/r/prompt.md"))
+            assert.is_true(row_of("/r/prompt.md") < row_of("intro"))
+            assert.is_true(row_of("intro") < row_of("/r/call.md"))
+            assert.is_true(row_of("intro") < row_of("hook context"))
+            assert.is_true(row_of("/r/call.md") < row_of("after the call"))
+            assert.is_true(row_of("hook context") < row_of("after the call"))
+            assert.is_true(row_of("after the call") < row_of("/r/compact.md"))
+            assert.is_true(row_of("/r/compact.md") < row_of("resumed"))
+            assert.is_true(row_of("resumed") < row_of("/r/end.md"))
+        end)
     end)
 end)

@@ -410,6 +410,22 @@ describe("ChatHistory", function()
             assert.same({ { type = "text", text = "User: go" } }, prompt)
         end)
 
+        it("sends nothing for side records", function()
+            local prompt = {}
+            ChatHistory.prepend_restored_messages({
+                {
+                    type = "side_records",
+                    records = {
+                        {
+                            kind = "hook",
+                            hook = { group = "context", body = { "ctx" } },
+                        },
+                    },
+                },
+            }, prompt)
+            assert.same({}, prompt)
+        end)
+
         it("writes the range of a read", function()
             local prompt = {}
             ChatHistory.prepend_restored_messages({
@@ -643,6 +659,107 @@ describe("ChatHistory", function()
                 end, history.messages)
             )
             assert.same({}, history.subagent_messages)
+        end)
+
+        describe("side records", function()
+            local notify_stub
+
+            before_each(function()
+                local Logger = require("agentic.utils.logger")
+                notify_stub = spy.stub(Logger, "notify")
+            end)
+
+            after_each(function()
+                notify_stub:revert()
+            end)
+
+            --- A history read from a file holding `messages`.
+            --- @param messages table[]
+            --- @return agentic.ui.ChatHistory
+            local function from_messages(messages)
+                return ChatHistory.from_data({
+                    session_id = "s",
+                    title = "",
+                    timestamp = 0,
+                    messages = messages,
+                })
+            end
+
+            it("drops unknown kinds with one notification", function()
+                local hook = {
+                    kind = "hook",
+                    hook = { group = "context", body = { "ctx" } },
+                }
+                local history = from_messages({
+                    {
+                        type = "side_records",
+                        records = { { kind = "future" }, hook },
+                    },
+                    {
+                        type = "side_records",
+                        records = { { kind = "future" }, { kind = "later" } },
+                    },
+                })
+
+                assert.same({
+                    { type = "side_records", records = { hook } },
+                    { type = "side_records", records = {} },
+                }, history.messages)
+                assert.equal(1, notify_stub.call_count)
+                assert.truthy(
+                    notify_stub.calls[1][1]:find("future, later", 1, true)
+                )
+            end)
+
+            it("notifies nothing when every kind is known", function()
+                from_messages({
+                    {
+                        type = "side_records",
+                        records = {
+                            {
+                                kind = "loaded_file",
+                                loaded_file = { path = "/a" },
+                            },
+                        },
+                    },
+                })
+
+                assert.equal(0, notify_stub.call_count)
+            end)
+        end)
+    end)
+
+    describe("has_prompt", function()
+        it("is false for a history of side records only", function()
+            local history = ChatHistory:new()
+            history:add_message({ type = "side_records", records = {} })
+
+            assert.is_false(history:has_prompt())
+        end)
+
+        it("is false for a synthetic prompt", function()
+            local history = ChatHistory:new()
+            history:add_message({
+                type = "user",
+                text = "continue",
+                timestamp = 0,
+                provider_name = "p",
+                synthetic = true,
+            })
+
+            assert.is_false(history:has_prompt())
+        end)
+
+        it("is true for a prompt the user sent", function()
+            local history = ChatHistory:new()
+            history:add_message({
+                type = "user",
+                text = "go",
+                timestamp = 0,
+                provider_name = "p",
+            })
+
+            assert.is_true(history:has_prompt())
         end)
     end)
 
@@ -1178,6 +1295,53 @@ describe("ChatHistory", function()
 
             --- @cast loaded agentic.ui.ChatHistory
             assert.same(original.subagent_messages, loaded.subagent_messages)
+        end)
+
+        it("round-trips side records", function()
+            local original = ChatHistory:new()
+            original.session_id = "side-records-roundtrip"
+            original:add_message({
+                type = "side_records",
+                records = {
+                    {
+                        kind = "hook",
+                        hook = {
+                            group = "passed",
+                            body = {},
+                            command = "/h/a.sh",
+                            tool_call_id = "toolu_1",
+                        },
+                    },
+                    {
+                        kind = "loaded_file",
+                        loaded_file = { path = "/r/a.md", after_prompt = true },
+                    },
+                },
+            })
+            assert.is_nil(original:save(TEST_CWD))
+
+            local loaded = read(original.session_id)
+
+            --- @cast loaded agentic.ui.ChatHistory
+            assert.same(original.messages, loaded.messages)
+        end)
+
+        it("round-trips a tool call's compaction flag", function()
+            local original = ChatHistory:new()
+            original.session_id = "compaction-roundtrip"
+            original:add_message(ChatHistory.tool_call_record({
+                tool_call_id = "c-1",
+                status = "completed",
+                kind = "other",
+                argument = "compact",
+                is_compaction = true,
+            }))
+            assert.is_nil(original:save(TEST_CWD))
+
+            local loaded = read(original.session_id)
+
+            --- @cast loaded agentic.ui.ChatHistory
+            assert.is_true(loaded.messages[1].is_compaction)
         end)
 
         it("round-trips subagents", function()

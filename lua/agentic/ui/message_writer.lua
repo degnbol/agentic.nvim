@@ -132,6 +132,7 @@ end
 --- @field background_job_id? string Id the provider gave the command when it went to the background
 --- @field output_file? string Absolute path of the file the command's own output goes to
 --- @field output_ended? boolean The command has ended. Only meaningful with `output_file`
+--- @field is_compaction? boolean The block reports a compaction of the conversation
 
 --- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
 --- @field kind agentic.acp.ToolKind
@@ -141,7 +142,6 @@ end
 --- @field cached_diff_blocks? agentic.ui.ToolCallDiff.DiffBlock[] Captured at render time so navigation (diff_jump) survives a later file refresh that breaks OLD-based matching
 --- @field task_id? string Task id the call is tagged with (`ACPClient:subagent_task_id`); nil for main-agent calls
 --- @field placed? agentic.ui.MessageWriter.Placed What was placed beneath the block after it was written
---- @field is_compaction? boolean The block reports a compaction of the conversation
 --- @field folds? agentic.ui.MessageWriter.BlockFold[] The block's folds, outermost first.
 --- @field output_tail? string[] Last rows of `output_file`, as last read
 --- @field output_live? boolean `output_tail` is still being followed
@@ -1410,9 +1410,6 @@ end
 --- injection is a separate input the model received. It carries no heading for
 --- the reason `queries/agentic/context.scm` documents — a titled heading over a
 --- fenced body pins the treesitter-context breadcrumb.
----
---- Not persisted: `ChatHistory` has no hook message variant yet, so a restored
---- session shows none of these. Missing work, not a rendering bug.
 --- @param block agentic.ui.MessageWriter.HookBlock
 function MessageWriter:write_hook_block(block)
     local wrapped, table_row_ends =
@@ -1428,7 +1425,7 @@ end
 --- region carrying the skill glyph and led by `skills.title`. Placed under
 --- its anchor while that is in the buffer, appended at the end otherwise. Left
 --- open for a single skill. The rows are not wrapped, so each skill name stays
---- whole. Not persisted, as hook regions are not.
+--- whole.
 --- @param skills agentic.acp.DiscoveredSkills
 function MessageWriter:write_discovered_skills(skills)
     self:_place_collapsed_region(

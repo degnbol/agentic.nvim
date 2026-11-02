@@ -271,6 +271,12 @@ describe("agentic.SessionManager", function()
             local chat_history = ChatHistory:new()
             chat_history.session_id = "s-1"
             chat_history.title = current_title
+            chat_history:add_message({
+                type = "user",
+                text = "do the thing",
+                timestamp = 0,
+                provider_name = "p",
+            })
             chat_history.save = save_spy
             local session = {
                 _title_user_set = user_renamed,
@@ -736,6 +742,7 @@ describe("agentic.SessionManager", function()
                     session_id = nil,
                     timestamp = nil,
                     messages = {},
+                    has_prompt = ChatHistory.has_prompt,
                 },
                 widget = {
                     clear = noop,
@@ -2496,6 +2503,20 @@ describe("agentic.SessionManager", function()
                 _drain_side_records = SessionManager._drain_side_records,
                 _block_id = SessionManager._block_id,
                 _read_agent_record = function() end,
+                _apply_side_tool_call = function()
+                    table.insert(calls, "_apply_side_tool_call")
+                end,
+                _write_received_message = function(self, message)
+                    table.insert(calls, "_write_received_message")
+                    self.chat_history:add_message({
+                        type = "session_message",
+                        message_id = message.message_id,
+                    })
+                end,
+                _history_changed = function()
+                    table.insert(calls, "_history_changed")
+                end,
+                chat_history = ChatHistory:new(),
                 agent = {
                     drain_side_records = function()
                         return sides
@@ -2518,237 +2539,92 @@ describe("agentic.SessionManager", function()
             return session, written, loaded, rows, calls, skills
         end
 
-        it("sends a loaded file to its writer method", function()
-            local file = { path = "/r/a.md", tool_call_id = "toolu_1" }
-            local session, written, loaded = make_session({
+        it("keeps its written records as one history message", function()
+            local hook = { group = "context", body = { "ctx" } }
+            local file = { path = "/r/a.md" }
+            local session, _, _, _, calls = make_session({
+                hook,
+                { kind = "tool_call", tool_call = { tool_call_id = "t1" } },
                 { kind = "loaded_file", loaded_file = file },
-                { group = "context", body = { "ctx" } },
             })
 
             session:_drain_side_records()
 
-            assert.same({ file }, loaded)
-            assert.equal(1, #written)
-        end)
-
-        it("sends each kind of a mixed drain to its writer method", function()
-            local session, _, _, _, calls = make_session({
+            assert.same({
                 {
-                    kind = "discovered_skills",
-                    discovered_skills = {
-                        title = "New skills",
-                        body = { "- foo" },
-                        tool_call_id = "toolu_1",
+                    type = "side_records",
+                    records = {
+                        { kind = "hook", hook = hook },
+                        { kind = "loaded_file", loaded_file = file },
                     },
                 },
-                { kind = "loaded_file", loaded_file = { path = "/r/a.md" } },
-                { group = "context", body = { "ctx" } },
-            })
-
-            session:_drain_side_records()
-
+            }, session.chat_history.messages)
             assert.same({
-                "write_discovered_skills",
+                "_apply_side_tool_call",
+                "write_hook_block",
                 "write_loaded_file",
-                "write_hook_block",
+                "_history_changed",
             }, calls)
         end)
 
-        it("forwards a hook record's prompt and compaction anchors", function()
-            local session, written = make_session({
-                { group = "context", body = { "a" }, after_prompt = true },
-                { group = "stray", body = { "b" }, after_compaction = true },
-            })
-
-            session:_drain_side_records()
-
-            assert.is_true(written[1].after_prompt)
-            assert.is_true(written[2].after_compaction)
-        end)
-
-        it("forwards a pass's prompt anchor to its row", function()
-            local session, _, _, rows = make_session({
-                { group = "passed", body = {}, command = "/h/a.sh" },
+        it("keeps the records around a received message in order", function()
+            local before = { path = "/r/before.md" }
+            local after = { path = "/r/after.md" }
+            local session, _, _, _, calls = make_session({
+                { kind = "loaded_file", loaded_file = before },
                 {
-                    group = "passed",
-                    body = {},
-                    command = "/h/b.sh",
-                    after_prompt = true,
+                    kind = "received_message",
+                    received_message = { message_id = "m1", text = "hi" },
                 },
-            })
-
-            session:_drain_side_records()
-
-            assert.equal("`/h/a.sh`", rows[1].text)
-            assert.is_nil(rows[1].after_prompt)
-            assert.equal("`/h/b.sh`", rows[2].text)
-            assert.is_true(rows[2].after_prompt)
-        end)
-
-        it("renders injected context", function()
-            local session, written = make_session({
-                { group = "context", body = { "ctx" }, command = "guard.sh" },
-            })
-
-            session:_drain_side_records()
-
-            assert.same(
-                { { body = { "ctx" }, title = "`guard.sh`", failed = false } },
-                written
-            )
-        end)
-
-        it("forwards the tool call the record is anchored to", function()
-            local session, written = make_session({
-                {
-                    group = "context",
-                    body = { "ctx" },
-                    command = "guard.sh",
-                    tool_call_id = "toolu_01W2Ve",
-                },
-            })
-
-            session:_drain_side_records()
-
-            assert.equal("toolu_01W2Ve", written[1].tool_call_id)
-        end)
-
-        describe("a block's title", function()
-            --- The title `_drain_side_records` gives a context record.
-            --- @param record table fields over a context record's
-            --- @return string|nil
-            local function title_of(record)
-                local session, written = make_session({
-                    vim.tbl_extend(
-                        "force",
-                        { group = "context", body = { "ctx" } },
-                        record
-                    ),
-                })
-                session:_drain_side_records()
-                return written[1].title
-            end
-
-            it("is the command as a code span, then the duration", function()
-                assert.equal(
-                    '`sh "$ROOT/init.sh"` · 199 ms',
-                    title_of({
-                        command = 'sh "$ROOT/init.sh"',
-                        duration_ms = 199,
-                        hook_name = "SessionStart:startup",
-                    })
-                )
-            end)
-
-            it("is the command alone when no duration is known", function()
-                assert.equal("`guard.sh`", title_of({ command = "guard.sh" }))
-            end)
-
-            it("is the hook name when no command is known", function()
-                assert.equal(
-                    "UserPromptSubmit",
-                    title_of({ hook_name = "UserPromptSubmit" })
-                )
-            end)
-
-            it("is `hook` when neither is known", function()
-                assert.equal("hook", title_of({}))
-            end)
-
-            it("joins a multi-line command onto one row", function()
-                assert.equal(
-                    "`cd /r && ./a.sh`",
-                    title_of({ command = "cd /r &&\n./a.sh" })
-                )
-            end)
-
-            it("keeps a command holding a backtick one span", function()
-                assert.equal(
-                    "`` echo `date` ``",
-                    title_of({ command = "echo `date`" })
-                )
-            end)
-        end)
-
-        it("renders a record whose line did not parse", function()
-            -- The group exists so an unparseable record cannot vanish.
-            local session, written =
-                make_session({ { group = "verbatim", body = { "{ trunc" } } })
-
-            session:_drain_side_records()
-
-            assert.equal(1, #written)
-            assert.same({ "{ trunc" }, written[1].body)
-        end)
-
-        it("marks a failure as failed", function()
-            local session, written = make_session({
-                { group = "failure", body = { "timed out after 600 s" } },
-            })
-
-            session:_drain_side_records()
-
-            assert.is_true(written[1].failed)
-        end)
-
-        it("renders stray output", function()
-            local session, written = make_session({
-                { group = "stray", body = { "leaked" } },
-            })
-
-            session:_drain_side_records()
-
-            assert.equal(1, #written)
-            assert.same({ "leaked" }, written[1].body)
-            assert.is_false(written[1].failed)
-        end)
-
-        it("writes a call's passes as rows after the rest", function()
-            --- @param command string
-            --- @return table
-            local function pass(command)
-                return {
-                    group = "passed",
-                    body = {},
-                    command = command,
-                    tool_call_id = "toolu_1",
-                }
-            end
-            local slow = pass("/hooks/lint.sh")
-            slow.duration_ms = 2760
-            local fast = pass("'/hooks/a guard.sh'")
-            fast.duration_ms = 61
-            local session, written, _, rows, calls = make_session({
-                fast,
-                {
-                    group = "context",
-                    body = { "ctx" },
-                    tool_call_id = "toolu_1",
-                },
-                slow,
-                pass("/hooks/untimed.sh"),
+                { kind = "loaded_file", loaded_file = after },
             })
 
             session:_drain_side_records()
 
             assert.same({
-                "write_hook_block",
-                "write_hook_row",
-                "write_hook_row",
-                "write_hook_row",
-            }, calls)
-            assert.same({ "ctx" }, written[1].body)
+                {
+                    type = "side_records",
+                    records = { { kind = "loaded_file", loaded_file = before } },
+                },
+                { type = "session_message", message_id = "m1" },
+                {
+                    type = "side_records",
+                    records = { { kind = "loaded_file", loaded_file = after } },
+                },
+            }, session.chat_history.messages)
             assert.same({
+                "write_loaded_file",
+                "_write_received_message",
+                "write_loaded_file",
+                "_history_changed",
+            }, calls)
+        end)
+
+        it("keeps nothing without a written record", function()
+            local session, _, _, _, calls = make_session({
+                { kind = "tool_call", tool_call = { tool_call_id = "t1" } },
+            })
+
+            session:_drain_side_records()
+
+            assert.same({}, session.chat_history.messages)
+            assert.same({ "_apply_side_tool_call" }, calls)
+        end)
+
+        it("keeps the subagent block a record was mapped to", function()
+            local session = make_session({
                 {
-                    text = "`'/hooks/a guard.sh'` · 61 ms",
+                    group = "context",
+                    body = { "ctx" },
                     tool_call_id = "toolu_1",
                 },
-                {
-                    text = "`/hooks/lint.sh` · 2.8 s",
-                    tool_call_id = "toolu_1",
-                },
-                { text = "`/hooks/untimed.sh`", tool_call_id = "toolu_1" },
-            }, rows)
+            })
+            session._agent_by_task.toolu_1 = "child-1"
+
+            session:_drain_side_records()
+
+            local stored = session.chat_history.messages[1].records[1]
+            assert.equal("child-1", stored.hook.tool_call_id)
         end)
 
         describe(
@@ -3211,10 +3087,11 @@ describe("agentic.SessionManager", function()
                     session_id = "s-1",
                     add_message = noop,
                     set_title = ChatHistory.set_title,
+                    has_prompt = ChatHistory.has_prompt,
                     save = function(this)
                         this.dirty = false
                     end,
-                    messages = {},
+                    messages = { { type = "user", text = "go" } },
                     title = "",
                     dirty = false,
                 },
@@ -3422,12 +3299,13 @@ describe("agentic.SessionManager", function()
                         table.insert(sink.history_updates, { id, update })
                     end,
                     set_title = ChatHistory.set_title,
+                    has_prompt = ChatHistory.has_prompt,
                     save = function(this)
                         sink.saves = (sink.saves or 0) + 1
                         sink.updates_at_save = #sink.history_updates
                         this.dirty = false
                     end,
-                    messages = {},
+                    messages = { { type = "user", text = "go" } },
                     title = "",
                     dirty = false,
                 },
@@ -5888,6 +5766,9 @@ describe("agentic.SessionManager", function()
                     save = function(this)
                         table.insert(saves, this)
                     end,
+                    has_prompt = function()
+                        return true
+                    end,
                 },
                 agent = { agent_info = { name = "acp", version = "0.66.0" } },
                 widget = { buf_nrs = {} },
@@ -5906,8 +5787,11 @@ describe("agentic.SessionManager", function()
         it("syncs the history it was handed", function()
             local saves = {}
             local session = make_session(saves)
-            local captured =
-                { session_id = "captured", save = session.chat_history.save }
+            local captured = {
+                session_id = "captured",
+                save = session.chat_history.save,
+                has_prompt = session.chat_history.has_prompt,
+            }
 
             session:_persist_history(captured)
 
@@ -5920,6 +5804,18 @@ describe("agentic.SessionManager", function()
             local saves = {}
             local session = make_session(saves)
             session.chat_history.session_id = nil
+
+            session:_persist_history(session.chat_history)
+
+            assert.equal(0, #saves)
+        end)
+
+        it("writes nothing before the user's first prompt", function()
+            local saves = {}
+            local session = make_session(saves)
+            session.chat_history.has_prompt = function()
+                return false
+            end
 
             session:_persist_history(session.chat_history)
 

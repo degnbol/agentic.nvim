@@ -2,6 +2,7 @@ local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
 local FileSystem = require("agentic.utils.file_system")
+local SideRecords = require("agentic.ui.side_records")
 local TextWrap = require("agentic.utils.text_wrap")
 
 --- @class agentic.ui.ChatHistory.UserMessage
@@ -50,6 +51,11 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field error? string The provider's error text
 --- @field agent_key? string Key of the subagent that owns the row: its task id, else its child session id while that is unknown
 
+--- Records a provider wrote outside the ACP feed.
+--- @class agentic.ui.ChatHistory.SideRecordsMessage
+--- @field type "side_records"
+--- @field records agentic.acp.SideRecord[]
+
 --- @alias agentic.ui.ChatHistory.Message
 --- | agentic.ui.ChatHistory.UserMessage
 --- | agentic.ui.ChatHistory.AgentMessage
@@ -57,6 +63,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- | agentic.ui.ChatHistory.ToolCall
 --- | agentic.ui.ChatHistory.SessionMessage
 --- | agentic.ui.ChatHistory.SubagentEnd
+--- | agentic.ui.ChatHistory.SideRecordsMessage
 
 --- The id, working directory, provider and model of a session.
 --- @class agentic.ui.ChatHistory.SessionRef
@@ -216,6 +223,17 @@ function ChatHistory:add_message(msg)
     self.dirty = true
 end
 
+--- Whether the history holds a prompt the user sent.
+--- @return boolean
+function ChatHistory:has_prompt()
+    for _, msg in ipairs(self.messages) do
+        if msg.type == "user" and not msg.synthetic then
+            return true
+        end
+    end
+    return false
+end
+
 --- @param title string
 function ChatHistory:set_title(title)
     self.title = title
@@ -319,6 +337,7 @@ local TOOL_CALL_FIELDS = {
     "background_job_id",
     "output_file",
     "output_ended",
+    "is_compaction",
 }
 
 --- The `TOOL_CALL_FIELDS` of `source`, sharing its values.
@@ -504,7 +523,31 @@ function ChatHistory:save(cwd)
     return err
 end
 
---- A history holding the contents of a session file.
+--- Remove from each `side_records` message of `messages` the records of a
+--- kind `SideRecords` does not write, such as one a newer build stored.
+--- @param messages agentic.ui.ChatHistory.Message[] updated in place
+--- @return string[] kinds the removed kinds, sorted
+local function remove_unknown_side_records(messages)
+    --- @type table<string, true>
+    local unknown = {}
+    for _, msg in ipairs(messages) do
+        if msg.type == "side_records" then
+            msg.records = vim.tbl_filter(function(side)
+                if SideRecords.KINDS[side.kind] then
+                    return true
+                end
+                unknown[tostring(side.kind)] = true
+                return false
+            end, msg.records)
+        end
+    end
+    local kinds = vim.tbl_keys(unknown)
+    table.sort(kinds)
+    return kinds
+end
+
+--- A history holding the contents of a session file. Side records of a kind
+--- this build does not write are dropped with a notification.
 --- @param data agentic.ui.ChatHistory.StorageData
 --- @return agentic.ui.ChatHistory history
 function ChatHistory.from_data(data)
@@ -519,6 +562,13 @@ function ChatHistory.from_data(data)
         return msg.type ~= "subagent_event"
     end
     instance.messages = vim.tbl_filter(current, data.messages)
+    local unknown_kinds = remove_unknown_side_records(instance.messages)
+    if #unknown_kinds > 0 then
+        Logger.notify(
+            "Agentic: skipped side records of unknown kind: "
+                .. table.concat(unknown_kinds, ", ")
+        )
+    end
     instance.subagent_messages =
         vim.tbl_filter(current, data.subagent_messages or {})
     instance.subagents = data.subagents or {}

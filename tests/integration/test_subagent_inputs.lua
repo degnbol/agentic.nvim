@@ -595,6 +595,9 @@ describe("subagent permission prompts", function()
         child.setup()
         child.lua(SETUP)
         child.lua([[
+_G.s.chat_history:add_message({
+    type = "user", text = "go", timestamp = 0, provider_name = "p",
+})
 _G.spawn("c1")
 _G.request = function()
     _G.s:_on_request_permission({
