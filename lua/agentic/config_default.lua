@@ -375,6 +375,7 @@ local ConfigDefault = {
         cancelled = "󰜺",
         -- Same glyph as the header's running state: both mean "still running".
         background = "󰔟",
+        stopped = "󰓛",
     },
 
     --- Icons used for diagnostics in the context panel

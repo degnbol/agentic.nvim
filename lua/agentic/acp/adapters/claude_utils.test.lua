@@ -23,6 +23,35 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
         end)
     end)
 
+    describe("stopped_task", function()
+        it("reads task_id, else shell_id", function()
+            assert.equal("t-7", ClaudeUtils.stopped_task({ task_id = "t-7" }))
+            assert.equal("s-2", ClaudeUtils.stopped_task({ shell_id = "s-2" }))
+        end)
+
+        it("gives nil for an empty or absent id", function()
+            assert.is_nil(ClaudeUtils.stopped_task({ task_id = "" }))
+            assert.is_nil(ClaudeUtils.stopped_task({}))
+        end)
+    end)
+
+    describe("task_stop_result", function()
+        it("reads the task id of a result", function()
+            assert.equal(
+                "bdod3zl0w",
+                ClaudeUtils.task_stop_result({
+                    '{"message":"Successfully stopped task: bdod3zl0w","task_id":"bdod3zl0w","task_type":"local_bash"}',
+                })
+            )
+        end)
+
+        it("gives nil for a body that is not such an object", function()
+            assert.is_nil(ClaudeUtils.task_stop_result({ "No task found" }))
+            assert.is_nil(ClaudeUtils.task_stop_result({ '{"message":"x"}' }))
+            assert.is_nil(ClaudeUtils.task_stop_result(nil))
+        end)
+    end)
+
     describe("background_task", function()
         local path = "/private/tmp/claude-501/proj/tasks/b7x2k9.output"
 

@@ -1155,7 +1155,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             end)
         end)
 
-        describe("the task-control family", function()
+        describe("TaskStop", function()
             --- @param toolName string
             --- @param rawInput table
             --- @return agentic.ui.MessageWriter.ToolCallBase message
@@ -1170,25 +1170,49 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
                 })
             end
 
-            -- One glyph covers the family, so the head has to name which
-            -- operation ran.
-            it("keeps the operation in the head", function()
-                local stop = task_update("TaskStop", { task_id = "t-7" })
-                local output = task_update("TaskOutput", { task_id = "t-7" })
+            it("heads with the id of the job it stops", function()
+                for _, input in ipairs({
+                    { task_id = "t-7" },
+                    { shell_id = "t-7" },
+                }) do
+                    local msg = task_update("TaskStop", input)
 
-                assert.equal("TaskControl", stop.kind)
-                assert.equal("TaskStop: t-7", stop.argument)
-                assert.equal("TaskControl", output.kind)
-                assert.equal("TaskOutput: t-7", output.argument)
+                    assert.equal("TaskStop", msg.kind)
+                    assert.equal("t-7", msg.argument)
+                    assert.equal("t-7", msg.stopped_job_id)
+                end
             end)
 
-            -- `task_id` is optional on TaskStop (it stops every task without
-            -- one), so the name-only head is the whole head, not a prefix
-            -- waiting for a field.
-            it("renders name-only without a task id", function()
-                local msg = task_update("TaskStop", { description = "halt" })
+            it("takes the job id from a completed result", function()
+                local msg = make_adapter():__build_tool_call_update({
+                    toolCallId = "tc-task",
+                    status = "completed",
+                    content = {
+                        {
+                            type = "content",
+                            content = {
+                                type = "text",
+                                text = vim.json.encode({
+                                    message = "Successfully stopped task: b9",
+                                    task_id = "b9",
+                                    task_type = "local_bash",
+                                }),
+                            },
+                        },
+                    },
+                    _meta = { claudeCode = { toolName = "TaskStop" } },
+                })
 
-                assert.equal("TaskStop", msg.argument)
+                assert.equal("b9", msg.stopped_job_id)
+                -- The name-only head is empty, which would erase the head
+                -- an earlier update set.
+                assert.is_nil(msg.argument)
+            end)
+
+            it("leaves TaskOutput the bridge's kind", function()
+                local msg = task_update("TaskOutput", { task_id = "t-7" })
+
+                assert.is_nil(msg.kind)
             end)
         end)
 

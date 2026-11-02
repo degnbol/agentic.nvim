@@ -207,17 +207,36 @@ function Subagents:transcript(child_id)
     return transcript
 end
 
+--- The subagent whose stored messages are keyed `agent_key`: the one the key
+--- routes to as a task id, else the one keyed by its child id.
+--- @param agent_key string
+--- @return string|nil child_id Nil when no subagent has them
+function Subagents:_child_of_key(agent_key)
+    local child_id = self._agent_by_task[agent_key] or agent_key
+    return self._agents[child_id] and child_id or nil
+end
+
 --- The transcript of the subagent whose stored messages are keyed
---- `agent_key`, loaded and rendered: the subagent the key routes to as a
---- task id, else the one keyed by its child id. Nil when no subagent has them.
+--- `agent_key`, loaded and rendered. Nil when no subagent has them.
 --- @param agent_key string
 --- @return agentic.ui.SubagentTranscript|nil
 function Subagents:transcript_of_key(agent_key)
-    local child_id = self._agent_by_task[agent_key] or agent_key
-    if not self._agents[child_id] then
-        return nil
+    local child_id = self:_child_of_key(agent_key)
+    return child_id and self:transcript(child_id)
+end
+
+--- The transcript of the subagent whose stored messages are keyed
+--- `agent_key`, when it exists and its buffer is loaded. Makes, loads and
+--- renders nothing.
+--- @param agent_key string
+--- @return agentic.ui.SubagentTranscript|nil
+function Subagents:loaded_transcript_of_key(agent_key)
+    local child_id = self:_child_of_key(agent_key)
+    local transcript = child_id and self._agents[child_id].transcript
+    if transcript and vim.api.nvim_buf_is_loaded(transcript.bufnr) then
+        return transcript
     end
-    return self:transcript(child_id)
+    return nil
 end
 
 --- Give each subagent the history holds a transcript, unloaded, so it renders

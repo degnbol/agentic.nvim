@@ -70,12 +70,16 @@ local function footer_note(block)
     return table.concat(deciders, ", ")
 end
 
---- The word a tool call's status footer shows: `background` while its output
---- is followed, else its status. The status itself stays the provider's, so a
+--- The word a tool call's status footer shows: `stopped` when the call
+--- completed and another call stopped its background job, `background` while
+--- its output is followed, else its status. The status itself stays the provider's, so a
 --- running background command is not taken for an unresolved call.
 --- @param block agentic.ui.MessageWriter.ToolCallBlock
 --- @return string
 local function footer_status(block)
+    if block.stopped_by and block.status == "completed" then
+        return "stopped"
+    end
     return block.output_live and "background" or block.status
 end
 
@@ -134,6 +138,9 @@ end
 --- @field output_file? string Absolute path of the file the command's own output goes to
 --- @field output_ended? boolean The command has ended. Only meaningful with `output_file`
 --- @field is_compaction? boolean The block reports a compaction of the conversation
+--- @field stopped_job_id? string `background_job_id` of the job this call stops
+--- @field stopped_job_output_file? string `output_file` of the job this call stops
+--- @field stopped_by? string Tool call id of the call that stopped this call's background job
 
 --- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
 --- @field kind agentic.acp.ToolKind
@@ -2104,6 +2111,14 @@ function MessageWriter:_block_rows(block)
         return nil, nil
     end
     return pos[1], details.end_row
+end
+
+--- The head row of a tracked tool call block.
+--- @param tool_call_id string
+--- @return integer|nil row 0-indexed; nil when the call is untracked or its range extmark is gone
+function MessageWriter:tool_call_row(tool_call_id)
+    local block = self.tool_call_blocks[tool_call_id]
+    return block and (self:_block_rows(block))
 end
 
 --- Stamp the per-turn token-usage footer on the trailing blank line that

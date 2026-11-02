@@ -607,9 +607,10 @@ end
 
 --- 'tagfunc' (`:h tag-function`) over this session's buffers: each message id
 --- is a tag at the message's rows, rows in other buffers before the current
---- buffer's. With the `c` flag (`CTRL-]`) the tag is the message whose row
---- holds the cursor, instead of `pattern`. `vim.NIL` (a standard lookup) when
---- nothing matches.
+--- buffer's, and each background job id a tag at the head of the job's block.
+--- With the `c` flag (`CTRL-]`) the tag is the message whose row holds the
+--- cursor, else the job the tool call block there stops, instead of
+--- `pattern`. `vim.NIL` (a standard lookup) when nothing matches.
 --- @param pattern string
 --- @param flags string
 --- @return { name: string, filename: string, cmd: string }[]|vim.NIL
@@ -617,31 +618,54 @@ function SessionManager:_tagfunc(pattern, flags)
     local current = vim.api.nvim_get_current_buf()
     local at_cursor = flags:find("c", 1, true) ~= nil
     --- @type string|nil
-    local message_id = pattern
+    local name = pattern
     if at_cursor then
         local writer = self:_writer_of_buf(current)
         local row = vim.api.nvim_win_get_cursor(0)[1] - 1
-        message_id = writer and writer:notice_at(row)
+        name = writer and writer:notice_at(row)
+        if writer and not name then
+            local block = DiffJump.find_block_at_row(
+                current,
+                row,
+                writer.tool_call_blocks
+            )
+            name = block and block.stopped_job_id
+        end
     end
-    if not message_id then
+    if not name then
         return vim.NIL
     end
     local tags = {}
     --- @type agentic.ui.MessageWriter|nil
     local first_other
-    for _, writer in ipairs(self:_writers_of_message(message_id)) do
-        local row = writer:notice_row(message_id)
+    --- @param writer agentic.ui.MessageWriter
+    --- @param row integer 0-indexed
+    local function add_tag(writer, row)
+        local tag = {
+            name = name,
+            filename = vim.api.nvim_buf_get_name(writer.bufnr),
+            cmd = tostring(row + 1),
+        }
+        if writer.bufnr == current then
+            table.insert(tags, tag)
+        else
+            table.insert(tags, 1, tag)
+            first_other = writer
+        end
+    end
+    for _, writer in ipairs(self:_writers_of_message(name)) do
+        local row = writer:notice_row(name)
         if row then
-            local tag = {
-                name = message_id,
-                filename = vim.api.nvim_buf_get_name(writer.bufnr),
-                cmd = tostring(row + 1),
-            }
-            if writer.bufnr == current then
-                table.insert(tags, tag)
-            else
-                table.insert(tags, 1, tag)
-                first_other = writer
+            add_tag(writer, row)
+        end
+    end
+    if #tags == 0 then
+        local record = self:_background_job_record(name)
+        local target = record and self:_record_writer(record, true)
+        if record and target then
+            local row = target:tool_call_row(record.tool_call_id)
+            if row then
+                add_tag(target, row)
             end
         end
     end
@@ -669,6 +693,97 @@ function SessionManager:_writers_of_message(message_id)
         end
     end
     return writers
+end
+
+--- The history record of the tool call that went to the background as
+--- `job_id`: the main agent's newest, else the subagents' newest.
+--- @param job_id string
+--- @return agentic.ui.ChatHistory.ToolCall|nil
+function SessionManager:_background_job_record(job_id)
+    local history = self.chat_history
+    for _, list in ipairs({ history.messages, history.subagent_messages }) do
+        for i = #list, 1, -1 do
+            local msg = list[i]
+            if msg.type == "tool_call" and msg.background_job_id == job_id then
+                return msg
+            end
+        end
+    end
+    return nil
+end
+
+--- The writer of the buffer that renders a tool call record: the chat's, or
+--- its subagent's transcript's.
+--- @param record agentic.ui.ChatHistory.ToolCall
+--- @param make boolean Make, load and render the transcript when needed
+--- @return agentic.ui.MessageWriter|nil writer Nil when the transcript does not exist, or with `make` false, is not loaded
+function SessionManager:_record_writer(record, make)
+    local agent_key = record.agent_key
+    if not agent_key then
+        return self.message_writer
+    end
+    local transcript
+    if make then
+        transcript = self._subagents:transcript_of_key(agent_key)
+    else
+        transcript = self._subagents:loaded_transcript_of_key(agent_key)
+    end
+    return transcript and transcript.writer
+end
+
+--- Merge `update` into a tool call's history record, and into its block when
+--- `writer` tracks it. Does not persist the history.
+--- @param writer agentic.ui.MessageWriter|nil
+--- @param fields { tool_call_id: string } `ToolCallBase` fields; those left out stay as they are
+function SessionManager:_apply_tool_call_fields(writer, fields)
+    local update = fields --[[@as agentic.ui.MessageWriter.ToolCallBase]]
+    local id = update.tool_call_id
+    if writer and writer.tool_call_blocks[id] then
+        writer:update_tool_call_block(update)
+    end
+    self.chat_history:update_tool_call(id, ChatHistory.tool_call_record(update))
+end
+
+--- Link a call that stops a background job to the job's block: head it with
+--- the job's description and show the job's output file, and once the stop
+--- has completed, mark the job's block stopped. Does nothing for a call that
+--- stops no job, or a job with no record in the history. Does not persist the
+--- history.
+--- @param tool_call_id string
+function SessionManager:_sync_job_stop(tool_call_id)
+    local writer = self:_writer_for(tool_call_id)
+    local tracker = writer.tool_call_blocks[tool_call_id]
+    local job_id = tracker and tracker.stopped_job_id
+    local record = job_id and self:_background_job_record(job_id)
+    if not record then
+        return
+    end
+
+    local description = record.description
+    if description == "" then
+        description = nil
+    end
+    -- Compared, not set once: a later update can set the head back to the
+    -- job id.
+    if
+        (description and description ~= tracker.argument)
+        or record.output_file ~= tracker.stopped_job_output_file
+    then
+        self:_apply_tool_call_fields(writer, {
+            tool_call_id = tool_call_id,
+            argument = description,
+            stopped_job_output_file = record.output_file,
+        })
+    end
+
+    if tracker.status == "completed" and not record.stopped_by then
+        -- A transcript that is not loaded renders the field from the history
+        -- when it loads.
+        self:_apply_tool_call_fields(self:_record_writer(record, false), {
+            tool_call_id = record.tool_call_id,
+            stopped_by = tool_call_id,
+        })
+    end
 end
 
 --- Bind the widget keymaps that act on a whole session to a buffer of this
@@ -1522,6 +1637,7 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
     local tool_msg = ChatHistory.tool_call_record(tool_call)
     tool_msg.agent_key = agent_key
     self.chat_history:add_message(tool_msg)
+    self:_sync_job_stop(id)
     if agent_key then
         self:_sync_modified(self.chat_history)
     else
@@ -2020,6 +2136,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         id,
         ChatHistory.tool_call_record(tool_call_update)
     )
+    self:_sync_job_stop(id)
     -- A subagent can outlive its turn, so outside a turn its output is written
     -- as each of its calls ends, not per update.
     if is_subagent and not has_ended(tool_call_update.status) then

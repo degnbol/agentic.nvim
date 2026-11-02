@@ -68,8 +68,7 @@ end
 --- the agent-orchestration family it has no display formatter either, so its
 --- default branch titles them with the bare tool name — a gear glyph beside a
 --- word the gutter should be saying. Tools doing one act share one kind
---- (`TaskStop`/`TaskOutput`, the three `Cron*`), and the head tells them apart
---- — see `tool_head`.
+--- (the three `Cron*`), and the head tells them apart — see `tool_head`.
 ---
 --- Every value needs a `Glyphs.KIND` entry, or the kind renders a gear that
 --- reads as an unrecognised tool; `claude_agent_acp_adapter.test.lua` asserts
@@ -88,8 +87,7 @@ M.TOOL_KINDS = {
     ListAgents = "ListAgents",
     Monitor = "Monitor",
     ScheduleWakeup = "ScheduleWakeup",
-    TaskStop = "TaskControl",
-    TaskOutput = "TaskControl",
+    TaskStop = "TaskStop",
     CronCreate = "Cron",
     CronDelete = "Cron",
     CronList = "Cron",
@@ -150,6 +148,14 @@ local function qualified(subject, detail)
     return detail and (subject .. ": " .. detail) or subject
 end
 
+--- The id of the background task a `TaskStop` input names: `task_id`, else
+--- the deprecated `shell_id`.
+--- @param raw_input agentic.acp.ClaudeAgentRawInput
+--- @return string|nil
+function M.stopped_task(raw_input)
+    return nonempty(raw_input, "task_id") or nonempty(raw_input, "shell_id")
+end
+
 --- Head text per minted kind. A head drops the tool name exactly when the
 --- glyph is unique to that tool, and keeps it when the glyph is a family's —
 --- so the family builders read the name and the rest return "" until their
@@ -186,8 +192,8 @@ local HEADS = {
     SlashCommand = function()
         return ""
     end,
-    TaskControl = function(raw_input, tool_name)
-        return qualified(tool_name, nonempty(raw_input, "task_id"))
+    TaskStop = function(raw_input)
+        return M.stopped_task(raw_input) or ""
     end,
     Cron = function(raw_input, tool_name)
         return qualified(tool_name, nonempty(raw_input, "cron"))
@@ -216,6 +222,18 @@ function M.tool_head(kind, raw_input, tool_name)
     return build(raw_input, tool_name)
 end
 
+--- The JSON object a tool result's body holds.
+--- @param body string[]|nil The call's body
+--- @return table|nil object Nil when the body is not a JSON object
+local function json_object(body)
+    if not body then
+        return nil
+    end
+    -- Most results are plain text; failing to parse is the common case.
+    local ok, decoded = pcall(vim.json.decode, table.concat(body, "\n"))
+    return ok and type(decoded) == "table" and decoded or nil
+end
+
 --- The text and outcome of a messaging tool's result (`SendMessage`,
 --- `SubagentHandback`): a JSON object whose `message` is the text for the
 --- reader and whose `success` says whether the message was delivered.
@@ -223,18 +241,8 @@ end
 --- @return string[]|nil lines `message` split into lines, nil when the body is not such an object
 --- @return boolean|nil delivered `success`, nil when it is not a boolean
 function M.message_result(body)
-    if not body then
-        return nil, nil
-    end
-    -- Most results are plain text; failing to parse is the common case.
-    local ok, decoded = pcall(vim.json.decode, table.concat(body, "\n"))
-    if
-        not (
-            ok
-            and type(decoded) == "table"
-            and type(decoded.message) == "string"
-        )
-    then
+    local decoded = json_object(body)
+    if not (decoded and type(decoded.message) == "string") then
         return nil, nil
     end
     local delivered = decoded.success
@@ -242,6 +250,17 @@ function M.message_result(body)
         delivered = nil
     end
     return vim.split(decoded.message, "\n", { plain = true }), delivered
+end
+
+--- The `task_id` of a `TaskStop` result, a JSON object.
+--- @param body string[]|nil The call's body
+--- @return string|nil task_id Nil when the body is not such an object
+function M.task_stop_result(body)
+    local decoded = json_object(body)
+    if not (decoded and type(decoded.task_id) == "string") then
+        return nil
+    end
+    return decoded.task_id
 end
 
 --- Content of the `<tool_use_error>` element that Claude Code wraps around a

@@ -609,6 +609,135 @@ end
         )
     end)
 
+    describe("a stop of a background job", function()
+        before_each(function()
+            child.lua([[
+-- A background command as job `b9`, from the main agent or a subagent.
+_G.bash = function(source, task_id)
+    _G.s:_on_tool_call({
+        tool_call_id = "t-bg", kind = "execute", argument = "tail -f log",
+        description = "Watch the logs", status = "completed",
+        background_job_id = "b9", output_ended = true, task_id = task_id,
+    }, source)
+end
+_G.stop = function()
+    _G.s:_on_tool_call({
+        tool_call_id = "t-stop", kind = "TaskStop", argument = "b9",
+        status = "in_progress", stopped_job_id = "b9",
+    })
+    _G.s:_on_tool_call_update({ tool_call_id = "t-stop", status = "completed" })
+end
+_G.bg_record = function()
+    for _, msg in ipairs(_G.s.chat_history.subagent_messages) do
+        if msg.tool_call_id == "t-bg" then
+            return msg
+        end
+    end
+end
+]])
+        end)
+
+        it("marks a job in a loaded transcript stopped", function()
+            child.lua([[
+_G.spawn("c1")
+_G.bash("c1", "toolu_c1")
+_G.stop()
+]])
+
+            assert.equal("t-stop", child.lua_get("_G.bg_record().stopped_by"))
+            assert.equal(
+                "t-stop",
+                child.lua_get(
+                    [[_G.transcript("c1").writer.tool_call_blocks["t-bg"].stopped_by]]
+                )
+            )
+            assert.truthy(
+                child.lua_get([[_G.ttext("c1")]]):find("stopped", 1, true)
+            )
+        end)
+
+        it("marks a job in an unloaded transcript stopped on reload", function()
+            child.lua([[
+_G.spawn("c1")
+_G.bash("c1", "toolu_c1")
+_G.transcript("c1"):unload()
+_G.stop()
+]])
+
+            assert.equal("t-stop", child.lua_get("_G.bg_record().stopped_by"))
+            assert.truthy(
+                child
+                    .lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]])
+                    :find("### Watch the logs", 1, true)
+            )
+            assert.is_false(
+                child.lua_get(
+                    [[vim.api.nvim_buf_is_loaded(_G.transcript("c1").bufnr)]]
+                )
+            )
+
+            child.lua([[vim.fn.bufload(_G.transcript("c1").bufnr)]])
+            assert.truthy(
+                child.lua_get([[_G.ttext("c1")]]):find("stopped", 1, true)
+            )
+        end)
+
+        it("CTRL-] on the stop jumps to the job's block", function()
+            child.lua([[
+_G.bash()
+_G.stop()
+]])
+            child.flush()
+            child.lua([[
+vim.api.nvim_set_current_win(_G.s.widget:home_win())
+vim.api.nvim_win_set_cursor(
+    0, { _G.s.message_writer:tool_call_row("t-stop") + 2, 0 }
+)
+]])
+            child.type_keys("<C-]>")
+
+            assert.equal(
+                child.lua_get([[_G.s.message_writer:tool_call_row("t-bg") + 1]]),
+                child.lua_get("vim.fn.line('.')")
+            )
+        end)
+
+        it(":tag with the job id makes the job's transcript again", function()
+            child.lua([[
+_G.spawn("c1")
+_G.bash("c1", "toolu_c1")
+vim.cmd.bwipeout({ args = { tostring(_G.transcript("c1").bufnr) }, bang = true })
+vim.api.nvim_set_current_win(_G.s.widget:home_win())
+vim.cmd("tag b9")
+-- Read the cursor now: a `:tag` jump does not stop following, which moves it.
+_G.landed = vim.api.nvim_win_get_cursor(0)[1]
+]])
+
+            assert.equal(
+                child.lua_get([[_G.transcript("c1").bufnr]]),
+                child.api.nvim_get_current_buf()
+            )
+            assert.equal(
+                child.lua_get(
+                    [[_G.transcript("c1").writer:tool_call_row("t-bg") + 1]]
+                ),
+                child.lua_get("_G.landed")
+            )
+        end)
+
+        it("a block that stops no job is no tag", function()
+            child.lua([[
+_G.bash()
+vim.api.nvim_set_current_win(_G.s.widget:home_win())
+vim.api.nvim_win_set_cursor(
+    0, { _G.s.message_writer:tool_call_row("t-bg") + 1, 0 }
+)
+]])
+
+            assert.is_true(child.lua_get([[_G.s:_tagfunc("", "c") == vim.NIL]]))
+        end)
+    end)
+
     it("an incoming view without a sender has no path", function()
         child.lua([[
 _G.spawn("c1")

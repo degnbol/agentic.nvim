@@ -40,10 +40,10 @@ Glyphs.HEADER_STATE = {
 --- granularity, and the diff already separates them.
 ---
 --- The agent-orchestration family is the other place one glyph covers several
---- tools: `taskcontrol` and `cron` are a family each, and their head names the
---- operation. `md-robot_outline` against `subagent`'s filled 󰚩, and `md-alarm` or `md-autorenew` against the round `status_icons` faces, are
---- the outline-vs-filled indistinguishability this module exists to prevent —
---- hence a tray and a calendar.
+--- tools: `cron` is a family, and its head names the operation. `md-alarm` or
+--- `md-autorenew` against the round `status_icons` faces are the
+--- outline-vs-filled indistinguishability this module exists to prevent —
+--- hence a calendar.
 --- @type table<string, string>
 Glyphs.KIND = {
     read = "󰈈",
@@ -69,7 +69,7 @@ Glyphs.KIND = {
     -- A radar sweeping until a condition holds, rather than `md-monitor_eye`,
     -- which reads as a screen and collides in spirit with `read`'s eye.
     monitor = "󰐷",
-    taskcontrol = "󱊖",
+    taskstop = "󰓛",
     -- A "Z" for a single fire, against `cron`'s recurring calendar.
     schedulewakeup = "󰒲",
     cron = "󰃰",

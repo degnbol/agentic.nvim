@@ -3759,6 +3759,49 @@ describe("agentic.ui.MessageWriter", function()
             writer:set_output_tail("other", { "a" }, true)
             assert.is_nil(row_of("a"))
         end)
+
+        it(
+            "reads stopped once another call stopped it, also while live",
+            function()
+                writer:set_output_tail("bg", { "a" }, true)
+                writer:update_tool_call_block({
+                    tool_call_id = "bg",
+                    status = "completed",
+                    stopped_by = "tc-stop",
+                })
+
+                assert.truthy(footer():find("stopped", 1, true))
+                assert.is_nil(footer():find("background", 1, true))
+            end
+        )
+    end)
+
+    describe("tool_call_row", function()
+        --- @type TestStub
+        local schedule_stub
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+        end)
+
+        after_each(function()
+            schedule_stub:revert()
+        end)
+
+        it("gives the head row of a tracked block, nil otherwise", function()
+            writer:write_message_chunk(make_message_update("before"))
+            writer:write_tool_call_block(
+                make_tool_call_block("tc-a", "completed")
+            )
+
+            local row = writer:tool_call_row("tc-a")
+            assert.is_not_nil(row)
+            ---@cast row integer
+            local head =
+                vim.api.nvim_buf_get_lines(bufnr, row, row + 1, true)[1]
+            assert.truthy(head:match("^###"))
+            assert.is_nil(writer:tool_call_row("other"))
+        end)
     end)
 
     describe("long command formatting", function()

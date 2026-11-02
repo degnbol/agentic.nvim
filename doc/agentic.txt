@@ -45,6 +45,7 @@ CONTENTS                                                    *agentic-contents*
        9.5 File activity ............................. |agentic-file-activity|
        9.6 Session info ................................ |agentic-info-panel|
        9.7 Subagents ..................................... |agentic-subagents|
+       9.8 Tags ............................................... |agentic-tags|
    10. Highlight groups ................................. |agentic-highlights|
    11. Autocmds ........................................... |agentic-autocmds|
    12. Health check ......................................... |agentic-health|
@@ -373,10 +374,9 @@ All options with defaults are in `lua/agentic/config_default.lua`.
         Register to copy the sent text into before a partial send deletes
         it from the input buffer. Nil writes no register.
     `write_submit`                   boolean (default: true)
-        `:w` in the input buffer submits it, also during a usage limit, so
-        `:wq` and `:x` submit and close the input window. The input is
-        'modified' while it holds text, so |:qa| refuses to quit. When
-        false the input is a plain buffer.
+        `:w` in the input buffer submits it, also during a usage limit. The
+        input is 'modified' while it holds text. When false the input is a
+        plain buffer.
 
 ------------------------------------------------------------------------------
 4.9 MISCELLANEOUS                                        *agentic-config-misc*
@@ -429,7 +429,8 @@ All options with defaults are in `lua/agentic/config_default.lua`.
                                                  *agentic-config-status_icons*
 `status_icons` table
     Tool call state icons: `pending`, `in_progress`, `completed`, `failed`,
-    `cancelled`, and `background` for a background command still running.
+    `cancelled`, `background` for a background command still running, and
+    `stopped` for one the agent stopped.
 
                                              *agentic-config-diagnostic_icons*
 `diagnostic_icons` table
@@ -636,14 +637,10 @@ What the queue bindings dispatch, and when, is in |agentic-queue|.
 
 `[[` and `]]` also move between the rows of a subagent transcript.
 
-|gf|, |CTRL-W_f| and |CTRL-W_gf| open file and buffer names in the chat and
-the subagent transcripts. On `/skill` in the chat, the transcripts, the input
-and the todos, they open that skill's SKILL.md. On a diff row where they find
-no file, they open the edited file at that row's line: in the window, in a
-split, or in a new tabpage. A count is ignored there.
-
-Tool output over its line threshold (|agentic-config-tool-display|) is
-folded; |zo|, |zc| and |za| toggle a fold as usual.
+On `/skill` in the chat, the transcripts, the input and the todos, |gf|,
+|CTRL-W_f| and |CTRL-W_gf| open that skill's SKILL.md. On a diff row where
+they find no file, they open the edited file at that row's line. A count is
+ignored there.
 
 A `to_input` key moves to an input and runs there as typed, at the input's
 cursor, with its count, register and user mappings: from a background
@@ -968,7 +965,7 @@ Notices, errors and the session-start line are not saved: `:e` and a
 restore do not render them again.
 
 A session with no messages and an empty input ends when no window shows its
-chat: after |:q| on its chat window, or |:e| or |gf| there.
+chat.
 
 The chat shows in any window, like any buffer. Its panels attach to one
 window showing it, the chat's window: the first window the chat enters
@@ -986,8 +983,7 @@ When the chat's window closes or shows another buffer, its panels close.
 quit, they open again.
 
 A panel window can show any buffer. While it shows a buffer that is not its
-panel's, it is not a panel window. A 'winfixbuf' set in `win_opts` stops |gf|
-and |:e| in that window.
+panel's, it is not a panel window.
 
 ------------------------------------------------------------------------------
 9.2 FOLLOW                                                    *agentic-follow*
@@ -1141,10 +1137,6 @@ its first sentence. The sign gives the kind:
     󰒊     Any other message, sent
     󰇮     Any other message, received
 
-Each message is a tag named by its id, defined at each of its rows: |CTRL-]|
-on one of two rows jumps to the other, |CTRL-T| jumps back, and |:tag| or
-|:tselect| with the id lists them.
-
 Each subagent also has a block in the chat, which records its launch:
 
     Line             Content ~
@@ -1153,8 +1145,7 @@ Each subagent also has a block in the chat, which records its launch:
     Footer           `completed`
 
 The mode is `Background` or `Blocking`, with a `?` until the SDK's record
-of the spawn confirms it; the type shows once that record is read. |gf|,
-|CTRL-W_f| or |CTRL-W_gf| on the name line opens the transcript.
+of the spawn confirms it; the type shows once that record is read.
 
 A provider crash and a session switch end every running subagent. A cancel
 ends the subagents that the provider then reports ended.
@@ -1173,6 +1164,21 @@ that subagent; the main agent's turn goes on.
 
 Transcripts are saved with the session (|agentic-buffers|) and come back on
 load and restore.
+
+------------------------------------------------------------------------------
+9.8 TAGS                                                        *agentic-tags*
+
+Some rows of the chat and the subagent transcripts are tags. Tags come back
+with a restored session.
+
+    Tag                  Defined at ~
+    Message id           Each row of a message between agents
+                         (|agentic-subagents|)
+    Background job id    The block of the command the agent sent to the
+                         background
+
+|CTRL-]| on a message row jumps to the message's other row. On the block of
+a call that stops a background job, it jumps to that job's block.
 
 ==============================================================================
 10. HIGHLIGHT GROUPS                                      *agentic-highlights*

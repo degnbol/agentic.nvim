@@ -130,7 +130,6 @@ local CODE_KINDS = {
     fetch = true,
     search = true,
     mcp = true,
-    taskcontrol = true,
     cron = true,
 }
 
@@ -669,6 +668,13 @@ local BODIES = {
         section.matches =
             GrepHighlights.for_command(section.rows, call.argument)
         return { section }
+    end,
+
+    -- The result repeats the command; the stopped job's output is what is
+    -- left to read.
+    taskstop = function(call)
+        local path = call.block.stopped_job_output_file
+        return path and { path_row(path) } or {}
     end,
 
     fetch = sidecar_body,

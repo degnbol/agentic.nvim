@@ -841,6 +841,42 @@ describe("agentic.ui.ToolCallLayout", function()
         end)
     end)
 
+    describe("taskstop", function()
+        --- @param output_file string|nil
+        --- @param failure_reason string[]|nil
+        --- @return string[] lines
+        local function taskstop_lines(output_file, failure_reason)
+            return Layout.build({
+                tool_call_id = "tc-stop",
+                status = failure_reason and "failed" or "completed",
+                kind = "TaskStop",
+                argument = "Watch the logs",
+                body = { '{"task_id":"b9","command":"tail -f log"}' },
+                stopped_job_output_file = output_file,
+                failure_reason = failure_reason,
+            }, 80, strwidth).lines
+        end
+
+        it(
+            "shows the stopped job's output path in place of the body",
+            function()
+                assert.same(
+                    { "### Watch the logs", "/tmp/tasks/b9.output", "" },
+                    taskstop_lines("/tmp/tasks/b9.output")
+                )
+            end
+        )
+
+        it("renders the head alone without an output path", function()
+            assert.same({ "### Watch the logs", "" }, taskstop_lines(nil))
+        end)
+
+        it("shows the reason of a failed stop", function()
+            local lines = taskstop_lines(nil, { "No task found" })
+            assert.is_true(vim.tbl_contains(lines, "No task found"))
+        end)
+    end)
+
     describe("buffer side effects", function()
         --- Render `block`, reporting how many buffers the render added and the
         --- lines it produced. Measures a single render: `bufadd` is idempotent

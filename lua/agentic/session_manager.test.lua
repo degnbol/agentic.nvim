@@ -2133,6 +2133,7 @@ describe("agentic.SessionManager", function()
                 end,
                 _drain_side_records_of = SessionManager._drain_side_records_of,
                 _sync_output_tail = SessionManager._sync_output_tail,
+                _sync_job_stop = SessionManager._sync_job_stop,
             } --[[@as agentic.SessionManager]]
             with_subagents(session)
             session._subagents.read_record = function() end
@@ -4594,6 +4595,10 @@ describe("agentic.SessionManager", function()
                 _on_tool_call = SessionManager._on_tool_call,
                 _on_tool_call_update = SessionManager._on_tool_call_update,
                 _on_permission_decided = SessionManager._on_permission_decided,
+                _sync_job_stop = SessionManager._sync_job_stop,
+                _background_job_record = SessionManager._background_job_record,
+                _record_writer = SessionManager._record_writer,
+                _apply_tool_call_fields = SessionManager._apply_tool_call_fields,
             } --[[@as agentic.SessionManager]]
             with_subagents(session)
             pm.on_decided = function(id, deciders)
@@ -4647,6 +4652,157 @@ describe("agentic.SessionManager", function()
             assert.equal("grep x f", record.argument)
             assert.equal("execute", record.kind)
             assert.equal("completed", record.status)
+        end)
+
+        describe("a stop of a background job", function()
+            local PATH = "/tmp/agentic-test-missing/tasks/b9.output"
+
+            before_each(function()
+                session._output_tails = {}
+                session._show_final_tail = SessionManager._show_final_tail
+            end)
+
+            --- A background command, already ended, as job `b9`.
+            --- @param output_file string|nil
+            local function background_command(output_file)
+                session:_on_tool_call({
+                    tool_call_id = "tc-bg",
+                    kind = "execute",
+                    argument = "tail -f log",
+                    description = "Watch the logs",
+                    status = "completed",
+                    background_job_id = "b9",
+                    output_file = output_file,
+                    output_ended = true,
+                })
+            end
+
+            --- @param job_id string
+            local function stop(job_id)
+                session:_on_tool_call({
+                    tool_call_id = "tc-stop",
+                    kind = "TaskStop",
+                    argument = job_id,
+                    status = "in_progress",
+                    stopped_job_id = job_id,
+                })
+            end
+
+            --- @param status agentic.ui.ToolCallStatus
+            local function end_stop(status)
+                session:_on_tool_call_update({
+                    tool_call_id = "tc-stop",
+                    status = status,
+                })
+            end
+
+            --- @param id string
+            --- @return agentic.ui.ChatHistory.ToolCall|nil
+            local function record_of(id)
+                for _, msg in ipairs(session.chat_history.messages) do
+                    if msg.type == "tool_call" and msg.tool_call_id == id then
+                        return msg
+                    end
+                end
+            end
+
+            --- Whether the job's block footer reads `stopped`.
+            --- @return boolean
+            local function chat_reads_stopped()
+                local writer = session.message_writer
+                local _, footer_row =
+                    writer:_block_rows(writer.tool_call_blocks["tc-bg"])
+                local footer = vim.api.nvim_buf_get_lines(
+                    bufnr,
+                    footer_row,
+                    footer_row + 1,
+                    true
+                )[1]
+                return footer:find("stopped", 1, true) ~= nil
+            end
+
+            it("heads the stop with the job and shows its output", function()
+                background_command(PATH)
+                stop("b9")
+
+                local tracker =
+                    session.message_writer.tool_call_blocks["tc-stop"]
+                assert.equal("Watch the logs", tracker.argument)
+                assert.equal(PATH, tracker.stopped_job_output_file)
+                assert.is_nil(tracker.output_file)
+                assert.is_nil(session._output_tails["tc-stop"])
+                local record = record_of("tc-stop")
+                assert.equal("Watch the logs", record.argument)
+                assert.equal(PATH, record.stopped_job_output_file)
+            end)
+
+            it(
+                "marks the job's block stopped once the stop completes",
+                function()
+                    background_command(PATH)
+                    stop("b9")
+                    assert.is_nil(record_of("tc-bg").stopped_by)
+                    assert.is_false(chat_reads_stopped())
+
+                    end_stop("completed")
+
+                    assert.equal("tc-stop", record_of("tc-bg").stopped_by)
+                    assert.equal(
+                        "tc-stop",
+                        session.message_writer.tool_call_blocks["tc-bg"].stopped_by
+                    )
+                    assert.is_true(chat_reads_stopped())
+                end
+            )
+
+            it("leaves the job alone when the stop fails", function()
+                background_command(PATH)
+                stop("b9")
+                end_stop("failed")
+
+                assert.is_nil(record_of("tc-bg").stopped_by)
+                assert.is_false(chat_reads_stopped())
+            end)
+
+            it("restores the job's head over a later id head", function()
+                background_command(PATH)
+                stop("b9")
+                session:_on_tool_call_update({
+                    tool_call_id = "tc-stop",
+                    status = "in_progress",
+                    argument = "b9",
+                })
+
+                assert.equal(
+                    "Watch the logs",
+                    session.message_writer.tool_call_blocks["tc-stop"].argument
+                )
+                assert.equal("Watch the logs", record_of("tc-stop").argument)
+            end)
+
+            it("keeps the id head for an unknown job", function()
+                background_command(PATH)
+                stop("zz")
+                end_stop("completed")
+
+                local tracker =
+                    session.message_writer.tool_call_blocks["tc-stop"]
+                assert.equal("zz", tracker.argument)
+                assert.is_nil(tracker.stopped_job_output_file)
+                assert.is_nil(record_of("tc-bg").stopped_by)
+            end)
+
+            it("links a job whose output file is gone", function()
+                background_command(nil)
+                stop("b9")
+                end_stop("completed")
+
+                local tracker =
+                    session.message_writer.tool_call_blocks["tc-stop"]
+                assert.equal("Watch the logs", tracker.argument)
+                assert.is_nil(tracker.stopped_job_output_file)
+                assert.equal("tc-stop", record_of("tc-bg").stopped_by)
+            end)
         end)
 
         describe("tool call side records", function()

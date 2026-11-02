@@ -68,7 +68,8 @@ end
 --- @field to? string Addressee of a SendMessage
 --- @field summary? string Transcript-row label of a SendMessage (not transmitted)
 --- @field reason? string Why a ScheduleWakeup picked its delay
---- @field task_id? string Background task a TaskStop/TaskOutput acts on
+--- @field task_id? string Background task a TaskStop stops
+--- @field shell_id? string Deprecated name of a TaskStop's `task_id`
 --- @field cron? string Schedule expression of a CronCreate
 --- @field planFilePath? string Plan file of an ExitPlanMode, on its permission request only
 --- @field command_description? string Bash `description` under the name the CLI also accepts
@@ -487,6 +488,11 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update, session_id)
     if update.status then
         self:__apply_terminal_output(message, session_id)
     end
+    if message.kind == "TaskStop" and message.status == "completed" then
+        -- The result names the task also when the input did not.
+        message.stopped_job_id = ClaudeUtils.task_stop_result(message.body)
+            or message.stopped_job_id
+    end
     if update._meta and update._meta.terminal_exit then
         message.output_ended = true
     end
@@ -691,6 +697,10 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update, session_id)
             ClaudeUtils.send_message_update(message.tool_call_id, rawInput)
         set_head(message, input_update.argument)
         message.body = input_update.body or message.body
+        return
+    elseif kind == "TaskStop" then
+        message.stopped_job_id = ClaudeUtils.stopped_task(rawInput)
+        set_head(message, ClaudeUtils.tool_head(kind, rawInput, tool_name))
         return
     end
 
