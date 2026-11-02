@@ -1,5 +1,5 @@
 ---
-paths: "README.md,doc/**"
+paths: "README.md"
 ---
 # Plugin documentation style
 

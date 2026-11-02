@@ -4,26 +4,25 @@ paths: "doc/*.txt"
 
 # Help files
 
-Human-facing `:help` for using and configuring a neovim plugin. That is the
-whole subject: requirements, dependencies, setup steps, options, keymaps,
-commands, and what setting them does. Not the screen — a reader with the UI in
-front of them does not need it described.
+Human-facing `:help` for using and configuring a neovim plugin: requirements,
+dependencies, setup steps, options, keymaps, commands, and what setting them
+does. It says what a thing is, at the level a user meets it.
 
 Concise. Nobody reads paragraphs to set up a plugin.
 
-It says what a thing is. It does not:
+It does not:
 
 1. advise — no suggesting when a reader might want an option, no reasons for
    or against a setting, no alternatives to consider. List the options; the
    reader chooses.
 2. say what something isn't
 3. say why something is
-4. say how something is
-
-Requirements, dependencies and setup steps are statements of fact, not advice,
-and belong here.
+4. describe mechanism — how the plugin does it, or how each case or code path
+   behaves. That is docstring content.
+5. describe the screen — a reader with the UI in front of them sees it.
+6. restate neovim's own help — link the `|tag|` and state only what the plugin
+   adds.
 
 Any exception requires express permission.
 
-Also applies here: `docs.md` in this directory, and the global `edit-docs` and
-`lang-vimdoc` rules.
+Also applies here: the global `edit-docs` and `lang-vimdoc` rules.
