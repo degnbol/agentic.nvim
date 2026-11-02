@@ -1324,6 +1324,34 @@ describe("agentic.ui.ToolCallLayout", function()
             assert.equal("```zsh", layout.lines[2])
             assert.equal("```bash", build("search", "rg foo", nil).lines[2])
         end)
+
+        it("shows a background command's path row and unfolded tail", function()
+            local layout = Layout.build({
+                tool_call_id = "bg",
+                kind = "execute",
+                argument = "rg foo",
+                status = "completed",
+                shell = "zsh",
+                body = { "Command running in background with ID: x." },
+                output_file = "/tmp/tasks/x.output",
+                output_tail = output(3),
+            }, 0)
+
+            assert.same({}, layout.folds)
+            assert.same({
+                "###",
+                "```zsh",
+                "rg foo",
+                "```",
+                "/tmp/tasks/x.output",
+                "```console",
+                "out 1",
+                "out 2",
+                "out 3",
+                "```",
+                "",
+            }, layout.lines)
+        end)
     end)
 
     describe("no fold markers in rendered output", function()

@@ -39,6 +39,8 @@ M.MODE_SWITCH_TOOLS = {
 
 --- @class agentic.acp.ClaudeMeta
 --- @field claudeCode? agentic.acp.ClaudeCodeMeta
+--- @field terminal_output? { terminal_id: string, data: string } A command's whole output, raw
+--- @field terminal_exit? { terminal_id: string, exit_code: integer|nil } The command has ended
 
 --- claude-agent-acp's per-notification metadata, or an empty table when the
 --- notification carries none — `_meta` is genuinely optional (the bridge's
@@ -259,6 +261,33 @@ function M.unwrap_tool_use_error(lines)
         return nil
     end
     return vim.split(inner, "\n", { plain = true })
+end
+
+--- The task id and output file of a Bash result that announces a background
+--- task on this machine. Claude Code words it in several ways, each starting
+--- `Command `, naming `ID: <id>`, and putting the path after
+--- `Output is being written to: `, ending in `/tasks/<id>.output`. A task on
+--- a remote host (`written there to`) names a file elsewhere and gives nil.
+--- @param text string The result's text
+--- @return string|nil task_id
+--- @return string|nil output_path Absolute path
+function M.background_task(text)
+    if not vim.startswith(text, "Command ") then
+        return nil, nil
+    end
+    local task_id = text:match("ID: ([^%s.,)]+)")
+    if not task_id then
+        return nil, nil
+    end
+    local path = text:match(
+        "Output is being written to: (/[^\n]-/tasks/"
+            .. vim.pesc(task_id)
+            .. "%.output)"
+    )
+    if not path then
+        return nil, nil
+    end
+    return task_id, path
 end
 
 --- This session's name and the rest of a `ListAgents` result. The first line

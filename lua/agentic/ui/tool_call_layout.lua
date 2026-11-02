@@ -330,6 +330,13 @@ local function comment_rows(rows)
     return section
 end
 
+--- A file's path on a row of its own, so `gf` on it opens the file.
+--- @param path string Absolute path
+--- @return agentic.ui.ToolCallLayout.Section
+local function path_row(path)
+    return comment_rows({ FileSystem.to_smart_path(path) })
+end
+
 --- Start state of a fold over output rows: nil for one row or none (no fold
 --- forms, so an op on its anchor would raise E490), closed past `max_lines`
 --- (0 = never), else open.
@@ -416,12 +423,14 @@ end
 --- Start state of the fold over a call's command and its output (the
 --- failure reason or body): nil without output rows, so a command alone is
 --- never hidden; closed when the call did not fail and is safe; else open.
+--- Nil for a call with an output file: its tail is re-rendered as the file
+--- grows, and a re-render would reopen a fold the user closed.
 --- @param call agentic.ui.ToolCallLayout.Call
 --- @param safe boolean True when the command is read-only
 --- @return agentic.ui.FoldState|nil
 local function command_fold_state(call, safe)
     local output = call.failure or call.block.body or {}
-    if #output == 0 then
+    if #output == 0 or call.block.output_file then
         return nil
     end
     return call.block.status ~= "failed" and safe and "closed" or "open"
@@ -544,10 +553,7 @@ local HEADS = {
         local sections = default_head(call)
         local skill_path = call.block.skill_path
         if skill_path then
-            table.insert(
-                sections,
-                comment_rows({ FileSystem.to_smart_path(skill_path) })
-            )
+            table.insert(sections, path_row(skill_path))
         end
         return sections
     end,
@@ -634,8 +640,23 @@ local BODIES = {
 
     -- A failed execute shows its reason as output: the bash stdout/stderr of
     -- a non-zero exit is long and often informational, so it takes the
-    -- output's colours rather than the red of a short denial.
+    -- output's colours rather than the red of a short denial. A command with
+    -- an output file shows the file's path and its last rows in place of the
+    -- body, which only announces the file. The rows are not folded, for the
+    -- reason in `command_fold_state`.
     execute = function(call)
+        local output_file = call.block.output_file
+        if output_file then
+            local sections = { path_row(output_file) }
+            local tail = call.block.output_tail
+            if tail and #tail > 0 then
+                local section = output_section(tail, 0)
+                section.fold = nil
+                table.insert(sections, section)
+            end
+            return sections
+        end
+
         local rows = call.failure or call.block.body
         if not rows then
             return {}

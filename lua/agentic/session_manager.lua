@@ -20,6 +20,7 @@ local DiagnosticsList = require("agentic.ui.diagnostics_list")
 local DiffJump = require("agentic.ui.diff_jump")
 local EnvironmentInfo = require("agentic.environment_info")
 local FileSystem = require("agentic.utils.file_system")
+local FileTail = require("agentic.utils.file_tail")
 local Glyphs = require("agentic.glyphs")
 local GrantCommand = require("agentic.grant_command")
 local GrantSafety = require("agentic.utils.grant_safety")
@@ -97,6 +98,7 @@ end
 --- @field _inputs table<string, agentic.ui.SubagentInput> Message inputs of background subagents by child session id
 --- @field _agent_by_task table<string, string> Id of the Task tool use that spawned a subagent -> its child session id
 --- @field _tool_call_owner table<string, string> toolCallId -> child session id of the subagent whose transcript holds the call
+--- @field _output_tails table<string, agentic.utils.FileTail> toolCallId -> tail of the output file of a command still running
 --- @field _held_tool_call_updates table<string, { update: agentic.ui.MessageWriter.ToolCallBase, child_id?: string }> toolCallId -> fields a side record gave a call the chat does not show yet, and the subagent whose records gave them. Dropped at the turn's end for the main agent, at the subagent's end for a subagent
 --- @field _seen_messages table<string, true> `<session id>:<messageId>` of each session message view handled
 --- @field _message_infos table<string, agentic.SessionMessageInfo> Kind and summary of each session message by message id, decided at its first view
@@ -361,6 +363,7 @@ function SessionManager:new(provider)
         _inputs = {},
         _agent_by_task = {},
         _tool_call_owner = {},
+        _output_tails = {},
         _held_tool_call_updates = {},
         _seen_messages = {},
         _message_infos = {},
@@ -2134,6 +2137,8 @@ function SessionManager:_build_handlers()
         on_disconnect = function()
             if not self.destroyed then
                 self:_close_agents({ state = "unknown" })
+                -- No command end can arrive any more.
+                self:_stop_output_tails(true)
             end
         end,
     }
@@ -2925,9 +2930,12 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     end
 
     -- A transcript's indicator runs from its agent's spawn to its end, so only
-    -- the main indicator follows tool activity.
+    -- the main indicator follows tool activity. An update without status
+    -- reports no step of the agent: the end of a background command comes
+    -- after its turn.
     if
         not is_subagent
+        and tool_call_update.status
         and not self.permission_manager.current_request
         and #self.permission_manager.queue == 0
     then
@@ -2939,6 +2947,88 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     -- anchor each record carries, not by when the drain runs.
     if has_ended(tool_call_update.status) then
         self:_drain_side_records_of(child_id)
+    end
+
+    self:_sync_output_tail(id)
+end
+
+--- Follow the output file of a tool call's block while its command runs, and
+--- show its last rows once the command has ended. Does nothing for a block
+--- without an output file.
+--- @param tool_call_id string
+function SessionManager:_sync_output_tail(tool_call_id)
+    local writer = self:_writer_for(tool_call_id)
+    local block = writer.tool_call_blocks[tool_call_id]
+    local path = block and block.output_file
+    if not path then
+        return
+    end
+
+    local tail = self._output_tails[tool_call_id]
+    if block.output_ended then
+        if tail then
+            tail:stop()
+            self._output_tails[tool_call_id] = nil
+        end
+        -- Once shown as final, later updates leave the rows alone.
+        if block.output_live ~= false then
+            self:_show_final_tail(tool_call_id)
+        end
+        return
+    end
+    if tail then
+        return
+    end
+
+    local err
+    tail, err = FileTail:new(
+        path,
+        Config.tool_call_display.background_tail_lines,
+        function(rows)
+            -- A wiped or unloaded transcript keeps its writer's trackers.
+            if
+                not self.destroyed
+                and vim.api.nvim_buf_is_loaded(writer.bufnr)
+                and writer.tool_call_blocks[tool_call_id]
+            then
+                writer:set_output_tail(tool_call_id, rows, true)
+            end
+        end
+    )
+    if not tail then
+        Logger.notify("Agentic: cannot follow " .. path .. ": " .. err)
+        self:_show_final_tail(tool_call_id)
+        return
+    end
+    self._output_tails[tool_call_id] = tail
+end
+
+--- Show the last rows of a tool call's output file as no longer followed. A
+--- missing file gives no rows and no warning: the provider may have removed it.
+--- @param tool_call_id string
+function SessionManager:_show_final_tail(tool_call_id)
+    local writer = self:_writer_for(tool_call_id)
+    local block = writer.tool_call_blocks[tool_call_id]
+    if not (block and block.output_file) then
+        return
+    end
+    local rows = FileSystem.read_last_lines(
+        block.output_file,
+        Config.tool_call_display.background_tail_lines
+    )
+    writer:set_output_tail(tool_call_id, rows or {}, false)
+end
+
+--- Stop following every output file.
+--- @param final boolean Show each file's last rows as no longer followed
+function SessionManager:_stop_output_tails(final)
+    local tails = self._output_tails
+    self._output_tails = {}
+    for tool_call_id, tail in pairs(tails) do
+        tail:stop()
+        if final then
+            self:_show_final_tail(tool_call_id)
+        end
     end
 end
 
@@ -4444,6 +4534,7 @@ end
 --- every extmark collapsed on row 0, where a stale tracker resolves to the top
 --- of the next conversation.
 function SessionManager:clear_chat()
+    self:_stop_output_tails(false)
     self.widget:clear()
     self.message_writer:reset()
     self:_reset_subagents()

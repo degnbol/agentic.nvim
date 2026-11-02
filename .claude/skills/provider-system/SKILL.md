@@ -167,30 +167,6 @@ default, configurable via `tool_call_display.execute_formatter`). If the
 formatter is not installed or errors, a built-in fallback splits long single-line
 commands at top-level shell operators (&&, ||, ;, |).
 
-### Description and output separation (claude-agent-acp)
-
-The bridge sends a Bash call's `input.description` as the **initial tool_call
-content**, and wraps the command output in a ` ```console ` fence on completion
-(`tool-calls/renderer.js` — the fence is a
-template literal `` `\`\`\`console\n${output}\n\`\`\`` ``, so it does not show up
-in a literal-backtick grep). Two consequences the adapter fixes
-(`lift_execute_description` in `claude_agent_acp_adapter.lua`):
-
-1. **Description is lifted to a title.** Without intervention the description
-   seeds the body and accumulates ahead of the output behind a `---` divider
-   (see body-accumulation in `update_tool_call_block`). The adapter moves it to
-   `ToolCallBase.description`, which names the block's `###` head, above the
-   command fence.
-2. **The bridge's console fence is stripped** (`TextWrap.fenced_inner`).
-   Without it `safe_fence` widens the outer fence around the bridge's inner
-   one, double-wrapping the output. `CanonicalToolCall.normalise` unwraps any
-   execute message that arrives as one fenced block, so another provider
-   that pre-fences renders single-wrapped too.
-
-The fence/non-fence distinction also separates the two payloads: claude Bash
-output is always fenced, so unfenced execute content is the description echo and
-is dropped from the body (the description is read from `rawInput.description`).
-
 **Requirements for injection to work:**
 
 - `vim.treesitter.start(chat_bufnr, "agentic")` must be called on the chat
@@ -216,6 +192,28 @@ Execute:      "### List files"             (description, or bare "###")
 
 Multi-line commands (containing `\n`) are split into separate lines within the
 fence rather than escaped to literal `\n`.
+
+### Command output via `terminal_output` (claude-agent-acp)
+
+The claude adapter declares `clientCapabilities._meta.terminal_output`
+(`capability_meta`). The bridge then sends a command's content as
+`{ type = "terminal" }` only, and its raw output as a separate status-less
+`tool_call_update` carrying `_meta.terminal_output.data`, just before the
+status update of the same result (`tool-calls/renderer.js` `result()`). So:
+
+- **Description** comes from `rawInput.description` (or
+  `command_description`) into `ToolCallBase.description`, which names the
+  block's `###` head.
+- **Output** is held per root session (`_terminal_output`) and put into the
+  next status update, trailing whitespace trimmed: `failure_reason` on
+  `failed`, else `body` (`__apply_terminal_output`).
+- **Background commands**: a result announcing a local background task
+  (`ClaudeUtils.background_task`) sets `background_job_id` and, when the file
+  exists, `output_file`, which `SessionManager:_sync_output_tail` follows with
+  a `FileTail`. The command's end arrives later, often after the turn, as a
+  status-less update with only `_meta.terminal_exit` → `output_ended`. A
+  status update that already carries `terminal_exit` (the command ended
+  before its result arrived, or a replay) sets `output_ended` directly.
 
 ## Permission flow and client-side auto-approval
 

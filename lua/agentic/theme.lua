@@ -55,6 +55,7 @@ local status_hl = {
     completed = Theme.HL_GROUPS.STATUS_COMPLETED,
     failed = Theme.HL_GROUPS.STATUS_FAILED,
     cancelled = Theme.HL_GROUPS.STATUS_CANCELLED,
+    background = Theme.HL_GROUPS.STATUS_PENDING,
 }
 
 --- Group the user-side identity glyphs follow: `Prompt` where the colorscheme

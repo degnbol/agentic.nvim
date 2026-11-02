@@ -334,9 +334,10 @@ end
 
 --- The subscribed session a session belongs to: the root that spawned a child
 --- session, else the session itself.
+--- @protected
 --- @param session_id string
 --- @return string root_id
-function ACPClient:_root_session(session_id)
+function ACPClient:__root_session(session_id)
     return self._children[session_id] or session_id
 end
 
@@ -348,7 +349,7 @@ end
 --- @param session_id string
 --- @param callback fun(sub: agentic.acp.ClientHandlers): nil
 function ACPClient:__with_subscriber(session_id, callback)
-    local subscriber = self.subscribers[self:_root_session(session_id)]
+    local subscriber = self.subscribers[self:__root_session(session_id)]
 
     if not subscriber then
         Logger.debug("No subscriber found for session_id: " .. session_id)
@@ -702,7 +703,7 @@ end
 --- @param session_id string
 --- @param update agentic.acp.ToolCallMessage|agentic.acp.ToolCallUpdate
 function ACPClient:_apply_tool_call_kind(session_id, update)
-    local root = self:_root_session(session_id)
+    local root = self:__root_session(session_id)
     if self.subscribers[root] then
         self._tool_call_kinds:apply(root, update)
     end
@@ -725,7 +726,7 @@ function ACPClient:__handle_session_update(params)
     end
 
     local session_update_type = update.sessionUpdate
-    local root = self:_root_session(session_id)
+    local root = self:__root_session(session_id)
 
     -- Recorded here rather than by the subscriber: the child's own updates
     -- follow at once, and the subscriber runs a tick later.
@@ -893,7 +894,7 @@ end
 --- @param session_id string|nil
 --- @return string[] roots Empty for a session this client neither created nor loaded
 function ACPClient:session_roots(session_id)
-    return session_id and self._session_roots[self:_root_session(session_id)]
+    return session_id and self._session_roots[self:__root_session(session_id)]
         or {}
 end
 
@@ -1091,7 +1092,7 @@ function ACPClient:__handle_request_permission(message_id, request)
         return
     end
 
-    local subscriber = self.subscribers[self:_root_session(request.sessionId)]
+    local subscriber = self.subscribers[self:__root_session(request.sessionId)]
 
     if not subscriber then
         -- No subscriber (session already cancelled) — send cancel immediately

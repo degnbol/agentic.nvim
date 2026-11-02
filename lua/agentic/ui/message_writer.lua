@@ -69,6 +69,15 @@ local function footer_note(block)
     return table.concat(deciders, ", ")
 end
 
+--- The word a tool call's status footer shows: `background` while its output
+--- is followed, else its status. The status itself stays the provider's, so a
+--- running background command is not taken for an unresolved call.
+--- @param block agentic.ui.MessageWriter.ToolCallBlock
+--- @return string
+local function footer_status(block)
+    return block.output_live and "background" or block.status
+end
+
 --- Tool call statuses that will not change again (safe to force a final parse).
 --- @param status string|nil
 --- @return boolean
@@ -120,6 +129,9 @@ end
 --- @field skill_path? string Absolute path to the SKILL.md a Skill call loaded, verified to exist when it was resolved. Absent when no root held the skill.
 --- @field subagent? agentic.ui.MessageWriter.SubagentInfo Set on a subagent's block in the main chat
 --- @field decided_by? agentic.PermissionDecider[] What let the call run or stopped it; nil when the provider decided
+--- @field background_job_id? string Id the provider gave the command when it went to the background
+--- @field output_file? string Absolute path of the file the command's own output goes to
+--- @field output_ended? boolean The command has ended. Only meaningful with `output_file`
 
 --- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
 --- @field kind agentic.acp.ToolKind
@@ -131,6 +143,8 @@ end
 --- @field placed? agentic.ui.MessageWriter.Placed What was placed beneath the block after it was written
 --- @field is_compaction? boolean The block reports a compaction of the conversation
 --- @field folds? agentic.ui.MessageWriter.BlockFold[] The block's folds, outermost first.
+--- @field output_tail? string[] Last rows of `output_file`, as last read
+--- @field output_live? boolean `output_tail` is still being followed
 
 --- One fold of a tool call block.
 --- @class agentic.ui.MessageWriter.BlockFold
@@ -2663,7 +2677,7 @@ function MessageWriter:_write_status_and_settle_folds(block, footer_row, folds)
     Renderer.apply_status_footer(
         self.bufnr,
         footer_row,
-        block.status,
+        footer_status(block),
         footer_note(block)
     )
     if is_final_status(block.status) then
@@ -2852,7 +2866,7 @@ function MessageWriter:_paint_tool_call_block(block, start_row, layout)
     Renderer.apply_status_footer(
         bufnr,
         end_row,
-        block.status,
+        footer_status(block),
         footer_note(block)
     )
 
@@ -2969,7 +2983,32 @@ function MessageWriter:update_tool_call_block(tool_call_block)
     end
 
     self.tool_call_blocks[tool_call_block.tool_call_id] = tracker
+    self:_rerender_tool_call_block(tracker, already_has_diff)
+end
 
+--- Show a tool call's output tail: replace the rows, so a shorter tail leaves
+--- none of the old ones, and re-render the block. Does nothing for an
+--- untracked call.
+--- @param tool_call_id string
+--- @param rows string[]
+--- @param live boolean The tail is still followed
+function MessageWriter:set_output_tail(tool_call_id, rows, live)
+    local tracker = self.tool_call_blocks[tool_call_id]
+    if not tracker then
+        return
+    end
+    -- Assigned, not merged: `tbl_deep_extend` merges lists by index.
+    tracker.output_tail = rows
+    tracker.output_live = live
+    self:_rerender_tool_call_block(tracker, tracker.diff ~= nil)
+end
+
+--- Write a tracked block's current layout over its rows, or only its status
+--- footer when the content is unchanged or its diff is frozen. Drops the
+--- tracker when its range extmark has collapsed.
+--- @param tracker agentic.ui.MessageWriter.ToolCallBlock
+--- @param diff_frozen boolean The block's diff was rendered before
+function MessageWriter:_rerender_tool_call_block(tracker, diff_frozen)
     local pos = vim.api.nvim_buf_get_extmark_by_id(
         self.bufnr,
         Renderer.NS_TOOL_BLOCKS,
@@ -3009,8 +3048,8 @@ function MessageWriter:update_tool_call_block(tool_call_block)
                 argument = tracker.argument,
                 start_row = start_row,
                 old_end_row = old_end_row,
-                status = tool_call_block.status,
-                already_has_diff = already_has_diff,
+                status = tracker.status,
+                diff_frozen = diff_frozen,
                 line_count = vim.api.nvim_buf_line_count(self.bufnr),
             }
         )
@@ -3022,7 +3061,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
                 tracker.placed.mark_id
             )
         end
-        self.tool_call_blocks[tool_call_block.tool_call_id] = nil
+        self.tool_call_blocks[tracker.tool_call_id] = nil
         return
     end
 
@@ -3036,7 +3075,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
         -- (`diff_body` in tool_call_layout). Re-extraction is safe — a failed
         -- file-mutating tool never applied its change, so the file is
         -- unchanged and reproduces the same diff.
-        if already_has_diff and tracker.status ~= "failed" then
+        if diff_frozen and tracker.status ~= "failed" then
             if old_end_row > vim.api.nvim_buf_line_count(bufnr) then
                 Logger.notify(
                     string.format(
@@ -3056,7 +3095,7 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             Renderer.apply_status_footer(
                 bufnr,
                 old_end_row,
-                tracker.status,
+                footer_status(tracker),
                 footer_note(tracker)
             )
             return false

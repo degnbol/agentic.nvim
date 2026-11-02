@@ -23,6 +23,62 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
         end)
     end)
 
+    describe("background_task", function()
+        local path = "/private/tmp/claude-501/proj/tasks/b7x2k9.output"
+
+        it("reads the id and path of each local wording", function()
+            for _, text in ipairs({
+                "Command running in background with ID: b7x2k9. Output is being written to: "
+                    .. path
+                    .. ".",
+                "Command was manually backgrounded by user with ID: b7x2k9. Output is being written to: "
+                    .. path,
+                "Command was moved to the background (ID: b7x2k9) so that it does not block. Output is being written to: "
+                    .. path
+                    .. ".",
+            }) do
+                local task_id, output_path = ClaudeUtils.background_task(text)
+                assert.equal("b7x2k9", task_id)
+                assert.equal(path, output_path)
+            end
+        end)
+
+        it("gives nil for a task on a remote host", function()
+            assert.is_nil(
+                ClaudeUtils.background_task(
+                    "Command running in the background on devbox with ID: b7x2k9. Output is being written there to: "
+                        .. path
+                )
+            )
+        end)
+
+        it("keeps spaces in the path", function()
+            local spaced = "/tmp/my dir/tasks/b7x2k9.output"
+            local _, output_path = ClaudeUtils.background_task(
+                "Command running in background with ID: b7x2k9. Output is being written to: "
+                    .. spaced
+                    .. "."
+            )
+            assert.equal(spaced, output_path)
+        end)
+
+        it("gives nil for output that only mentions a task path", function()
+            assert.is_nil(
+                ClaudeUtils.background_task(
+                    "log: Output is being written to: " .. path
+                )
+            )
+        end)
+
+        it("gives nil for text without a path", function()
+            assert.is_nil(
+                ClaudeUtils.background_task(
+                    "Command running in background with ID: b7x2k9."
+                )
+            )
+        end)
+    end)
+
     describe("list_agents_result", function()
         local PEERS = {
             "Peer sessions (2):",

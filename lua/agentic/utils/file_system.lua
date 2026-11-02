@@ -130,6 +130,38 @@ function FileSystem.read_appended(abs_path, offset)
         nil
 end
 
+local LAST_LINES_WINDOW = 64 * 1024
+
+--- The last lines of a file, read from at most its last 64 KiB, so the cost
+--- does not grow with the file. A read that does not start at the file's
+--- first byte drops its first line, which may be partial. A last line without
+--- a newline is included, as `tail` does.
+--- @param abs_path string
+--- @param max_lines integer
+--- @return string[]|nil lines
+--- @return string|nil error
+function FileSystem.read_last_lines(abs_path, max_lines)
+    local file, open_err = io.open(abs_path, "rb")
+    if not file then
+        return nil, (open_err or ("Failed to open file: " .. abs_path))
+    end
+
+    local size = file:seek("end")
+    local start = math.max(0, size - LAST_LINES_WINDOW)
+    file:seek("set", start)
+    local text = file:read("*a") or ""
+    file:close()
+
+    local lines = vim.split(text, "\n")
+    if lines[#lines] == "" then
+        table.remove(lines)
+    end
+    if start > 0 then
+        table.remove(lines, 1)
+    end
+    return vim.list_slice(lines, math.max(1, #lines - max_lines + 1)), nil
+end
+
 --- Read the file content from a buffer if loaded, to get unsaved changes,
 --- or from disk otherwise
 --- @param abs_path string

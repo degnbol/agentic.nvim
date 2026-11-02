@@ -123,9 +123,10 @@ the fence is set per kind:
 
 | Site | Info string | Notes |
 | --- | --- | --- |
-| Execute command (argument fence) | the block's `shell` (e.g. `zsh`), `bash` fallback; `<shell>-foldnext` once output arrives | The shell label is cosmetic (zsh is aliased to `bash`) |
+| Execute command (argument fence) | the block's `shell` (e.g. `zsh`), `bash` fallback; `<shell>-foldnext` once output arrives, except with `output_file` | The shell label is cosmetic (zsh is aliased to `bash`) |
 | Search command (argument fence) | `bash`; `bash-foldnext` once output arrives | |
 | Execute body | `console`, or `console-fold` past one row | A body that arrives as one fenced block is unwrapped by `CanonicalToolCall.normalise` |
+| Execute body with `output_file` | unfenced path row, then `console` over the tail | No fold in the block, command fence included: a tail re-render would reopen a fold the user closed (`command_fold_state`) |
 | Search body | `console`, or `console-fold` past one row | `console` prevents markdown parsing of `--`, `*` |
 | Prose body (`prose_section`) | `markdown-fold` (multi-line) or `markdown` | Dimmed (sidecar) via `set_dim_range` (`AgenticDimmedBlock`) |
 | Generic and todowrite body | `json`, `markdown` (flat JSON table) or `console`, `-fold` past `other_max_lines` | todowrite folds closed past one row; not dimmed |

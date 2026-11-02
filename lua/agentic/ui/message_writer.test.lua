@@ -3691,6 +3691,76 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
+    describe("set_output_tail", function()
+        --- @type TestStub
+        local schedule_stub
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+            local block = make_tool_call_block("bg", "completed")
+            block.output_file = "/tmp/tasks/bg.output"
+            writer:write_tool_call_block(block)
+        end)
+
+        after_each(function()
+            schedule_stub:revert()
+        end)
+
+        --- Rows of the block between the path row and the footer.
+        --- @return string[]
+        local function tail_rows()
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            local path_row = row_of("/tmp/tasks/bg.output")
+            assert.is_not_nil(path_row)
+            ---@cast path_row integer
+            local rows = {}
+            -- Past the path row and the opening fence, up to the closing one.
+            for i = path_row + 2, #lines do
+                if lines[i]:match("^`+$") then
+                    break
+                end
+                table.insert(rows, lines[i])
+            end
+            return rows
+        end
+
+        --- @return string
+        local function footer()
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            for i = #lines, 1, -1 do
+                if lines[i] ~= "" then
+                    return lines[i]
+                end
+            end
+            return ""
+        end
+
+        it("replaces the tail in place", function()
+            writer:set_output_tail("bg", { "a", "b", "c" }, true)
+            assert.same({ "a", "b", "c" }, tail_rows())
+
+            writer:set_output_tail("bg", { "d" }, true)
+            assert.same({ "d" }, tail_rows())
+            assert.is_nil(row_of("a"))
+        end)
+
+        it("reads background while live and completed after", function()
+            writer:set_output_tail("bg", { "a" }, true)
+            assert.truthy(footer():find("background", 1, true))
+            assert.equal("completed", writer.tool_call_blocks["bg"].status)
+
+            writer:set_output_tail("bg", { "a", "b" }, false)
+            assert.truthy(footer():find("completed", 1, true))
+            assert.is_nil(footer():find("background", 1, true))
+            assert.equal("completed", writer.tool_call_blocks["bg"].status)
+        end)
+
+        it("ignores an untracked call", function()
+            writer:set_output_tail("other", { "a" }, true)
+            assert.is_nil(row_of("a"))
+        end)
+    end)
+
     describe("long command formatting", function()
         --- @type TestStub
         local schedule_stub

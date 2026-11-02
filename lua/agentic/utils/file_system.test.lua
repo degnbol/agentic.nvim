@@ -194,6 +194,73 @@ describe("FileSystem", function()
         end)
     end)
 
+    describe("read_last_lines", function()
+        --- @type string
+        local tmp
+
+        before_each(function()
+            tmp = os.tmpname()
+        end)
+
+        after_each(function()
+            os.remove(tmp)
+        end)
+
+        --- @param text string
+        local function write(text)
+            local f = io.open(tmp, "wb")
+            assert.is_not_nil(f)
+            ---@cast f -nil
+            f:write(text)
+            f:close()
+        end
+
+        it("returns every line of a short file", function()
+            write("one\ntwo\n")
+
+            local lines, err = FileSystem.read_last_lines(tmp, 10)
+
+            assert.is_nil(err)
+            assert.same({ "one", "two" }, lines)
+        end)
+
+        it("keeps only the last lines", function()
+            write("one\ntwo\nthree\n")
+
+            assert.same({ "two", "three" }, FileSystem.read_last_lines(tmp, 2))
+        end)
+
+        it("includes a last line without a newline", function()
+            write("one\npartial")
+
+            assert.same(
+                { "one", "partial" },
+                FileSystem.read_last_lines(tmp, 5)
+            )
+        end)
+
+        it("returns nothing for an empty file", function()
+            write("")
+
+            assert.same({}, FileSystem.read_last_lines(tmp, 5))
+        end)
+
+        it("drops the partial first line of a read past 64 KiB", function()
+            local long = string.rep("x", 70 * 1024)
+            write(long .. "\nlast\n")
+
+            assert.same({ "last" }, FileSystem.read_last_lines(tmp, 5))
+        end)
+
+        it("returns the error for a missing file", function()
+            local lines, err =
+                FileSystem.read_last_lines("/tmp/agentic_absent_output", 5)
+
+            assert.is_nil(lines)
+            assert.is_not_nil(err)
+        end)
+    end)
+
     describe("read_from_buffer_or_disk", function()
         it("reads from disk when no buffer exists", function()
             local tmp = os.tmpname()

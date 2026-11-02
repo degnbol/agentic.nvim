@@ -404,6 +404,8 @@ describe("agentic.SessionManager", function()
                     },
                     message_writer = { reset = noop },
                     clear_chat = SessionManager.clear_chat,
+                    _output_tails = {},
+                    _stop_output_tails = SessionManager._stop_output_tails,
                     _cancel_session = SessionManager._cancel_session,
                     _reset_conversation = SessionManager._reset_conversation,
                     _set_available_commands = SessionManager._set_available_commands,
@@ -471,6 +473,8 @@ describe("agentic.SessionManager", function()
                 },
                 message_writer = { reset = noop },
                 clear_chat = SessionManager.clear_chat,
+                _output_tails = {},
+                _stop_output_tails = SessionManager._stop_output_tails,
                 _reset_conversation = SessionManager._reset_conversation,
                 _set_available_commands = SessionManager._set_available_commands,
                 render_info = function() end,
@@ -752,6 +756,8 @@ describe("agentic.SessionManager", function()
                 },
                 file_activity = { clear = noop, load = noop },
                 clear_chat = SessionManager.clear_chat,
+                _output_tails = {},
+                _stop_output_tails = SessionManager._stop_output_tails,
                 _cancel_retry_timer = noop,
                 _do_load_acp_session = SessionManager._do_load_acp_session,
                 _advance_session_epoch = SessionManager._advance_session_epoch,
@@ -2157,6 +2163,7 @@ describe("agentic.SessionManager", function()
                     table.insert(drains.subagents, child_id)
                 end,
                 _drain_side_records_of = SessionManager._drain_side_records_of,
+                _sync_output_tail = SessionManager._sync_output_tail,
             } --[[@as agentic.SessionManager]]
             return session, drains
         end
@@ -4889,6 +4896,7 @@ describe("agentic.SessionManager", function()
                 _drain_side_records = noop,
                 _drain_subagent_side_records = noop,
                 _drain_side_records_of = SessionManager._drain_side_records_of,
+                _sync_output_tail = SessionManager._sync_output_tail,
                 _agent_of = SessionManager._agent_of,
                 _writer_for = SessionManager._writer_for,
                 _indicator_for = SessionManager._indicator_for,
@@ -6089,6 +6097,196 @@ describe("agentic.SessionManager", function()
             )
             assert.equal("thinking", indicator_start.calls[2][2])
             assert.equal("thought", session.chat_history.messages[2].type)
+        end)
+    end)
+
+    describe("output tails", function()
+        local FileTail = require("agentic.utils.file_tail")
+        local PATH = "/tmp/tasks/bg.output"
+
+        --- @type TestStub
+        local start_stub
+        --- @type TestStub
+        local read_stub
+        --- @type { stop: TestSpy, on_rows: fun(rows: string[]) }[]
+        local tails
+        --- @type agentic.SessionManager
+        local session
+        --- @type TestSpy
+        local set_output_tail
+
+        before_each(function()
+            tails = {}
+            start_stub = spy.stub(FileTail, "new")
+            start_stub:invokes(function(_self, _path, _max_lines, on_rows)
+                local tail =
+                    { stop = spy.new(function() end), on_rows = on_rows }
+                table.insert(tails, tail)
+                -- As the real tail does, before returning.
+                on_rows({ "row" })
+                return tail
+            end)
+            read_stub = spy.stub(FileSystem, "read_last_lines")
+            read_stub:returns({ "row" })
+            set_output_tail = spy.new(function(writer, id, _rows, live)
+                writer.tool_call_blocks[id].output_live = live
+            end)
+            session = {
+                _output_tails = {},
+                _tool_call_owner = {},
+                message_writer = {
+                    bufnr = vim.api.nvim_get_current_buf(),
+                    tool_call_blocks = {},
+                    set_output_tail = set_output_tail,
+                },
+                widget = { clear = function() end },
+                _reset_subagents = function() end,
+                _writer_for = SessionManager._writer_for,
+                _sync_output_tail = SessionManager._sync_output_tail,
+                _show_final_tail = SessionManager._show_final_tail,
+                _stop_output_tails = SessionManager._stop_output_tails,
+                clear_chat = SessionManager.clear_chat,
+            } --[[@as agentic.SessionManager]]
+            session.message_writer.reset = function() end
+        end)
+
+        after_each(function()
+            start_stub:revert()
+            read_stub:revert()
+        end)
+
+        --- @param id string
+        --- @param fields table|nil
+        local function track(id, fields)
+            session.message_writer.tool_call_blocks[id] = vim.tbl_extend(
+                "force",
+                { tool_call_id = id, status = "completed" },
+                fields or {}
+            )
+        end
+
+        --- The `rows` and `live` of each `set_output_tail` call.
+        --- @return table[]
+        local function shown()
+            return vim.tbl_map(function(call)
+                return { call[3], call[4] }
+            end, set_output_tail.calls)
+        end
+
+        it("does nothing without an output file", function()
+            track("tc-1")
+            session:_sync_output_tail("tc-1")
+
+            assert.equal(0, start_stub.call_count)
+            assert.equal(0, set_output_tail.call_count)
+        end)
+
+        it("starts on an output file, once", function()
+            track("tc-1", { output_file = PATH })
+            session:_sync_output_tail("tc-1")
+            session:_sync_output_tail("tc-1")
+
+            assert.equal(1, start_stub.call_count)
+            assert.same({ { { "row" }, true } }, shown())
+
+            tails[1].on_rows({ "a", "b" })
+            assert.same({ "a", "b" }, shown()[2][1])
+        end)
+
+        it("ends the tail on output_ended", function()
+            track("tc-1", { output_file = PATH })
+            session:_sync_output_tail("tc-1")
+            session.message_writer.tool_call_blocks["tc-1"].output_ended = true
+            session:_sync_output_tail("tc-1")
+
+            assert.equal(1, tails[1].stop.call_count)
+            assert.is_nil(session._output_tails["tc-1"])
+            assert.same({ { "row" }, false }, shown()[2])
+        end)
+
+        it("leaves a final tail alone on later updates", function()
+            track("tc-1", { output_file = PATH, output_ended = true })
+            session:_sync_output_tail("tc-1")
+            session:_sync_output_tail("tc-1")
+
+            assert.equal(1, set_output_tail.call_count)
+        end)
+
+        it("shows the rows as final when the tail cannot start", function()
+            local notify_stub = spy.stub(Logger, "notify")
+            MiniTest.finally(function()
+                notify_stub:revert()
+            end)
+            start_stub:invokes(function()
+                return nil, "boom"
+            end)
+            track("tc-1", { output_file = PATH })
+            session:_sync_output_tail("tc-1")
+
+            assert.equal(1, notify_stub.call_count)
+            assert.same({ { { "row" }, false } }, shown())
+            assert.is_nil(session._output_tails["tc-1"])
+        end)
+
+        it("ignores rows while the buffer is unloaded", function()
+            local buf = vim.api.nvim_create_buf(false, true)
+            session.message_writer.bufnr = buf
+            track("tc-1", { output_file = PATH })
+            session:_sync_output_tail("tc-1")
+            vim.api.nvim_buf_delete(buf, { unload = true })
+
+            tails[1].on_rows({ "late" })
+            assert.equal(1, set_output_tail.call_count)
+        end)
+
+        it("reads once when ended on arrival", function()
+            track("tc-1", { output_file = PATH, output_ended = true })
+            session:_sync_output_tail("tc-1")
+
+            assert.equal(0, start_stub.call_count)
+            assert.same({ { { "row" }, false } }, shown())
+        end)
+
+        it("shows no rows for a missing file", function()
+            read_stub:returns(nil)
+            track("tc-1", { output_file = PATH, output_ended = true })
+            session:_sync_output_tail("tc-1")
+
+            assert.same({ { {}, false } }, shown())
+        end)
+
+        it("ignores rows after the block is gone", function()
+            track("tc-1", { output_file = PATH })
+            session:_sync_output_tail("tc-1")
+            session.message_writer.tool_call_blocks["tc-1"] = nil
+
+            tails[1].on_rows({ "late" })
+            assert.equal(1, set_output_tail.call_count)
+        end)
+
+        it("stops every tail on clear_chat", function()
+            track("tc-1", { output_file = PATH })
+            track("tc-2", { output_file = PATH })
+            session:_sync_output_tail("tc-1")
+            session:_sync_output_tail("tc-2")
+            set_output_tail:reset()
+
+            session:clear_chat()
+
+            assert.equal(1, tails[1].stop.call_count)
+            assert.equal(1, tails[2].stop.call_count)
+            assert.same({}, session._output_tails)
+            assert.equal(0, set_output_tail.call_count)
+        end)
+
+        it("finalises every tail on disconnect", function()
+            track("tc-1", { output_file = PATH })
+            session:_sync_output_tail("tc-1")
+
+            session:_stop_output_tails(true)
+
+            assert.equal(1, tails[1].stop.call_count)
+            assert.same({ { "row" }, false }, shown()[2])
         end)
     end)
 end)

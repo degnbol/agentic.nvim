@@ -373,6 +373,8 @@ local ConfigDefault = {
         completed = "✔",
         failed = "",
         cancelled = "󰜺",
+        -- Same glyph as the header's running state: both mean "still running".
+        background = "󰔟",
     },
 
     --- Icons used for diagnostics in the context panel
@@ -482,6 +484,7 @@ local ConfigDefault = {
     --- @field execute_formatter? string|false Command to format execute code blocks (default: "shfmt"). Set to false to disable external formatting and use the built-in operator-splitting fallback only.
     --- @field diff_context_max_lines integer Skip context-aware diff highlighting when the target file exceeds this many lines (each Edit render reparses the whole file). Set to 0 to disable the feature entirely.
     --- @field create_max_lines integer Fold a created-file diff closed when it exceeds this many lines (0 = always open). An edit diff stays open unless the edit failed.
+    --- @field background_tail_lines integer Last lines of a background command's output file shown under its block
     tool_call_display = {
         search_max_lines = 8,
         execute_max_lines = 25,
@@ -489,6 +492,7 @@ local ConfigDefault = {
         execute_formatter = "shfmt",
         diff_context_max_lines = 10000,
         create_max_lines = 50,
+        background_tail_lines = 10,
     },
 
     --- Notification settings

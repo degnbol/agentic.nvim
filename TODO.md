@@ -63,7 +63,6 @@ calls to).
 [`PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md),
 [`PLAN-heading-command-flag.md`](notes/PLAN-heading-command-flag.md) (on hold;
 after `PLAN-placeholder-titles.md`),
-[`PLAN-terminal-streaming.md`](notes/PLAN-terminal-streaming.md),
 [`PLAN-updated-input-display.md`](notes/PLAN-updated-input-display.md),
 [`PLAN-completion-current-buf.md`](notes/PLAN-completion-current-buf.md),
 [`PLAN-deny-gate-flag-cap.md`](notes/PLAN-deny-gate-flag-cap.md),
@@ -653,14 +652,8 @@ so a read-only tmux entry is unsound until `ask` can catch them.
 
 ### bacground running
 
-A long-running execution will be put in the background and in Chat I see
-
-```
-Command running in background with ID: bn0pwm7hm. Output is being written to: /private/tmp/claude-502/-Users-cmadsen-dotfiles-config-nvim-modules-agentic-nvim/fda66270-4ac0-425b-9234-eec2d2c51d68/tasks/bn0pwm7hm.output. You will be notified when it completes. To check interim output, use Read on that file path.
-```
-We should brainstorm how to show background jobs nicer in the UI.
-E.g. a new spinner mode, since it currently shows as if the agent stopped its turn (which I suppose it did, so we also don't want to lie.)
-Maybe some way of streaming the run. We can of course do the native `<C-w>gf` on the path.
+Still open: a spinner mode for a background job, since it currently shows as if
+the agent stopped its turn (which I suppose it did, so we also don't want to lie.)
 
 ## Auto-allow non-zsh
 

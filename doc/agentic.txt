@@ -262,6 +262,9 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     `create_max_lines`         integer (default: 50)
         Fold a created-file diff closed when it exceeds this many lines
         (0 = always open). An edit diff stays open unless the edit failed.
+    `background_tail_lines`    integer (default: 10)
+        Last lines of a background command's output file to show, never
+        folded.
 
 ------------------------------------------------------------------------------
 4.5 PERMISSIONS                                   *agentic-config-permissions*
@@ -426,7 +429,7 @@ All options with defaults are in `lua/agentic/config_default.lua`.
                                                  *agentic-config-status_icons*
 `status_icons` table
     Tool call state icons: `pending`, `in_progress`, `completed`, `failed`,
-    `cancelled`.
+    `cancelled`, and `background` for a background command still running.
 
                                              *agentic-config-diagnostic_icons*
 `diagnostic_icons` table

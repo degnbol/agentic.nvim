@@ -18,6 +18,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         return setmetatable({
             _session_roots = session_roots or {},
             _children = {},
+            _terminal_output = {},
             _transcript_readers = {},
             _subagent_readers = {},
             provider_config = { subagents = { force_background = false } },
@@ -43,71 +44,191 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         end)
     end)
 
-    describe("execute description and body separation", function()
-        local CMD = "for i in $(seq 1 30); do printf '%d\\n' \"$i\"; done"
-        local DESC = "Print 30 numbered lines to demo execute folding"
+    describe("terminal output", function()
+        local TERMINAL = { { type = "terminal", terminalId = "tc-1" } }
 
-        it(
-            "lifts the description and drops it from the initial body",
-            function()
-                -- Initial tool_call: the bridge sends input.description as content.
-                local msg = make_adapter():__build_tool_call_message({
-                    toolCallId = "tc-1",
-                    kind = "execute",
-                    status = "pending",
-                    title = CMD,
-                    rawInput = { command = CMD, description = DESC },
-                    content = {
-                        {
-                            type = "content",
-                            content = { type = "text", text = DESC },
+        --- Adapter whose subscriber notifications are captured instead of sent.
+        --- @return agentic.acp.ClaudeAgentACPAdapter adapter
+        --- @return agentic.ui.MessageWriter.ToolCallBase[] updates
+        local function make_capturing_adapter()
+            local updates = {}
+            local adapter = make_adapter()
+            adapter.__with_subscriber = function(_self, _session_id, fn)
+                fn({
+                    on_tool_call_update = function(message)
+                        table.insert(updates, message)
+                    end,
+                })
+            end
+            return adapter, updates
+        end
+
+        --- @param adapter agentic.acp.ClaudeAgentACPAdapter
+        --- @param data string
+        local function send_output(adapter, data)
+            adapter:__handle_tool_call_update("s-1", {
+                toolCallId = "tc-1",
+                _meta = {
+                    terminal_output = { terminal_id = "tc-1", data = data },
+                },
+            })
+        end
+
+        --- @param adapter agentic.acp.ClaudeAgentACPAdapter
+        --- @param status agentic.ui.ToolCallStatus
+        --- @param terminal_exit boolean|nil
+        local function send_status(adapter, status, terminal_exit)
+            adapter:__handle_tool_call_update("s-1", {
+                toolCallId = "tc-1",
+                status = status,
+                content = TERMINAL,
+                _meta = {
+                    claudeCode = { toolName = "Bash" },
+                    terminal_exit = terminal_exit
+                            and { terminal_id = "tc-1", exit_code = 0 }
+                        or nil,
+                },
+            })
+        end
+
+        it("holds the output for the completed status update", function()
+            local adapter, updates = make_capturing_adapter()
+
+            send_output(adapter, "one\ntwo\n\n")
+            assert.equal(0, #updates)
+            send_status(adapter, "completed", true)
+
+            assert.same({ "one", "two" }, updates[1].body)
+            assert.is_nil(updates[1].failure_reason)
+            assert.is_true(updates[1].output_ended)
+        end)
+
+        it("gives a failed call the output as failure reason", function()
+            local adapter, updates = make_capturing_adapter()
+
+            send_output(adapter, "<tool_use_error>boom</tool_use_error>")
+            send_status(adapter, "failed")
+
+            assert.same({ "boom" }, updates[1].failure_reason)
+            assert.is_nil(updates[1].body)
+        end)
+
+        it("gives blank output neither body nor reason", function()
+            for _, data in ipairs({ "", " \n\t\n" }) do
+                local adapter, updates = make_capturing_adapter()
+                send_output(adapter, data)
+                send_status(adapter, "completed")
+                assert.is_nil(updates[1].body)
+
+                send_output(adapter, data)
+                send_status(adapter, "failed")
+                assert.is_nil(updates[2].failure_reason)
+            end
+        end)
+
+        it("renders a denial's CLI text alone", function()
+            local adapter, updates = make_capturing_adapter()
+
+            adapter:__handle_tool_call_update("s-1", {
+                toolCallId = "tc-1",
+                status = "failed",
+                content = {
+                    {
+                        type = "content",
+                        content = {
+                            type = "text",
+                            text = "Permission denied: no",
                         },
                     },
-                })
+                },
+            })
+            send_output(adapter, "The user denied this.")
+            send_status(adapter, "failed")
 
-                assert.equal(DESC, msg.description)
-                assert.equal(CMD, msg.argument)
-                -- The description echo must not seed the body (which would later
-                -- accumulate ahead of the output behind a "---" divider).
-                assert.is_nil(msg.body)
-            end
-        )
+            assert.same({ "The user denied this." }, updates[2].failure_reason)
+            assert.is_nil(updates[2].body)
+        end)
 
-        it(
-            "strips the bridge console fence from the completion body",
-            function()
-                local fenced = { "```console" }
-                for i = 1, 30 do
-                    table.insert(fenced, string.format("line %02d", i))
-                end
-                table.insert(fenced, "```")
+        it("drops held output on unsubscribe", function()
+            local adapter, updates = make_capturing_adapter()
+            adapter._session_dirs = {}
+            adapter.subscribers = {}
+            adapter._tool_call_kinds = { forget_session = function() end }
 
-                local msg = make_adapter():__build_tool_call_update({
-                    toolCallId = "tc-1",
-                    kind = "execute",
-                    status = "completed",
-                    rawInput = { command = CMD, description = DESC },
-                    content = {
-                        {
-                            type = "content",
-                            content = {
-                                type = "text",
-                                text = table.concat(fenced, "\n"),
-                            },
-                        },
-                    },
-                })
+            send_output(adapter, "stale")
+            adapter:unsubscribe("s-1")
+            send_status(adapter, "completed")
 
-                assert.equal(DESC, msg.description)
-                assert.equal(30, #msg.body)
-                assert.equal("line 01", msg.body[1])
-                assert.equal("line 30", msg.body[30])
-                -- No fence lines survive — the renderer applies its own.
-                for _, l in ipairs(msg.body) do
-                    assert.is_nil(l:match("^```"))
-                end
-            end
-        )
+            assert.is_nil(updates[1].body)
+        end)
+
+        describe("a background result", function()
+            local dir, path, announcement
+
+            before_each(function()
+                dir = vim.fn.tempname()
+                path = dir .. "/tasks/b7x2k9.output"
+                announcement = "Command running in background with ID: b7x2k9. Output is being written to: "
+                    .. path
+            end)
+
+            after_each(function()
+                vim.fs.rm(dir, { recursive = true, force = true })
+            end)
+
+            it("links the job and its output file", function()
+                vim.fn.mkdir(dir .. "/tasks", "p")
+                vim.fn.writefile({}, path)
+                local adapter, updates = make_capturing_adapter()
+
+                send_output(adapter, announcement)
+                send_status(adapter, "completed")
+
+                assert.equal("b7x2k9", updates[1].background_job_id)
+                assert.equal(path, updates[1].output_file)
+                assert.same({ announcement }, updates[1].body)
+                assert.is_nil(updates[1].output_ended)
+            end)
+
+            it("links the job alone when the file is gone", function()
+                local adapter, updates = make_capturing_adapter()
+
+                send_output(adapter, announcement)
+                send_status(adapter, "completed")
+
+                assert.equal("b7x2k9", updates[1].background_job_id)
+                assert.is_nil(updates[1].output_file)
+            end)
+        end)
+
+        it("lets the end of a background command through", function()
+            local adapter, updates = make_capturing_adapter()
+
+            adapter:__handle_tool_call_update("s-1", {
+                toolCallId = "tc-1",
+                _meta = { terminal_exit = { terminal_id = "tc-1" } },
+            })
+
+            assert.equal(1, #updates)
+            assert.is_true(updates[1].output_ended)
+            assert.is_nil(updates[1].status)
+        end)
+
+        it("takes the description from rawInput only", function()
+            local msg = make_adapter():__build_tool_call_message({
+                toolCallId = "tc-1",
+                kind = "execute",
+                status = "pending",
+                title = "ls",
+                rawInput = { command = "ls", description = "List files" },
+                content = TERMINAL,
+                _meta = { claudeCode = { toolName = "Bash" } },
+            })
+
+            assert.equal("List files", msg.description)
+            assert.equal("ls", msg.argument)
+            assert.is_nil(msg.body)
+        end)
     end)
 
     it("unwraps a failure reason's tool_use_error envelope", function()
@@ -257,6 +378,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             local adapter = setmetatable({
                 _session_roots = {},
                 _children = {},
+                _terminal_output = {},
                 __with_subscriber = function(_self, _session_id, fn)
                     fn({
                         on_tool_call_update = function(message)
@@ -1713,11 +1835,11 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             return construct(provider_config).provider_config
         end
 
-        it("opts into subagent-transcript", function()
+        it("opts into subagent-transcript and terminal output", function()
             local client = construct({ command = "claude-agent-acp" })
 
             assert.same(
-                { ["subagent-transcript"] = true },
+                { ["subagent-transcript"] = true, terminal_output = true },
                 client.capabilities["_meta"]
             )
         end)
@@ -1841,6 +1963,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             local adapter = setmetatable({
                 _session_roots = {},
                 _children = {},
+                _terminal_output = {},
                 _tool_call_kinds = ToolCallKinds:new(),
                 subscribers = { ["s-1"] = {} },
                 __with_subscriber = function(_self, _session_id, fn)

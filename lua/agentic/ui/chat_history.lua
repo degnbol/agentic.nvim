@@ -317,6 +317,9 @@ local TOOL_CALL_FIELDS = {
     "skill_path",
     "subagent",
     "decided_by",
+    "background_job_id",
+    "output_file",
+    "output_ended",
 }
 
 --- The `TOOL_CALL_FIELDS` of `source`, sharing its values.

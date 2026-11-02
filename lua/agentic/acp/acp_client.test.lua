@@ -1295,7 +1295,7 @@ describe("agentic.acp.ACPClient", function()
             spawn(client, "root", "child")
             spawn(client, "child", "grandchild")
 
-            assert.equal("root", client:_root_session("grandchild"))
+            assert.equal("root", client:__root_session("grandchild"))
         end)
 
         it("routes a child's tool calls with the raw id", function()

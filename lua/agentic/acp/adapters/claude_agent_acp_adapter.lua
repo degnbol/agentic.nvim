@@ -7,7 +7,6 @@ local ClaudeTranscriptReader =
     require("agentic.acp.adapters.claude_transcript_reader")
 local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 local SkillPath = require("agentic.utils.skill_path")
-local TextWrap = require("agentic.utils.text_wrap")
 
 local HOOKS_DIR = vim.fs.root(debug.getinfo(1, "S").source:sub(2), "hooks")
     .. "/hooks"
@@ -85,6 +84,7 @@ end
 --- @field _session_dirs table<string, string> Root session id -> Claude Code's side-file directory of the session, once found
 --- @field _transcript_readers table<string, agentic.acp.ClaudeTranscriptReader> Session id -> reader of the session's transcript, from the session's opening until `unsubscribe`
 --- @field _subagent_readers table<string, table<string, agentic.acp.ClaudeTranscriptReader>> Root session id -> child session id -> reader of the subagent's transcript, from its first drain until the root's `unsubscribe`
+--- @field _terminal_output table<string, table<string, string>> Root session id -> tool call id -> a command's output, held until the status update that follows it
 --- @field _exec_shell? "bash"|"zsh"
 local ClaudeAgentACPAdapter = ACPClient.extend()
 
@@ -120,6 +120,7 @@ function ClaudeAgentACPAdapter:new(config, on_ready)
     client._session_dirs = {}
     client._transcript_readers = {}
     client._subagent_readers = {}
+    client._terminal_output = {}
     -- Resolved here: tool calls are built in the transport's fast callback,
     -- where reading `vim.env` is forbidden.
     client._exec_shell = ClaudeUtils.exec_shell(config.env)
@@ -169,9 +170,13 @@ end
 --- Opts into the bridge forwarding subagent (Task) assistant text and
 --- thinking as parentToolUseId-tagged notifications. Without this opt-in the
 --- bridge drops them.
+---
+--- `terminal_output` makes the bridge send a command's output as
+--- `_meta.terminal_output`, and the end of a background command as
+--- `_meta.terminal_exit`, which is sent only under this capability.
 --- @return table meta
 function ClaudeAgentACPAdapter:capability_meta()
-    return { ["subagent-transcript"] = true }
+    return { ["subagent-transcript"] = true, terminal_output = true }
 end
 
 --- Creates a session and opens a transcript reader for it.
@@ -226,6 +231,7 @@ function ClaudeAgentACPAdapter:unsubscribe(session_id)
     self._session_dirs[session_id] = nil
     self._transcript_readers[session_id] = nil
     self._subagent_readers[session_id] = nil
+    self._terminal_output[session_id] = nil
     ACPClient.unsubscribe(self, session_id)
 end
 
@@ -381,33 +387,22 @@ function ClaudeAgentACPAdapter:subagent_message_instruction(
     return ClaudeUtils.send_message_instruction(agent_id, label, message)
 end
 
---- Separate a Bash tool call's description from its output. claude-agent-acp
---- sends `input.description` as the initial tool_call content and wraps
---- stdout/stderr in a ```console fence on completion (tools.js). Left alone,
---- the description seeds the body and accumulates ahead of the output behind a
---- "---" divider, and the renderer double-wraps the already-fenced output.
---- Lift the description to a title field and reduce the body to the unfenced
---- output, so the renderer shows the description as a heading and applies a
---- single fence.
---- @param message agentic.ui.MessageWriter.ToolCallBase
---- @param raw_input agentic.acp.ClaudeAgentRawInput|nil
-local function lift_execute_description(message, raw_input)
-    local desc = raw_input
-        and (raw_input.description or raw_input.command_description)
-    local inner = TextWrap.fenced_inner(message.body or {})
-    if inner ~= nil then
-        message.body = inner
-    else
-        -- Unfenced content is the description echo, not output. Prefer the
-        -- explicit rawInput field, fall back to the echoed text.
-        if (not desc or desc == "") and message.body and #message.body > 0 then
-            desc = table.concat(message.body, "\n")
-        end
-        message.body = nil
-    end
-    if type(desc) == "string" and desc ~= "" then
-        message.description = desc
-    end
+--- A Bash call's description, under either name the CLI accepts.
+--- @param raw_input agentic.acp.ClaudeAgentRawInput
+--- @return string|nil description Nil when absent or empty
+local function execute_description(raw_input)
+    local description = raw_input.description or raw_input.command_description
+    return description ~= "" and description or nil
+end
+
+--- The rows a command's raw output shows as: the output without trailing
+--- whitespace, split into lines. Nil when nothing is left, as the bridge
+--- sends no output block for blank output without the terminal capability.
+--- @param data string
+--- @return string[]|nil rows
+local function output_rows(data)
+    local trimmed = data:gsub("%s+$", "")
+    return trimmed ~= "" and vim.split(trimmed, "\n", { plain = true }) or nil
 end
 
 --- Intercept mode-switching tools at the initial tool_call level before the
@@ -455,8 +450,6 @@ end
 function ClaudeAgentACPAdapter:__build_tool_call_message(update, session_id)
     local message =
         ACPClient.__build_tool_call_message(self, update, session_id)
-    local had_raw_input = update.rawInput
-        and not vim.tbl_isempty(update.rawInput)
     self:__apply_tool_identity(message, update)
     self:__apply_message_result(message)
     self:__apply_raw_input(message, update, session_id)
@@ -464,13 +457,6 @@ function ClaudeAgentACPAdapter:__build_tool_call_message(update, session_id)
     self:__apply_edit_diff(message, update)
     -- The bridge reports a compaction as a synthetic call of this name.
     message.is_compaction = ClaudeUtils.tool_name(update) == "compact" or nil
-    -- Top-level execute tool_calls arrive with empty rawInput (input streams
-    -- separately), so __apply_raw_input's execute branch is skipped — lift the
-    -- description echo out of the body here. Subagent execute carries rawInput
-    -- and is already lifted inside __apply_raw_input.
-    if message.kind == "execute" and not had_raw_input then
-        lift_execute_description(message, update.rawInput)
-    end
     return message
 end
 
@@ -498,8 +484,60 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update, session_id)
     self:__apply_raw_input(message, update, session_id)
     self:__apply_list_agents_result(message)
     self:__apply_edit_diff(message, update)
+    if update.status then
+        self:__apply_terminal_output(message, session_id)
+    end
+    if update._meta and update._meta.terminal_exit then
+        message.output_ended = true
+    end
 
     return message
+end
+
+--- Move the output held for a tool call into its status update: as
+--- `failure_reason` on a failed call, else as `body`. A failed call so shows
+--- the CLI's text alone, also after a `Permission denied` body. When the
+--- output announces a background task, also set `background_job_id` and
+--- `output_file`. The body keeps the announcement, so history says where the
+--- output went. Does nothing when no output is held.
+--- @protected
+--- @param message agentic.ui.MessageWriter.ToolCallBase
+--- @param session_id string|nil
+function ClaudeAgentACPAdapter:__apply_terminal_output(message, session_id)
+    local held = session_id
+        and self._terminal_output[self:__root_session(session_id)]
+    local data = held and held[message.tool_call_id]
+    if not data then
+        return
+    end
+    held[message.tool_call_id] = nil
+
+    local rows = output_rows(data)
+    if message.status == "failed" then
+        if rows then
+            message.failure_reason = ClaudeUtils.unwrap_tool_use_error(rows)
+        end
+        return
+    end
+    message.body = rows
+
+    local task_id, path = ClaudeUtils.background_task(data)
+    if task_id then
+        -- Also when the file is gone: a replay after the CLI removed its
+        -- temp dir still names the job.
+        message.background_job_id = task_id
+        message.output_file = FileSystem.is_file(path) and path or nil
+    end
+end
+
+--- Hold a command's output until the status update that follows it.
+--- @param session_id string
+--- @param update agentic.acp.ClaudeAgentToolCallUpdate
+function ClaudeAgentACPAdapter:_hold_terminal_output(session_id, update)
+    local root = self:__root_session(session_id)
+    local held = self._terminal_output[root] or {}
+    self._terminal_output[root] = held
+    held[update.toolCallId] = update._meta.terminal_output.data
 end
 
 --- Mark a `SendMessage` or `SubagentHandback` call completed or failed by
@@ -725,7 +763,7 @@ function ClaudeAgentACPAdapter:__apply_raw_input(message, update, session_id)
                 message.search_pattern = rawInput.pattern
             end
         elseif kind == "execute" then
-            lift_execute_description(message, rawInput)
+            message.description = execute_description(rawInput)
         end
     end
 end
@@ -829,9 +867,17 @@ function ClaudeAgentACPAdapter:__handle_tool_call_update(session_id, update)
         return
     end
 
+    local meta = update._meta or {}
+    if meta.terminal_output and not update.status then
+        self:_hold_terminal_output(session_id, update)
+        return
+    end
+
     if
         not update.status
         and (not update.rawInput or vim.tbl_isempty(update.rawInput))
+        -- The end of a background command comes without either.
+        and not meta.terminal_exit
     then
         return
     end
