@@ -1,37 +1,38 @@
 # Plan: Claude tool call heads from rawInput, not the bridge title
-Status: draft
-
-## Relevant files
-- `lua/agentic/acp/adapters/claude_agent_acp_adapter.lua` (`__handle_tool_call` 195-219, `__build_tool_call_message` 232-248, `set_head` 285-289, `__apply_tool_identity` 305-318, `__apply_raw_input` 330-451)
-- `lua/agentic/acp/adapters/claude_utils.lua` (`nonempty`/`qualified` 107-121, `HEADS`/`tool_head` 131-187, `rewrite_grep_to_rg` 334-339, `PLACEHOLDER_TITLES`/`suppress_placeholder_title` 341-368)
-- `lua/agentic/acp/adapters/claude_agent_acp_adapter.test.lua`
-- `lua/agentic/acp/acp_client.lua` (`__resolve_fetch_fields` 674-687, `__build_tool_call_message` 796-811; shared, not edited)
-- `lua/agentic/ui/tool_call_renderer.lua` (`search_title_flags` 452-462, `first_quoted_string` 429, consumer 1114-1116; not edited)
-- Bridge v0.95.0 `dist/tool-calls/`: `renderer.js` (`toolCall` 104-127, `refinement` 129-141, `partialRefinement` 149-160, `memoryRecall` 410-431), `field-tracker.js` 6-14, `reporters/*.js`; `acp-agent.js` 10042-10057, 10585
-- Skills: `provider-system` (§ Tool identity, 366-371), `rendering` (bare `###`, 99-101)
-- `notes/bug-placeholder-titles.md`, `notes/audit-edge-cases.md` items 0.7, 3.18, 3.21
+Status: reviewed (open questions)
 
 ## Background
 
-### Facts about the bridge (v0.95.0)
-1. Every title of a tool use is a function of the tool's input (plus cwd): `facts(toolUse)` → `reporterFor(name).toolUse(input)` (`renderer.js:83-89`). No reporter's `toolResult` returns a title; only the synthetic compaction call does (`compaction.js:21,45`).
-2. Every notification built from a tool use carries `rawInput` for a non-AIR client: the initial `tool_call` (empty `{}` while input streams, `renderer.js:117-121`), `partialRefinement` (the top-level fields so far, `:156`), `refinement` (complete, `:136`), and the permission-surfaced eager `tool_call` (`acp-agent.js:7588`, complete input). `rawInput` is a whole value that replaces the client's copy (`field-tracker.js:6-14`); the tracker drops it only when unchanged, and then also drops the title (which derives from it).
-3. Synthetic tool calls carry a title and no `rawInput`: `memory_recall` ("Recalled 3 memories", `renderer.js:410-431`) and `compact` ("Compact conversation", `compaction.js:16-25`). Their input never streams, so their title is never a placeholder, and they have no input to build a head from.
-4. MCP and unknown tools use `GenericReporter`: title = tool name, or `"Unknown Tool"` when the name is empty (`interaction.js:158-161`). `_meta.claudeCode.toolName` carries the same name (`renderer.js:578`).
-5. TodoWrite and Task* never surface a `tool_call` from the stream; only a permission request does, with complete input (`acp-agent.js:10042-10057, 10585`). Their fallback titles (`Create task`, `Update task`) cannot reach the client.
-6. NotebookEdit is titled `"NotebookEdit"`, kind `other`, for a non-AIR client (`file-edit.js:151-152`); `"Edit notebook"` is AIR-only.
+### Files
+- `lua/agentic/acp/adapters/claude_agent_acp_adapter.lua`: `__handle_tool_call`, `__build_tool_call_message`, `set_head`, `__apply_tool_identity`, `__apply_raw_input`.
+- `lua/agentic/acp/adapters/claude_utils.lua`: `nonempty`, `qualified`, `HEADS`, `tool_head`, `rewrite_grep_to_rg`, `PLACEHOLDER_TITLES`, `suppress_placeholder_title`.
+- `lua/agentic/acp/adapters/claude_agent_acp_adapter.test.lua`, `claude_utils.test.lua`.
+- `lua/agentic/acp/acp_client.lua`: `__resolve_fetch_fields`, `__build_tool_call_message` (shared, not edited).
+- `lua/agentic/ui/tool_call_layout.lua`: `search_title_flags`, `first_quoted_string` and their search-section consumer (not edited).
+- Bridge v0.97.0 `dist/tool-calls/`: `renderer.js` (`facts`, `toolCall`, `refinement`, `partialRefinement`, `permissionToolCall`, `memoryRecall`, `toolUseMeta`), `field-tracker.js` (`REPLACED_FIELDS`), `reporters/*.js`; `dist/acp-agent.js` (`isTaskTool`, `shouldEmitToolCall`).
+- Skills: `provider-system` § "Tool identity is `_meta.claudeCode.toolName`, not `title`"; `rendering` (the bare `###` paragraph).
+- Notes: `notes/bug-placeholder-titles.md`; `notes/audit-edge-cases.md` items 0.7, 3.18, 3.21.
 
-### Every path by which placeholder text reaches a Claude head
+### Bridge facts
+1. Every title of a tool use is a function of the tool's input (plus cwd): `facts(toolUse)` → `reporterFor(name).toolUse(input)`. Two result paths also set a title, and neither reaches a Claude head: `ExitPlanModeReporter.toolResult` ("Exited Plan Mode"; the adapter heads mode switches by name, `MODE_SWITCH_TOOLS`) and the synthetic compaction call (`compaction.js`).
+2. Every notification built from a tool use carries `rawInput` for a non-AIR client: the initial `tool_call` from `toolCall` (empty `{}` while input streams), `partialRefinement` (the top-level fields so far), `refinement` (complete), and `permissionToolCall` (complete). `rawInput` is a whole value that replaces the client's copy (`REPLACED_FIELDS`); the tracker drops it only when unchanged, and then also drops the title (which derives from it).
+3. Synthetic tool calls carry a title and no `rawInput`: `memory_recall` (`memoryRecall`, "Recalled 3 memories") and `compact` ("Compact conversation"). Their input never streams, so their title is never a placeholder, and they have no input to build a head from. The ExitPlanMode plan-file clear call carries `rawInput`, but only for an AIR `planFile` client, which this plugin is not.
+4. MCP and unknown tools use `GenericReporter`: title = tool name, or `"Unknown Tool"` when the name is empty. `_meta.claudeCode.toolName` carries the same name (`toolUseMeta`).
+5. TodoWrite and Task* (`TaskCreate`/`TaskUpdate`/`TaskList`/`TaskGet`) never surface a `tool_call` from the stream (`shouldEmitToolCall`); only a permission request does, with complete input. Their fallback titles (`Create task`, `Update task`) cannot reach the client. `PlanToolReporter` kinds them `think`.
+6. NotebookEdit is titled `"NotebookEdit"`, kind `other`, for a non-AIR client (`NotebookEditReporter.toolUse`); `"Edit notebook"` is AIR-only.
+7. Agent/Task (`AgentReporter`) and ReportFindings are kinded `think`; AskUserQuestion `other`.
+
+### Placeholder paths
 | # | Path | Example text |
 |---|---|---|
-| P1 | Initial `tool_call`: base `argument = update.title` (`acp_client.lua:802`), filtered only by the drifting list (`claude_agent_acp_adapter.lua:216`, `claude_utils.lua:347-359`) | `Task (high effort)`, `Read File (1 - 20)` (renders `File`), `Find \`src\``, `grep -i`, `Report findings: none found`, `Asking for your input` |
-| P2 | Update fallback `command or suppress(title)` (`claude_agent_acp_adapter.lua:431-436`) — reached by execute, search, `think` without `subagent_type` (Agent before its type, ReportFindings), and `other` (AskUserQuestion, unknown tools) | `Task (high effort)` / `<description> (high effort)`, `grep -n`, `Find \`src\`` |
-| P3 | Plugin sentinel `"unknown skill"` (`:351`) | `unknown skill` |
-| P4 | Plugin sentinel `"unknown fetch"` via the shared `__resolve_fetch_fields` (`acp_client.lua:684-686`, called at `:405`) | `unknown fetch` |
-| P5 | SubAgent head `"%s, %s: %s"` with `"default"` and `""` (`:414-427`) | `default, : ` |
-| P6 | Read range parsed from the title (`:390-402`) — feeds the head's `path:N` (`tool_call_renderer.lua:845-858`) | (title dependency, no placeholder text today) |
+| P1 | Initial `tool_call`: base `argument = update.title` (`ACPClient:__build_tool_call_message`), filtered only by the drifting list (`suppress_placeholder_title` in `__handle_tool_call`) | `Task (high effort)`, `Read File (1 - 20)` (renders `File`), `Find \`src\``, `grep -i`, `Report findings: none found`, `Asking for your input` |
+| P2 | Fallback branch of `__apply_raw_input`: `command or suppress_placeholder_title(title)` — reached by execute, search, `think` without `subagent_type` (Agent before its type, ReportFindings), and `other` (AskUserQuestion, unknown tools) | `Task (high effort)` / `<description> (high effort)`, `grep -n`, `Find \`src\`` |
+| P3 | Plugin sentinel `"unknown skill"` (Skill branch of `__apply_raw_input`) | `unknown skill` |
+| P4 | Plugin sentinel `"unknown fetch"` via the shared `__resolve_fetch_fields` (fetch branch) | `unknown fetch` |
+| P5 | SubAgent head `"%s, %s: %s"` with `"default"` and `""` (the `kind == "SubAgent" or (kind == "other" and rawInput.subagent_type)` branch) | `default, : ` |
+| P6 | Read range parsed from the title (`CanonicalToolCall.parse_read_range(update.title)` in the read branch) — feeds the head's `path:N` | (title dependency, no placeholder text today) |
 
-P5 is unreachable with v0.95.0: `kind` there is the bridge kind (`ToolCallKinds:apply` stores `update.kind`, `tool_call_kinds.lua:27-30`; `__apply_tool_identity` never mints `SubAgent`), and Agent/Task are kinded `think` (`agent.js:11`), so neither `kind == "SubAgent"` nor `kind == "other" and subagent_type` holds. The prompt body it sets already arrives as `content[1]` (`agent.js:12`).
+P5 is unreachable: `kind` there is the bridge kind (`ToolCallKinds:apply` stores `update.kind`; `__apply_tool_identity` mints only `TOOL_KINDS` values and `Mcp`, never `SubAgent`), and Agent/Task are kinded `think` (fact 7), which the branch before it takes. The prompt body it sets already arrives as `content` (`AgentReporter` `display`).
 
 ### Rule
 **The Claude adapter writes no head from `update.title`, except on a notification without `rawInput`.** A notification with `rawInput` gets its head from `rawInput` fields (empty until the field arrives) or, for a tool the adapter has no field knowledge of, from `_meta.claudeCode.toolName`.
@@ -40,41 +41,51 @@ Why it cannot drift: a placeholder is the bridge's text for an input field that 
 
 The bridge title carries information `rawInput` lacks only for synthetic calls (fact 3), which the rule keeps. The Grep title is the one place the adapter would otherwise have to re-derive a format — see Q1.
 
-`set_head`'s guard (`:285-289`) stays: it protects identity heads written on result updates, which carry `_meta` but no `rawInput`. Inside `__apply_raw_input`, heads are written unconditionally, because `rawInput` there is the complete current input (fact 2).
+`set_head`'s guard stays: it protects identity heads written on result updates, which carry `_meta` but no `rawInput`, and the existing `set_head` calls in `__apply_raw_input` (SendMessage, `tool_head`) keep it. The writes changes 4–8 make are plain assignments, because `rawInput` there is the complete current input (fact 2): a field once present stays present, so an empty write happens only while the head is still empty.
 
 ## Changes
 
 ### `claude_agent_acp_adapter.lua`
-1. `__handle_tool_call`: delete line 216 (`suppress_placeholder_title`).
-2. `__build_tool_call_message`: right after the base build, `if update.rawInput then message.argument = "" end` — replaces the bridge title on every tool use; a synthetic call keeps its title. Delete `had_raw_input` (235-236) and the execute special-case (240-246); change 3 makes `__apply_raw_input` cover it.
-3. `__apply_raw_input`: gate on `if not rawInput then return end` instead of nil-or-empty (332). The initial `tool_call`'s `{}` now runs the ladder, so each branch writes its empty head and the fallback branch writes the tool name on the first frame (needed for permission-surfaced no-input calls such as TaskList, which would otherwise stay blank). Update the docstring of `__apply_tool_identity` (295-301), which cites the old gate.
-4. Skill (349-351): `message.argument = skill or ""`; drop the sentinel comment.
-5. Read range (390-402): replace the title parse with `elseif rawInput.limit then message.read_range = { offset = 1, limit = rawInput.limit }` — same value the bridge puts in the title (`read.js:7-9`).
-6. Fetch (404-405): `if rawInput.query or rawInput.url then self:__resolve_fetch_fields(message, rawInput) else message.argument = "" end`. The shared helper keeps its sentinel for auggie.
-7. Subagent (406-427): one branch keyed on the tool name, `elseif tool_name == "Agent" or tool_name == "Task" then`, which sets `kind = "SubAgent"` when `rawInput.subagent_type` is non-empty (as now) and `message.argument = ClaudeUtils.subagent_head(rawInput)`. Delete the unreachable `SubAgent`/`other` branch (414-427, P5).
-8. Fallback (428-436):
+1. `__handle_tool_call`: delete the `update.title = ClaudeUtils.suppress_placeholder_title(update.title)` line.
+2. `__build_tool_call_message`: right after the base build, `if update.rawInput then message.argument = "" end` — replaces the bridge title on every tool use; a synthetic call keeps its title. Delete `had_raw_input`, the trailing execute special-case and its comment; change 3 makes `__apply_raw_input` cover it.
+3. `__apply_raw_input`: gate on `if not rawInput then return end` instead of nil-or-empty. The initial `tool_call`'s `{}` now runs the ladder, so each branch writes its empty head and the fallback branch writes the tool name on the first frame (needed for permission-surfaced no-input calls such as TaskList, which would otherwise stay blank). Update the `__apply_tool_identity` docstring, whose second paragraph gives the old gate as the reason it runs outside `__apply_raw_input`; the remaining reason is that minting needs only `_meta`.
+4. Skill branch: `message.argument = skill or ""`; drop the sentinel comment.
+5. Read branch: replace the `update.title` parse with `elseif rawInput.limit and rawInput.limit > 0 then message.read_range = { offset = 1, limit = rawInput.limit }` — the range `ReadReporter` puts in the title (it also requires `limit > 0` and defaults `offset` to 1).
+6. Fetch branch: `if rawInput.query or rawInput.url then self:__resolve_fetch_fields(message, rawInput) else message.argument = "" end`. The shared helper keeps its sentinel for auggie.
+7. Subagent: replace the `kind == "think" and rawInput.subagent_type` branch with one keyed on the tool name, `elseif tool_name == "Agent" or tool_name == "Task" then`, which sets `kind = "SubAgent"` when `rawInput.subagent_type` is a non-empty string (today any truthy value, so `""` mints `SubAgent` with an empty head) and `message.argument = ClaudeUtils.subagent_head(rawInput)`. Delete the unreachable `SubAgent`/`other` branch (P5).
+8. Fallback branch:
    - `execute`: `message.argument = command or ""`.
    - `search`: per Q1.
    - any other kind: `message.argument = tool_name` when `tool_name` is non-nil; else leave `argument` alone (bridge's untracked fallback, no `_meta`).
    Body extraction and `lift_execute_description` stay as they are.
 
 ### `claude_utils.lua`
-9. Delete `PLACEHOLDER_TITLES` and `suppress_placeholder_title` (341-368).
-10. Add `M.subagent_head(raw_input: agentic.acp.ClaudeAgentRawInput): string` — `"<subagent_type>: <description>"`, else the one present, else `""`; built from `nonempty` and `qualified` (107-121).
-11. Q1 option A only: add `M.search_head(tool_name: string, raw_input: agentic.acp.ClaudeAgentRawInput): string` and delete `rewrite_grep_to_rg`.
+9. Delete `PLACEHOLDER_TITLES` and `suppress_placeholder_title`.
 
-### Tests (`claude_agent_acp_adapter.test.lua`)
-- 587-592: expect `""` for a Skill without a name.
-- 1034-1080 (`subagent heading`): give `think_update` `_meta.claudeCode.toolName = "Agent"`; add a case with `description` only (head is the description, kind stays unset) and one with `effort` only (head `""`). The "think call without a type" case (1075) keeps no `_meta` and still asserts `kind` nil.
-- 1462-1479: an unknown tool heads with its name (`"Frobnicate"`) on the initial `tool_call` and on the update; the title `"Frobnicate thing"` is never shown.
-- New, in `updates that leave out unchanged fields`: initial `tool_call` with `rawInput = {}` and titles `Terminal`, `Read File (1 - 20)`, `Task (high effort)`, `grep -i` → head `""`; a `tool_call` without `rawInput` titled `Compact conversation` keeps the title; a WebFetch update with only `prompt` → head `""`; a Read update with `limit` only → `read_range = { offset = 1, limit = … }`.
+### Tests
+`claude_agent_acp_adapter.test.lua`:
+- `the SKILL.md a Skill call loaded` › "probes nothing before the name streams": expect `""`; drop the sentinel comment above it.
+- `subagent heading`: give `think_update` `_meta.claudeCode.toolName = "Agent"`; add a case with `description` only (head is the description, kind stays unset), one with `effort` only (head `""`), and one with `subagent_type = ""` (kind stays unset). "leaves a think call without a type alone" keeps no `_meta` and still asserts `kind` nil.
+- `updates that leave out unchanged fields` › "writes no head when neither title nor command came": invert and rename — an unknown tool heads with its name (`"Frobnicate"`) on the initial `tool_call` and on the update; the title `"Frobnicate thing"` is never shown.
+- New, in `updates that leave out unchanged fields`: initial `tool_call` with `rawInput = {}` and titles `Terminal`, `Read File (1 - 20)`, `Task (high effort)`, `grep -i` → head `""`; a `tool_call` without `rawInput` titled `Compact conversation` keeps the title; a WebFetch update with only `prompt` → head `""`; a Read update with `limit` only → `read_range = { offset = 1, limit = … }`; a Read update with `limit = 0` → no `read_range`.
 - Q1 cases for Grep and Glob.
 
+`claude_utils.test.lua`: `subagent_head` with both fields, type only, description only, neither, and empty strings.
+
 ### Docs
-- `provider-system` skill 366-371: the identity step's reason no longer cites the empty-`rawInput` gate; state the rule above in one sentence under § Tool identity.
+- `provider-system` skill § "Tool identity is `_meta.claudeCode.toolName`, not `title`": the last paragraph's reason (`__apply_tool_identity` stays out of the `rawInput` gate because the initial `tool_call` carries an empty `rawInput`) no longer holds; replace it, and state the rule above in one sentence.
+
+### Notes
+- Delete `notes/bug-placeholder-titles.md` when this lands; mark `notes/audit-edge-cases.md` items 0.7, 3.18, 3.21 resolved.
+
+## Additions
+
+### `claude_utils.lua`
+- `M.subagent_head(raw_input: agentic.acp.ClaudeAgentRawInput): string` — `"<subagent_type>: <description>"`, else the one present, else `""`. Built from `nonempty` and `qualified`; `qualified` alone does not cover description-only.
+- Q1 option A only: `M.search_head(tool_name: string, raw_input: agentic.acp.ClaudeAgentRawInput): string`, and delete `rewrite_grep_to_rg`.
 
 ## Expected outcome
-- No Claude tool head shows bridge fallback text or a plugin sentinel. While input streams, the head is a bare `###` (`rendering` skill 99-101) until its field arrives.
+- No Claude tool head shows bridge fallback text or a plugin sentinel. While input streams, the head is a bare `###` (`rendering` skill) until its field arrives.
 - MCP, unknown tools, NotebookEdit, ReportFindings and AskUserQuestion head with the tool name (MCP keeps its `server: tool` head). Compaction and memory recall keep their bridge titles.
 - Agent calls without `subagent_type` head with the description; the `(… effort)` suffix is no longer shown (it was shown only when `subagent_type` was absent).
 - New bridge versions cannot add a placeholder to a Claude head; no list to maintain.
@@ -85,7 +96,7 @@ The bridge title carries information `rawInput` lacks only for synthetic calls (
 - `notes/bug-path-b-replay-empty-argument.md` (empty-argument history records); this plan only changes which text is in `argument`.
 
 ## Open questions
-- **Q1 — Grep and Glob heads.** Grep's title is a grep command line the adapter does not build; the renderer reads `-i`/`-P` and the first quoted word from it (`tool_call_renderer.lua:452-462, 1114-1116`). Glob's is ``Find `path` `pattern` ``. Options:
-  - A. Build both from `rawInput` in `ClaudeUtils.search_head` (port of `search.js:17-51` plus `grepOutputMode`/`grepPath` 58-83, emitting `rg` directly). Fully title-free; about 40 lines, and it must track the CLI's input aliases (`-l`/`-c` booleans, `file_path` for `path`), as the bridge's own comments show it does.
+- **Q1 — Grep and Glob heads.** Grep's title is a grep command line the adapter does not build; `tool_call_layout.lua` reads `-i`/`-P` from it (`search_title_flags`) and, without `search_pattern`, the first quoted word (`first_quoted_string`). Glob's is ``Find `path` `pattern` ``. Options:
+  - A. Build both from `rawInput` in `ClaudeUtils.search_head` (port of `GrepReporter`/`GlobReporter.toolUse` plus `grepOutputMode`/`grepPath` in `reporters/search.js`, emitting `rg` directly). Fully title-free; about 40 lines, and it must track the CLI's input aliases (`-l`/`-c` as `true` or `"true"`, `file_path` for `path`), as the bridge's own comments show it does.
   - B. Use the title only once `rawInput.pattern` is present (both tools require `pattern`), else `""`; keep `rewrite_grep_to_rg`. A title absent on such an update means unchanged, so leave `argument` alone then. Few lines; keeps a dependency on the title's format, not on its fallbacks.
-- **Q2 — tools without field knowledge.** The plan heads them with the tool name. That drops the bridge's input-derived text for: AskUserQuestion (single question; the question also arrives as the body, `interaction.js:76-79,86`), ReportFindings (finding count; findings also in the body, `:145-148`), TodoWrite/TaskCreate/TaskUpdate (permission-surfaced only, fact 5). Alternative: add per-tool builders for any of these to `HEADS`. Which, if any?
+- **Q2 — tools without field knowledge.** The plan heads them with the tool name. That drops the bridge's input-derived text for: AskUserQuestion (single question; the question also arrives as the body), ReportFindings (finding count; findings also in the body), TodoWrite/TaskCreate/TaskUpdate (permission-surfaced only, fact 5). Alternative: per-tool heads for any of these. `HEADS` is keyed by minted kind, so each needs a `TOOL_KINDS` entry and a `Glyphs.KIND` glyph, or a separate name-keyed table. Which, if any?

@@ -1,124 +1,124 @@
 # Plan: gutter identity glyphs
+Status: reviewed (open questions)
 
-Master note for eight units of work: 1 to 3, 5 and 7 have shipped, 4 has been
-handed off, and 6 is partly done. Each note is self-contained; this one holds the
-rule they converge on, the limitation they accept, and the order.
+## Background
 
-## The rule
+### Rule
 
 **The sign column says what a region is; the buffer text says what it contains.**
 A region's opening row carries an identity sign, continuation rows `│`, the last
 row `╰─`. Single-row regions carry the identity sign alone — the bracket is what
 a region grows when it has more than one row, not a frame every region wears.
 
-The rule is forced by the chat window being `signcolumn=yes:1` — one sign per
-row, so a region bracket and an identity marker cannot share the opening row and
-one of the two meanings had to leave the gutter. Identity won it; the `╭─` corner
-survives only for a region with no identity to announce, which is prose.
+The chat window is `signcolumn=yes:1` (`ChatBuffer.win_opts`): one sign per row,
+so a region bracket and an identity marker cannot share the opening row. Identity
+wins; the `╭─` corner (`ExtmarkBlock.SIGNS.HEADER`) survives only for a region
+with no identity to announce, which is prose.
 
 `╰─` goes on the last row that draws it where it can be seen (`last_drawn_row` in
-`message_writer`): not a trailing blank, which has nothing to close over, and not
-a fence delimiter, which `TextWrap.is_fence_delimiter` conceals to zero height so
-the corner is never drawn at all. Interior rows of both kinds need no such care —
-a zero-height row leaves no gap in the rail.
+`message_writer.lua`): not a trailing blank, and not a fence delimiter, which
+`TextWrap.is_fence_delimiter` conceals to zero height.
 
-## The accepted limitation
+### Accepted limitation
 
 treesitter-context renders the pinned node's buffer line only, so a gutter glyph
 never reaches the breadcrumb: a pinned diff reads `` ### `path.lua` `` with no
-read/edit distinction. Verified against the installed plugin (`copy_extmarks`
-filters to `nvim.`-prefixed namespaces and its opts whitelist omits the sign
-fields); getting it in there means patching upstream. Accepted because a pinned
-block's kind is implied by what is on screen, and the blocks whose kind is not
-self-evident are short enough to keep their heading in view.
+read/edit distinction. `copy_extmarks` in the installed plugin's
+`treesitter-context/render.lua` copies only `nvim.`-prefixed namespaces. Accepted
+because a pinned block's kind is implied by what is on screen, and the blocks
+whose kind is not self-evident are short enough to keep their heading in view.
 
-## Closed
+### Shipped units
 
-Units 1 to 3, 5 and 7 have shipped; their notes are gone and the code is the
-reference. The rule above is in force, not proposed. Unit 4 turned out to hold
-no rendering work and left for the note that owns the submit paths.
+The rule is in force. Units 1 to 7 have shipped or moved out; the code is the
+reference.
 
-1. Command notices — `/trust`, `/rename`, `/context`, model/provider switch and
-   session resume render as glyph-signed headings instead of fabricated
-   `agent_message_chunk`s. See `MessageWriter:write_notice` and `glyphs.lua`.
-2. Gutter region signs — the tool-call kind glyph moved to the sign column, the
-   prompt and body-bearing notices grew a region bracket, and the prompt's `---`
-   separator is retired. See `ExtmarkBlock.render_block`/`render_rail`,
-   `Renderer.render_decorations`, and `render_region_rail` in `message_writer`.
-3. Closing summary bracket — the prose that closes a turn takes a `╭─` region,
-   tracked by `_prose_run_start_line` and drawn by `render_prose_region`.
-   Superseded entirely by unit 7: the bracket is no longer confined to one run
-   per turn, no longer anchored on the empty `###`, and no longer drawn from
-   `finalize_turn`.
+1. Command notices — `MessageWriter:write_notice`, `glyphs.lua`.
+2. Gutter region signs — `ExtmarkBlock.render_block`/`render_rail`,
+   `ToolCallRenderer.render_decorations`, `render_region_rail` in
+   `message_writer.lua`.
+3. and 7. Prose run regions — every prose run holding more than one paragraph
+   takes a `╭─` region, re-stamped as the run streams (`render_prose_region`,
+   `has_paragraph_break`, `_rebuild_prose_region`, `_extend_prose_region`).
+   Every writer that interrupts prose, and `finalize_turn`/`end_runs`, ends the
+   run through `MessageWriter:_end_prose_run`.
+4. Mid-turn prompt splitting the prose run — moved to the queue gate
+   (`19fa6d6`). `write_user_prompt` ends the run it interrupts through
+   `_end_prose_run`.
+5. Collapsed thought runs — `MessageWriter:flush_thought_run` →
+   `_append_collapsed_region` → `render_collapsed_region` (glyph on the first
+   body row). Insert-mode fold repair: `_rebuild_folds_after_insert`.
+6. Hook activity — recovered from the CLI transcript
+   (`claude_transcript_reader.lua`), rendered by `write_hook_block` (through
+   `_place_collapsed_region`) and `write_hook_row`. The history keeps them as
+   `side_records` messages (`SideRecords.write`).
 
-   Replayed chats carry no prose bracket at all: `replay_messages` writes
-   agent prose through `write_message`, which starts no run, and finalizes no
-   turn. Prompt and tool-block regions do survive a replay, so this is the one
-   bracket that a replayed buffer is missing — the same gap unit 1's notices
-   accept, and the fix is the same shape: replay would have to bracket at each
-   user→agent boundary.
-
-4. Mid-turn prompt splitting the prose run — folded into the queue gate, landed
-   in `19fa6d6`. Nothing was left for the renderer:
-   `write_user_prompt` already ends the run it interrupts (its
-   `_reflow_chunks(bufnr, true)` drops `_prose_run_start_line`), so unit 3's
-   bracket never spans the wedge, and the residual paragraph split is the cost
-   `write_notice` documents and accepts. What remained hangs off the gate, so it
-   went with it: whether a forced mid-turn submit sends at all, the concurrent
-   `_dispatch_turn` state clobbering that follows if it does, and the bottom-pinned
-   preview a *deferred* prompt gets while it waits.
-
-5. Collapsed thought runs — thinking is buffered out of the prose path and
-   rendered as one dimmed `markdown-fold` block closed at write, carrying 󰧑 on
-   its first body row. See `MessageWriter:flush_thought_run` and `sign_at` /
-   `foldtext` in `folds.lua`. Fixing the fold close that insert mode used to
-   swallow came with it (`_retry_folds_on_insert_leave`), which repairs sidecar
-   bodies too.
-
-7. Prose run regions — every prose run holding more than one paragraph takes a
-   `╭─` region, opening on its first row of text and re-stamped as the run
-   streams. The seven writers that interrupt prose end a run through
-   `MessageWriter:_end_prose_run`, which is also what fixed the subagents pane
-   (its runs end at `end_runs` at a Task close, never at `finalize_turn`). See
-   `render_prose_region`, `has_paragraph_break`, and
-   `_{rebuild,extend}_prose_region`.
-
-## Units and order
-
-6. Hook activity — shipped. The ACP bridge drops the hook lifecycle events, so
-   it is recovered from the CLI's transcript jsonl and rendered through
-   `MessageWriter:write_hook_block`, which took 5's shape wholesale: the two
-   share `MessageWriter:_append_collapsed_region`. The history keeps them as
-   `side_records` messages (`SideRecords.write`). Still open: blocking-hook feedback, a site unit 1
-   left as prose, arrives as a genuine `agent_message_chunk`, identifiable by a
-   bridge-generated severity prefix.
-
-8. Foldable prose regions — a prose region should fold on `zc`, open by default.
-   Unblocked by unit 7, which is where the region's range comes from.
-
-   The fold *source* is the work. `folds.scm` is the buffer's only one and it
-   matches `code_fence_content` under a `fold$` info string; prose has no fence,
-   and no node spans a run — a run is a sequence of sibling paragraphs. Markdown's
-   `(section)` is ruled out by that query's own top comment (sections nest, and
-   `folds.lua` flattens every match to level 1), and would anyway miss a run with
-   no `###` opener, which is the first prose of every turn. So the region becomes
-   the fold: overlay the run's rows onto `M.levels`'s per-line array, read from
-   the signs already placed.
-
-   Three things that need deciding rather than assuming: `M.levels` caches on
-   `b:changedtick` and placing an extmark does not bump it, so the render needs an
-   explicit invalidation rather than relying on text landing afterwards; the
-   non-nesting invariant holds by construction unless an agent writes a `fold$`
-   fence inside prose; and `foldtext`'s "the row above a fold is always its
-   fence" stops being true. Open-by-default is nearly free — `chat_win_opts` pins
-   `foldlevel = 99` — but a fold created after a closed one still inherits the
-   closed state, and prose lands directly beneath closed thought runs constantly,
-   so it needs the same explicit `_open_fold` a diff gets.
-
-## Glyph vocabulary
+### Glyph vocabulary
 
 `glyphs.lua`. Nerd Font `nf-md-*`, never emoji, and every new glyph must avoid
 the tool kinds 󰈈 󰏫 󰆍 󰍉 󰖟 󰚩 󰒓. `sign_text` must be
 `glyph .. " "` — two cells, which is also what lets a wide-aspect glyph render
-across both. 󰋚 history is reserved for a future rewind. 󰧑 thinking (unit 5) and
-󰛢 hook and 󰛣 failed hook (unit 6) are spent.
+across both. 󰋚 history is reserved for a future rewind. 󰧑 `THINKING` (unit 5)
+and 󰛢 `HOOK` and 󰛣 `HOOK_FAILED` (unit 6) are spent.
+
+## Changes
+
+### Foldable prose regions
+
+A finished prose region folds on `zc`, open by default.
+
+- **Fold source.** `queries/agentic/folds.scm` is the buffer's only fold query.
+  It matches `code_fence_content` under a `fold$` info string, and its top
+  comment rules out markdown's `(section)` (it would fold all prose, and misses a
+  run with no `###` opener). No node spans a run — a run is sibling paragraphs —
+  so the range comes from the writer. `_end_prose_run` discards the finished
+  region's extmark ids, so the range cannot be read back by id. Approach:
+  `_end_prose_run` places one range extmark (`end_row` set) per finished region
+  in a namespace that `agentic.ui.folds` owns, and `ranges_in` returns those
+  ranges next to the query matches. This is preferred over scanning
+  `NS_DECORATIONS` for `╭─`/`╰─` because a `set_lines` collapses signs onto one
+  row (`extmark_block.lua` header comment), and a range extmark tracks edits by
+  itself.
+- **Invalidation.** `agentic.ui.folds` keeps levels in a per-buffer state that
+  only `on_bytes` and `on_changedtree` make dirty (`splice`, `watch`). Placing an
+  extmark fires neither, and Vim does not re-run `foldexpr` for it. So
+  `agentic.ui.folds` needs a public function to mark rows dirty, and the writer
+  then calls `BufHelpers.recompute_folds(winid)` for each window showing the
+  buffer, or arms `_rebuild_folds_after_insert` in insert mode.
+- **Nesting.** `levels_of_ranges` nests folds by containment, so a `fold$` fence
+  the agent writes inside prose nests under the prose fold. The module
+  docstring's invariant (footprints nest or are disjoint) holds, because a run
+  ends before any other block is appended. `fold_span` and `refresh` take a
+  fold's footprint to include the row above its first row (an opening fence row
+  for query folds); for a prose fold that row is the blank or `###` above the
+  region, and must be counted the same way.
+- **Fold range.** From the region's first prose row (the `╭─` row) through its
+  `╰─` row, so the row a closed fold shows carries the region's sign.
+- **Open by default.** `ChatBuffer.win_opts` pins `foldlevel = 99`, but a fold
+  created after a closed one inherits the closed state, and prose often lands
+  under a closed thought region. Open it explicitly with
+  `_queue_fold(first_row, true)`, as `_decorate_collapsed_region` does for an
+  open region.
+
+### Blocking-hook feedback
+
+Remaining from unit 6: feedback from a blocking hook arrives as a real
+`agent_message_chunk` and renders as prose. A bridge-generated severity prefix
+identifies it. No note owns it yet.
+
+## Non-goals
+
+- Prose regions in a replayed chat. `SessionRestore.replay_messages` writes
+  agent prose through `write_message`, which starts no prose run, so a replayed
+  buffer has no `╭─` regions and no prose folds. Command notices are not in
+  `ChatHistory` either. A fix would bracket each user→agent boundary in replay.
+- Folding a live run. Its range changes with each reflow; it becomes foldable at
+  `_end_prose_run`.
+
+## Open questions
+
+1. Design Q: what does a closed prose fold show? `Folds.foldtext` shows
+   `··· N lines ···`, or leads with the fold's first row when the row above it
+   carries an `NS_TITLED` mark (a mark meant for an opening fence row, which a
+   prose fold does not have). Leading with the first prose row names what was
+   folded; the bare count is shorter.

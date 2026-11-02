@@ -1,54 +1,61 @@
 # PLAN: show when a hook rewrote a tool call's input
 
-Status: **draft — not investigated.** Written from a single observation;
-nothing below has been verified beyond the counts in "What prompted this". Do
-not implement from this as-is.
+Status: reviewed (open questions)
 
-The hook rows in the chat (`MessageWriter:write_hook_block`) show hook
-*activity*. This plan is about the tool call's own displayed input being wrong.
-
-## Problem
+## Background
 
 A `PreToolUse` hook can return `hookSpecificOutput.updatedInput`, which replaces
-the tool input before the tool runs. The chat buffer renders the input the model
-sent, so after a rewrite **the command shown is not the command that ran.**
+the whole tool input before the tool runs. The chat renders the input the model
+sent, so after a rewrite the displayed input is not the input that ran. The hook
+rows (`MessageWriter:write_hook_block`) show hook activity, not the rewritten
+input.
 
-Silent display divergence, not a hook-visibility gap — which is why it is its own
-note.
+### Input path over ACP
 
-## What prompted this
+claude-agent-acp sends the model's input, never the rewritten one:
 
-While classifying hook records in this project's transcript history: 56
-`hook_success` records carry `updatedInput`, all from one script
-(`shell-guard.sh`), all on Bash. That is the entire evidence base.
+- `tool_call` / `tool_call_update` `rawInput` comes from the assistant
+  `tool_use` chunk (`dist/tool-calls/renderer.js`).
+- The PostToolUse hook callback gets the post-rewrite `tool_input` and discards
+  it (`onPostToolUseHook: async (toolUseId, _toolInput, toolResponse)` in
+  `dist/acp-agent.js`).
+- A `session/request_permission` carries the `canUseTool` input
+  (`dist/permissions/presentation.js`), which is post-hook. A hook that also
+  returns `permissionDecision: "allow"` skips `canUseTool`, so then no request
+  is sent.
 
-## Hypothesis (unverified)
+So the divergence is real, and the client has no source for the rewritten
+input except a permission request. A client cannot read a user hook's output.
 
-The rewrite is usually **additive** — a prepended prefix (an env assignment, a
-wrapper, a flag), leaving the model's command intact as a substring.
+### Rewrites in the transcript history
 
-If that holds, the display can stay minimal: keep the rendered command as-is and
-mark the inserted span with an extmark highlight linked to the existing diff
-"added" colouring. No second command line, no diff block, no layout change.
+Every `hook_success` record with `updatedInput` under `~/.claude/projects/`,
+compared against its `tool_use` input:
+
+| Hook | Tool | Records | Change |
+|---|---|---|---|
+| `hooks/subagent_hook.lua` (this plugin, `subagents.force_background`) | Agent | 512, plus 88 no-ops | sets `run_in_background = true` |
+| `~/.config/claude/hooks/shell-guard.sh` | Bash | 83 | prefix `PYTHONUNBUFFERED=1 `; drops `description` (and `timeout` in 19) |
+
+- The shell-guard rewrite no longer exists: dotfiles commit 523fa358 removed
+  it, and `config/claude/settings.json` sets `PYTHONUNBUFFERED` instead. No
+  hook in `config/claude/` returns `updatedInput`.
+- All Bash rewrites were pure prefixes. The dropped `description`/`timeout`
+  show `updatedInput` replaces the object, it does not merge.
+- The only live rewriter is this plugin's `subagent_hook.lua`. The chat does
+  not render `run_in_background` (declared in `claude_agent_acp_adapter.lua`,
+  read nowhere), so that rewrite causes no visible divergence.
+
+## Changes
+
+None until the open question is answered. For an additive command rewrite, the
+minimal treatment is an extmark over the inserted span linked to
+`Theme.HL_GROUPS.DIFF_ADD` (`AgenticDiffAdd`); priority against treesitter on a
+fenced execute command is covered by the `rendering` skill. It needs the
+rewritten input from the bridge first.
 
 ## Open questions
 
-- **Is it always additive?** Needs checking against the 56 records: prefix-only,
-  suffix, or arbitrary rewrite. A non-additive rewrite has no "inserted span" to
-  highlight and needs a different treatment (two lines, or a real diff).
-- **Which fields get rewritten?** Only Bash `command` in the sample, but
-  `updatedInput` is a whole input object — an Edit's `old_string`/`new_string`
-  rewrite would not fit a single-span highlight at all.
-- **Where does the rewritten input arrive over ACP?** Unknown. If the bridge
-  sends the *rewritten* input as `rawInput` then the chat already shows what ran
-  and there is no bug — only the *original* would be missing. **Check this first:
-  it decides whether this note describes a real problem or an inverted one.**
-- Which highlight group to link to (needs a look at `theme.lua`), and whether an
-  extmark on a fenced execute command survives treesitter priority — the
-  `rendering` skill covers that interaction.
-
-## Not decided
-
-Whether this is worth surfacing at all. A hook the user wrote themselves,
-rewriting their own commands predictably, may not need chat real estate. Revisit
-once the first open question above is answered.
+- Scope Q: no live hook rewrites a field the chat shows. Retire this plan, or
+  keep it for future user hooks (which needs a bridge change to send the
+  rewritten input)?

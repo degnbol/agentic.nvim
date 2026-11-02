@@ -1,255 +1,244 @@
 # PLAN: honour explicit `ask` gates under auto mode
 
-Status: **design; not started.** Extends `PLAN-auto-mode-integration.md` (the
-hook transport, session routing, and `decide` refactor described there are
-prerequisites and assumed done).
+Status: reviewed spec. Extends `PLAN-auto-mode-integration.md`; needs its
+Phase 1 (done: `decide` refactor, hook transport, session routing, inline hook
+registration).
 
-## Problem
+## Background
 
-Under auto mode a command that matches an explicit `ask` gate in
-`permissions.json` (e.g. `git commit`, in `permissions.json`'s `git` → `ask`
-array) is auto-allowed by the SDK classifier without prompting. The deterministic
-ladder is supposed to gate it first.
+Under auto mode, a command that matches a structured `ask` gate (e.g.
+`git commit`: `{"positionals":["commit"]}` in `git.ask` of the bundled
+`lua/agentic/permissions.json`) is auto-allowed by the SDK classifier without a
+prompt.
 
-Root cause: `PermissionManager:decide` (`lua/agentic/ui/permission_manager.lua:321`)
-returns `"allow" | "deny" | nil`, and folds two different outcomes into `nil`:
+Root cause: `PermissionManager:decide` returns `"allow"|"deny"|nil` (plus
+deciders) and folds two outcomes into `nil`:
 
-- **explicit `ask`** — a rule matched; the user asked to be prompted for this.
-- **defer** — no rule matched; the ladder cannot prove anything, legitimately
-  the classifier's residue.
+- **explicit `ask`**: a gate matched; the user wants a prompt.
+- **defer**: no rule matched; the classifier's legitimate residue.
 
-`should_auto_reject` (`lua/agentic/utils/permission_rules.lua:2537`) is
-concrete-**deny**-only, so an `ask` match is not a reject; `evaluate`
-(`lua/agentic/utils/permission_rules.lua:2584`) returns `ok = false` for *both*
-"an `ask` gate blocked approval" and "no allow rule matched". So `decide` returns
-`nil` in both cases. `permission_hook.evaluate` maps `nil` → `""`,
-`permission_hook.sh` emits no `permissionDecision`, and the call falls through to
-the classifier (`internals.md` § "PreToolUse decision vs the permission
-resolver": *no decision → resolver handles it*; in auto mode the resolver **is**
-the classifier).
+`PermissionRules.should_auto_reject` is concrete-deny-only, and
+`PermissionRules.evaluate` returns `ok = false` both for "an `ask` gate blocked
+approval" and for "no allow rule matched". `permission_hook.evaluate` maps `nil`
+to `""`, `hooks/permission_hook.sh` emits no `permissionDecision`, and the call
+goes to the classifier (`~/.claude/skills/claude/references/internals.md`
+§ "PreToolUse decision vs the permission resolver": no decision, resolver
+handles it; in auto mode the resolver is the classifier).
 
-In the interactive (`canUseTool`) path the conflation is harmless — both `nil`
-outcomes fall through to the same prompt. Only the auto/hook path loses the
-distinction.
+On the interactive (`canUseTool`) path both `nil` outcomes reach the same
+prompt, so only the hook path loses the distinction.
 
-## Rejected options (do not relitigate)
+### Rejected alternatives
 
-- **Map `ask` → hook `deny`.** `deny` is a hard reject: `tool.call()` never
-  runs, an `is_error` `tool_result` goes to the model (`internals.md` step 5).
-  The agent could then *never* commit in auto mode — that is refusal, not a
-  prompt. `ask` means "route the decision to the user", which `deny` cannot
-  express.
-- **A fifth `permissionDecision`.** There is none.
-  `HookPermissionDecision = 'allow' | 'deny' | 'ask' | 'defer'` (`sdk.d.ts`).
-  In auto mode: `allow` short-circuits only when unobstructed, `deny` hard-rejects,
-  `ask` defers to the classifier (does *not* prompt), `defer` is print-mode-only
-  and ignored over ACP with a warning. None forces the interactive prompt.
-  `PreToolUseHookSpecificOutput` carries only
-  `permissionDecision`/`permissionDecisionReason`/`updatedInput`/`additionalContext`
-  — no mode lever and no `updatedPermissions` (`sdk.d.ts:2180`).
-- **Temporarily flip the session out of auto mode from the hook.** Broken by
-  ordering: mode lives in the SDK process; the only lever is an async
-  `session/set_mode` ACP request, processed on the SDK message loop — which is
-  blocked running the current tool call while the hook runs. The flip cannot
-  land before the resolver reads mode at step 5 of *this* call, so this call
-  still hits the classifier and the flip leaks to a later call. Also
-  session-global (thrashes concurrent calls + the `agentic_headers` pipeline)
-  and needs restore bookkeeping with no completion callback.
-- **Block inside nvim (`vim.wait`) for the answer.** `vim.wait` pumps the libuv
-  loop (timers, IO, `vim.schedule`) but does **not** dispatch mapped keys — the
-  permission answer arrives via buffer-local normal-mode keymaps
-  (`1`/`2`/… → `_complete_request`), which only fire from nvim's main input loop.
-  A blocking `vim.wait` prevents nvim from reaching that loop, so the user's
-  keypress is never processed and every prompt would time out. The fix below
-  therefore does the waiting in the **shell hook process**, keeping every RPC
-  into nvim short and non-blocking so the main loop stays free to dispatch the
-  answer.
+- **Map `ask` to hook `deny`.** `deny` is a hard reject (`tool.call()` never
+  runs, an `is_error` `tool_result` goes to the model). The agent could never
+  commit in auto mode.
+- **Another `permissionDecision`.** `HookPermissionDecision` is
+  `'allow' | 'deny' | 'ask' | 'defer'` (`sdk.d.ts`). In auto mode hook `ask`
+  goes to the classifier; `defer` is print-mode-only.
+  `PreToolUseHookSpecificOutput` has only `permissionDecision`,
+  `permissionDecisionReason`, `updatedInput`, `additionalContext`: no mode lever.
+- **Flip the session out of auto mode from the hook.** The only lever is an
+  async `session/set_mode` request, handled on the SDK loop that is blocked on
+  this tool call, so it lands after the resolver has read the mode. It is also
+  session-global and needs restore bookkeeping.
+- **Block inside nvim (`vim.wait`) for the answer.** `vim.wait` pumps libuv but
+  does not dispatch mapped keys, and the answer arrives through the float's
+  buffer-local keymaps. Every prompt would time out. The waiting goes in the
+  hook shell process instead, and every RPC into nvim returns at once.
 
-## Fix: distinguish `ask`, and drive the prompt by polling from the hook shell
+## Changes
 
-The only place a prompt can originate in auto mode is the hook. But the hook
-must **not** block inside nvim (see the last rejected option). Instead: on an
-explicit `ask`, the hook RPC *enqueues* the plugin's normal permission float and
-returns immediately; the hook **shell process** then polls nvim until the user
-answers, and emits the answer as the hook's `allow`/`deny` verdict. nvim never
-blocks, so the float's existing keymaps dispatch the answer normally, and the
-prompt UX is identical to the interactive `canUseTool` path.
+On an explicit `ask` in auto mode, the hook RPC queues the plugin's normal
+permission float and returns at once. The hook shell process then polls nvim
+until the user answers, and emits the answer as the hook's `allow`/`deny`.
 
-### 1. Surface `ask` as a distinct ladder verdict
+### 1. `ask` as a distinct ladder verdict
 
-- New existential pass in `lua/agentic/utils/permission_rules.lua`, mirroring
-  `should_auto_reject`: `should_prompt(command) → boolean`, true iff a concrete
-  executed leaf matches an `ask` gate (structured `ask` array or glob `ask`
-  pattern). **Concrete-only** and **fail-closed-to-false** (no parser / parse
-  error / over-long → `false`), identical discipline to `should_auto_reject`.
-  Dynamic-token evasion of an `ask` gate (`git $x`) therefore falls through to
-  the classifier — the same accepted residual the concrete-only deny pass
-  already has in auto mode, and acceptable because the classifier is the
-  designated residue handler.
-  - The structured layer already reports `ask` (`permission_structured` classify
-    path); the pass needs a concrete-only `ask_leaf` mirroring the existing
-    `deny_leaf`, plus the glob `ask` patterns from `get_ask_patterns`.
-  - Alternative considered: extend `evaluate`'s walk to also report an
-    `ask`-matched flag. Rejected to keep the hot approve path unchanged; the
-    separate pass only runs on the cold not-approved branch.
-- `decide` gains an `ask` branch **immediately before the final `return nil`**
-  (so every allow opportunity — read-only, `evaluate`-allow, cache-`allow`,
-  trust-allow — and the deny short-circuit all still win first; `ask` only fires
-  when the command is otherwise undecided *and* an `ask` gate matched):
+`lua/agentic/utils/permission_structured.lua`:
 
-  ```lua
-  if command and PermissionRules.should_prompt(command) then
-      return "ask"
-  end
-  return nil
-  ```
-- Return type becomes `"allow" | "deny" | "ask" | nil`. Update the annotation.
-- **Interactive path unchanged.** `_try_auto_approve` handles only `allow`/`deny`
-  explicitly and returns `false` for everything else, so `"ask"` falls through to
-  the existing interactive prompt exactly as `nil` did. Add a comment; no logic
-  change.
+- `M.ask_leaf(entries, parsed) -> boolean`: true iff some `ask` gate of the
+  leaf's relevant entries holds under concrete matching. Use the gate semantics
+  of the `ask` clause of `decide_leaf` (`gate_may`, so `unless` and
+  `option_values` apply), over a concrete context:
+  `build_exist_ctx(args, {}, false, ...)` and `forall_getter(args, {}, arity)`.
+  Do **not** copy `deny_leaf`'s plain `gate_matches_existential`: bundled `ask`
+  gates use `unless` (`gh api` unless `-X GET`, `curl -o` unless `/dev/null`),
+  and plain matching would prompt for those.
 
-### 2. Scope to `auto` mode only
+`lua/agentic/utils/permission_rules.lua`:
 
-`permission_hook.evaluate` already base64-decodes the full PreToolUse hook JSON,
-which includes `permission_mode` (`BaseHookInput.permission_mode`, `sdk.d.ts:164`,
-typed `string`; runtime value is one of `PermissionMode`, `sdk.d.ts:2017`). No
-shell change needed — read `payload.permission_mode`. The blocking-prompt
-interception fires **only** when `permission_mode == "auto"`; every other mode
-already resolves the `ask` per its own explicit contract, so the hook returns
-`""` and lets the resolver handle it:
+- `M.should_prompt(command, config_dir) -> boolean`: true iff an executed leaf
+  concretely matches an `ask` gate (`PermissionStructured.ask_leaf`) or a glob
+  pattern from `M.get_settings_patterns("ask", config_dir)` (but see § 4).
+  Concrete-only and fail-closed-to-false (no parser, parse error, over-long
+  command), like `should_auto_reject`. A dynamic token (`git $x`) goes to the
+  classifier: the same residual the concrete-only deny pass has.
+- Do not copy the reject traversal. Generalise `reject_walk` /
+  `command_is_denied` over a gate: the ctx carries the glob patterns of one list
+  and the leaf predicate (`deny_leaf` or `ask_leaf`). `should_auto_reject` and
+  `should_prompt` both call the one walk; `should_prompt` drops the source.
+- Alternative considered: make `evaluate`'s walk also report an ask match.
+  Rejected: it keeps the hot approve path unchanged; the separate pass runs only
+  on the undecided branch.
 
-| mode | hook returns `""` for `ask` → resolver does | correct? |
+`lua/agentic/ui/permission_manager.lua`, `PermissionManager:decide`: add an
+`ask` branch immediately before the final `return nil, nil`. Every earlier
+verdict still wins: the concrete-deny pass, the allow/reject-always cache,
+`auto_approve_kinds`, `evaluate` allow, grant scopes.
+
+```lua
+if command and PermissionRules.should_prompt(command, self._get_config_dir()) then
+    return "ask", nil
+end
+return nil, nil
+```
+
+Update the return annotation to `"allow"|"deny"|"ask"|nil`. Deciders stay nil
+for `ask`; `_complete_request` records `prompt-allow`/`prompt-reject` when the
+user answers.
+
+`_try_auto_approve` handles only `allow`/`deny`, so `"ask"` reaches the
+interactive prompt exactly as `nil` did. No logic change.
+
+### 2. Auto mode only
+
+`permission_hook.evaluate` already decodes the full hook input. Read
+`payload.permission_mode` (`BaseHookInput.permission_mode`, optional `string`;
+values from `PermissionMode`). When the field is absent, fall back to the
+session's `config_options:current_mode_id()`. Intercept only when the mode is
+`"auto"`. Every other mode resolves a hook no-decision by its own contract:
+
+| mode | hook returns `""`, the resolver does | correct |
 |---|---|---|
-| `auto` | classifier silently allows — **the bug** | intercept (below) |
-| `default` | reaches `canUseTool` → plugin prompt fires once | ✓ prompts as today |
-| `dontAsk` | denies (mode = "auto-deny anything that would prompt") | ✓ matches contract |
-| `bypassPermissions` | allows (user opted out of all checks) | ✓ matches contract |
+| `auto` | classifier allows: **the bug** | intercept |
+| `default` | `canUseTool`, plugin prompt | yes |
+| `dontAsk` | deny | yes |
+| `bypassPermissions` | allow | yes |
 | `plan` / `acceptEdits` | per `internals.md` resolver map | out of scope |
 
-So the verdict handling in `permission_hook.evaluate`:
+Verdict mapping in `permission_hook.evaluate`:
 
-| `decide` verdict | `permission_mode == "auto"` | otherwise |
+| `decide` verdict | mode `auto` | other modes |
 |---|---|---|
 | `"allow"` | `"allow"` | `"allow"` |
 | `"deny"` | `"deny"` | `"deny"` |
-| `"ask"` | **enqueue prompt, return `"pending"`** (see § 3) | `""` |
+| `"ask"` | queue prompt, return `"pending"` (§ 3) | `""` |
 | `nil` | `""` | `""` |
 
-Gating on `"auto"` also confines the interception to the one mode where the
-outcome is surprising, and keeps the hook a no-op interposition everywhere else
-even though it is registered for all sessions.
+### 3. Queue and poll
 
-### 3. Enqueue-and-poll (no nvim-side blocking)
+The call identity is `PreToolUseHookInput.tool_use_id`. claude-agent-acp uses it
+as the ACP `toolCallId`; `permission_hook.evaluate` already relies on this for
+`record_deciders`. The session comes from the existing
+`SessionRegistry.session_for_acp_id(payload.session_id)`, the manager from its
+`permission_manager` field.
 
-Per-call identity uses the hook input's `tool_use_id`
-(`PreToolUseHookInput.tool_use_id`, `sdk.d.ts:2177`), unique per tool call.
+State: a pending-answer table on the `PermissionManager` instance
+(`hook_answers: table<string, "pending"|"allow"|"deny">`, keyed by
+`tool_use_id`): per session, as the session-isolation rule requires. `clear()`
+empties it.
 
-- **`permission_hook.evaluate`** (auto + `ask`): synthesise an ACP
-  `RequestPermission` from `tool_name`/`tool_input` (it already builds the
-  `toolCall`), adding the standard `options` (`allow_once`, `allow_always`,
-  `reject_once`, `reject_always`) so `PermissionFloat` renders and the `1..N`
-  keymaps map. Enqueue it through the normal queue with a callback that stores
-  the answer on the manager keyed by `(session_id, tool_use_id)`, then **return
-  immediately** with the string `"pending"`. Because the verdict is already known
-  to be `ask`, enqueue directly rather than re-running `_try_auto_approve`.
-- **`permission_hook.poll`** (new RPC entry): decode the same payload, look up
-  the stored answer by `(session_id, tool_use_id)`, return `"allow"` /
-  `"deny"` / `"pending"`. Map the answered `optionId` → its option `kind` →
-  `"allow"` (`allow_once`/`allow_always`) or `"deny"` (`reject_*` / `cancelled`
-  / `<C-c>` abort). Clear the entry on a terminal answer.
-- **`permission_hook.cancel`** (new RPC entry): dequeue/close the float and drop
-  the pending entry — called by the shell on its poll deadline.
-- **`permission_hook.sh`** re-sends the *same* base64 payload for each RPC (no
-  shell-side JSON parsing):
+`lua/agentic/permission_hook.lua`:
 
-  ```sh
-  case "$verdict" in
-      allow|deny) emit "$verdict" ;;
-      pending)
-          # poll until answered or the deadline (< SDK hook timeout)
-          waited=0
-          while [ "$waited" -lt "$DEADLINE" ]; do
-              sleep 0.1; waited=$((waited + 1))
-              ans=$(nvim --server "$AGENTIC_SOCK" --remote-expr \
-                  "luaeval('require(\"agentic.permission_hook\").poll(_A)','${payload}')" 2>/dev/null) || break
-              case "$ans" in allow|deny) emit "$ans"; break ;; esac
-          done
-          if [ -z "${ans:-}" ] || { [ "$ans" != allow ] && [ "$ans" != deny ]; }; then
-              nvim --server "$AGENTIC_SOCK" --remote-expr \
-                  "luaeval('require(\"agentic.permission_hook\").cancel(_A)','${payload}')" 2>/dev/null
-              emit deny   # fail-closed: an unanswered explicit ask is not auto-executed
-          fi
-          ;;
-      *) : ;;   # "" → no output → classifier
-  esac
-  ```
+- `M.evaluate(b64)`, auto + `ask`: build an `agentic.acp.RequestPermission` with
+  `sessionId = payload.session_id`, `toolCall.toolCallId = payload.tool_use_id`
+  (not the current placeholder `"hook"`: the float anchor, the tool-call hold,
+  the unapproved-command highlight and `record_deciders` all look up the tool
+  call by this id), and options `allow_once`, `allow_always`, `reject_once`,
+  `reject_always` (option id = kind). Set `hook_answers[id] = "pending"`, then
+  call `SessionManager:_on_request_permission(request, callback)` (rename it to
+  public `request_permission`, since a second module now calls it), not
+  `pm:add_request` directly: that method also stops the status indicator, rings
+  the attention signal and fires the `on_permission_request` user hook, which
+  matter most in auto mode, where the user is likely not watching. The callback
+  maps option kind `allow_*` to `"allow"`, and `reject_*` or a nil option id
+  (cancel) to `"deny"`. Return `"pending"`. `add_request` re-runs
+  `_try_auto_approve`; `decide` is deterministic and returns `"ask"` again, so
+  the request queues. If it did auto-resolve, the callback has already stored
+  the answer and `poll` returns it.
+- `M.poll(b64) -> "allow"|"deny"|"pending"`: look up `hook_answers` by
+  `tool_use_id`; drop the entry on a terminal answer. An unknown id returns
+  `"deny"` (manager cleared, nvim restarted): fail-closed.
+- `M.cancel(b64)`: `pm:remove_request_by_tool_call_id(tool_use_id)` (closes the
+  float or dequeues; its nil callback stores `"deny"`), then drop the entry.
 
-  Each poll RPC runs a trivial table lookup and returns instantly, so nvim
-  returns to its main input loop between polls and the user's keypress reaches
-  the float's keymaps. `$DEADLINE` is in tenths of a second (poll interval); keep
-  it below the SDK hook timeout — see § 4.
-- **State store.** The pending-answer table lives **on the `PermissionManager`
-  instance** (per-tabpage, so per-session — multi-tabpage rule: no module-level
-  shared state). Keyed by `tool_use_id`. `SessionRegistry.permission_manager_for_session`
-  already resolves the right manager from `session_id`.
+`hooks/permission_hook.sh`: add an `emit <verdict>` helper for the two existing
+`printf` lines, and a `pending)` branch that re-sends the same base64 payload
+(no shell-side JSON parsing):
 
-### 4. Hook timeout coordination (load-bearing)
+```sh
+pending)
+    i=0
+    while [ "$i" -lt "$POLLS" ]; do
+        sleep "$POLL_INTERVAL"; i=$((i + 1))
+        ans=$(nvim --server "$AGENTIC_SOCK" --remote-expr \
+            "luaeval('require(\"agentic.permission_hook\").poll(_A)', '${payload}')" 2>/dev/null) || break
+        case "$ans" in allow|deny) emit "$ans"; exit 0 ;; esac
+    done
+    nvim --server "$AGENTIC_SOCK" --remote-expr \
+        "luaeval('require(\"agentic.permission_hook\").cancel(_A)', '${payload}')" >/dev/null 2>&1
+    emit deny   # fail-closed: an unanswered explicit ask does not run
+    ;;
+```
 
-The SDK runs each PreToolUse hook with a `timeout` in **seconds** (not ms;
-`HookCallbackMatcher.timeout` / the settings-blob per-command `timeout` are both
-documented "Timeout in seconds", `sdk.d.ts:775`, `sdk.d.ts:4828`), default **60
-s**. If the shell poll loop outlasts it, the SDK kills the hook → no output →
-classifier → auto-allow, i.e. the bug reappears. Required:
+Each poll is a table lookup, so nvim returns to its main loop between polls and
+the float's keymaps get the keypress. Each poll spawns an nvim client process,
+so use `POLL_INTERVAL=0.5`, not 0.1 (fractional `sleep` works on macOS and GNU
+coreutils).
 
-- Set a generous `timeout` (seconds) on the inline PreToolUse hook entry in
-  `acp_client.lua`'s `build_claude_options` (the
-  `_meta.claudeCode.options.settings.hooks` blob — see
-  `PLAN-auto-mode-integration.md` § "Hook registration"). A human answer window
-  wants minutes, e.g. 300.
-- The shell `$DEADLINE` must be **strictly less** than that `timeout × 10` tenths,
-  so the shell hits its own deadline (→ `cancel` + `emit deny`, fail-closed)
-  *before* the SDK kills the hook (→ classifier, fail-open). Fail-closed is the
-  safe side for an explicit `ask` the user did not answer.
-- Spike task: confirm the maximum permitted hook timeout / whether it can be
-  disabled — enforcement is in the compiled binary, the type layer only forwards
-  `i.timeout`.
+### 4. Hook timeout and settings `ask` rules
+
+- Set an explicit `timeout` (seconds: `HookCallbackMatcher.timeout` and the
+  per-command `timeout` are both seconds) on the permission hook entry in
+  `build_claude_options`
+  (`lua/agentic/acp/adapters/claude_agent_acp_adapter.lua`):
+  `{ type = "command", command = PERMISSION_HOOK, timeout = 300 }`. If the SDK
+  kills the hook first, no output reaches it and the classifier allows: the bug
+  comes back.
+- `POLLS * POLL_INTERVAL` must be strictly less than that timeout, so the shell
+  reaches its own deadline (`cancel`, `deny`) before the SDK kills it.
+- Spike: confirm the maximum hook timeout the compiled binary accepts.
+- Spike: in auto mode, does a settings.json `ask` rule for Bash reach
+  `canUseTool`? `internals.md` says a hook `allow` short-circuits only when no
+  settings `ask` rule matches.
+  - If yes: glob `ask` patterns already prompt. `should_prompt` must match
+    structured `ask` gates only, or the user gets two prompts.
+  - If no: a user `allow` from the hook does not stick for a glob-`ask` command
+    (the classifier still runs). Keep glob patterns in `should_prompt` for the
+    fail-closed `deny` side.
 
 ## Reentrancy
 
-The `vim.wait` hazard is gone: `evaluate` enqueues and **returns immediately**,
-so the hook RPC never holds nvim's loop open. This does reuse `add_request` (the
-integration plan chose `decide`-direct to avoid enqueuing a modal mid-RPC), but
-the concern there was a *blocking* nested modal — here the float opens
-`enter=false` (non-blocking, no focus steal) and the RPC returns, exactly the
-benign case the integration plan's reentrancy trace already analysed. Between
-polls nvim runs its normal main loop: streaming chunks render, other queued
-permission requests display in order, and the user answers via the standard
-keymaps.
+`evaluate` queues and returns at once, so the hook RPC never holds nvim's loop.
+The integration plan kept the hook away from `add_request` because of a nested
+*blocking* modal. Here the float opens with `enter=false` and the RPC returns:
+the benign case the integration plan's § "Reentrancy" trace analysed.
 
-- An interactive prompt already `current` when the hook fires → the synthesised
-  request queues behind it; the poll returns `"pending"` until the user works
-  down to it.
-- Parallel PreToolUse hooks (batched tool calls) → each shell process polls its
-  own `tool_use_id`; prompts serialise through the one queue; each shell gets
-  its own answer.
+- An interactive prompt is already `current_request`: the hook request queues
+  behind it; `poll` returns `"pending"` until the user reaches it.
+- Parallel PreToolUse hooks (batched tool calls): each shell polls its own
+  `tool_use_id`; prompts serialise through the one queue.
+- The user cancels the turn: `cancel_requests` resolves the hook request with
+  nil, so the entry becomes `"deny"`. If the SDK has already killed the hook,
+  nobody polls the entry; `clear()` drops it.
 
 ## Testing
 
-- **Unit:** `should_prompt` truth table (concrete `ask` match → true; dynamic
-  token → false; deny wins over ask; parse failure → false). `decide` verdict
-  table gains the `ask` row (explicit-`ask` command → `"ask"`; unprovable →
-  `nil`). Assert `_try_auto_approve` still prompts (returns `false`) for an
-  `"ask"` verdict — the existing `permission_manager.test.lua:1188` ("prompts an
-  ask command instead of rejecting") already covers the interactive path and must
-  stay green.
-- **Enqueue/poll:** `evaluate` (auto + `ask`) returns `"pending"` and registers a
-  pending entry; firing the stored callback with each `optionId` makes `poll`
-  return the mapped `"allow"`/`"deny"` and clears the entry; `poll` returns
-  `"pending"` until answered; `cancel` dequeues and drops the entry. Drive the
-  callback in-test — no real keypress needed.
-- **Mode gate:** `evaluate` returns `""` for `"ask"` when `permission_mode ~=
-  "auto"`, and returns `"pending"` when `== "auto"`.
-- **E2e:** a real auto-mode `git commit` reaches the hook, opens the float; the
-  shell poll loop picks up the answered verdict and maps it to
-  `permissionDecision`.
+- **`should_prompt`:** a concrete `ask` match is true; a dynamic token is false;
+  an `unless` exclusion (`gh api -X GET`) is false; a parse failure is false; a
+  wrapped ask (`timeout 5 git commit`) is true.
+- **`decide`:** an explicit-ask command returns `"ask"`; deny wins over ask; an
+  allow-always cached command returns `"allow"`; an unprovable command returns
+  `nil`. The existing `permission_manager.test.lua` test "prompts an ask command
+  instead of rejecting" covers the interactive path and must stay green.
+- **`permission_hook`:** `evaluate` (auto + ask) returns `"pending"` and queues
+  a request whose `toolCallId` is the `tool_use_id`; calling the stored callback
+  with each option id makes `poll` return the mapped verdict and drop the entry;
+  `poll` returns `"pending"` before an answer and `"deny"` for an unknown id;
+  `cancel` dequeues and drops the entry.
+- **Mode gate:** `evaluate` returns `""` for `"ask"` when `permission_mode` is
+  not `"auto"`, `"pending"` when it is, and uses the session mode when the field
+  is absent.
+- **E2e:** an auto-mode `git commit` opens the float; the answer reaches the
+  shell poll loop and becomes the `permissionDecision`.

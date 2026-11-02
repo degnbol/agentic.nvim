@@ -9,11 +9,6 @@ minor").
 Plans in `notes/`. Within a track, each plan needs the ones above it.
 Tracks are independent unless a note says otherwise.
 
-**Session resume**
-1. [`PLAN-subagent-task-id.md`](notes/PLAN-subagent-task-id.md). Before 2
-   only to avoid a rebase; it can land earlier.
-2. [`PLAN-split-subagents.md`](notes/PLAN-split-subagents.md)
-
 **Resume terminology:** a mechanical rename: a plan that lands after it
 renames its references first.
 1. [`PLAN-resume-terminology.md`](notes/PLAN-resume-terminology.md)
@@ -28,8 +23,10 @@ renames its references first.
 **Subagents**
 1. [`PLAN-agent-view-consolidation.md`](notes/PLAN-agent-view-consolidation.md).
    After `PLAN-reapply-model.md`, which deletes the model-line dedupe this
-   plan would otherwise move. After Session resume 2 only to avoid a rebase.
+   plan would otherwise move, and after Session resume 1, whose `Subagents`
+   class it is written against.
 - [`PLAN-nested-subagent-blocks.md`](notes/PLAN-nested-subagent-blocks.md).
+  After Session resume 1 only to avoid a rebase.
 
 **Executed code**
 1. [`PLAN-walk-file-model.md`](notes/PLAN-walk-file-model.md)
@@ -38,12 +35,14 @@ renames its references first.
 **Tool call rendering**
 1. [`PLAN-silent-errors.md`](notes/PLAN-silent-errors.md)
 2. [`PLAN-failed-execute-body-offset.md`](notes/PLAN-failed-execute-body-offset.md):
-   the offset is fixed; open question 2 stays.
+   the offset is fixed; open question 2 stays. May retire: a rejected call
+   no longer draws the deny-rule merged body, its only reachable case.
 
-**Input and queue:**
-[`PLAN-usage-limit-queue.md`](notes/PLAN-usage-limit-queue.md). It
-needs the fix in
-[`bug-respawn-invalidates-shared-client.md`](notes/bug-respawn-invalidates-shared-client.md).
+**Input and queue**
+1. [`PLAN-shared-client-recovery.md`](notes/PLAN-shared-client-recovery.md)
+2. [`PLAN-usage-limit-queue.md`](notes/PLAN-usage-limit-queue.md). Its
+   "Limit ownership" assumes a respawn replaces the client; rewrite it once 1
+   lands.
 
 **Auto mode**
 1. [`PLAN-auto-mode-integration.md`](notes/PLAN-auto-mode-integration.md)
@@ -59,7 +58,7 @@ calls to).
 
 **No ordering:**
 [`PLAN-widget-clear-chat.md`](notes/PLAN-widget-clear-chat.md),
-[`PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md),
+[`PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md) (unit 8 left),
 [`PLAN-heading-command-flag.md`](notes/PLAN-heading-command-flag.md) (on hold;
 after `PLAN-placeholder-titles.md`),
 [`PLAN-updated-input-display.md`](notes/PLAN-updated-input-display.md),
@@ -211,6 +210,11 @@ A usage limit without a reset clause renders as a raw error naming the org
 monthly spend limit:
 [`notes/bug-error-classification-structured-errorkind.md`](notes/bug-error-classification-structured-errorkind.md).
 
+### Permission matchers overflow on long commands
+
+On the hook path the overflow returns undecided, so the auto-mode classifier
+decides: [`notes/bug-matcher-depth-overflow.md`](notes/bug-matcher-depth-overflow.md).
+
 ### `ExitWorktree` renders as an unrecognised tool
 
 `ClaudeUtils.MODE_SWITCH_TOOLS` (`claude_utils.lua:6-10`) maps `EnterPlanMode`,
@@ -295,9 +299,9 @@ so typing them in the input buffer runs the TUI flow via the LLM.
 
 ### Gutter identity glyphs
 
-Five units of work under one rule — *the sign column says what a region is, the
-buffer text says what it contains*. Overview, dependency order and the accepted
-breadcrumb limitation: [`notes/PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md).
+One rule — *the sign column says what a region is, the buffer text says what it
+contains*. Units 1–7 have landed; foldable prose regions remain:
+[`notes/PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md).
 
 ### Rendering
 
