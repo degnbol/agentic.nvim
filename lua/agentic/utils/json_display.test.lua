@@ -1,5 +1,8 @@
 local JsonDisplay = require("agentic.utils.json_display")
+local MarkdownConceal = require("tests.helpers.markdown_conceal")
 local assert = require("tests.helpers.assert")
+
+local strwidth = vim.api.nvim_strwidth
 
 --- @param value any
 --- @return string[]
@@ -11,11 +14,22 @@ local function pretty(value)
 end
 
 describe("agentic.utils.JsonDisplay", function()
+    local restore
+
+    before_each(function()
+        restore = MarkdownConceal.pin()
+    end)
+
+    after_each(function()
+        restore()
+    end)
+
     describe("lines", function()
         it(
             "shows a flat object as a key | value table sorted by key",
             function()
-                local rows, lang = JsonDisplay.lines('{"b":"x","a":1.5}')
+                local rows, lang =
+                    JsonDisplay.lines('{"b":"x","a":1.5}', strwidth)
                 assert.equal("markdown", lang)
                 assert.same({
                     "| key | value |",
@@ -27,7 +41,8 @@ describe("agentic.utils.JsonDisplay", function()
         )
 
         it("writes strings bare and other scalars as JSON", function()
-            local rows = JsonDisplay.lines('{"a":true,"b":null,"c":"","d":3}')
+            local rows =
+                JsonDisplay.lines('{"a":true,"b":null,"c":"","d":3}', strwidth)
             assert.same({
                 "| key | value |",
                 "| --- | ----- |",
@@ -39,14 +54,15 @@ describe("agentic.utils.JsonDisplay", function()
         end)
 
         it("shows an empty key as an empty key cell", function()
-            local rows = JsonDisplay.lines('{"":"v"}')
+            local rows = JsonDisplay.lines('{"":"v"}', strwidth)
             assert.equal("|     | v     |", rows[3])
         end)
 
         it("shows an array of flat objects one row per object", function()
             local rows, lang = JsonDisplay.lines(
                 '[{"status":"done","content":"write the tests","id":"1"},'
-                    .. '{"id":"2","content":"ship","status":"open"}]'
+                    .. '{"id":"2","content":"ship","status":"open"}]',
+                strwidth
             )
             assert.equal("markdown", lang)
             assert.same({
@@ -58,18 +74,21 @@ describe("agentic.utils.JsonDisplay", function()
         end)
 
         it("keeps key order among equally wide columns", function()
-            local rows = JsonDisplay.lines('[{"a":"x","b":"y","c":"z"}]')
+            local rows =
+                JsonDisplay.lines('[{"a":"x","b":"y","c":"z"}]', strwidth)
             assert.equal("| a   | b   | c   |", rows[1])
         end)
 
         it("escapes a pipe in a key and a value", function()
-            local rows = JsonDisplay.lines('{"a|b":"c|d"}')
+            local rows =
+                JsonDisplay.lines('{"a|b":"c|d"}', MarkdownConceal.width)
             assert.equal("| a\\|b | c\\|d  |", rows[3])
         end)
 
         it("decodes multi-line pretty source the same", function()
-            local compact = JsonDisplay.lines('{"a":1,"b":"x"}')
-            local spread = JsonDisplay.lines('{\n  "a": 1,\n  "b": "x"\n}')
+            local compact = JsonDisplay.lines('{"a":1,"b":"x"}', strwidth)
+            local spread =
+                JsonDisplay.lines('{\n  "a": 1,\n  "b": "x"\n}', strwidth)
             assert.same(compact, spread)
         end)
 
@@ -85,7 +104,7 @@ describe("agentic.utils.JsonDisplay", function()
                 '{"a\\u0001":1}',
             }
             for _, source in ipairs(sources) do
-                local rows, lang = JsonDisplay.lines(source)
+                local rows, lang = JsonDisplay.lines(source, strwidth)
                 assert.equal("json", lang)
                 assert.same(pretty(vim.json.decode(source)), rows)
             end
@@ -93,7 +112,7 @@ describe("agentic.utils.JsonDisplay", function()
 
         it("returns nil for no object or array, or no JSON encoding", function()
             for _, source in ipairs({ "[1e999]", '"x"', "3", "{nope" }) do
-                assert.is_nil(JsonDisplay.lines(source))
+                assert.is_nil(JsonDisplay.lines(source, strwidth))
             end
         end)
     end)

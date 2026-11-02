@@ -62,6 +62,7 @@ local M = {}
 --- @field kind string `AcpKind.normalise(block.kind)`
 --- @field argument string `block.argument` without the kind prefix
 --- @field wrap_width integer 0 = soft wrap
+--- @field measure agentic.utils.MarkdownTable.Measure
 --- @field failure? string[] `failure_reason` of a failed call; nil when not failed or empty
 --- @field head_line? integer Line appended to a path head as `path:N`
 --- @field diff? { hunks: agentic.ui.ToolCallDiff.DiffBlock[], source_lines: string[], is_create: boolean }
@@ -386,9 +387,11 @@ end
 --- folded closed when more than one row.
 --- @param rows string[]
 --- @param wrap_width integer 0 = soft wrap
+--- @param measure agentic.utils.MarkdownTable.Measure
 --- @return agentic.ui.ToolCallLayout.Section
-local function prose_section(rows, wrap_width)
-    local wrapped, table_row_ends = TextWrap.wrap_prose(rows, wrap_width)
+local function prose_section(rows, wrap_width, measure)
+    local wrapped, table_row_ends =
+        TextWrap.wrap_prose(rows, wrap_width, measure)
     --- @type agentic.ui.ToolCallLayout.HighlightRange[]
     local highlights = {}
     for _, i in ipairs(table_row_ends) do
@@ -568,7 +571,7 @@ local function generic_body(call)
     if not body then
         return {}
     end
-    local rows, lang = JsonDisplay.lines(table.concat(body, "\n"))
+    local rows, lang = JsonDisplay.lines(table.concat(body, "\n"), call.measure)
     --- @type agentic.ui.ToolCallLayout.Section
     local section = { rows = rows or body, lang = lang or "console" }
     local max_lines = Config.tool_call_display.other_max_lines
@@ -587,7 +590,7 @@ local function sidecar_body(call)
     if not body then
         return {}
     end
-    return { prose_section(body, call.wrap_width) }
+    return { prose_section(body, call.wrap_width, call.measure) }
 end
 
 --- @type table<string, agentic.ui.ToolCallLayout.Builder>
@@ -903,8 +906,9 @@ end
 --- Lay out a tool call block. Does not modify `block` and writes no buffer.
 --- @param block agentic.ui.MessageWriter.ToolCallBlock
 --- @param wrap_width integer Hard-wrap width; 0 = soft wrap
+--- @param measure agentic.utils.MarkdownTable.Measure
 --- @return agentic.ui.ToolCallLayout.Layout
-function M.build(block, wrap_width)
+function M.build(block, wrap_width, measure)
     local failure = block.failure_reason
     --- @type agentic.ui.ToolCallLayout.Call
     local call = {
@@ -912,6 +916,7 @@ function M.build(block, wrap_width)
         kind = AcpKind.normalise(block.kind),
         argument = strip_kind_prefix(block.kind, block.argument),
         wrap_width = wrap_width,
+        measure = measure,
         failure = block.status == "failed"
                 and failure
                 and #failure > 0

@@ -23,9 +23,11 @@ end
 --- @param line string
 --- @param ranges agentic.utils.Conceal.Range[]
 --- @param inlines agentic.utils.Conceal.Inline[]|nil
+--- @param conceallevel integer|nil 2 when nil
 --- @return integer[]
-local function shown(line, ranges, inlines)
-    local columns = Conceal.columns(line, ranges, inlines or {}, 8)
+local function shown(line, ranges, inlines, conceallevel)
+    local columns =
+        Conceal.columns(line, ranges, inlines or {}, 8, conceallevel or 2)
     return vim.tbl_map(function(byte)
         return columns.shown[byte]
     end, columns.starts)
@@ -34,14 +36,14 @@ end
 describe("agentic.utils.Conceal", function()
     describe("columns", function()
         it("counts every character without conceal", function()
-            local columns = Conceal.columns("abc", {}, {}, 8)
+            local columns = Conceal.columns("abc", {}, {}, 8, 2)
             assert.same({ 0, 1, 2, 3 }, columns.starts)
             assert.same({ [0] = 0, 1, 2, 3 }, columns.raw)
             assert.same({ [0] = 0, 1, 2, 3 }, columns.shown)
         end)
 
         it("keys multibyte characters by their first byte", function()
-            local columns = Conceal.columns("aéb", {}, {}, 8)
+            local columns = Conceal.columns("aéb", {}, {}, 8, 2)
             assert.same({ 0, 1, 3, 4 }, columns.starts)
             assert.equal(2, columns.raw[3])
         end)
@@ -49,11 +51,11 @@ describe("agentic.utils.Conceal", function()
         it("widens a tab to the next multiple of tabstop", function()
             assert.same(
                 { [0] = 0, 1, 4, 5 },
-                Conceal.columns("a\tb", {}, {}, 4).raw
+                Conceal.columns("a\tb", {}, {}, 4, 2).raw
             )
             assert.same(
                 { [0] = 0, 1, 8, 9 },
-                Conceal.columns("a\tb", {}, {}, 8).raw
+                Conceal.columns("a\tb", {}, {}, 8, 2).raw
             )
         end)
 
@@ -125,7 +127,8 @@ describe("agentic.utils.Conceal", function()
                     "ab",
                     {},
                     { { col = 1, width = 3 } },
-                    8
+                    8,
+                    2
                 )
                 assert.same({ [0] = 0, 4, 5 }, columns.raw)
                 assert.same({ [0] = 0, 4, 5 }, columns.shown)
@@ -135,6 +138,53 @@ describe("agentic.utils.Conceal", function()
 
         it("counts a double-width replacement as two cells", function()
             assert.same({ 0, 2, 2, 3 }, shown("abc", { range(0, 2, "全") }))
+        end)
+
+        describe("by conceallevel", function()
+            --- `a[b]c` with `[` and `]` hidden, `b` replaced by `X`.
+            local ranges = {
+                range(1, 2, ""),
+                range(2, 3, "X"),
+                range(3, 4, ""),
+            }
+
+            it("shows every character at level 0", function()
+                assert.same({ 0, 1, 2, 3, 4, 5 }, shown("a[b]c", ranges, {}, 0))
+            end)
+
+            it(
+                "draws the 'listchars' conceal character for an empty text at level 1",
+                function()
+                    assert.same(
+                        { 0, 1, 2, 3, 4, 5 },
+                        shown("a[b]c", ranges, {}, 1)
+                    )
+                end
+            )
+
+            it("hides an empty text at level 2", function()
+                assert.same({ 0, 1, 1, 2, 2, 3 }, shown("a[b]c", ranges, {}, 2))
+            end)
+
+            it("hides every covered byte at level 3", function()
+                assert.same({ 0, 1, 1, 1, 1, 2 }, shown("a[b]c", ranges, {}, 3))
+            end)
+
+            it(
+                "loses a replacement whose start a higher-priority range covers at level 1",
+                function()
+                    local overlap =
+                        { range(2, 6, "x", 100), range(0, 4, "", 200) }
+                    assert.same(
+                        { 0, 1, 1, 1, 1, 1, 1, 2 },
+                        shown("abcdefg", overlap, {}, 1)
+                    )
+                    assert.same(
+                        { 0, 0, 0, 0, 0, 0, 0, 1 },
+                        shown("abcdefg", overlap, {}, 3)
+                    )
+                end
+            )
         end)
     end)
 

@@ -1,4 +1,5 @@
 local BufHelpers = require("agentic.utils.buf_helpers")
+local ChatBuffer = require("agentic.ui.chat_buffer")
 local Config = require("agentic.config")
 local ErrorReport = require("agentic.acp.error_report")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
@@ -761,8 +762,7 @@ function MessageWriter:write_message(update)
 
     local lines = vim.split(text, "\n", { plain = true })
     close_fence(lines)
-    local wrapped, table_row_ends =
-        TextWrap.wrap_prose(lines, Config.windows.wrap_width)
+    local wrapped, table_row_ends = self:_wrap_prose(lines)
 
     self:_schedule_follow()
 
@@ -1333,10 +1333,8 @@ function MessageWriter:flush_thought_run()
         return
     end
 
-    local body, table_row_ends = TextWrap.wrap_prose(
-        vim.split(vim.trim(text), "\n", { plain = true }),
-        Config.windows.wrap_width
-    )
+    local body, table_row_ends =
+        self:_wrap_prose(vim.split(vim.trim(text), "\n", { plain = true }))
     self:_append_collapsed_region(body, Glyphs.THINKING_SIGN, {
         table_row_ends = table_row_ends,
     })
@@ -1412,8 +1410,7 @@ end
 --- fenced body pins the treesitter-context breadcrumb.
 --- @param block agentic.ui.MessageWriter.HookBlock
 function MessageWriter:write_hook_block(block)
-    local wrapped, table_row_ends =
-        TextWrap.wrap_prose(block.body, Config.windows.wrap_width)
+    local wrapped, table_row_ends = self:_wrap_prose(block.body)
     local sign = (block.failed and Glyphs.HOOK_FAILED or Glyphs.HOOK) .. " "
     self:_place_collapsed_region(block, block.title, wrapped, sign, {
         open = block.failed,
@@ -1579,7 +1576,7 @@ function MessageWriter:write_user_prompt(text, extra_lines)
     -- the prompt's own code block.
     close_fence(flat)
     local table_row_ends
-    flat, table_row_ends = TextWrap.wrap_prose(flat, Config.windows.wrap_width)
+    flat, table_row_ends = self:_wrap_prose(flat)
 
     self:_schedule_follow()
 
@@ -1678,8 +1675,7 @@ function MessageWriter:write_notice(notice)
     -- reached by scrolling horizontally.
     local lines = { "## " .. notice.title, notice.detail }
     vim.list_extend(lines, notice.body or {})
-    local fold_body, table_row_ends =
-        TextWrap.wrap_prose(notice.fold_body or {}, Config.windows.wrap_width)
+    local fold_body, table_row_ends = self:_wrap_prose(notice.fold_body or {})
     --- @type integer|nil 0-indexed offset of the fenced body's first row in `lines`
     local fold_offset
     if #fold_body > 0 then
@@ -1892,10 +1888,7 @@ function MessageWriter:write_error_message(err)
 
     local body_lines, error_type, reset_epoch = ErrorReport.format(err)
     local all_lines = { HEADING }
-    vim.list_extend(
-        all_lines,
-        (TextWrap.wrap_prose(body_lines, Config.windows.wrap_width))
-    )
+    vim.list_extend(all_lines, (self:_wrap_prose(body_lines)))
 
     self:_release_prose_pin()
     self:_schedule_follow()
@@ -2023,7 +2016,7 @@ end
 function MessageWriter:write_error_action(text)
     self:_schedule_follow()
 
-    local lines = TextWrap.wrap_prose({ text }, Config.windows.wrap_width)
+    local lines = self:_wrap_prose({ text })
 
     self:_own_edit(function(bufnr)
         local block = self._error_block
@@ -2212,8 +2205,7 @@ function MessageWriter:_reflow_chunks(bufnr, flush_all)
     end
 
     local raw = vim.api.nvim_buf_get_lines(bufnr, start, reflow_end, false)
-    local wrapped, table_row_ends =
-        TextWrap.wrap_prose(raw, Config.windows.wrap_width)
+    local wrapped, table_row_ends = self:_wrap_prose(raw)
 
     if not vim.deep_equal(raw, wrapped) then
         vim.api.nvim_buf_set_lines(bufnr, start, reflow_end, false, wrapped)
@@ -2522,6 +2514,19 @@ function MessageWriter:_scroll_followers()
         end
     end
     self:_scroll(winids)
+end
+
+--- `TextWrap.wrap_prose` at the chat's wrap width, with table cells measured
+--- as this buffer shows them.
+--- @param lines string[]
+--- @return string[] wrapped
+--- @return integer[] table_row_ends
+function MessageWriter:_wrap_prose(lines)
+    return TextWrap.wrap_prose(
+        lines,
+        Config.windows.wrap_width,
+        ChatBuffer.cell_measure(self.bufnr)
+    )
 end
 
 --- Owe a scroll for a write and schedule it after the current synchronous
@@ -2887,8 +2892,11 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         -- tracking) via nvim_buf_set_lines.
         self:_end_prose_run(bufnr)
 
-        local layout =
-            ToolCallLayout.build(tool_call_block, Config.windows.wrap_width)
+        local layout = ToolCallLayout.build(
+            tool_call_block,
+            Config.windows.wrap_width,
+            ChatBuffer.cell_measure(self.bufnr)
+        )
         if layout.diff_blocks then
             tool_call_block.cached_diff_blocks = layout.diff_blocks
         end
@@ -3109,7 +3117,11 @@ function MessageWriter:_rerender_tool_call_block(tracker, diff_frozen)
             return false
         end
 
-        local layout = ToolCallLayout.build(tracker, Config.windows.wrap_width)
+        local layout = ToolCallLayout.build(
+            tracker,
+            Config.windows.wrap_width,
+            ChatBuffer.cell_measure(self.bufnr)
+        )
         if layout.diff_blocks then
             tracker.cached_diff_blocks = layout.diff_blocks
         end

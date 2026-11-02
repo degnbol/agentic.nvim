@@ -1,6 +1,8 @@
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
+local strwidth = vim.api.nvim_strwidth
+
 --- Check whether a parser for `lang` is installed.
 --- @param lang string
 --- @return boolean
@@ -61,7 +63,7 @@ describe("ToolCallRenderer", function()
     --- @return integer bufnr
     --- @return agentic.ui.ToolCallLayout.Layout layout
     local function paint(block)
-        local layout = Layout.build(block, 80)
+        local layout = Layout.build(block, 80, strwidth)
         local bufnr = vim.api.nvim_create_buf(false, true)
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, layout.lines)
         Renderer.apply_block_highlights(bufnr, 0, layout)

@@ -37,26 +37,24 @@ local function flat_cells(object)
     return cells
 end
 
---- Keys sorted, then the widest column (header included, escaped, after
---- conceal) moved to the end. On a tie, the last in sorted order is the
---- widest, so tied columns keep key order.
+--- Keys sorted, then the widest column (header included, escaped, as
+--- `measure` counts it) moved to the end. On a tie, the last in sorted order
+--- is the widest, so tied columns keep key order.
 --- Sorting keeps one order across arrays whose objects list keys
 --- differently; the widest column last is where a long row clips.
 --- @param keys string[]
 --- @param rows table<string, string>[] cell text by key, per row
+--- @param measure agentic.utils.MarkdownTable.Measure
 --- @return string[] order
-local function column_order(keys, rows)
+local function column_order(keys, rows, measure)
     local order = vim.list_extend({}, keys)
     table.sort(order)
     --- @param key string
     --- @return integer
     local function column_width(key)
-        local width = MarkdownTable.width(MarkdownTable.cell(key))
+        local width = measure(MarkdownTable.cell(key))
         for _, row in ipairs(rows) do
-            width = math.max(
-                width,
-                MarkdownTable.width(MarkdownTable.cell(row[key]))
-            )
+            width = math.max(width, measure(MarkdownTable.cell(row[key])))
         end
         return width
     end
@@ -75,8 +73,9 @@ end
 --- rows, a non-empty array of flat objects with one key set as one column per
 --- key.
 --- @param value table decoded JSON value
+--- @param measure agentic.utils.MarkdownTable.Measure
 --- @return string[]|nil lines nil for any other shape
-local function table_lines(value)
+local function table_lines(value, measure)
     local cells = flat_cells(value)
     if cells then
         local keys = vim.tbl_keys(cells)
@@ -86,7 +85,9 @@ local function table_lines(value)
             rows[i] =
                 { MarkdownTable.cell(key), MarkdownTable.cell(cells[key]) }
         end
-        return (MarkdownTable.lines({ "key", "value" }, rows))
+        return (
+            MarkdownTable.lines({ "key", "value" }, rows, nil, nil, measure)
+        )
     end
 
     if next(value) == nil or not vim.islist(value) then
@@ -111,7 +112,7 @@ local function table_lines(value)
         end
     end
 
-    local order = column_order(keys, records)
+    local order = column_order(keys, records, measure)
     local header = vim.tbl_map(MarkdownTable.cell, order)
     local rows = {}
     for i, record in ipairs(records) do
@@ -119,21 +120,22 @@ local function table_lines(value)
             return MarkdownTable.cell(record[key])
         end, order)
     end
-    return (MarkdownTable.lines(header, rows))
+    return (MarkdownTable.lines(header, rows, nil, nil, measure))
 end
 
 --- Display rows for JSON text. A flat object, or a non-empty array of flat
 --- objects with one key set, becomes a markdown table; any other object or
 --- array becomes pretty JSON (2-space indent, sorted keys).
 --- @param text string
+--- @param measure agentic.utils.MarkdownTable.Measure
 --- @return string[]|nil rows nil when `text` does not decode to an object or array, or does not encode back (`inf`)
 --- @return "markdown"|"json"|nil lang
-function M.lines(text)
+function M.lines(text, measure)
     local ok, value = pcall(vim.json.decode, text)
     if not ok or type(value) ~= "table" then
         return nil
     end
-    local rows = table_lines(value)
+    local rows = table_lines(value, measure)
     if rows then
         return rows, "markdown"
     end

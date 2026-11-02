@@ -1,12 +1,14 @@
 --- Display columns of a line under conceal.
 ---
---- Follows how Neovim draws conceal at `conceallevel >= 2` (`decor_redraw_col`
+--- Follows how Neovim draws conceal at each 'conceallevel' (`decor_redraw_col`
 --- in src/nvim/decoration.c, the conceal block in src/nvim/drawline.c):
---- - A byte is hidden if any conceal range covers it.
+--- - At level 0, and for a byte that no conceal range covers, the byte draws
+---   as usual.
 --- - The ranges covering a byte are ordered by priority, then insertion
----   order; the last one decides. A replacement cell is drawn at a byte only
----   when that deciding range starts at this byte, on this row, with a
----   non-empty text.
+---   order; the last one decides. A covered byte draws nothing, except at
+---   level 1 or 2 when that deciding range starts at this byte, on this row.
+---   Then the byte draws the range's text, or for an empty text the
+---   'listchars' `conceal` character at level 1 and nothing at level 2.
 --- - Inline virt text is not hidden by conceal and counts as raw columns.
 ---
 --- @class agentic.utils.Conceal
@@ -130,30 +132,45 @@ function Conceal.inline_widths(bufnr, srow, erow)
     return by_row
 end
 
---- The range deciding how `byte` draws: the last covering one in `order`.
+--- Display cells `byte` draws as, per the rules in the module docstring.
 --- @param ranges agentic.utils.Conceal.Range[]
 --- @param order integer[] indices into `ranges`, in drawing order
 --- @param byte integer
---- @return agentic.utils.Conceal.Range|nil
-local function deciding_range(ranges, order, byte)
-    for i = #order, 1, -1 do
-        local range = ranges[order[i]]
+--- @param width integer display cells of the character at `byte`
+--- @param conceallevel integer 0 to 3
+--- @return integer
+local function drawn_width(ranges, order, byte, width, conceallevel)
+    local decider --- @type agentic.utils.Conceal.Range|nil
+    for _, i in ipairs(order) do
+        local range = ranges[i]
         if range.col <= byte and byte < range.end_col then
-            return range
+            decider = range
         end
     end
-    return nil
+    if not decider or conceallevel == 0 then
+        return width
+    elseif
+        conceallevel == 3
+        or decider.col ~= byte
+        or not decider.starts_on_row
+    then
+        return 0
+    elseif decider.text == "" and conceallevel == 1 then
+        -- The 'listchars' `conceal` character is single width (`:h E1512`).
+        return 1
+    end
+    return vim.api.nvim_strwidth(decider.text)
 end
 
 --- Raw and displayed vcol of every character of `line`, per the drawing rules
---- in the module docstring. Assumes `conceallevel >= 2`. Tabs are counted at
---- their unconcealed width.
+--- in the module docstring. Tabs are counted at their unconcealed width.
 --- @param line string
 --- @param ranges agentic.utils.Conceal.Range[] this row's ranges, in insertion order
 --- @param inlines agentic.utils.Conceal.Inline[]
 --- @param tabstop integer
+--- @param conceallevel integer 0 to 3
 --- @return agentic.utils.Conceal.Columns
-function Conceal.columns(line, ranges, inlines, tabstop)
+function Conceal.columns(line, ranges, inlines, tabstop, conceallevel)
     local order = {}
     for i = 1, #ranges do
         order[i] = i
@@ -197,12 +214,7 @@ function Conceal.columns(line, ranges, inlines, tabstop)
             width = vim.fn.strdisplaywidth(char)
         end
         raw = raw + width
-        local decider = deciding_range(ranges, order, byte)
-        if not decider then
-            shown = shown + width
-        elseif decider.col == byte and decider.starts_on_row then
-            shown = shown + vim.api.nvim_strwidth(decider.text)
-        end
+        shown = shown + drawn_width(ranges, order, byte, width, conceallevel)
         byte = next_byte
     end
 end

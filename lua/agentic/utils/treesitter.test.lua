@@ -1,3 +1,4 @@
+local MarkdownConceal = require("tests.helpers.markdown_conceal")
 local Treesitter = require("agentic.utils.treesitter")
 local ZshParseGuard = require("agentic.utils.zsh_parse_guard")
 local assert = require("tests.helpers.assert")
@@ -415,6 +416,104 @@ describe("Treesitter", function()
         it("returns nothing when only a parser exists", function()
             vim.treesitter.get_parser(bufnr, "markdown"):parse(true)
             assert.same({}, Treesitter.highlight_trees(bufnr, 0, 1))
+        end)
+    end)
+
+    describe("string_highlight_trees", function()
+        it("returns nothing without a parser for the language", function()
+            assert.same(
+                {},
+                Treesitter.string_highlight_trees("text", "no_such_lang")
+            )
+        end)
+
+        it("returns the root tree with its highlights query", function()
+            local trees =
+                Treesitter.string_highlight_trees("[a](b)", "markdown_inline")
+            assert.equal(1, #trees)
+            assert.equal("inline", trees[1].root:type())
+        end)
+    end)
+
+    describe("concealed_width", function()
+        local restore
+
+        before_each(function()
+            restore = MarkdownConceal.pin()
+        end)
+
+        after_each(function()
+            restore()
+        end)
+
+        local CELLS = {
+            "**bold**",
+            "[txt](http://x.y)",
+            "&lt;x&gt;",
+            "\\*esc",
+            "`code`",
+            "_em_",
+            "~~st~~",
+            "![alt](i.png)",
+            "[txt][ref]",
+            "***bi***",
+            "plain",
+        }
+
+        --- Width of each of `CELLS` at a conceallevel.
+        --- @param conceallevel integer
+        --- @return integer[]
+        local function widths(conceallevel)
+            return vim.tbl_map(function(cell)
+                return Treesitter.concealed_width(
+                    cell,
+                    "markdown_inline",
+                    conceallevel
+                )
+            end, CELLS)
+        end
+
+        it("counts every byte at level 0", function()
+            assert.same(vim.tbl_map(vim.api.nvim_strwidth, CELLS), widths(0))
+        end)
+
+        it("counts one cell per concealed node at level 1", function()
+            assert.same({ 8, 8, 3, 5, 6, 4, 6, 9, 6, 8, 5 }, widths(1))
+        end)
+
+        it("hides empty conceals and keeps replacements at level 2", function()
+            assert.same({ 4, 3, 3, 5, 4, 2, 2, 3, 3, 2, 5 }, widths(2))
+        end)
+
+        it("hides every concealed byte at level 3", function()
+            assert.same({ 4, 3, 1, 4, 4, 2, 2, 3, 3, 2, 5 }, widths(3))
+        end)
+
+        it("counts the shown text at level 2", function()
+            local shown = {
+                { "__init__", "init" },
+                { "[x]", "x" },
+                { '[t](u "ti")', 't "ti"' },
+                { "&amp;", "&" },
+                { "snake_case", "snake_case" },
+                { "*.lua, *.md", "*.lua, *.md" },
+                { "2 * 3 * 4", "2 * 3 * 4" },
+                { "\\_x\\_", "\\_x\\_" },
+                { "日本", "日本" },
+            }
+            for _, pair in ipairs(shown) do
+                assert.equal(
+                    vim.api.nvim_strwidth(pair[2]),
+                    Treesitter.concealed_width(pair[1], "markdown_inline", 2)
+                )
+            end
+        end)
+
+        it("counts the text unchanged without a parser", function()
+            assert.equal(
+                4,
+                Treesitter.concealed_width("**a*", "no_such_lang", 2)
+            )
         end)
     end)
 end)

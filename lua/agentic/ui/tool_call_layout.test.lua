@@ -2,6 +2,8 @@ local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 local Logger = require("agentic.utils.logger")
 
+local strwidth = vim.api.nvim_strwidth
+
 --- Check whether a parser for `lang` is installed.
 --- @param lang string
 --- @return boolean
@@ -78,7 +80,8 @@ describe("agentic.ui.ToolCallLayout", function()
                     },
                 }
 
-                local highlight_ranges = Layout.build(block, 0).highlights
+                local highlight_ranges =
+                    Layout.build(block, 0, strwidth).highlights
 
                 local found
                 for _, hr in ipairs(highlight_ranges) do
@@ -119,7 +122,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 },
             }
 
-            local highlight_ranges = Layout.build(block, 0).highlights
+            local highlight_ranges = Layout.build(block, 0, strwidth).highlights
 
             for _, hr in ipairs(highlight_ranges) do
                 assert.is_nil(hr.block_col_hl)
@@ -150,7 +153,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 diff = { old = {}, new = { "y = 1" } },
             }
 
-            local highlight_ranges = Layout.build(block, 0).highlights
+            local highlight_ranges = Layout.build(block, 0, strwidth).highlights
 
             for _, hr in ipairs(highlight_ranges) do
                 assert.is_nil(hr.block_col_hl)
@@ -179,7 +182,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 diff = diff,
             }
 
-            return Layout.build(block, 80).lines[1]
+            return Layout.build(block, 80, strwidth).lines[1]
         end
 
         it("heads an edit with the first changed line", function()
@@ -283,7 +286,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 argument = argument,
             }
 
-            return Layout.build(block, wrap_width or 80).lines[1]
+            return Layout.build(block, wrap_width or 80, strwidth).lines[1]
         end
 
         --- `heading` for an execute block, whose heading name is the model's
@@ -301,7 +304,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 description = description,
             }
 
-            return Layout.build(block, wrap_width or 80).lines[1]
+            return Layout.build(block, wrap_width or 80, strwidth).lines[1]
         end
 
         describe("subagent block", function()
@@ -318,7 +321,7 @@ describe("agentic.ui.ToolCallLayout", function()
                     subagent = subagent,
                     body = body,
                 }
-                return Layout.build(block, 80).lines
+                return Layout.build(block, 80, strwidth).lines
             end
 
             it("heads with the heading, then the transcript name", function()
@@ -358,7 +361,7 @@ describe("agentic.ui.ToolCallLayout", function()
                     },
                     body = { "Find the files.", "", "List them." },
                 }
-                local layout = Layout.build(block, 80)
+                local layout = Layout.build(block, 80, strwidth)
 
                 assert.equal("```markdown-fold", layout.lines[3])
                 assert.same({ { anchor = 3, state = "closed" } }, layout.folds)
@@ -391,7 +394,7 @@ describe("agentic.ui.ToolCallLayout", function()
                     },
                     failure_reason = { "stopped" },
                 }
-                local layout = Layout.build(block, 80)
+                local layout = Layout.build(block, 80, strwidth)
 
                 assert.same(
                     { type = "comment", line_index = 1 },
@@ -769,7 +772,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 argument = "rg -n foo lua/",
                 search_pattern = search_pattern,
             }
-            return Layout.build(block, wrap_width).lines
+            return Layout.build(block, wrap_width, strwidth).lines
         end
 
         it("truncates a code kind's name inside its whole guard", function()
@@ -810,7 +813,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 failure_reason = failure_reason,
             }
 
-            return Layout.build(block, 80)
+            return Layout.build(block, 80, strwidth)
         end
 
         it("puts the path under the header as Comment", function()
@@ -848,7 +851,7 @@ describe("agentic.ui.ToolCallLayout", function()
         --- @return string[] lines
         local function render_counting_buffers(block)
             local before = #vim.api.nvim_list_bufs()
-            local lines = Layout.build(block, 80).lines
+            local lines = Layout.build(block, 80, strwidth).lines
             return #vim.api.nvim_list_bufs() - before, lines
         end
 
@@ -919,7 +922,7 @@ describe("agentic.ui.ToolCallLayout", function()
                     failure_reason = { "Read hooks.md first." },
                 }
 
-                local lines = Layout.build(block, 0).lines
+                local lines = Layout.build(block, 0, strwidth).lines
 
                 -- "Read N lines" must not appear when failed
                 for _, line in ipairs(lines) do
@@ -953,7 +956,7 @@ describe("agentic.ui.ToolCallLayout", function()
                     failure_reason = { "Permission denied." },
                 }
 
-                local layout = Layout.build(block, 0)
+                local layout = Layout.build(block, 0, strwidth)
                 local lines = layout.lines
 
                 -- The diff is kept (not replaced by the reason)...
@@ -1011,7 +1014,7 @@ describe("agentic.ui.ToolCallLayout", function()
                     status = "completed",
                     diff = diff,
                 }
-                local fold = Layout.build(block, 0).folds[1]
+                local fold = Layout.build(block, 0, strwidth).folds[1]
                 return fold and fold.state
             end
 
@@ -1050,7 +1053,7 @@ describe("agentic.ui.ToolCallLayout", function()
                     status = "completed",
                     diff = { old = {}, new = new },
                 }
-                assert.same({}, Layout.build(block, 0).folds)
+                assert.same({}, Layout.build(block, 0, strwidth).folds)
             end
         end)
 
@@ -1068,7 +1071,7 @@ describe("agentic.ui.ToolCallLayout", function()
                     },
                 }
 
-                local layout = Layout.build(block, 0)
+                local layout = Layout.build(block, 0, strwidth)
                 local lines, ranges = layout.lines, layout.highlights
 
                 for _, range in ipairs(ranges) do
@@ -1099,7 +1102,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 failure_reason = reason,
             }
 
-            local lines = Layout.build(block, 0).lines
+            local lines = Layout.build(block, 0, strwidth).lines
 
             for _, line in ipairs(lines) do
                 assert.are_not.equal("{{{", line)
@@ -1121,7 +1124,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 failure_reason = reason,
             }
 
-            local lines = Layout.build(block, 0).lines
+            local lines = Layout.build(block, 0, strwidth).lines
 
             for _, line in ipairs(lines) do
                 assert.are_not.equal("{{{", line)
@@ -1139,7 +1142,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 failure_reason = { "Permission denied." },
             }
 
-            local layout = Layout.build(block, 0)
+            local layout = Layout.build(block, 0, strwidth)
 
             local reason_i = vim.fn.index(layout.lines, "Permission denied.")
             assert.same({ reason_i, reason_i }, layout.dim)
@@ -1158,7 +1161,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 failure_reason = { "reason 1", "reason 2" },
             }
 
-            local layout = Layout.build(block, 0)
+            local layout = Layout.build(block, 0, strwidth)
 
             local reason_i = vim.fn.index(layout.lines, "reason 1")
             for _, line in ipairs(layout.lines) do
@@ -1180,7 +1183,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 failure_reason = { "rg: bad pattern", "at offset 3" },
             }
 
-            local layout = Layout.build(block, 0)
+            local layout = Layout.build(block, 0, strwidth)
 
             local reason_i = vim.fn.index(layout.lines, "rg: bad pattern")
             assert.is_not_nil(layout.lines[reason_i]:match("^`+console%-fold$"))
@@ -1200,7 +1203,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 body = { "line a", "line b", "line c" },
             }
 
-            local lines = Layout.build(block, 0).lines
+            local lines = Layout.build(block, 0, strwidth).lines
 
             local found = false
             for _, line in ipairs(lines) do
@@ -1240,7 +1243,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 shell = "zsh",
                 body = body,
                 failure_reason = status == "failed" and body or nil,
-            }, 0)
+            }, 0, strwidth)
         end
 
         --- Start states of a block's folds, outermost first.
@@ -1335,7 +1338,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 body = { "Command running in background with ID: x." },
                 output_file = "/tmp/tasks/x.output",
                 output_tail = output(3),
-            }, 0)
+            }, 0, strwidth)
 
             assert.same({}, layout.folds)
             assert.same({
@@ -1377,7 +1380,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 body = body,
             }
 
-            local lines = Layout.build(block, 0).lines
+            local lines = Layout.build(block, 0, strwidth).lines
             assert_no_markers(lines)
         end)
 
@@ -1395,7 +1398,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 body = body,
             }
 
-            local lines = Layout.build(block, 0).lines
+            local lines = Layout.build(block, 0, strwidth).lines
             assert_no_markers(lines)
         end)
 
@@ -1409,7 +1412,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 body = { "page content line 1", "page content line 2" },
             }
 
-            local lines = Layout.build(block, 0).lines
+            local lines = Layout.build(block, 0, strwidth).lines
             assert_no_markers(lines)
         end)
 
@@ -1423,7 +1426,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 body = { "result snippet" },
             }
 
-            local lines = Layout.build(block, 0).lines
+            local lines = Layout.build(block, 0, strwidth).lines
             assert_no_markers(lines)
         end)
 
@@ -1437,7 +1440,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 body = { "subagent output line" },
             }
 
-            local lines = Layout.build(block, 0).lines
+            local lines = Layout.build(block, 0, strwidth).lines
             assert_no_markers(lines)
         end)
     end)
@@ -1451,7 +1454,7 @@ describe("agentic.ui.ToolCallLayout", function()
             argument = "https://example.com prompt",
             body = { "line 1", "", "line 2" },
         }
-        assert.equal("closed", Layout.build(block, 80).folds[1].state)
+        assert.equal("closed", Layout.build(block, 80, strwidth).folds[1].state)
     end)
 
     describe("shell command fence label", function()
@@ -1486,7 +1489,7 @@ describe("agentic.ui.ToolCallLayout", function()
                     argument = HANG_CMD,
                     status = "completed",
                 }
-                local lines = Layout.build(block, 0).lines
+                local lines = Layout.build(block, 0, strwidth).lines
                 assert.equal("text", first_fence_label(lines))
             end
         )
@@ -1501,7 +1504,7 @@ describe("agentic.ui.ToolCallLayout", function()
                     argument = "rg '" .. HANG_CMD .. "'",
                     status = "completed",
                 }
-                local lines = Layout.build(block, 0).lines
+                local lines = Layout.build(block, 0, strwidth).lines
                 assert.equal("text", first_fence_label(lines))
             end
         )
@@ -1514,7 +1517,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 argument = "rg -n foo file",
                 status = "completed",
             }
-            local lines = Layout.build(block, 0).lines
+            local lines = Layout.build(block, 0, strwidth).lines
             assert.are_not.equal("text", first_fence_label(lines))
         end)
     end)
@@ -1525,7 +1528,7 @@ describe("agentic.ui.ToolCallLayout", function()
         --- @param block agentic.ui.MessageWriter.ToolCallBlock
         --- @return { terms: string[], grep_parts: string[] }
         local function matched_texts(block)
-            local layout = Layout.build(block, 200)
+            local layout = Layout.build(block, 200, strwidth)
             local lines = layout.lines
             local texts = { terms = {}, grep_parts = {} }
             for _, m in ipairs(layout.matches) do
@@ -1602,9 +1605,9 @@ describe("agentic.ui.ToolCallLayout", function()
                 body = { "a:1:x" },
             }
             local before = vim.deepcopy(block)
-            local first = Layout.build(block, 200)
+            local first = Layout.build(block, 200, strwidth)
             assert.same(before, block)
-            assert.same(first, Layout.build(block, 200))
+            assert.same(first, Layout.build(block, 200, strwidth))
         end)
 
         it("gives a search body with ANSI both spans and terms", function()
@@ -1614,7 +1617,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 kind = "search",
                 argument = "rg 'foo'",
                 body = { "\27[35ma.lua\27[0m:3:foo" },
-            }, 200)
+            }, 200, strwidth)
             local terms = vim.tbl_filter(function(m)
                 return m.hl_group == nil
             end, layout.matches)
@@ -1954,7 +1957,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 body = { "total 16" },
             }
 
-            local lines = Layout.build(block, 80).lines
+            local lines = Layout.build(block, 80, strwidth).lines
 
             assert.equal("###", lines[1])
             assert.equal("```bash-foldnext", lines[2])
@@ -1976,7 +1979,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 shell = "zsh",
             }
 
-            local lines = Layout.build(block, 80).lines
+            local lines = Layout.build(block, 80, strwidth).lines
 
             assert.equal("```zsh-foldnext", lines[2])
         end)
@@ -1991,7 +1994,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 body = { "total 16" },
             }
 
-            local lines = Layout.build(block, 80).lines
+            local lines = Layout.build(block, 80, strwidth).lines
 
             assert.equal("```bash-foldnext", lines[2])
         end)
@@ -2009,7 +2012,7 @@ describe("agentic.ui.ToolCallLayout", function()
                     body = { "total 16" },
                 }
 
-                local lines = Layout.build(block, 80).lines
+                local lines = Layout.build(block, 80, strwidth).lines
 
                 assert.equal("### List the temp directory", lines[1])
                 assert.equal("```bash-foldnext", lines[2])
@@ -2031,7 +2034,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 argument = "for i in 1 2 3; do\necho $i\ndone",
             }
 
-            local lines = Layout.build(block, 80).lines
+            local lines = Layout.build(block, 80, strwidth).lines
 
             assert.equal("###", lines[1])
             assert.equal("```bash", lines[2])
@@ -2053,7 +2056,7 @@ describe("agentic.ui.ToolCallLayout", function()
                     body = { "line1" },
                 }
 
-                local lines = Layout.build(block, 80).lines
+                local lines = Layout.build(block, 80, strwidth).lines
 
                 assert.equal("### `/tmp/file.txt`", lines[1])
                 assert.equal("Read 1 lines", lines[2])
@@ -2070,7 +2073,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 body = { "line1" },
             }
 
-            local lines = Layout.build(block, 80).lines
+            local lines = Layout.build(block, 80, strwidth).lines
 
             assert.equal("### `/tmp/file.txt`", lines[1])
         end)
@@ -2086,7 +2089,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 read_range = { offset = 10, limit = 3 },
             }
 
-            local lines = Layout.build(block, 80).lines
+            local lines = Layout.build(block, 80, strwidth).lines
 
             assert.equal("### `/tmp/file.txt:10`", lines[1])
             assert.equal("Read 3 lines (10 - 12)", lines[2])
@@ -2103,7 +2106,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 read_range = { offset = 10 },
             }
 
-            local lines = Layout.build(block, 80).lines
+            local lines = Layout.build(block, 80, strwidth).lines
 
             assert.equal("### `/tmp/file.txt:10`", lines[1])
             assert.equal("Read 3 lines (10 - …)", lines[2])
@@ -2124,7 +2127,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 },
             }
 
-            local layout = Layout.build(block, 80)
+            local layout = Layout.build(block, 80, strwidth)
             local lines, highlight_ranges = layout.lines, layout.highlights
 
             local found_inserted = false
@@ -2152,7 +2155,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 argument = "cd /some/very/long/project/path && npm install --save-dev typescript && npm run build && npm test",
             }
 
-            local lines = Layout.build(block, 80).lines
+            local lines = Layout.build(block, 80, strwidth).lines
 
             assert.equal("###", lines[1])
             assert.equal("```bash", lines[2])
@@ -2172,7 +2175,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 argument = "ls -la && echo done",
             }
 
-            local lines = Layout.build(block, 80).lines
+            local lines = Layout.build(block, 80, strwidth).lines
 
             assert.equal("ls -la && echo done", lines[3])
         end)
@@ -2186,7 +2189,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 argument = [[echo "this && that || other" && echo 'pipes | here ; too' && echo done with a very long command line]],
             }
 
-            local lines = Layout.build(block, 80).lines
+            local lines = Layout.build(block, 80, strwidth).lines
 
             assert.equal("```bash", lines[2])
             assert.equal([[echo "this && that || other" &&]], lines[3])
@@ -2203,7 +2206,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 argument = "result=$(cmd1 && cmd2 || cmd3) && echo $result && final_command with some extra arguments to be long",
             }
 
-            local lines = Layout.build(block, 80).lines
+            local lines = Layout.build(block, 80, strwidth).lines
 
             assert.equal("result=$(cmd1 && cmd2 || cmd3) &&", lines[3])
             assert.equal("echo $result &&", lines[4])
@@ -2220,7 +2223,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 kind = "execute",
                 argument = "",
                 shell = "zsh",
-            }, 80).lines
+            }, 80, strwidth).lines
 
             assert.same({ "```zsh", "", "```" }, vim.list_slice(lines, 2, 4))
         end)
@@ -2240,7 +2243,7 @@ describe("agentic.ui.ToolCallLayout", function()
                     "\27[31mfour\27[0m",
                 },
                 failure_reason = { "\27[31mExit code 1\27[0m" },
-            }, 80)
+            }, 80, strwidth)
 
             assert.same({
                 "### List",
@@ -2279,7 +2282,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 kind = kind,
                 argument = "x",
                 body = body,
-            }, wrap_width or 80)
+            }, wrap_width or 80, strwidth)
         end
 
         it("folds a multi-row todowrite body closed", function()
@@ -2416,7 +2419,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 read_stub:invokes(function()
                     return { "a" }, nil
                 end)
-                local layout = Layout.build(block, 80)
+                local layout = Layout.build(block, 80, strwidth)
                 local rows = covered_rows(layout)
 
                 for _, range in ipairs(layout.highlights) do
@@ -2450,7 +2453,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 old = { "```lua", "x = 1", "```" },
                 new = { "```python", "x = 1", "```" },
             },
-        }, 80)
+        }, 80, strwidth)
 
         local TextWrap = require("agentic.utils.text_wrap")
         local opener = layout.lines[2]:match("^`+")

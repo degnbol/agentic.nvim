@@ -1,18 +1,31 @@
+local MarkdownConceal = require("tests.helpers.markdown_conceal")
 local TextWrap = require("agentic.utils.text_wrap")
 local assert = require("tests.helpers.assert")
 
+local strwidth = vim.api.nvim_strwidth
+
 describe("agentic.utils.TextWrap", function()
+    local restore
+
+    before_each(function()
+        restore = MarkdownConceal.pin()
+    end)
+
+    after_each(function()
+        restore()
+    end)
+
     describe("wrap_prose", function()
         it("leaves short lines unchanged", function()
             local lines = { "hello world" }
-            local result = TextWrap.wrap_prose(lines, 80)
+            local result = TextWrap.wrap_prose(lines, 80, strwidth)
             assert.same({ "hello world" }, result)
         end)
 
         it("wraps long prose lines at word boundaries", function()
             local line =
                 "the quick brown fox jumps over the lazy dog and keeps running"
-            local result = TextWrap.wrap_prose({ line }, 30)
+            local result = TextWrap.wrap_prose({ line }, 30, strwidth)
             for _, l in ipairs(result) do
                 assert.is_true(#l <= 30, "line too long: " .. l)
             end
@@ -23,7 +36,7 @@ describe("agentic.utils.TextWrap", function()
 
         it("preserves blank lines", function()
             local lines = { "first paragraph", "", "second paragraph" }
-            local result = TextWrap.wrap_prose(lines, 80)
+            local result = TextWrap.wrap_prose(lines, 80, strwidth)
             assert.same(lines, result)
         end)
 
@@ -35,7 +48,7 @@ describe("agentic.utils.TextWrap", function()
                 "```",
                 "more prose",
             }
-            local result = TextWrap.wrap_prose(lines, 40)
+            local result = TextWrap.wrap_prose(lines, 40, strwidth)
             -- Code line must be untouched
             assert.equal(
                 "local very_long_variable_name = some_very_long_function_call(argument_one, argument_two, argument_three)",
@@ -50,7 +63,7 @@ describe("agentic.utils.TextWrap", function()
             local lines = {
                 "- this is a very long list item that should wrap at some point around here",
             }
-            local result = TextWrap.wrap_prose(lines, 40)
+            local result = TextWrap.wrap_prose(lines, 40, strwidth)
             assert.is_true(#result > 1)
             -- Continuation lines should be indented to align with list text
             for i = 2, #result do
@@ -64,7 +77,7 @@ describe("agentic.utils.TextWrap", function()
         it("keeps an over-wide line's leading whitespace", function()
             local result = TextWrap.wrap_prose({
                 "  - a nested list item long enough to wrap at forty columns",
-            }, 40)
+            }, 40, strwidth)
             assert.is_true(#result > 1)
             assert.equal("  - a", result[1]:sub(1, 5))
             for i = 2, #result do
@@ -87,7 +100,7 @@ describe("agentic.utils.TextWrap", function()
                 "```",
                 "ending prose",
             }
-            local result = TextWrap.wrap_prose(lines, 30)
+            local result = TextWrap.wrap_prose(lines, 30, strwidth)
             -- Find the code lines and verify they're untouched
             local found_code1 = false
             local found_code2 = false
@@ -108,13 +121,13 @@ describe("agentic.utils.TextWrap", function()
 
         it("handles zero width gracefully", function()
             local lines = { "hello world" }
-            local result = TextWrap.wrap_prose(lines, 0)
+            local result = TextWrap.wrap_prose(lines, 0, strwidth)
             assert.same(lines, result)
         end)
 
         it("handles single long word exceeding width", function()
             local lines = { "supercalifragilisticexpialidocious" }
-            local result = TextWrap.wrap_prose(lines, 10)
+            local result = TextWrap.wrap_prose(lines, 10, strwidth)
             -- Single word cannot be broken, so it stays as one line
             assert.equal(1, #result)
             assert.equal("supercalifragilisticexpialidocious", result[1])
@@ -123,7 +136,7 @@ describe("agentic.utils.TextWrap", function()
         it("never wraps inside an inline code span", function()
             local line =
                 "run the `git commit -m msg` command and then push it upstream"
-            local result = TextWrap.wrap_prose({ line }, 30)
+            local result = TextWrap.wrap_prose({ line }, 30, strwidth)
             -- The whole span stays on one output line.
             local has_span = false
             for _, l in ipairs(result) do
@@ -138,7 +151,7 @@ describe("agentic.utils.TextWrap", function()
             "keeps an oversized code span whole rather than splitting it",
             function()
                 local line = "prefix `one two three four five six seven` suffix"
-                local result = TextWrap.wrap_prose({ line }, 20)
+                local result = TextWrap.wrap_prose({ line }, 20, strwidth)
                 local joined = table.concat(result, " "):gsub("%s+", " ")
                 assert.equal(line, joined)
                 local has_span = false
@@ -158,7 +171,7 @@ describe("agentic.utils.TextWrap", function()
                 "| short | x |",
                 "| longer name | longer value |",
             }
-            local result = TextWrap.wrap_prose(lines, 40)
+            local result = TextWrap.wrap_prose(lines, 40, strwidth)
             assert.same({
                 "| Name        | Value        |",
                 "| ----------- | ------------ |",
@@ -173,7 +186,7 @@ describe("agentic.utils.TextWrap", function()
                 "|---|---|---|---|---|",
                 "| val1 | val2 | val3 | val4 | val5 |",
             }
-            local result = TextWrap.wrap_prose(lines, 20)
+            local result = TextWrap.wrap_prose(lines, 20, strwidth)
             -- Table lines must not be word-wrapped even if wider than target
             assert.equal(3, #result)
             for _, l in ipairs(result) do
@@ -190,7 +203,7 @@ describe("agentic.utils.TextWrap", function()
                 "|:---|:---:|---:|",
                 "| a | b | c |",
             }
-            local result = TextWrap.wrap_prose(lines, 80)
+            local result = TextWrap.wrap_prose(lines, 80, strwidth)
             -- Separator row should preserve alignment colons
             assert.equal("| :--- | :----: | ----: |", result[2])
         end)
@@ -205,7 +218,7 @@ describe("agentic.utils.TextWrap", function()
                 "",
                 "And more prose after the table.",
             }
-            local result = TextWrap.wrap_prose(lines, 80)
+            local result = TextWrap.wrap_prose(lines, 80, strwidth)
             assert.equal("Here is a table:", result[1])
             assert.equal("", result[2])
             assert.is_true(result[3]:match("^| A") ~= nil)
@@ -219,7 +232,7 @@ describe("agentic.utils.TextWrap", function()
                 "|---|---",
                 "| 1 | 2",
             }
-            local result = TextWrap.wrap_prose(lines, 80)
+            local result = TextWrap.wrap_prose(lines, 80, strwidth)
             -- Should still format as a table
             assert.equal(3, #result)
             for _, l in ipairs(result) do
@@ -249,7 +262,7 @@ describe("agentic.utils.TextWrap", function()
                 "| `foo` | string |",
                 "| longname | `int` |",
             }
-            local result = TextWrap.wrap_prose(lines, 80)
+            local result = TextWrap.wrap_prose(lines, 80, MarkdownConceal.width)
             assert.equal(4, #result)
             local vw1 = visual_width(result[1])
             for i = 2, #result do
@@ -268,7 +281,8 @@ describe("agentic.utils.TextWrap", function()
                     "| **foo** | string |",
                     "| longname | **int** |",
                 }
-                local result = TextWrap.wrap_prose(lines, 80)
+                local result =
+                    TextWrap.wrap_prose(lines, 80, MarkdownConceal.width)
                 assert.equal(4, #result)
                 local vw1 = visual_width(result[1])
                 for i = 2, #result do
@@ -288,7 +302,8 @@ describe("agentic.utils.TextWrap", function()
                     "| *foo* | string |",
                     "| longname | *int* |",
                 }
-                local result = TextWrap.wrap_prose(lines, 80)
+                local result =
+                    TextWrap.wrap_prose(lines, 80, MarkdownConceal.width)
                 assert.equal(4, #result)
                 local vw1 = visual_width(result[1])
                 for i = 2, #result do
@@ -306,7 +321,8 @@ describe("agentic.utils.TextWrap", function()
                     "| ~~removed~~ | old |",
                     "| longername | current |",
                 }
-                local result = TextWrap.wrap_prose(lines, 80)
+                local result =
+                    TextWrap.wrap_prose(lines, 80, MarkdownConceal.width)
                 assert.equal(4, #result)
                 local vw1 = visual_width(result[1])
                 for i = 2, #result do
@@ -322,7 +338,7 @@ describe("agentic.utils.TextWrap", function()
                 "| **`foo`** | *string* | ~~old~~ |",
                 "| plain | plain | plain |",
             }
-            local result = TextWrap.wrap_prose(lines, 80)
+            local result = TextWrap.wrap_prose(lines, 80, MarkdownConceal.width)
             assert.equal(4, #result)
             local vw1 = visual_width(result[1])
             for i = 2, #result do
@@ -336,7 +352,7 @@ describe("agentic.utils.TextWrap", function()
                 "|---|---|",
                 "| echo foo \\| grep bar | filter output |",
             }
-            local result = TextWrap.wrap_prose(lines, 80)
+            local result = TextWrap.wrap_prose(lines, 80, MarkdownConceal.width)
             assert.equal(3, #result)
             -- Escaped pipe must stay inside the cell, not split it
             assert.is_true(
@@ -371,7 +387,8 @@ describe("agentic.utils.TextWrap", function()
                     "|---|---|---|",
                     "| foo\\\\ | bar | baz |",
                 }
-                local result = TextWrap.wrap_prose(lines, 80)
+                local result =
+                    TextWrap.wrap_prose(lines, 80, MarkdownConceal.width)
                 assert.equal(3, #result)
                 -- foo\\ is a literal backslash — pipe after it is a real delimiter
                 -- so we should still have 3 data columns
@@ -388,7 +405,7 @@ describe("agentic.utils.TextWrap", function()
                 "| 3 A25 | 0.30  | 1.19 | 1.49  |",
                 "| 2 A42 | 2.32  | 2.50 | 4.82  |",
             }
-            local result = TextWrap.wrap_prose(lines, 80)
+            local result = TextWrap.wrap_prose(lines, 80, strwidth)
             -- Header must keep the empty first cell — 4 columns, not 3
             assert.equal("|       | birth | pers | death |", result[1])
             assert.equal(4, #result)
@@ -406,7 +423,7 @@ describe("agentic.utils.TextWrap", function()
                 "| ----- | ---- |",
                 "| [docs](https://example.com)  | x    |",
                 "| plain | y    |",
-            }, TextWrap.wrap_prose(lines, 80))
+            }, TextWrap.wrap_prose(lines, 80, MarkdownConceal.width))
         end)
 
         describe("table_row_ends", function()
@@ -424,7 +441,8 @@ describe("agentic.utils.TextWrap", function()
                 vim.list_extend(lines, { "", "between" })
                 vim.list_extend(lines, wide_table)
                 lines[#lines + 1] = "after"
-                local result, row_ends = TextWrap.wrap_prose(lines, 20)
+                local result, row_ends =
+                    TextWrap.wrap_prose(lines, 20, strwidth)
                 assert.same({ 7, 8, 9, 16, 17, 18 }, row_ends)
                 assert.equal("|      | five six    |", result[7])
                 assert.equal("after", result[#result])
@@ -433,12 +451,13 @@ describe("agentic.utils.TextWrap", function()
             it("counts a pipe block that is no table as lines", function()
                 local lines = { "| a | b |", "| c |", "" }
                 vim.list_extend(lines, wide_table)
-                local _, row_ends = TextWrap.wrap_prose(lines, 20)
+                local _, row_ends = TextWrap.wrap_prose(lines, 20, strwidth)
                 assert.same({ 8, 9, 10 }, row_ends)
             end)
 
             it("is empty when the width is not positive", function()
-                local result, row_ends = TextWrap.wrap_prose(wide_table, 0)
+                local result, row_ends =
+                    TextWrap.wrap_prose(wide_table, 0, strwidth)
                 assert.same(wide_table, result)
                 assert.same({}, row_ends)
             end)
@@ -452,7 +471,7 @@ describe("agentic.utils.TextWrap", function()
                     "| c |",
                     "|---|---|",
                 }
-                assert.same(lines, TextWrap.wrap_prose(lines, 80))
+                assert.same(lines, TextWrap.wrap_prose(lines, 80, strwidth))
             end
         )
 
@@ -462,7 +481,7 @@ describe("agentic.utils.TextWrap", function()
                 "|---|---|---|",
                 "| 1 | 2 |",
             }
-            local result = TextWrap.wrap_prose(lines, 80)
+            local result = TextWrap.wrap_prose(lines, 80, strwidth)
             -- Row with fewer columns should be padded
             assert.equal(3, #result)
             -- All rows should have same structure
@@ -472,7 +491,7 @@ describe("agentic.utils.TextWrap", function()
         it("never wraps inside an inline math span", function()
             local line =
                 "the identity $x + y = z + w$ holds for all reals here yes"
-            local result = TextWrap.wrap_prose({ line }, 30)
+            local result = TextWrap.wrap_prose({ line }, 30, strwidth)
             local has_span = false
             for _, l in ipairs(result) do
                 if l:match("%$x %+ y = z %+ w%$") then
@@ -484,7 +503,7 @@ describe("agentic.utils.TextWrap", function()
 
         it("wraps before an oversized inline math span", function()
             local line = "prefix $a + b + c + d + e + f + g$ suffix"
-            local result = TextWrap.wrap_prose({ line }, 20)
+            local result = TextWrap.wrap_prose({ line }, 20, strwidth)
             local joined = table.concat(result, " "):gsub("%s+", " ")
             assert.equal(line, joined)
             local has_span = false
@@ -499,7 +518,7 @@ describe("agentic.utils.TextWrap", function()
         it("treats an unclosed dollar as literal and wraps normally", function()
             local line =
                 "the cost is $5 for the first widget and rises steeply after that"
-            local result = TextWrap.wrap_prose({ line }, 30)
+            local result = TextWrap.wrap_prose({ line }, 30, strwidth)
             for _, l in ipairs(result) do
                 assert.is_true(#l <= 30, "line too long: " .. l)
             end
@@ -509,7 +528,7 @@ describe("agentic.utils.TextWrap", function()
 
         it("keeps a single-line display-math span atomic", function()
             local line = "before $$x = \\sum_i a_i b_i$$ after the equation ok"
-            local result = TextWrap.wrap_prose({ line }, 25)
+            local result = TextWrap.wrap_prose({ line }, 25, strwidth)
             local has_span = false
             for _, l in ipairs(result) do
                 if l:match("%$%$x = \\sum_i a_i b_i%$%$") then
@@ -523,7 +542,7 @@ describe("agentic.utils.TextWrap", function()
             "leaves a bare currency amount shorter than width untouched",
             function()
                 local lines = { "it costs $5 total" }
-                assert.same(lines, TextWrap.wrap_prose(lines, 80))
+                assert.same(lines, TextWrap.wrap_prose(lines, 80, strwidth))
             end
         )
 
@@ -535,7 +554,7 @@ describe("agentic.utils.TextWrap", function()
                 "$$",
                 "which converges.",
             }
-            local result = TextWrap.wrap_prose(lines, 30)
+            local result = TextWrap.wrap_prose(lines, 30, strwidth)
             assert.same(lines, result)
         end)
 
@@ -549,7 +568,7 @@ describe("agentic.utils.TextWrap", function()
                     "```",
                     "after the fence this prose line is long enough that it must wrap",
                 }
-                local result = TextWrap.wrap_prose(lines, 30)
+                local result = TextWrap.wrap_prose(lines, 30, strwidth)
                 assert.equal("```", result[1])
                 assert.equal("$$", result[2])
                 assert.equal(
@@ -565,11 +584,16 @@ describe("agentic.utils.TextWrap", function()
         it("never wraps headings", function()
             local heading =
                 "## the quick brown fox jumps over the lazy dog and keeps running"
-            assert.same({ heading }, TextWrap.wrap_prose({ heading }, 30))
+            assert.same(
+                { heading },
+                TextWrap.wrap_prose({ heading }, 30, strwidth)
+            )
             -- 7+ hashes is not a heading and may wrap like prose
             local non_heading =
                 "####### not a heading but still long enough to wrap around"
-            assert.is_true(#TextWrap.wrap_prose({ non_heading }, 30) > 1)
+            assert.is_true(
+                #TextWrap.wrap_prose({ non_heading }, 30, strwidth) > 1
+            )
         end)
     end)
 

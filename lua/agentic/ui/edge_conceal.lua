@@ -108,7 +108,8 @@ local function conceal_edge(winid, bufnr, row, state)
         line,
         ranges,
         Conceal.inline_widths(bufnr, row, row + 1)[row] or {},
-        vim.bo[bufnr].tabstop
+        vim.bo[bufnr].tabstop,
+        vim.wo[winid].conceallevel
     )
 
     local cursor_col

@@ -26,7 +26,7 @@ local LONG_LINE = "ab[cd](efgh)ijklmnopqrstuvwxyz"
 --- @param inlines agentic.utils.Conceal.Inline[]|nil
 --- @return agentic.utils.Conceal.Columns
 local function link_columns(line, inlines)
-    return Conceal.columns(line, LINK_RANGES, inlines or {}, 8)
+    return Conceal.columns(line, LINK_RANGES, inlines or {}, 8, 2)
 end
 
 --- `EdgeConceal.hide_range` results packed into a list.
@@ -95,7 +95,8 @@ describe("agentic.ui.EdgeConceal", function()
                 "[x]全全ab",
                 { hidden(0, 1), hidden(2, 3) },
                 {},
-                8
+                8,
+                2
             )
             assert.same({ 3, 6 }, hide(columns, 3))
             assert.same({ 6, 9 }, hide(columns, 4))

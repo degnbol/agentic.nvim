@@ -186,9 +186,10 @@ end
 --- markdown parser, and is returned unchanged.
 --- @param table_lines string[]
 --- @param width integer display cells per line
+--- @param measure agentic.utils.MarkdownTable.Measure
 --- @return string[] lines
 --- @return integer[] row_ends 1-based indices into `lines` of the last line of every body row, when some row wrapped, else {}
-local function format_table(table_lines, width)
+local function format_table(table_lines, width, measure)
     local rows = {}
     for _, line in ipairs(table_lines) do
         rows[#rows + 1] = parse_table_row(line)
@@ -196,7 +197,13 @@ local function format_table(table_lines, width)
     if not (rows[2] and is_separator_row(rows[2])) then
         return table_lines, {}
     end
-    return MarkdownTable.lines(rows[1], vim.list_slice(rows, 3), rows[2], width)
+    return MarkdownTable.lines(
+        rows[1],
+        vim.list_slice(rows, 3),
+        rows[2],
+        width,
+        measure
+    )
 end
 
 --- Wrap a single prose line at word boundaries.
@@ -423,9 +430,10 @@ end
 --- formatting markdown tables with aligned columns wrapped to `width`.
 --- @param lines string[]
 --- @param width integer Target width in columns
+--- @param measure agentic.utils.MarkdownTable.Measure
 --- @return string[] wrapped
 --- @return integer[] table_row_ends 1-based indices into `wrapped` of the last line of every table body row, in tables where some row wrapped
-function M.wrap_prose(lines, width)
+function M.wrap_prose(lines, width, measure)
     if width <= 0 then
         return lines, {}
     end
@@ -439,7 +447,7 @@ function M.wrap_prose(lines, width)
     --- Emit any buffered table lines (formatted) before a non-table line.
     local function flush_table()
         if #table_buf > 0 then
-            local formatted, row_ends = format_table(table_buf, width)
+            local formatted, row_ends = format_table(table_buf, width, measure)
             for _, row_end in ipairs(row_ends) do
                 table_row_ends[#table_row_ends + 1] = #out + row_end
             end
