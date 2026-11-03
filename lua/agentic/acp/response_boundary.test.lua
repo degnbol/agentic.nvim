@@ -66,4 +66,54 @@ describe("agentic.acp.ResponseBoundary", function()
             )
         end
     )
+
+    describe("filter_chunk", function()
+        --- @param message_id string|nil
+        --- @param text string
+        --- @return agentic.acp.AgentMessageChunk
+        local function chunk(message_id, text)
+            --- @type agentic.acp.AgentMessageChunk
+            local update = {
+                sessionUpdate = "agent_message_chunk",
+                messageId = message_id,
+                content = { type = "text", text = text },
+            }
+            return update
+        end
+
+        it("marks a response start and strips its leading newlines", function()
+            local boundary = ResponseBoundary:new()
+            boundary:filter_chunk(chunk("X", "a"))
+            local update = chunk("Y", "\nb")
+
+            local filtered, starts = boundary:filter_chunk(update)
+
+            assert.is_true(starts)
+            assert.equal("b", filtered and filtered.content.text)
+            assert.equal("Y", filtered and filtered.messageId)
+            assert.equal("\nb", update.content.text)
+        end)
+
+        it("drops a chunk with no text left", function()
+            local boundary = ResponseBoundary:new()
+            boundary:filter_chunk(chunk("X", "a"))
+
+            local filtered, starts = boundary:filter_chunk(chunk("Y", "\n"))
+
+            assert.is_nil(filtered)
+            assert.is_false(starts)
+        end)
+
+        it("passes a chunk without text through", function()
+            local boundary = ResponseBoundary:new()
+            local update = chunk("X", "a")
+            update.content =
+                { type = "image", data = "", mimeType = "image/png" }
+
+            local filtered, starts = boundary:filter_chunk(update)
+
+            assert.equal(update, filtered)
+            assert.is_false(starts)
+        end)
+    end)
 end)

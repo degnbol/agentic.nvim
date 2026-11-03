@@ -72,6 +72,33 @@ _G.chunk = function(source, text, task_id)
             or nil,
     })
 end
+-- The config options the bridge sends on a child's session: its model
+-- (`value` and `name` only), and a mode when `mode_id` is given.
+_G.child_options = function(child_id, model_id, mode_id)
+    local options = { {
+        id = "model", name = "Model", category = "model", type = "select",
+        currentValue = model_id,
+        options = { { value = model_id, name = model_id } },
+    } }
+    if mode_id then
+        table.insert(options, {
+            id = "mode", name = "Mode", category = "mode", type = "select",
+            currentValue = mode_id,
+            options = { { value = mode_id, name = mode_id } },
+        })
+    end
+    _G.update(child_id, {
+        sessionUpdate = "config_option_update", configOptions = options,
+    })
+end
+-- A message or thought chunk on a child's session, of response `message_id`.
+_G.child_chunk = function(child_id, kind, text, message_id)
+    _G.update(child_id, {
+        sessionUpdate = kind,
+        messageId = message_id,
+        content = { type = "text", text = text },
+    })
+end
 _G.call = function(child_id, id)
     _G.s:_on_tool_call({
         tool_call_id = id, kind = "read", status = "pending", argument = "a.txt",
@@ -133,7 +160,7 @@ end
 -- Whether a transcript's working indicator is on its last line.
 _G.indicator_at_end = function(child_id)
     local transcript = _G.transcript(child_id)
-    local indicator = transcript.status_indicator
+    local indicator = transcript.view.status_indicator
     local pos = vim.api.nvim_buf_get_extmark_by_id(
         transcript.bufnr,
         vim.api.nvim_create_namespace("agentic_status"),
@@ -243,7 +270,9 @@ _G.announce("c1", "find it", "root", false)
 
         assert.is_false(child.lua_get([[_G.s._subagents._agents.c1.open]]))
         assert.is_false(
-            child.lua_get([[_G.transcript("c1").status_indicator:is_active()]])
+            child.lua_get(
+                [[_G.transcript("c1").view.status_indicator:is_active()]]
+            )
         )
         assert.is_true(child.lua_get([[_G.s._subagents._inputs.c1 == nil]]))
     end)
@@ -536,7 +565,7 @@ vim.api.nvim_win_set_cursor(0, { _G.chat_row + 1, 0 })
         )
         assert.equal(
             child.lua_get(
-                [[_G.transcript("c1").writer:notice_row("toolu_send") + 1]]
+                [[_G.transcript("c1").view.writer:notice_row("toolu_send") + 1]]
             ),
             child.lua_get("vim.fn.line('.')")
         )
@@ -668,7 +697,7 @@ _G.stop()
             assert.equal(
                 "t-stop",
                 child.lua_get(
-                    [[_G.transcript("c1").writer.tool_call_blocks["t-bg"].stopped_by]]
+                    [[_G.transcript("c1").view.writer.tool_call_blocks["t-bg"].stopped_by]]
                 )
             )
             assert.truthy(
@@ -739,7 +768,7 @@ _G.landed = vim.api.nvim_win_get_cursor(0)[1]
             )
             assert.equal(
                 child.lua_get(
-                    [[_G.transcript("c1").writer:tool_call_row("t-bg") + 1]]
+                    [[_G.transcript("c1").view.writer:tool_call_row("t-bg") + 1]]
                 ),
                 child.lua_get("_G.landed")
             )
@@ -809,7 +838,7 @@ _G.s:_on_tool_call({
         )
         assert.is_true(
             child.lua_get(
-                [[_G.transcript("c1").writer.tool_call_blocks.t1 ~= nil]]
+                [[_G.transcript("c1").view.writer.tool_call_blocks.t1 ~= nil]]
             )
         )
         assert.same(
@@ -915,7 +944,7 @@ _G.state("c1", ...)
                 )
                 assert.is_false(
                     child.lua_get(
-                        [[_G.transcript("c1").status_indicator:is_active()]]
+                        [[_G.transcript("c1").view.status_indicator:is_active()]]
                     )
                 )
                 assert.equal(
@@ -939,7 +968,7 @@ _G.state("c1", ...)
                 assert.equal(
                     open and "pending" or case.word,
                     child.lua_get(
-                        [[require("agentic.acp.canonical_tool_call").status_word(_G.transcript("c1").writer.tool_call_blocks.t1)]]
+                        [[require("agentic.acp.canonical_tool_call").status_word(_G.transcript("c1").view.writer.tool_call_blocks.t1)]]
                     )
                 )
                 assert.equal(
@@ -977,7 +1006,9 @@ _G.state("c1", { state = "running" })
         assert.is_true(child.lua_get([[_G.s._subagents._agents.c1.open]]))
         assert.is_true(child.lua_get([[_G.transcript("c1").bufnr == _G.bufnr]]))
         assert.is_true(
-            child.lua_get([[_G.transcript("c1").status_indicator:is_active()]])
+            child.lua_get(
+                [[_G.transcript("c1").view.status_indicator:is_active()]]
+            )
         )
         assert.is_true(child.lua_get([[_G.context("c1") == nil]]))
     end)
@@ -992,7 +1023,9 @@ _G.state("c1", { state = "running" })
 
         assert.is_true(child.lua_get([[_G.s._subagents._agents.c1.open]]))
         assert.is_true(
-            child.lua_get([[_G.transcript("c1").status_indicator:is_active()]])
+            child.lua_get(
+                [[_G.transcript("c1").view.status_indicator:is_active()]]
+            )
         )
         local transcript = child.lua_get([[_G.ttext("c1")]])
         assert.truthy(transcript:find("## find it", 1, true))
@@ -1047,12 +1080,12 @@ _G.prompt_cb({ stopReason = "cancelled" }, nil)
             assert.equal(
                 "pending",
                 child.lua_get(
-                    [[_G.transcript("c1").writer.tool_call_blocks.t1.status]]
+                    [[_G.transcript("c1").view.writer.tool_call_blocks.t1.status]]
                 )
             )
             assert.is_true(
                 child.lua_get(
-                    [[_G.transcript("c1").status_indicator:is_active()]]
+                    [[_G.transcript("c1").view.status_indicator:is_active()]]
                 )
             )
 
@@ -1063,7 +1096,7 @@ _G.prompt_cb({ stopReason = "cancelled" }, nil)
             assert.equal(
                 "interrupted",
                 child.lua_get(
-                    [[require("agentic.acp.canonical_tool_call").status_word(_G.transcript("c1").writer.tool_call_blocks.t1)]]
+                    [[require("agentic.acp.canonical_tool_call").status_word(_G.transcript("c1").view.writer.tool_call_blocks.t1)]]
                 )
             )
         end
@@ -1087,7 +1120,7 @@ _G.s:_build_handlers().on_disconnect()
         assert.equal(
             "ended",
             child.lua_get(
-                [[require("agentic.acp.canonical_tool_call").status_word(_G.transcript("c1").writer.tool_call_blocks.t1)]]
+                [[require("agentic.acp.canonical_tool_call").status_word(_G.transcript("c1").view.writer.tool_call_blocks.t1)]]
             )
         )
         assert.equal(
@@ -1104,7 +1137,9 @@ _G.s:_advance_session_epoch()
 
         assert.is_false(child.lua_get([[_G.s._subagents._agents.c1.open]]))
         assert.is_false(
-            child.lua_get([[_G.transcript("c1").status_indicator:is_active()]])
+            child.lua_get(
+                [[_G.transcript("c1").view.status_indicator:is_active()]]
+            )
         )
         assert.is_true(child.lua_get([[_G.context("c1") == nil]]))
     end)
@@ -1112,13 +1147,7 @@ _G.s:_advance_session_epoch()
     it("a child's config options stay out of the main agent's", function()
         child.lua([[
 _G.spawn("c1")
-_G.update("c1", {
-    sessionUpdate = "config_option_update",
-    configOptions = { {
-        id = "model", name = "Model", category = "model", type = "select",
-        currentValue = "child-model", options = {},
-    } },
-})
+_G.child_options("c1", "child-model")
 ]])
 
         assert.is_true(
@@ -1132,6 +1161,100 @@ _G.update("c1", {
                 [[_G.s._subagents._agents.c1.config_options:current_model_id()]]
             )
         )
+        local loaded = "**Loaded child-model** · child-model"
+        assert.equal(1, count(child.lua_get([[_G.ttext("c1")]]), loaded))
+        assert.is_nil(
+            child
+                .lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]])
+                :find("Loaded child-model", 1, true)
+        )
+
+        child.lua([[_G.child_options("c1", "other-model", "plan")]])
+
+        local transcript = child.lua_get([[_G.ttext("c1")]])
+        assert.equal(1, count(transcript, "**Loaded"))
+        assert.is_nil(transcript:find("other-model", 1, true))
+    end)
+
+    it("a model reported before the child runs shows at its start", function()
+        child.lua([[
+_G.announce("c1", "find it", nil, false)
+_G.child_options("c1", "child-model")
+_G.before = _G.ttext("c1")
+_G.state("c1", { state = "running" })
+]])
+
+        assert.is_nil(child.lua_get("_G.before"):find("Loaded", 1, true))
+        assert.equal(
+            1,
+            count(
+                child.lua_get([[_G.ttext("c1")]]),
+                "**Loaded child-model** · child-model"
+            )
+        )
+    end)
+
+    it("a child's model line comes before its first response", function()
+        child.lua([[
+_G.spawn("c1")
+_G.child_options("c1", "child-model")
+_G.child_chunk("c1", "agent_thought_chunk", "pondering", "r1")
+_G.child_chunk("c1", "agent_message_chunk", "the answer", "r1")
+]])
+
+        local transcript = child.lua_get([[_G.ttext("c1")]])
+        local loaded = transcript:find("**Loaded child-model**", 1, true)
+        local thought = transcript:find("pondering", 1, true)
+        local answer = transcript:find("the answer", 1, true)
+        assert.truthy(loaded and thought and answer)
+        assert.is_true(loaded < thought and thought < answer)
+    end)
+
+    it("a child's indicator shows what the child does", function()
+        child.lua([[
+_G.spawn("c1")
+_G.child_chunk("c1", "agent_thought_chunk", "pondering", "r1")
+_G.thought_state = _G.transcript("c1").view.status_indicator._state
+_G.call("c1", "t1")
+_G.s:_on_tool_call_update({ tool_call_id = "t1", status = "in_progress" })
+]])
+
+        assert.equal("thinking", child.lua_get("_G.thought_state"))
+        assert.equal(
+            "generating",
+            child.lua_get([[_G.transcript("c1").view.status_indicator._state]])
+        )
+        assert.is_false(child.lua_get([[_G.s.status_indicator:is_active()]]))
+
+        child.lua([[
+_G.state("c1", _G.COMPLETED)
+_G.child_chunk("c1", "agent_message_chunk", "late", "r2")
+]])
+
+        assert.is_false(
+            child.lua_get(
+                [[_G.transcript("c1").view.status_indicator:is_active()]]
+            )
+        )
+    end)
+
+    it("main and child chunks land in their own buffers", function()
+        child.lua([[
+_G.write_meta("c1", "background", "toolu_1")
+_G.spawn("c1")
+_G.chunk("root", "main text")
+_G.chunk("root", "tagged text", "toolu_1")
+_G.chunk("c1", "child text")
+]])
+
+        local chat = child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]])
+        local transcript = child.lua_get([[_G.ttext("c1")]])
+        assert.truthy(chat:find("main text", 1, true))
+        assert.is_nil(chat:find("tagged text", 1, true))
+        assert.is_nil(chat:find("child text", 1, true))
+        assert.truthy(transcript:find("tagged text", 1, true))
+        assert.truthy(transcript:find("child text", 1, true))
+        assert.is_nil(transcript:find("main text", 1, true))
     end)
 
     it(
@@ -1541,6 +1664,50 @@ _G.load_cb({}, nil)
         end
     )
 
+    --- Load `sid-x` with a replay that announces `c1` and sends its model,
+    --- then run `after_load`, what the bridge sends after the load response.
+    --- @param after_load string
+    local function load_then(after_load)
+        child.lua([[
+_G.s:_do_load_acp_session("sid-x", "/tmp")
+_G.update = function(source, update)
+    _G.s.agent.subscribers["sid-x"].on_session_update(update, source)
+end
+_G.announce("c1", "finder", "sid-x", { state = "running" })
+_G.message("toolu_1", "sid-x", "c1", "Find it.")
+_G.child_options("c1", "replayed-model")
+_G.load_cb({}, nil)
+]])
+        child.flush()
+        child.lua(after_load)
+    end
+
+    it("a child the load leaves ended shows no model", function()
+        load_then([[_G.child_options("c1", "late-model")]])
+
+        assert.is_false(
+            child.lua_get(
+                [[vim.api.nvim_buf_is_loaded(_G.transcript("c1").bufnr)]]
+            )
+        )
+        child.lua([[vim.fn.bufload(_G.transcript("c1").bufnr)]])
+        assert.is_nil(child.lua_get([[_G.ttext("c1")]]):find("Loaded", 1, true))
+    end)
+
+    it("a child running after the load shows the model it runs", function()
+        load_then([[
+_G.state("c1", { state = "running" }, "sid-x")
+_G.child_options("c1", "late-model")
+]])
+
+        local transcript = child.lua_get([[_G.ttext("c1")]])
+        assert.equal(1, count(transcript, "**Loaded"))
+        assert.equal(
+            1,
+            count(transcript, "**Loaded replayed-model** · replayed-model")
+        )
+    end)
+
     it("a load takes the kinds and delegations from the file", function()
         load()
 
@@ -1569,7 +1736,9 @@ _G.load_cb({}, nil)
 
         assert.is_true(child.lua_get("_G.s._subagents._agents.c1.open"))
         assert.is_true(
-            child.lua_get([[_G.transcript("c1").status_indicator:is_active()]])
+            child.lua_get(
+                [[_G.transcript("c1").view.status_indicator:is_active()]]
+            )
         )
         assert.truthy(
             child.lua_get([[_G.ttext("c1")]]):find("saved finding", 1, true)

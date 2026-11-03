@@ -283,6 +283,109 @@ describe("agentic.acp.AgentConfigOptions", function()
         end)
     end)
 
+    describe("model_display", function()
+        --- Options offering `models`.
+        --- @param models agentic.acp.ConfigOption.Option[]
+        --- @return agentic.acp.AgentConfigOptions
+        local function offering(models)
+            local options = AgentConfigOptions:new(
+                function() end,
+                function() end,
+                function() end,
+                function()
+                    return true
+                end
+            )
+            options:set_options({
+                vim.tbl_extend("force", model_option, { options = models }) --[[@as agentic.acp.ConfigOption]],
+            })
+            return options
+        end
+
+        it("returns the model's name and description", function()
+            config_options:set_options({ model_option })
+
+            local name, description =
+                config_options:model_display("claude-sonnet")
+
+            assert.equal("Sonnet", name)
+            assert.equal("Fast model", description)
+        end)
+
+        it("takes a Default model's name from its description", function()
+            local options = offering({
+                {
+                    value = "default",
+                    name = "Default (recommended)",
+                    description = "Opus 4.8 with 1M context window.",
+                },
+            })
+
+            assert.equal("Opus", (options:model_display("default")))
+        end)
+
+        it("falls back to the id for a model never described", function()
+            local name, description = config_options:model_display("ghost")
+
+            assert.equal("ghost", name)
+            assert.is_nil(description)
+        end)
+
+        it("takes a model without description from the fallback", function()
+            local child = offering({
+                -- The bridge sends a child's model without a description.
+                --- @diagnostic disable-next-line: missing-fields
+                { value = "default", name = "Default (recommended)" },
+            })
+            local root = offering({
+                {
+                    value = "default",
+                    name = "Default (recommended)",
+                    description = "Opus 4.8 with 1M context window.",
+                },
+            })
+
+            local name, description = child:model_display("default", root)
+
+            assert.equal("Opus", name)
+            assert.equal("Opus 4.8 with 1M context window.", description)
+        end)
+
+        it("keeps its own entry when it has a description", function()
+            local child = offering({
+                { value = "m", name = "Own", description = "own" },
+            })
+            local root = offering({
+                { value = "m", name = "Root", description = "root" },
+            })
+
+            local name, description = child:model_display("m", root)
+
+            assert.equal("Own", name)
+            assert.equal("own", description)
+        end)
+    end)
+
+    describe("model_title", function()
+        it("adds the thought level of the current model", function()
+            config_options:set_options({ model_option, thought_option })
+
+            assert.equal(
+                "Label · claude-sonnet · Thought Level: Normal",
+                config_options:model_title("Label", "claude-sonnet")
+            )
+        end)
+
+        it("omits the thought level of a model not current", function()
+            config_options:set_options({ model_option, thought_option })
+
+            assert.equal(
+                "Label · other",
+                config_options:model_title("Label", "other")
+            )
+        end)
+    end)
+
     describe("show_thought_level_selector", function()
         --- @type TestStub
         local select_stub

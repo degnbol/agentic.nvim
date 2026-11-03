@@ -1,9 +1,7 @@
+local AgentView = require("agentic.ui.agent_view")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local ChatBuffer = require("agentic.ui.chat_buffer")
 local Glyphs = require("agentic.glyphs")
-local MessageWriter = require("agentic.ui.message_writer")
-local ResponseBoundary = require("agentic.acp.response_boundary")
-local StatusIndicator = require("agentic.ui.status_indicator")
 local ToolCallLayout = require("agentic.ui.tool_call_layout")
 local WindowDecoration = require("agentic.ui.window_decoration")
 
@@ -14,13 +12,10 @@ local WindowDecoration = require("agentic.ui.window_decoration")
 --- @field on_write fun() Write the buffer on `:w`
 --- @field on_wipeout fun() The buffer is gone, wiped by the user
 
---- One subagent's transcript: a listed, chat-style buffer with its own writer,
---- working indicator and response boundary.
+--- One subagent's transcript: a listed, chat-style buffer with its own view.
 --- @class agentic.ui.SubagentTranscript
 --- @field bufnr integer
---- @field writer agentic.ui.MessageWriter
---- @field status_indicator agentic.ui.StatusIndicator
---- @field response_boundary agentic.acp.ResponseBoundary
+--- @field view agentic.ui.AgentView
 --- @field _destroyed boolean
 local SubagentTranscript = {}
 SubagentTranscript.__index = SubagentTranscript
@@ -61,14 +56,12 @@ function SubagentTranscript:new(session_id, subagent, widget, handlers)
     end
     BufHelpers.rename(bufnr, name)
 
-    local status_indicator = StatusIndicator:new(bufnr)
-    local writer = MessageWriter:new(bufnr)
+    local view = AgentView:new(bufnr)
+    local writer = view.writer
 
     self = setmetatable({
         bufnr = bufnr,
-        writer = writer,
-        status_indicator = status_indicator,
-        response_boundary = ResponseBoundary:new(),
+        view = view,
         _destroyed = false,
     }, self)
 
@@ -117,12 +110,11 @@ end
 --- Empty the transcript and open it again with its heading.
 --- @param subagent agentic.ui.MessageWriter.SubagentInfo|nil
 function SubagentTranscript:restart(subagent)
-    self.writer:reset()
-    ChatBuffer.start(self.bufnr)
+    self.view:restart()
     BufHelpers.with_modifiable(self.bufnr, function()
         vim.api.nvim_buf_set_lines(self.bufnr, 0, -1, false, {})
     end)
-    self.writer:write_subagent_heading(
+    self.view.writer:write_subagent_heading(
         ToolCallLayout.subagent_heading(subagent)
     )
 end
@@ -189,7 +181,7 @@ end
 --- Wipe the buffer. Its autocmds no longer reach the handlers.
 function SubagentTranscript:destroy()
     self._destroyed = true
-    self.status_indicator:stop()
+    self.view.status_indicator:stop()
     if vim.api.nvim_buf_is_valid(self.bufnr) then
         vim.api.nvim_buf_delete(self.bufnr, { force = true })
     end

@@ -298,6 +298,53 @@ function AgentConfigOptions:get_model_name(model_value)
     return nil
 end
 
+--- The entry of a model id, as a config option or a legacy model.
+--- @param options agentic.acp.AgentConfigOptions
+--- @param model_id string
+--- @return agentic.acp.ConfigOption.Option|agentic.acp.Model|nil
+local function model_entry(options, model_id)
+    return options:get_model(model_id)
+        or options.legacy_agent_models:get_model(model_id)
+end
+
+--- How a model id reads to a human: its display name and description. Falls
+--- back to `fallback`'s entry when this one is missing or has no description,
+--- then to the id. A `Default…` name gives way to the description's first word, the
+--- model it stands for.
+--- @param model_id string
+--- @param fallback agentic.acp.AgentConfigOptions|nil
+--- @return string name
+--- @return string|nil description
+function AgentConfigOptions:model_display(model_id, fallback)
+    local model = model_entry(self, model_id)
+    if fallback and not (model and model.description) then
+        model = model_entry(fallback, model_id) or model
+    end
+    local name = model and model.name or model_id
+    local description = model and model.description
+
+    if name:find("^Default") and description then
+        name = description:match("^(%S+)") or name
+    end
+
+    return name, description
+end
+
+--- `label`, `model_id` and, for the current model, its thought level, joined
+--- by ` · `. The provider reports no thought level for other models.
+--- @param label string
+--- @param model_id string
+--- @return string title
+function AgentConfigOptions:model_title(label, model_id)
+    local parts = { label, model_id }
+    local thought_label = model_id == self:current_model_id()
+        and self:current_thought_level_label()
+    if thought_label then
+        table.insert(parts, thought_label)
+    end
+    return table.concat(parts, " · ")
+end
+
 --- The thought level the session runs at, as `<option name>: <level name>`.
 --- @return string|nil label Nil without a thought level option, or when its
 ---   current value is not among its options

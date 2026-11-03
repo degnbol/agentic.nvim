@@ -13,9 +13,6 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 **Session log:**
 1. P3 [`PERF-append-session-log.md`](notes/PERF-append-session-log.md)
 
-**Subagents**
-1. P3 [`REFACTOR-agent-view-consolidation.md`](notes/REFACTOR-agent-view-consolidation.md)
-
 **Executed code**
 1. P1 [`FIX-walk-file-model.md`](notes/FIX-walk-file-model.md)
 2. P2 [`FEAT-executed-code.md`](notes/FEAT-executed-code.md)

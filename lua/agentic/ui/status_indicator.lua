@@ -84,6 +84,14 @@ function StatusIndicator:reposition()
     end
 end
 
+--- Switch to `state` when the indicator is active, else do nothing.
+--- @param state agentic.ui.StatusIndicator.State
+function StatusIndicator:switch(state)
+    if self:is_active() then
+        self:start(state)
+    end
+end
+
 function StatusIndicator:_render_frame()
     if not self._state or not vim.api.nvim_buf_is_valid(self._bufnr) then
         return

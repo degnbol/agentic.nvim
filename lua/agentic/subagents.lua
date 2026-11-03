@@ -19,12 +19,14 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field title? string The provider's title for it, the label's fallback
 --- @field description? string The provider's description of its task, the label
 --- @field config_options? agentic.acp.AgentConfigOptions Its own, once the provider reports any
+--- @field model_announced? boolean Its transcript has had a `Loaded` line
 
 --- What a session gives its subagents.
 --- @class agentic.Subagents.Host
 --- @field agent fun(): agentic.acp.ACPClient The session's current client
 --- @field history fun(): agentic.ui.ChatHistory The session's current history
 --- @field session_id fun(): string|nil
+--- @field config_options fun(): agentic.acp.AgentConfigOptions The main agent's current config options
 --- @field history_changed fun() The current history was mutated
 --- @field sync_modified fun() Set the `modified` flags of the chat and the transcripts from the current history and the running work
 --- @field setup_buf fun(bufnr: integer, writer: agentic.ui.MessageWriter|nil) Bind the session's own maps; with `writer`, a chat-style buffer, also the session's 'tagfunc'
@@ -38,8 +40,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- message inputs, session messages, and which subagent owns each tool call.
 --- @class agentic.Subagents
 --- @field _widget agentic.ui.ChatWidget
---- @field _chat_writer agentic.ui.MessageWriter
---- @field _chat_indicator agentic.ui.StatusIndicator
+--- @field _main_view agentic.ui.AgentView
 --- @field _host agentic.Subagents.Host
 --- @field _agents table<string, agentic.Subagents.Agent> By child session id
 --- @field _inputs table<string, agentic.ui.SubagentInput> Message inputs of background subagents by child session id
@@ -52,15 +53,13 @@ local Subagents = {}
 Subagents.__index = Subagents
 
 --- @param widget agentic.ui.ChatWidget
---- @param chat_writer agentic.ui.MessageWriter Writer of the main chat, which holds the main agent's subagent blocks
---- @param chat_indicator agentic.ui.StatusIndicator Working indicator of the main chat
+--- @param main_view agentic.ui.AgentView View of the main chat, which holds the main agent's subagent blocks
 --- @param host agentic.Subagents.Host
 --- @return agentic.Subagents
-function Subagents:new(widget, chat_writer, chat_indicator, host)
+function Subagents:new(widget, main_view, host)
     return setmetatable({
         _widget = widget,
-        _chat_writer = chat_writer,
-        _chat_indicator = chat_indicator,
+        _main_view = main_view,
         _host = host,
         _agents = {},
         _inputs = {},
@@ -162,10 +161,10 @@ function Subagents:_replay_transcript(child_id)
     local rows =
         self._host.history():messages_for_agent(self:agent_key(child_id))
     transcript:restart(block and block.subagent)
-    SessionResume.replay_messages(transcript.writer, rows, function(id)
+    SessionResume.replay_messages(transcript.view.writer, rows, function(id)
         return self:buffer_name(id)
     end)
-    transcript.status_indicator:reposition()
+    transcript.view.status_indicator:reposition()
 
     transcript:set_header(block and block.subagent)
     transcript:set_running(agent.open)
@@ -196,7 +195,7 @@ function Subagents:transcript(child_id)
         agent.transcript = transcript
         self:_replay_transcript(child_id)
         if agent.open then
-            transcript.status_indicator:start("generating")
+            transcript.view.status_indicator:start("generating")
         end
     elseif not transcript:is_loaded() then
         -- Its `BufReadCmd` renders it now, before a caller writes to it,
@@ -246,7 +245,7 @@ end
 function Subagents:record_writer(record, make)
     local agent_key = record.agent_key
     if not agent_key then
-        return self._chat_writer
+        return self._main_view.writer
     end
     local transcript
     if make then
@@ -254,7 +253,7 @@ function Subagents:record_writer(record, make)
     else
         transcript = self:loaded_transcript_of_key(agent_key)
     end
-    return transcript and transcript.writer
+    return transcript and transcript.view.writer
 end
 
 --- Give each subagent the history holds a transcript, unloaded, so it renders
@@ -488,9 +487,9 @@ function Subagents:_open_agent(child_id, label, parent_session_id, replayed)
         argument = vim.api.nvim_buf_get_name(transcript.bufnr),
         subagent = subagent,
     }
-    local writer, indicator = self:_view_of(parent_session_id)
-    writer:write_tool_call_block(block)
-    indicator:reposition()
+    local view = self:_view_of(parent_session_id)
+    view.writer:write_tool_call_block(block)
+    view.status_indicator:reposition()
     local record = ChatHistory.tool_call_record(block)
     if self._agents[parent_session_id] then
         record.agent_key = self:agent_key(parent_session_id)
@@ -504,13 +503,16 @@ function Subagents:_open_agent(child_id, label, parent_session_id, replayed)
     self:read_record(child_id)
 end
 
---- Start a closed subagent's work, first or again: its working indicator, a
---- header without the last run's end, and a background one's message input.
+--- Start a closed subagent's work, first or again: its model when known
+--- (`_announce_model`), its working indicator, a header without the last
+--- run's end, and a background one's message input.
 --- @param child_id string
 function Subagents:_start_agent(child_id)
-    self:_set_open(self._agents[child_id], true)
+    local agent = self._agents[child_id]
+    self:_set_open(agent, true)
     local transcript = self:transcript(child_id)
-    transcript.status_indicator:start("generating")
+    self:_announce_model(agent)
+    transcript.view.status_indicator:start("generating")
     transcript:set_context(nil)
     self:_open_input(child_id)
 end
@@ -556,14 +558,12 @@ function Subagents:end_agent(child_id, state)
 
     self:_set_open(agent, false)
     local transcript = self:transcript(child_id)
-    transcript.status_indicator:stop()
+    transcript.view.status_indicator:stop()
     -- An `unknown` end does not say the calls stopped.
     if word ~= "completed" and word ~= "unknown" then
-        self._host
-            .history()
-            :update_tool_calls(
-                transcript.writer:stamp_open_calls(word, "failed")
-            )
+        self._host.history():update_tool_calls(
+            transcript.view.writer:stamp_open_calls(word, "failed")
+        )
     end
     self:_write_row(child_id, row)
     transcript:set_context(word)
@@ -579,18 +579,16 @@ function Subagents:close_all(state)
     end
 end
 
---- The writer and working indicator of a session's buffer: a subagent's
---- transcript, loaded and rendered, else the chat. Get them before adding
---- what they write to the history: loading a transcript replays the history.
+--- The view of a session's buffer: a subagent's transcript, loaded and
+--- rendered, else the chat. Get it before adding what it writes to the
+--- history: loading a transcript replays the history.
 --- @param session_id string
---- @return agentic.ui.MessageWriter writer
---- @return agentic.ui.StatusIndicator indicator
+--- @return agentic.ui.AgentView
 function Subagents:_view_of(session_id)
     if not self._agents[session_id] then
-        return self._chat_writer, self._chat_indicator
+        return self._main_view
     end
-    local transcript = self:transcript(session_id)
-    return transcript.writer, transcript.status_indicator
+    return self:transcript(session_id).view
 end
 
 --- Write a session message or subagent end row to a subagent's transcript and
@@ -599,17 +597,17 @@ end
 --- @param child_id string
 --- @param row agentic.ui.ChatHistory.SessionMessage|agentic.ui.ChatHistory.SubagentEnd Gets `agent_key` set
 function Subagents:_write_row(child_id, row)
-    local writer, indicator = self:_view_of(child_id)
+    local view = self:_view_of(child_id)
     row.agent_key = self:agent_key(child_id)
     SessionResume.write_row(
-        writer,
+        view.writer,
         row,
         self._agents[child_id].open,
         function(id)
             return self:buffer_name(id)
         end
     )
-    indicator:reposition()
+    view.status_indicator:reposition()
     self._host.history():add_message(row)
     self._host.history_changed()
 end
@@ -820,8 +818,34 @@ function Subagents:write_received_message(message)
     self._host.write_chat_row(row)
 end
 
+--- Write a `Loaded` line for a subagent's model in its transcript, once per
+--- subagent: when it works, its transcript is loaded and its config options
+--- name a model. Later models get none.
+--- @param agent agentic.Subagents.Agent
+function Subagents:_announce_model(agent)
+    local options = agent.config_options
+    local model_id = options and options:current_model_id()
+    local transcript = agent.transcript
+    if
+        not model_id
+        or agent.model_announced
+        or not agent.open
+        or not (transcript and transcript:is_loaded())
+    then
+        return
+    end
+    --- @cast options agentic.acp.AgentConfigOptions
+    agent.model_announced = true
+    transcript.view:announce_model(
+        options,
+        model_id,
+        self._host.config_options()
+    )
+end
+
 --- Keep a subagent's own config options, read only: no selector reaches
---- them. Those of an unknown child are dropped with a debug log.
+--- them, and announce its model (`_announce_model`). Those of an unknown
+--- child are dropped with a debug log.
 --- @param child_id string
 --- @param options agentic.acp.ConfigOption[]
 function Subagents:set_config_options(child_id, options)
@@ -832,7 +856,7 @@ function Subagents:set_config_options(child_id, options)
         )
         return
     end
-    agent.config_options = agent.config_options
+    local config_options = agent.config_options
         or AgentConfigOptions:new(
             function() end,
             function() end,
@@ -841,7 +865,9 @@ function Subagents:set_config_options(child_id, options)
                 return false
             end
         )
-    agent.config_options:set_options(options)
+    agent.config_options = config_options
+    config_options:set_options(options)
+    self:_announce_model(agent)
 end
 
 --- Mark every subagent ended, stop its indicator and wipe the message
@@ -850,7 +876,7 @@ function Subagents:forget()
     for _, agent in pairs(self._agents) do
         self:_set_open(agent, false)
         if agent.transcript then
-            agent.transcript.status_indicator:stop()
+            agent.transcript.view.status_indicator:stop()
         end
     end
     self:_destroy_inputs()
@@ -988,7 +1014,7 @@ end
 --- @param child_id string
 function Subagents:_mark_stopped(child_id)
     self._host.history():update_tool_calls(
-        self:transcript(child_id).writer:stamp_open_calls("interrupted")
+        self:transcript(child_id).view.writer:stamp_open_calls("interrupted")
     )
 end
 

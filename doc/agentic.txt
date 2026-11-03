@@ -1120,7 +1120,8 @@ A toggled panel with the session's agent, account, context and usage limits.
 With claude-agent-acp, each subagent has its own transcript: a listed buffer
 named `agentic://<id>/subagent/<agent id tail>-<name>` holding its prose,
 thinking and tool calls under a `##` heading like its block's. A transcript
-shows its subagent as working while it works. It also has a row for each end
+shows its subagent as working while it works, and the model of a running
+subagent in a `Loaded` line. It also has a row for each end
 of a run, titled `completed`, `interrupted`, `failed`, `ended`, `unknown` or
 the provider's stop reason, and signed with that status's icon
 (|agentic-config-status_icons|), else 󰈼. The header reads

@@ -1,3 +1,5 @@
+local Json = require("agentic.utils.json")
+
 --- Finds where one model response ends and the next begins in a stream of
 --- message chunks, from the change of their `messageId`. No end-of-message
 --- event exists, so the verdict lands on the first chunk of the next response.
@@ -40,6 +42,27 @@ function ResponseBoundary:filter(message_id, text)
     end
     self._stripping = false
     return text, true
+end
+
+--- Run a message chunk's text through the boundary. `update` is not modified.
+--- @param update agentic.acp.AgentMessageChunk
+--- @return agentic.acp.AgentMessageChunk|nil chunk `update` with the filtered text, nil when no text is left
+--- @return boolean starts_response The chunk is the first text of a new response
+function ResponseBoundary:filter_chunk(update)
+    local content = update.content
+    if not (content and content.text) then
+        return update, false
+    end
+    local message_id = Json.present(update.messageId)
+    --- @cast message_id string|nil
+    local text, starts_response = self:filter(message_id, content.text)
+    if text == "" then
+        return nil, false
+    end
+    local chunk = vim.tbl_extend("force", update, {
+        content = vim.tbl_extend("force", content, { text = text }),
+    }) --[[@as agentic.acp.AgentMessageChunk]]
+    return chunk, starts_response
 end
 
 return ResponseBoundary

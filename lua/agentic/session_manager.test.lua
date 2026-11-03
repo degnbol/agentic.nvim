@@ -5,6 +5,7 @@ local spy = require("tests.helpers.spy")
 local ACPClient = require("agentic.acp.acp_client")
 local AgentConfigOptions = require("agentic.acp.agent_config_options")
 local AgentModes = require("agentic.acp.agent_modes")
+local AgentView = require("agentic.ui.agent_view")
 local ChatHistory = require("agentic.ui.chat_history")
 local FileSystem = require("agentic.utils.file_system")
 local Config = require("agentic.config")
@@ -31,15 +32,27 @@ local function fresh_id()
     return last_id
 end
 
+--- The main view of a fake session: an `AgentView` of its writer and
+--- indicator.
+--- @param session agentic.SessionManager
+--- @return agentic.ui.AgentView
+local function fake_main_view(session)
+    return setmetatable({
+        writer = session.message_writer,
+        status_indicator = session.status_indicator,
+    }, { __index = AgentView }) --[[@as agentic.ui.AgentView]]
+end
+
 --- Give a fake session a real `Subagents` with no subagents, reaching the
---- session through its host.
+--- session through its host, and a main view of its writer and indicator
+--- unless it has one.
 --- @param session agentic.SessionManager
 --- @return agentic.SessionManager session
 local function with_subagents(session)
+    session.main_view = session.main_view or fake_main_view(session)
     session._subagents = Subagents:new(
         session.widget,
-        session.message_writer,
-        session.status_indicator,
+        session.main_view,
         SessionManager._subagents_host(session)
     )
     return session
@@ -751,8 +764,6 @@ describe("agentic.SessionManager", function()
                 _apply_session_options = SessionManager._apply_session_options,
                 _reapply_model = SessionManager._reapply_model,
                 announce_model_loaded = SessionManager.announce_model_loaded,
-                _resolve_model_display = SessionManager._resolve_model_display,
-                _model_title = SessionManager._model_title,
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _prompt_pending = 0,
                 _dispatch_deferred_prompts = noop,
@@ -1463,16 +1474,17 @@ describe("agentic.SessionManager", function()
                     legacy_agent_models = {
                         get_model = function() end,
                     },
+                    model_display = AgentConfigOptions.model_display,
+                    model_title = AgentConfigOptions.model_title,
                 },
                 message_writer = {
                     write_message = write_spy,
                     write_notice = notice_spy,
                 },
-                _resolve_model_display = SessionManager._resolve_model_display,
-                _model_title = SessionManager._model_title,
                 announce_model_loaded = SessionManager.announce_model_loaded,
                 _notice_model_switched = SessionManager._notice_model_switched,
             } --[[@as agentic.SessionManager]]
+            session.main_view = fake_main_view(session)
             return session, write_spy, notice_spy
         end
 
@@ -1500,68 +1512,6 @@ describe("agentic.SessionManager", function()
                     .. "Opus 4.8 with 1M context window.",
                 written_text(write_spy, 1)
             )
-        end)
-
-        it("extracts real model from description for Default name", function()
-            local session, write_spy = make_session({
-                ["default"] = {
-                    value = "default",
-                    name = "Default (recommended)",
-                    description = "Opus 4.8 with 1M context window.",
-                },
-            })
-
-            session:announce_model_loaded("default")
-
-            assert.equal(
-                "**Loaded Opus** · default\nOpus 4.8 with 1M context window.",
-                written_text(write_spy, 1)
-            )
-        end)
-
-        it("falls back to the id when the model is unknown", function()
-            local session, write_spy = make_session({})
-
-            session:announce_model_loaded("ghost-model")
-
-            assert.equal(
-                "**Loaded ghost-model** · ghost-model",
-                written_text(write_spy, 1)
-            )
-        end)
-
-        it("adds the thought level of the current model", function()
-            local session, write_spy = make_session(
-                { ["m"] = { value = "m", name = "M" } },
-                { model_id = "m", thought_level = "Effort: High" }
-            )
-
-            session:announce_model_loaded("m")
-
-            assert.equal(
-                "**Loaded M** · m · Effort: High",
-                written_text(write_spy, 1)
-            )
-        end)
-
-        it("omits the thought level of a model not yet current", function()
-            -- A model still being switched in may run at another level.
-            local session, write_spy = make_session(
-                { ["m"] = { value = "m", name = "M" } },
-                { model_id = "default", thought_level = "Effort: High" }
-            )
-
-            session:announce_model_loaded("m")
-
-            assert.equal("**Loaded M** · m", written_text(write_spy, 1))
-        end)
-
-        it("ignores nil model id", function()
-            local session, write_spy = make_session({})
-
-            session:announce_model_loaded(nil)
-
-            assert.spy(write_spy).was.called(0)
         end)
 
         it("renders an explicit switch as a notice", function()
@@ -1666,13 +1616,12 @@ describe("agentic.SessionManager", function()
                 message_writer = { write_message = write_spy },
                 render_info = noop,
                 _handle_new_config_options = SessionManager._handle_new_config_options,
-                _resolve_model_display = SessionManager._resolve_model_display,
-                _model_title = SessionManager._model_title,
                 announce_model_loaded = SessionManager.announce_model_loaded,
                 _reapply_model = SessionManager._reapply_model,
                 _handle_model_change = SessionManager._handle_model_change,
                 _set_session_option = SessionManager._set_session_option,
             } --[[@as agentic.SessionManager]]
+            session.main_view = fake_main_view(session)
             return session, write_spy, set_option_spy
         end
 
@@ -2537,9 +2486,6 @@ describe("agentic.SessionManager", function()
             local drains = { n = 0, subagents = {} }
             --- @type agentic.SessionManager
             local session = {
-                _indicator_for = function()
-                    return { reposition = function() end }
-                end,
                 message_writer = {
                     update_tool_call_block = function() end,
                     tool_call_blocks = tool_call_blocks,
@@ -2556,10 +2502,13 @@ describe("agentic.SessionManager", function()
                 },
                 _try_record_edit_range = function() end,
                 _record_file_op = function() end,
-                status_indicator = { start = function() end },
+                status_indicator = {
+                    start = function() end,
+                    reposition = function() end,
+                },
                 chat_history = { update_tool_call = function() end },
                 _history_changed = function() end,
-                _writer_for = SessionManager._writer_for,
+                _view_for = SessionManager._view_for,
                 _drain_side_records = function()
                     drains.n = drains.n + 1
                 end,
@@ -2574,9 +2523,15 @@ describe("agentic.SessionManager", function()
             session._subagents.read_record = function() end
             session._subagents.transcript = function()
                 return {
-                    writer = {
-                        update_tool_call_block = function() end,
-                        tool_call_blocks = tool_call_blocks,
+                    view = {
+                        writer = {
+                            update_tool_call_block = function() end,
+                            tool_call_blocks = tool_call_blocks,
+                        },
+                        status_indicator = {
+                            reposition = function() end,
+                            switch = function() end,
+                        },
                     },
                 }
             end
@@ -2726,7 +2681,7 @@ describe("agentic.SessionManager", function()
                     end,
                 },
                 _last_edited_md = "/project/plan.md",
-                _writer_for = SessionManager._writer_for,
+                _view_for = SessionManager._view_for,
                 _handle_input_submit = spy.new(function() end),
                 new_session = new_session,
                 permission_manager = {
@@ -2839,8 +2794,8 @@ describe("agentic.SessionManager", function()
                 _held_tool_call_updates = {},
                 _drain_subagent_side_records = SessionManager._drain_subagent_side_records,
                 _apply_side_tool_call = SessionManager._apply_side_tool_call,
-                _writer_for = function()
-                    return child_writer
+                _view_for = function()
+                    return { writer = child_writer }
                 end,
                 _history_changed = function() end,
                 chat_history = { update_tool_call = function() end },
@@ -3203,7 +3158,7 @@ describe("agentic.SessionManager", function()
                         return true
                     end,
                 },
-                _writer_for = SessionManager._writer_for,
+                _view_for = SessionManager._view_for,
                 _record_file_op = SessionManager._record_file_op,
             } --[[@as agentic.SessionManager]]
             with_subagents(session)
@@ -3413,7 +3368,7 @@ describe("agentic.SessionManager", function()
                         table.insert(recorded, { id, start_line })
                     end,
                 },
-                _writer_for = SessionManager._writer_for,
+                _view_for = SessionManager._view_for,
                 _try_record_edit_range = SessionManager._try_record_edit_range,
             } --[[@as agentic.SessionManager]]
             with_subagents(session)
@@ -3750,11 +3705,13 @@ describe("agentic.SessionManager", function()
                 open = true,
                 record_read = true,
                 transcript = {
-                    writer = {
-                        tool_call_blocks = {},
-                        nonfinal_tool_call_ids = MessageWriter.nonfinal_tool_call_ids,
-                        stamp_open_calls = MessageWriter.stamp_open_calls,
-                        update_tool_call_block = record_stamp("subagent"),
+                    view = {
+                        writer = {
+                            tool_call_blocks = {},
+                            nonfinal_tool_call_ids = MessageWriter.nonfinal_tool_call_ids,
+                            stamp_open_calls = MessageWriter.stamp_open_calls,
+                            update_tool_call_block = record_stamp("subagent"),
+                        },
                     },
                     set_modified = noop,
                 },
@@ -3879,7 +3836,7 @@ describe("agentic.SessionManager", function()
                     ["main-pending"] = { status = "pending" },
                     ["main-done"] = { status = "completed" },
                 }
-                session._subagents._agents.c1.transcript.writer.tool_call_blocks =
+                session._subagents._agents.c1.transcript.view.writer.tool_call_blocks =
                     {
                         ["sub-running"] = { status = "in_progress" },
                         ["sub-done"] = { status = "completed" },
@@ -4598,7 +4555,7 @@ describe("agentic.SessionManager", function()
                 destroyed = false,
                 status_indicator = { start = noop, stop = noop },
                 message_writer = { tool_call_blocks = {} },
-                _writer_for = SessionManager._writer_for,
+                _view_for = SessionManager._view_for,
                 -- chat not current => unfocused => bell would ring if notified
                 widget = {
                     buf_nrs = { agent = -1 },
@@ -5057,8 +5014,7 @@ describe("agentic.SessionManager", function()
                 _drain_subagent_side_records = noop,
                 _drain_side_records_of = SessionManager._drain_side_records_of,
                 _sync_output_tail = SessionManager._sync_output_tail,
-                _writer_for = SessionManager._writer_for,
-                _indicator_for = SessionManager._indicator_for,
+                _view_for = SessionManager._view_for,
                 _history_changed = spy.new(noop),
                 _try_record_edit_range = noop,
                 _record_file_op = noop,
@@ -5598,11 +5554,14 @@ describe("agentic.SessionManager", function()
                             record_read = true,
                             transcript = {
                                 bufnr = child_buf,
-                                writer = writer,
-                                status_indicator = {
-                                    reposition = noop,
-                                    start = noop,
-                                    stop = noop,
+                                view = {
+                                    writer = writer,
+                                    status_indicator = {
+                                        reposition = noop,
+                                        start = noop,
+                                        stop = noop,
+                                        switch = noop,
+                                    },
                                 },
                                 set_running = noop,
                                 set_context = noop,
@@ -6662,17 +6621,25 @@ describe("agentic.SessionManager", function()
             drain = spy.new(function()
                 table.insert(main_calls, "drain")
             end)
+            local noop = function() end
             -- A running subagent with task id `task`.
             local transcript = {
-                writer = { write_message_chunk = subagent_write },
-                status_indicator = { reposition = function() end },
-                response_boundary = ResponseBoundary:new(),
-                set_modified = function() end,
+                view = setmetatable({
+                    writer = { write_message_chunk = subagent_write },
+                    status_indicator = { reposition = noop, switch = noop },
+                    response_boundary = ResponseBoundary:new(),
+                }, { __index = AgentView }),
+                set_modified = noop,
             }
             session = setmetatable({
-                _response_boundary = ResponseBoundary:new(),
-                message_writer = { write_message_chunk = main_write },
-                status_indicator = { start = indicator_start },
+                main_view = setmetatable({
+                    writer = { write_message_chunk = main_write },
+                    status_indicator = {
+                        start = indicator_start,
+                        reposition = noop,
+                    },
+                    response_boundary = ResponseBoundary:new(),
+                }, { __index = AgentView }),
                 chat_history = ChatHistory:new(),
                 agent = {
                     provider_config = { name = "test-provider" },
@@ -6840,7 +6807,7 @@ describe("agentic.SessionManager", function()
                 },
                 widget = { clear = function() end },
                 _sync_modified = function() end,
-                _writer_for = SessionManager._writer_for,
+                _view_for = SessionManager._view_for,
                 _sync_output_tail = SessionManager._sync_output_tail,
                 _show_final_tail = SessionManager._show_final_tail,
                 _stop_output_tails = SessionManager._stop_output_tails,

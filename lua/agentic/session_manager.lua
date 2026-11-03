@@ -12,7 +12,6 @@ local Bootstrap = require("agentic.bootstrap")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Budget = require("agentic.budget")
 local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
-local ChatBuffer = require("agentic.ui.chat_buffer")
 local ChatHistory = require("agentic.ui.chat_history")
 local CodeSelection = require("agentic.ui.code_selection")
 local Config = require("agentic.config")
@@ -31,7 +30,6 @@ local PromptBlocks = require("agentic.utils.prompt_blocks")
 local Recovery = require("agentic.session_recovery")
 local SessionRegistry = require("agentic.session_registry")
 local SessionResume = require("agentic.session_resume")
-local ResponseBoundary = require("agentic.acp.response_boundary")
 local SequenceTail = require("agentic.utils.sequence_tail")
 local SideRecords = require("agentic.ui.side_records")
 local SlashCommands = require("agentic.acp.slash_commands")
@@ -79,10 +77,11 @@ end
 --- @field is_generating boolean
 --- @field widget agentic.ui.ChatWidget
 --- @field agent agentic.acp.ACPClient
---- @field message_writer agentic.ui.MessageWriter
+--- @field main_view agentic.ui.AgentView The chat's. Its response boundary is never reset: every session starts with the writer's prose run closed and history ending on a user message, where a stale verdict writes no break
+--- @field message_writer agentic.ui.MessageWriter `main_view.writer`
 --- @field permission_manager agentic.ui.PermissionManager
 --- @field _grant_command agentic.GrantCommand
---- @field status_indicator agentic.ui.StatusIndicator
+--- @field status_indicator agentic.ui.StatusIndicator `main_view.status_indicator`
 --- @field _subagents agentic.Subagents
 --- @field _output_tails table<string, agentic.utils.FileTail> toolCallId -> tail of the output file of a command still running
 --- @field _held_tool_call_updates table<string, { update: agentic.ui.MessageWriter.ToolCallBase, child_id?: string }> toolCallId -> fields a side record gave a call the chat does not show yet, and the subagent whose records gave them. Dropped at the turn's end for the main agent, at the subagent's end for a subagent
@@ -94,7 +93,6 @@ end
 --- @field todo_list agentic.ui.TodoList
 --- @field chat_history agentic.ui.ChatHistory
 --- @field _thought_response_id? string `messageId` of the main agent's last thought chunk
---- @field _response_boundary agentic.acp.ResponseBoundary The chat's. Each transcript has its own. Never reset: every session starts with the writer's prose run closed and history ending on a user message, where a stale verdict writes no break
 --- @field _title_user_set? boolean Set once the user picks a title via /rename; blocks the provider's auto-summary from overriding it
 --- @field _history_to_send? agentic.ui.ChatHistory History whose messages to prepend on next prompt submit, as a text transcript (the history prefix)
 --- @field _loading_saved boolean True while a load of a saved session is deferred or in flight. Stops the constructor's on-ready from starting a new session
@@ -290,9 +288,8 @@ function SessionManager:new(provider)
     local ChatWidget = require("agentic.ui.chat_widget")
     local FileActivity = require("agentic.ui.file_activity")
     local FileList = require("agentic.ui.file_list")
-    local MessageWriter = require("agentic.ui.message_writer")
+    local AgentView = require("agentic.ui.agent_view")
     local PermissionManager = require("agentic.ui.permission_manager")
-    local StatusIndicator = require("agentic.ui.status_indicator")
     local TodoList = require("agentic.ui.todo_list")
 
     last_id = last_id + 1
@@ -347,7 +344,6 @@ function SessionManager:new(provider)
     self.agent = agent
 
     self.chat_history = ChatHistory:new()
-    self._response_boundary = ResponseBoundary:new()
 
     self.widget = ChatWidget:new(self.id, function(input_text, opts)
         self:on_user_submit()
@@ -365,20 +361,17 @@ function SessionManager:new(provider)
         end
     end
 
-    self.status_indicator = StatusIndicator:new(self.widget.buf_nrs.agent)
-    self.message_writer = MessageWriter:new(self.widget.buf_nrs.agent)
-    self._subagents = Subagents:new(
-        self.widget,
-        self.message_writer,
-        self.status_indicator,
-        self:_subagents_host()
-    )
+    self.main_view = AgentView:new(self.widget.buf_nrs.agent)
+    self.status_indicator = self.main_view.status_indicator
+    self.message_writer = self.main_view.writer
+    self._subagents =
+        Subagents:new(self.widget, self.main_view, self:_subagents_host())
 
     self.permission_manager = PermissionManager:new(
         self.message_writer,
         self.widget.buf_nrs,
         function(tool_call_id)
-            return self:_writer_for(tool_call_id)
+            return self:_view_for(tool_call_id).writer
         end,
         function()
             return self.agent:claude_config_dir()
@@ -692,7 +685,7 @@ function SessionManager:_writers_of_message(message_id)
         if msg.type == "session_message" and msg.message_id == message_id then
             local transcript = self._subagents:transcript_of_key(msg.agent_key)
             if transcript then
-                table.insert(writers, transcript.writer)
+                table.insert(writers, transcript.view.writer)
             end
         end
     end
@@ -736,7 +729,7 @@ end
 --- history.
 --- @param tool_call_id string
 function SessionManager:_sync_job_stop(tool_call_id)
-    local writer = self:_writer_for(tool_call_id)
+    local writer = self:_view_for(tool_call_id).writer
     local tracker = writer.tool_call_blocks[tool_call_id]
     local job_id = tracker and tracker.stopped_job_id
     local record = job_id and self:_background_job_record(job_id)
@@ -896,9 +889,7 @@ end
 --- plus the running turn. What the history does not hold is not rendered
 --- again: notices, errors and the session-start marker.
 function SessionManager:_reload_chat()
-    local chat = self.widget.buf_nrs.agent
-    self.message_writer:reset()
-    ChatBuffer.start(chat)
+    self.main_view:restart()
     SessionResume.replay_messages(
         self.message_writer,
         self.chat_history.messages,
@@ -919,32 +910,20 @@ function SessionManager:_writer_of_buf(bufnr)
         return self.message_writer
     end
     local child_id = self._subagents:child_of_buf(bufnr)
-    return child_id and self._subagents:transcript(child_id).writer
+    return child_id and self._subagents:transcript(child_id).view.writer
 end
 
---- Resolve which MessageWriter owns a tool call. Ownership is recorded on the
---- initial `tool_call` (see `_on_tool_call`); updates and permission lookups
---- resolve through here rather than re-reading the wire tag, which is not
---- reliably present on later notifications.
+--- The view of the agent that owns a tool call: its subagent's transcript,
+--- else the chat. The owner is the one recorded at the initial `tool_call`,
+--- as later notifications do not reliably carry the wire tag.
 --- @param tool_call_id string
---- @return agentic.ui.MessageWriter
-function SessionManager:_writer_for(tool_call_id)
+--- @return agentic.ui.AgentView
+function SessionManager:_view_for(tool_call_id)
     local child_id = self._subagents:owner_of(tool_call_id)
     if child_id then
-        return self._subagents:transcript(child_id).writer
+        return self._subagents:transcript(child_id).view
     end
-    return self.message_writer
-end
-
---- The status indicator paired with the writer that owns a tool call.
---- @param tool_call_id string
---- @return agentic.ui.StatusIndicator
-function SessionManager:_indicator_for(tool_call_id)
-    local child_id = self._subagents:owner_of(tool_call_id)
-    if child_id then
-        return self._subagents:transcript(child_id).status_indicator
-    end
-    return self.status_indicator
+    return self.main_view
 end
 
 --- The id of the main chat's block for a tool call: the id itself when the
@@ -1001,6 +980,9 @@ function SessionManager:_subagents_host()
         session_id = function()
             return self.session_id
         end,
+        config_options = function()
+            return self.config_options
+        end,
         history_changed = function()
             self:_history_changed(self.chat_history)
         end,
@@ -1035,45 +1017,22 @@ function SessionManager:_subagents_host()
     return host
 end
 
---- Run a message chunk's text through `boundary`. `update` is not modified.
---- @param boundary agentic.acp.ResponseBoundary
---- @param update agentic.acp.AgentMessageChunk
---- @return agentic.acp.AgentMessageChunk|nil chunk `update` with the filtered text, nil when no text is left
---- @return boolean starts_response The chunk is the first text of a new response
-local function filter_chunk(boundary, update)
-    local content = update.content
-    if not (content and content.text) then
-        return update, false
-    end
-    local message_id = Json.present(update.messageId)
-    --- @cast message_id string|nil
-    local text, starts_response = boundary:filter(message_id, content.text)
-    if text == "" then
-        return nil, false
-    end
-    local chunk = vim.tbl_extend("force", update, {
-        content = vim.tbl_extend("force", content, { text = text }),
-    }) --[[@as agentic.acp.AgentMessageChunk]]
-    return chunk, starts_response
-end
-
 --- Write an agent's message or thought chunk to the chat, or to the
---- transcript of the subagent that sent it, and append its text to the
---- history. A message chunk that opens a new response loses its leading
---- newlines, and is dropped if no text is left. A thought chunk is written
---- as sent.
+--- transcript of the subagent that sent it, show its kind on that view's
+--- working indicator, and append its text to the history. A message chunk
+--- that opens a new response loses its leading newlines, and is dropped if no
+--- text is left. A thought chunk is written as sent.
 --- @param update agentic.acp.AgentMessageChunk|agentic.acp.AgentThoughtChunk
 --- @param source_session_id string|nil The session that sent it: the root, or a subagent's child session
 function SessionManager:_on_agent_chunk(update, source_session_id)
     local is_message = update.sessionUpdate == "agent_message_chunk"
     local child_id, transcript =
         self._subagents:agent_of_chunk(update, source_session_id)
+    local view = transcript and transcript.view or self.main_view
     local chunk, starts_response = update, nil
     if is_message then
         local filtered
-        filtered, starts_response = filter_chunk(
-            transcript and transcript.response_boundary
-                or self._response_boundary,
+        filtered, starts_response = view.response_boundary:filter_chunk(
             update --[[@as agentic.acp.AgentMessageChunk]]
         )
         if not filtered then
@@ -1081,10 +1040,7 @@ function SessionManager:_on_agent_chunk(update, source_session_id)
         end
         chunk = filtered
     end
-    if transcript then
-        transcript.writer:write_message_chunk(chunk, starts_response)
-        transcript.status_indicator:reposition()
-    else
+    if not transcript then
         -- Records already recorded go above a new response, so a reply to
         -- Stop hook feedback reads under that feedback. A turn no prompt
         -- started, such as one a received message started, can open with
@@ -1099,8 +1055,15 @@ function SessionManager:_on_agent_chunk(update, source_session_id)
         if (starts_response or starts_unprompted) and not self._loading then
             self:_drain_side_records()
         end
-        self.message_writer:write_message_chunk(chunk, starts_response)
-        self.status_indicator:start(is_message and "generating" or "thinking")
+    end
+    view.writer:write_message_chunk(chunk, starts_response)
+    local state = is_message and "generating" or "thinking"
+    if transcript then
+        -- A subagent's indicator runs from its start to its end, and late
+        -- chunks of an ended one must not bring it back.
+        view.status_indicator:switch(state)
+    else
+        view.status_indicator:start(state)
     end
     if chunk.content and chunk.content.text then
         self.chat_history:append_agent_text({
@@ -1619,8 +1582,9 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
     end
     tool_call = CanonicalToolCall.normalise(tool_call, tool_call.kind)
     tool_call.decided_by = self.permission_manager:take_deciders(id)
-    self:_writer_for(id):write_tool_call_block(tool_call)
-    self:_indicator_for(id):reposition()
+    local view = self:_view_for(id)
+    view.writer:write_tool_call_block(tool_call)
+    view.status_indicator:reposition()
 
     local tool_msg = ChatHistory.tool_call_record(tool_call)
     tool_msg.agent_key = agent_key
@@ -1651,7 +1615,7 @@ function SessionManager:_on_permission_decided(tool_call_id, deciders)
     if self.destroyed then
         return
     end
-    local writer = self:_writer_for(tool_call_id)
+    local writer = self:_view_for(tool_call_id).writer
     local tracker = writer.tool_call_blocks[tool_call_id]
     if not tracker or vim.deep_equal(tracker.decided_by, deciders) then
         return
@@ -1698,7 +1662,7 @@ function SessionManager:_try_record_edit_range(tool_call_id)
         return
     end
     local tracker =
-        self:_writer_for(tool_call_id).tool_call_blocks[tool_call_id]
+        self:_view_for(tool_call_id).writer.tool_call_blocks[tool_call_id]
     if not tracker or AcpKind.normalise(tracker.kind) ~= "edit" then
         return
     end
@@ -1763,7 +1727,7 @@ function SessionManager:_record_file_op(tool_call_id)
         return
     end
     local tracker =
-        self:_writer_for(tool_call_id).tool_call_blocks[tool_call_id]
+        self:_view_for(tool_call_id).writer.tool_call_blocks[tool_call_id]
     if not tracker or tracker.status ~= "completed" then
         return
     end
@@ -1832,7 +1796,7 @@ function SessionManager:_info_snapshot()
     --- @type agentic.ui.InfoPanel.Snapshot
     local snap = {
         provider = self.agent.provider_config.name,
-        model = model_id and (self:_resolve_model_display(model_id)),
+        model = model_id and (options:model_display(model_id)),
         mode = mode_id and options:get_mode_name(mode_id),
         thought_level = options:current_thought_level_label(),
         auth = self.agent.auth_status,
@@ -1881,7 +1845,7 @@ function SessionManager:_on_request_permission(request, callback)
     end
 
     local tracker =
-        self:_writer_for(tool_call_id).tool_call_blocks[tool_call_id]
+        self:_view_for(tool_call_id).writer.tool_call_blocks[tool_call_id]
     if tracker and tracker.exits_plan then
         -- Inject "Clear context & implement plan" option.
         -- It sorts first (priority 0 in PermissionManager).
@@ -2056,7 +2020,7 @@ end
 --- @param child_id string|nil The subagent whose records gave the fields, nil for the main agent's
 function SessionManager:_apply_side_tool_call(update, child_id)
     local id = update.tool_call_id
-    local writer = self:_writer_for(id)
+    local writer = self:_view_for(id).writer
     if not writer.tool_call_blocks[id] then
         self._held_tool_call_updates[id] =
             { update = update, child_id = child_id }
@@ -2112,7 +2076,8 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     if child_id then
         self._subagents:read_record(child_id)
     end
-    local writer = self:_writer_for(id)
+    local view = self:_view_for(id)
+    local writer = view.writer
     local existing = writer.tool_call_blocks[id]
     tool_call_update = CanonicalToolCall.normalise(
         tool_call_update,
@@ -2125,7 +2090,7 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     end
 
     writer:update_tool_call_block(tool_call_update)
-    self:_indicator_for(id):reposition()
+    view.status_indicator:reposition()
     self:_try_record_edit_range(id)
     self:_record_file_op(id)
 
@@ -2186,17 +2151,17 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         end
     end
 
-    -- A transcript's indicator runs from its agent's spawn to its end, so only
-    -- the main indicator follows tool activity. An update without status
-    -- reports no step of the agent: the end of a background command comes
-    -- after its turn.
-    if
-        not is_subagent
-        and tool_call_update.status
-        and not self.permission_manager.current_request
-        and #self.permission_manager.queue == 0
-    then
-        self.status_indicator:start("generating")
+    -- An update without status reports no step of the agent: the end of a
+    -- background command comes after its turn.
+    if tool_call_update.status then
+        if is_subagent then
+            view.status_indicator:switch("generating")
+        elseif
+            not self.permission_manager.current_request
+            and #self.permission_manager.queue == 0
+        then
+            self.status_indicator:start("generating")
+        end
     end
 
     -- Look for records as soon as the call they fired on ends, rather than
@@ -2214,7 +2179,7 @@ end
 --- without an output file.
 --- @param tool_call_id string
 function SessionManager:_sync_output_tail(tool_call_id)
-    local writer = self:_writer_for(tool_call_id)
+    local writer = self:_view_for(tool_call_id).writer
     local block = writer.tool_call_blocks[tool_call_id]
     local path = block and block.output_file
     if not path then
@@ -2264,7 +2229,7 @@ end
 --- missing file gives no rows and no warning: the provider may have removed it.
 --- @param tool_call_id string
 function SessionManager:_show_final_tail(tool_call_id)
-    local writer = self:_writer_for(tool_call_id)
+    local writer = self:_view_for(tool_call_id).writer
     local block = writer.tool_call_blocks[tool_call_id]
     if not (block and block.output_file) then
         return
@@ -2418,67 +2383,15 @@ function SessionManager:_update_chat_header()
     self.widget:render_header("agent", context)
 end
 
---- How a model id reads to a human: its display name and description. Falls
---- back to the id itself for a model the provider never described.
---- @param model_id string
---- @return string name
---- @return string|nil description
-function SessionManager:_resolve_model_display(model_id)
-    local model = self.config_options:get_model(model_id)
-        or self.config_options.legacy_agent_models:get_model(model_id)
-    local name = model and model.name or model_id
-    local description = model and model.description
-
-    -- "Default (recommended)" → extract real model from description
-    -- (matches _update_chat_header's prior handling).
-    if name:find("^Default") and description then
-        name = description:match("^(%S+)") or name
-    end
-
-    return name, description
-end
-
---- A model's title: `label`, `model_id` and, for the current model only, its
---- thought level, joined by ` · `. The provider reports the thought level of
---- the current model only.
---- @param label string
---- @param model_id string
---- @return string title
-function SessionManager:_model_title(label, model_id)
-    local parts = { label, model_id }
-    local options = self.config_options
-    local thought_label = model_id == options:current_model_id()
-        and options:current_thought_level_label()
-    if thought_label then
-        table.insert(parts, thought_label)
-    end
-    return table.concat(parts, " · ")
-end
-
---- Write a two-line "Loaded <model>" marker into the chat buffer announcing
---- which model is now active, with its full id and description. Doubles as a
---- temporal marker — its scrollback position shows when the model was
---- loaded/switched. Display-only: not persisted, not sent to the model, not
---- replayed.
+--- Announce in the chat that `model_id` runs from here on
+--- (`AgentView:announce_model`).
 ---
 --- Prose rather than a notice because it marks the model a session starts or
 --- resumes on, under the `#` welcome header or after a replay. An explicit
 --- switch renders as a notice instead (`_notice_model_switched`).
 --- @param model_id string|nil
 function SessionManager:announce_model_loaded(model_id)
-    if not model_id then
-        return
-    end
-
-    local name, description = self:_resolve_model_display(model_id)
-
-    local lines =
-        { self:_model_title(string.format("**Loaded %s**", name), model_id) }
-    if description and description ~= "" then
-        table.insert(lines, description)
-    end
-
-    self.message_writer:write_message(ACPPayloads.generate_agent_message(lines))
+    self.main_view:announce_model(self.config_options, model_id)
 end
 
 --- Announce the current model at the end of the chat, then switch the session
@@ -2518,7 +2431,8 @@ function SessionManager:_notice_model_switched(model_id)
         return
     end
 
-    local name, description = self:_resolve_model_display(model_id)
+    local options = self.config_options
+    local name, description = options:model_display(model_id)
 
     --- @type string[]|nil
     local body
@@ -2528,7 +2442,7 @@ function SessionManager:_notice_model_switched(model_id)
 
     self.message_writer:write_notice({
         glyph = Glyphs.COMMAND.model,
-        title = self:_model_title(name, model_id),
+        title = options:model_title(name, model_id),
         body = body,
         mid_turn = self.is_generating,
     })

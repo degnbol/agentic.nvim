@@ -121,6 +121,18 @@ describe("agentic.ui.SubagentTranscript", function()
         assert.equal("## Background? map the UI", lines_of(transcript.bufnr)[1])
     end)
 
+    it("has a view of its own buffer, apart from the main view", function()
+        local AgentView = require("agentic.ui.agent_view")
+        local main_view = AgentView:new(widget.buf_nrs.agent)
+        local view = new_transcript("aa11bb22cc33dd44").view
+
+        assert.equal(transcripts[1].bufnr, view.bufnr)
+        assert.is_true(view ~= main_view)
+        assert.is_true(view.writer ~= main_view.writer)
+        assert.is_true(view.status_indicator ~= main_view.status_indicator)
+        assert.is_true(view.response_boundary ~= main_view.response_boundary)
+    end)
+
     it("writes its heading again on :e", function()
         local transcript = new_transcript("aa11bb22cc33dd44")
         transcript:set_modified(false)

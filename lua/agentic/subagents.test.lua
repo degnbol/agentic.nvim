@@ -45,12 +45,110 @@ local function make_host(history, overrides)
 end
 
 --- @param host agentic.Subagents.Host
+--- @param main_view agentic.ui.AgentView|nil
 --- @return agentic.Subagents
-local function make_subagents(host)
-    return Subagents:new({ buf_nrs = {} }, {}, {}, host)
+local function make_subagents(host, main_view)
+    return Subagents:new({ buf_nrs = {} }, main_view or {}, host)
 end
 
 describe("agentic.Subagents", function()
+    describe("record_writer", function()
+        it("gives a main-chat record the main view's writer", function()
+            local writer = {}
+            local subagents = make_subagents(
+                (make_host(ChatHistory:new())),
+                { writer = writer } --[[@as agentic.ui.AgentView]]
+            )
+
+            assert.equal(
+                writer,
+                subagents:record_writer({ type = "tool_call" }, true)
+            )
+        end)
+    end)
+
+    describe("set_config_options", function()
+        --- @param model_id string
+        --- @return agentic.acp.ConfigOption[]
+        local function model_options(model_id)
+            return {
+                {
+                    id = "model",
+                    category = "model",
+                    currentValue = model_id,
+                    name = "Model",
+                    options = { { value = model_id, name = model_id } },
+                },
+            }
+        end
+
+        local root_options = { "root's options" }
+
+        --- Subagents with one agent `c1`, its transcript loaded unless
+        --- `loaded` is false.
+        --- @param open boolean
+        --- @param loaded boolean|nil
+        --- @return agentic.Subagents subagents
+        --- @return TestSpy announce
+        local function make(open, loaded)
+            local host = make_host(ChatHistory:new(), {
+                config_options = function()
+                    return root_options
+                end,
+            })
+            local subagents = make_subagents(host)
+            local announce = spy.new(function() end)
+            subagents._agents.c1 = {
+                open = open,
+                record_read = true,
+                transcript = {
+                    view = { announce_model = announce },
+                    is_loaded = function()
+                        return loaded ~= false
+                    end,
+                },
+            } --[[@as agentic.Subagents.Agent]]
+            return subagents, announce
+        end
+
+        it("announces a working subagent's first model", function()
+            local subagents, announce = make(true)
+
+            subagents:set_config_options("c1", model_options("m"))
+
+            assert.spy(announce).was.called(1)
+            local call = announce.calls[1]
+            assert.equal(subagents._agents.c1.config_options, call[2])
+            assert.equal("m", call[3])
+            assert.equal(root_options, call[4])
+        end)
+
+        it("announces no later model", function()
+            local subagents, announce = make(true)
+            subagents:set_config_options("c1", model_options("m"))
+
+            subagents:set_config_options("c1", model_options("n"))
+
+            assert.spy(announce).was.called(1)
+        end)
+
+        it("announces nothing for an unloaded transcript", function()
+            local subagents, announce = make(true, false)
+
+            subagents:set_config_options("c1", model_options("m"))
+
+            assert.spy(announce).was.called(0)
+        end)
+
+        it("announces nothing for a subagent not working", function()
+            local subagents, announce = make(false)
+
+            subagents:set_config_options("c1", model_options("m"))
+
+            assert.spy(announce).was.called(0)
+        end)
+    end)
+
     describe("_set_open", function()
         it("sets the transcript's running", function()
             local host, spies = make_host(ChatHistory:new())
@@ -183,8 +281,10 @@ describe("agentic.Subagents", function()
             local host, spies = make_host(history)
             local subagents = make_subagents(host)
             local transcript = {
-                writer = {},
-                status_indicator = { reposition = function() end },
+                view = {
+                    writer = {},
+                    status_indicator = { reposition = function() end },
+                },
             }
             subagents._agents.c1 = { open = true, record_read = true }
             subagents.transcript = function()
@@ -195,7 +295,7 @@ describe("agentic.Subagents", function()
 
             assert.equal(0, spies.write_chat_row.call_count)
             assert.equal(1, write_row_stub.call_count)
-            assert.equal(transcript.writer, write_row_stub.calls[1][1])
+            assert.equal(transcript.view.writer, write_row_stub.calls[1][1])
             -- The delegation's message id became c1's task id, its key.
             local row = history:messages_for_agent("m1")[1]
             assert.equal("received", row.view)

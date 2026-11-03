@@ -769,7 +769,9 @@ vim.cmd.bwipeout({ args = { tostring(_G.old) }, bang = true })
             )
             assert.equal(
                 "t9",
-                child.lua_get("_G.transcript('c1').writer._held_tool_call_id")
+                child.lua_get(
+                    "_G.transcript('c1').view.writer._held_tool_call_id"
+                )
             )
         end)
 
@@ -882,7 +884,7 @@ _G.request()
         "after \\v, the transcript's prompting block is placed in view",
         function()
             child.lua([[
-local writer = _G.transcript("c1").writer
+local writer = _G.transcript("c1").view.writer
 for i = 1, 60 do
     _G.chunk("c1", "line " .. i .. "\n\n")
 end
@@ -901,7 +903,7 @@ _G.request()
 
             assert.is_true(child.lua_get([[(function()
     local transcript = _G.transcript("c1")
-    local writer = transcript.writer
+    local writer = transcript.view.writer
     local s = writer:_block_rows(writer.tool_call_blocks.t9)
     local win = vim.fn.win_findbuf(transcript.bufnr)[1]
     local info = vim.fn.getwininfo(win)[1]
