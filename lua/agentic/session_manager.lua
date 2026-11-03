@@ -431,6 +431,9 @@ function SessionManager:new(provider)
         function(model_id, is_legacy, opts)
             self:_handle_model_change(model_id, is_legacy, opts)
         end,
+        function(value, opts)
+            self:_handle_thought_level_change(value, opts)
+        end,
         function()
             return self.agent ~= nil and self.agent.state == "ready"
         end
@@ -1834,6 +1837,7 @@ function SessionManager:_info_snapshot()
         provider = self.agent.provider_config.name,
         model = model_id and (self:_resolve_model_display(model_id)),
         mode = mode_id and options:get_mode_name(mode_id),
+        thought_level = options:current_thought_level_label(),
         auth = self.agent.auth_status,
         usage = self._usage,
         budget = vim.g.agentic_budget,
@@ -2327,10 +2331,21 @@ function SessionManager:_handle_model_change(model_id, is_legacy, opts)
     end)
 end
 
---- Set the session's mode or model on the provider. On success, apply the
---- config options the provider returns, then call `on_set`. On failure,
---- notify. A no-op without a session.
---- @param category "mode"|"model"
+--- Set the session's thought level on the agent.
+--- @param value string
+--- @param opts agentic.acp.AgentConfigOptions.ChangeOpts|nil
+function SessionManager:_handle_thought_level_change(value, opts)
+    self:_set_session_option("thought_level", value, false, function()
+        if opts and opts.as_notice then
+            self:_notice_thought_level_switched(value)
+        end
+    end)
+end
+
+--- Set the session's mode, model or thought level on the provider. On
+--- success, apply the config options the provider returns, then call
+--- `on_set`. On failure, notify. A no-op without a session.
+--- @param category "mode"|"model"|"thought_level"
 --- @param value_id string
 --- @param is_legacy boolean|nil Send `session/set_mode` or `session/set_model` instead of `session/set_config_option`
 --- @param on_set fun()
@@ -2344,21 +2359,26 @@ function SessionManager:_set_session_option(
         return
     end
 
+    --- @param reason string
+    local function notify_failure(reason)
+        Logger.notify(
+            string.format(
+                "Failed to change %s to '%s': %s",
+                category,
+                value_id,
+                reason
+            ),
+            vim.log.levels.ERROR
+        )
+    end
+
     local function callback(result, err)
         -- Destroyed while the request was in flight: its buffers are gone.
         if self.destroyed then
             return
         end
         if err then
-            Logger.notify(
-                string.format(
-                    "Failed to change %s to '%s': %s",
-                    category,
-                    value_id,
-                    err.message
-                ),
-                vim.log.levels.ERROR
-            )
+            notify_failure(err.message)
             return
         end
         if result and result.configOptions then
@@ -2370,9 +2390,15 @@ function SessionManager:_set_session_option(
     end
 
     if not is_legacy then
+        -- A picker stays open across option updates, which can drop the option.
+        local option = self.config_options[category]
+        if not option then
+            notify_failure("option no longer offered")
+            return
+        end
         self.agent:set_config_option(
             self.session_id,
-            category,
+            option.id,
             value_id,
             callback
         )
@@ -2424,10 +2450,10 @@ end
 function SessionManager:_model_title(label, model_id)
     local parts = { label, model_id }
     local options = self.config_options
-    local level = model_id == options:current_model_id()
-        and options:current_thought_level_name()
-    if level then
-        table.insert(parts, options.thought_level.name .. ": " .. level)
+    local thought_label = model_id == options:current_model_id()
+        and options:current_thought_level_label()
+    if thought_label then
+        table.insert(parts, thought_label)
     end
     return table.concat(parts, " · ")
 end
@@ -2512,6 +2538,16 @@ function SessionManager:_notice_mode_switched(mode_id)
         glyph = Glyphs.KIND.switch_mode,
         title = mode and mode.name or mode_id,
         body = body,
+        mid_turn = self.is_generating,
+    })
+end
+
+--- Announce a thought level the user just switched to, as a command notice.
+--- @param value string Level id, the title when the level has no label
+function SessionManager:_notice_thought_level_switched(value)
+    self.message_writer:write_notice({
+        glyph = Glyphs.COMMAND.effort,
+        title = self.config_options:current_thought_level_label() or value,
         mid_turn = self.is_generating,
     })
 end

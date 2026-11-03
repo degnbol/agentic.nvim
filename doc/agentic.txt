@@ -600,17 +600,18 @@ configurable via `keymaps` in |agentic-config-keymaps|.
 
 Applied to all buffers in the widget (chat, prompt, panels).
 
-    Key              Field               Mode    Description ~
-    `<localLeader>m`   `change_mode`         n/v     Switch agent mode
-    `<C-c>`            `stop_generation`     n/i     Stop generation
-    `<localLeader>R`   `resume_session`      n       Pick a saved session
-    `<localLeader>p`   `switch_provider`     n       Switch this session's provider
-    `<localLeader>M`   `switch_model`        n       Switch model
-    `<localLeader>!`   `restart_session`     n       Restart session
-    `<localLeader>f`   `toggle_activity`     n       Toggle file activity panel (|agentic-file-activity|)
-    `<localLeader>I`   `toggle_info`         n       Toggle session info panel (|agentic-info-panel|)
-    `<localLeader>a`   `toggle_follow`       n       Toggle follow (|agentic-follow|)
-    `<localLeader>G`   `goto_bottom`         n       Scroll chat and transcripts in the tabpage to bottom, keep focus
+    Key              Field                 Mode    Description ~
+    `<localLeader>m`   `change_mode`           n/v     Switch agent mode
+    `<C-c>`            `stop_generation`       n/i     Stop generation
+    `<localLeader>R`   `resume_session`        n       Pick a saved session
+    `<localLeader>p`   `switch_provider`       n       Switch this session's provider
+    `<localLeader>M`   `switch_model`          n       Switch model
+    `<localLeader>E`   `switch_thought_level`  n       Switch thought level (effort)
+    `<localLeader>!`   `restart_session`       n       Restart session
+    `<localLeader>f`   `toggle_activity`       n       Toggle file activity panel (|agentic-file-activity|)
+    `<localLeader>I`   `toggle_info`           n       Toggle session info panel (|agentic-info-panel|)
+    `<localLeader>a`   `toggle_follow`         n       Toggle follow (|agentic-follow|)
+    `<localLeader>G`   `goto_bottom`           n       Scroll chat and transcripts in the tabpage to bottom, keep focus
 
 Canned prompts live in `keymaps.prompts` (|agentic-config-keymaps-prompts|).
 

@@ -192,6 +192,7 @@ Glyphs.COMMAND = {
     memory = "󰠮",
     -- Agent setup
     model = "󱍐",
+    effort = "󰓅",
     agents = "󰡉",
     mcp = "󰌘",
     config = "󰘮",

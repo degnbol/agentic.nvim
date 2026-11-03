@@ -1401,10 +1401,9 @@ describe("agentic.SessionManager", function()
                     current_model_id = function()
                         return current.model_id
                     end,
-                    current_thought_level_name = function()
+                    current_thought_level_label = function()
                         return current.thought_level
                     end,
-                    thought_level = { name = "Effort" },
                     legacy_agent_models = {
                         get_model = function() end,
                     },
@@ -1478,7 +1477,7 @@ describe("agentic.SessionManager", function()
         it("adds the thought level of the current model", function()
             local session, write_spy = make_session(
                 { ["m"] = { value = "m", name = "M" } },
-                { model_id = "m", thought_level = "High" }
+                { model_id = "m", thought_level = "Effort: High" }
             )
 
             session:announce_model_loaded("m")
@@ -1493,7 +1492,7 @@ describe("agentic.SessionManager", function()
             -- A model still being switched in may run at another level.
             local session, write_spy = make_session(
                 { ["m"] = { value = "m", name = "M" } },
-                { model_id = "default", thought_level = "High" }
+                { model_id = "default", thought_level = "Effort: High" }
             )
 
             session:announce_model_loaded("m")
@@ -1537,7 +1536,7 @@ describe("agentic.SessionManager", function()
         it("adds the thought level to a switch notice", function()
             local session, _, notice_spy = make_session(
                 { ["m"] = { value = "m", name = "M" } },
-                { model_id = "m", thought_level = "Medium" }
+                { model_id = "m", thought_level = "Effort: Medium" }
             )
 
             session:_notice_model_switched("m")
@@ -1706,6 +1705,7 @@ describe("agentic.SessionManager", function()
 
         it("leaves the legacy mode id on a config option change", function()
             local session = make_session(nil)
+            session.config_options.mode = { id = "mode" }
             session.agent.set_config_option = function(_, _sid, _id, _v, cb)
                 cb({}, nil)
             end
@@ -1716,6 +1716,124 @@ describe("agentic.SessionManager", function()
                 "plan",
                 session.config_options.legacy_agent_modes.current_mode_id
             )
+        end)
+    end)
+
+    describe("_set_session_option", function()
+        local function make_session()
+            local set_spy = spy.new(function() end)
+            local session = {
+                session_id = "s",
+                agent = { set_config_option = set_spy },
+                config_options = {
+                    mode = { id = "mode-id" },
+                    thought_level = { id = "effort" },
+                },
+                _set_session_option = SessionManager._set_session_option,
+            } --[[@as agentic.SessionManager]]
+            return session, set_spy
+        end
+
+        it("sends the option's id, not its category", function()
+            local session, set_spy = make_session()
+
+            session:_set_session_option(
+                "thought_level",
+                "high",
+                false,
+                function() end
+            )
+            session:_set_session_option("mode", "plan", false, function() end)
+
+            assert.equal("effort", set_spy.calls[1][3])
+            assert.equal("mode-id", set_spy.calls[2][3])
+        end)
+
+        it("reports an option the provider no longer offers", function()
+            local session, set_spy = make_session()
+            session.config_options.thought_level = nil
+            local notify_stub = spy.stub(Logger, "notify")
+            MiniTest.finally(function()
+                notify_stub:revert()
+            end)
+
+            session:_set_session_option(
+                "thought_level",
+                "high",
+                false,
+                function() end
+            )
+
+            assert.spy(set_spy).was.called(0)
+            assert.equal(vim.log.levels.ERROR, notify_stub.calls[1][2])
+        end)
+    end)
+
+    describe("_handle_thought_level_change", function()
+        local function make_session()
+            local config_options = AgentConfigOptions:new(
+                function() end,
+                function() end,
+                function() end,
+                function()
+                    return true
+                end
+            )
+            --- @param level string
+            --- @return agentic.acp.ConfigOption[]
+            local function options_at(level)
+                return {
+                    {
+                        id = "effort",
+                        category = "thought_level",
+                        currentValue = level,
+                        name = "Effort",
+                        options = {
+                            { value = "low", name = "Low" },
+                            { value = "high", name = "High" },
+                        },
+                    },
+                }
+            end
+            config_options:set_options(options_at("low"))
+            local notice_spy = spy.new(function() end)
+            local session = {
+                session_id = "s",
+                agent = {
+                    set_config_option = function(_, _sid, _id, value, cb)
+                        cb({ configOptions = options_at(value) }, nil)
+                    end,
+                },
+                config_options = config_options,
+                message_writer = { write_notice = notice_spy },
+                _handle_new_config_options = function(this, options)
+                    this.config_options:set_options(options)
+                end,
+                render_info = function() end,
+                _set_session_option = SessionManager._set_session_option,
+                _handle_thought_level_change = SessionManager._handle_thought_level_change,
+                _notice_thought_level_switched = SessionManager._notice_thought_level_switched,
+            } --[[@as agentic.SessionManager]]
+            return session, notice_spy
+        end
+
+        it("notices the level from the reply's options", function()
+            local session, notice_spy = make_session()
+
+            session:_handle_thought_level_change("high", { as_notice = true })
+
+            assert.spy(notice_spy).was.called(1)
+            local notice = notice_spy.calls[1][2]
+            assert.equal(Glyphs.COMMAND.effort, notice.glyph)
+            assert.equal("Effort: High", notice.title)
+        end)
+
+        it("writes no notice without as_notice", function()
+            local session, notice_spy = make_session()
+
+            session:_handle_thought_level_change("high")
+
+            assert.spy(notice_spy).was.called(0)
         end)
     end)
 
@@ -1820,6 +1938,9 @@ describe("agentic.SessionManager", function()
                         return nil
                     end,
                     current_mode_id = function()
+                        return nil
+                    end,
+                    current_thought_level_label = function()
                         return nil
                     end,
                 },

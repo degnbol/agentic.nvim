@@ -272,6 +272,7 @@ local ConfigDefault = {
             goto_bottom = "<localLeader>G",
             switch_provider = "<localLeader>p",
             switch_model = "<localLeader>M",
+            switch_thought_level = "<localLeader>E",
         },
 
         --- Put a fixed prompt at the end of this widget's input buffer, with

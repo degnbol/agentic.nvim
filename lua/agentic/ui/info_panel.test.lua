@@ -92,11 +92,13 @@ describe("agentic.ui.InfoPanel", function()
     describe("lines", function()
         it("joins the known agent values", function()
             assert.equal(
-                "- Agent: Claude · Opus · Plan",
-                line_starting(
-                    { provider = "Claude", model = "Opus", mode = "Plan" },
-                    "- Agent:"
-                )
+                "- Agent: Claude · Opus · Effort: High · Plan",
+                line_starting({
+                    provider = "Claude",
+                    model = "Opus",
+                    thought_level = "Effort: High",
+                    mode = "Plan",
+                }, "- Agent:")
             )
             assert.equal(
                 "- Agent: Claude",

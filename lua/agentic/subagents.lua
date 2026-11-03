@@ -833,9 +833,14 @@ function Subagents:set_config_options(child_id, options)
         return
     end
     agent.config_options = agent.config_options
-        or AgentConfigOptions:new(function() end, function() end, function()
-            return false
-        end)
+        or AgentConfigOptions:new(
+            function() end,
+            function() end,
+            function() end,
+            function()
+                return false
+            end
+        )
     agent.config_options:set_options(options)
 end
 

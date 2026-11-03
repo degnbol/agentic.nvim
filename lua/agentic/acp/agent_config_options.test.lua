@@ -1,3 +1,4 @@
+local MiniTest = require("mini.test")
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
@@ -73,6 +74,7 @@ describe("agentic.acp.AgentConfigOptions", function()
         config_options = AgentConfigOptions:new(
             function() end,
             function() end,
+            function() end,
             function()
                 return true
             end
@@ -85,19 +87,18 @@ describe("agentic.acp.AgentConfigOptions", function()
     end)
 
     describe("bind_keymaps", function()
-        it("binds the mode and model selectors on the buffer", function()
-            config_options:bind_keymaps(test_bufnr)
+        it(
+            "binds the mode, model and thought level selectors on the buffer",
+            function()
+                config_options:bind_keymaps(test_bufnr)
 
-            assert.stub(multi_keymap_stub).was.called(2)
-            assert.equal(test_bufnr, multi_keymap_stub.calls[1][2])
-            assert.equal(test_bufnr, multi_keymap_stub.calls[2][2])
-
-            local mode_call = multi_keymap_stub.calls[1]
-            assert.equal("function", type(mode_call[3]))
-
-            local model_call = multi_keymap_stub.calls[2]
-            assert.equal("function", type(model_call[3]))
-        end)
+                assert.stub(multi_keymap_stub).was.called(3)
+                for _, call in ipairs(multi_keymap_stub.calls) do
+                    assert.equal(test_bufnr, call[2])
+                    assert.equal("function", type(call[3]))
+                end
+            end
+        )
     end)
 
     describe("set_options", function()
@@ -237,17 +238,20 @@ describe("agentic.acp.AgentConfigOptions", function()
         end)
     end)
 
-    describe("current_thought_level_name", function()
-        it("returns the current value's name", function()
+    describe("current_thought_level_label", function()
+        it("returns the option name and the current value's name", function()
             config_options:set_options({ thought_option })
 
-            assert.equal("Normal", config_options:current_thought_level_name())
+            assert.equal(
+                "Thought Level: Normal",
+                config_options:current_thought_level_label()
+            )
         end)
 
         it("returns nil without a thought level option", function()
             config_options:set_options({ model_option })
 
-            assert.is_nil(config_options:current_thought_level_name())
+            assert.is_nil(config_options:current_thought_level_label())
         end)
 
         it("returns nil when the current value is not an option", function()
@@ -257,7 +261,101 @@ describe("agentic.acp.AgentConfigOptions", function()
                 }) --[[@as agentic.acp.ConfigOption]],
             })
 
-            assert.is_nil(config_options:current_thought_level_name())
+            assert.is_nil(config_options:current_thought_level_label())
+        end)
+    end)
+
+    describe("show_thought_level_selector", function()
+        --- @type TestStub
+        local select_stub
+
+        --- @type agentic.acp.ConfigOption
+        local effort_option = {
+            id = "effort",
+            category = "thought_level",
+            currentValue = "high",
+            description = "Effort level",
+            name = "Effort",
+            options = {
+                { value = "low", name = "Low", description = "" },
+                { value = "high", name = "High", description = "" },
+            },
+        }
+
+        before_each(function()
+            select_stub = spy.stub(vim.ui, "select")
+        end)
+
+        after_each(function()
+            select_stub:revert()
+        end)
+
+        it("shows the levels and calls back with as_notice", function()
+            config_options:set_options({ effort_option })
+            local handler = spy.new(function() end)
+            select_stub:invokes(function(items, opts, on_choice)
+                assert.equal(2, #items)
+                assert.equal("Select Effort:", opts.prompt)
+                on_choice(items[1])
+            end)
+
+            local shown = config_options:show_thought_level_selector(
+                handler --[[@as fun(value: string, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil): any]]
+            )
+
+            assert.is_true(shown)
+            assert.spy(handler).was.called_with("low", { as_notice = true })
+        end)
+
+        it("does not call back on the current value", function()
+            config_options:set_options({ effort_option })
+            local handler = spy.new(function() end)
+            select_stub:invokes(function(items, _opts, on_choice)
+                on_choice(items[2])
+            end)
+
+            config_options:show_thought_level_selector(
+                handler --[[@as fun(value: string, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil): any]]
+            )
+
+            assert.spy(handler).was.called(0)
+        end)
+
+        it("warns without a thought level option", function()
+            local Logger = require("agentic.utils.logger")
+            local notify_stub = spy.stub(Logger, "notify")
+            MiniTest.finally(function()
+                notify_stub:revert()
+            end)
+            config_options:set_options({ model_option })
+
+            assert.is_false(
+                config_options:show_thought_level_selector(function() end)
+            )
+            assert.stub(select_stub).was.called(0)
+            assert.stub(notify_stub).was.called(1)
+            assert.equal(vim.log.levels.WARN, notify_stub.calls[1][2])
+        end)
+
+        it("waits for the provider before reading the options", function()
+            local Logger = require("agentic.utils.logger")
+            local notify_stub = spy.stub(Logger, "notify")
+            MiniTest.finally(function()
+                notify_stub:revert()
+            end)
+            local fresh = AgentConfigOptions:new(
+                function() end,
+                function() end,
+                function() end,
+                function()
+                    return false
+                end
+            )
+            fresh:set_options({ effort_option })
+
+            assert.is_false(fresh:show_thought_level_selector(function() end))
+            assert.stub(select_stub).was.called(0)
+            assert.equal(vim.log.levels.INFO, notify_stub.calls[1][2])
         end)
     end)
 
@@ -366,6 +464,7 @@ describe("agentic.acp.AgentConfigOptions", function()
                 local fresh = AgentConfigOptions:new(
                     function() end,
                     function() end,
+                    function() end,
                     function()
                         return true
                     end
@@ -455,6 +554,7 @@ describe("agentic.acp.AgentConfigOptions", function()
                 local fresh = AgentConfigOptions:new(
                     function() end,
                     function() end,
+                    function() end,
                     function()
                         return true
                     end
@@ -497,6 +597,7 @@ describe("agentic.acp.AgentConfigOptions", function()
             local notify_stub = spy.stub(Logger, "notify")
 
             local fresh = AgentConfigOptions:new(
+                function() end,
                 function() end,
                 function() end,
                 function()
@@ -578,6 +679,7 @@ describe("agentic.acp.AgentConfigOptions", function()
                 local fresh = AgentConfigOptions:new(
                     function() end,
                     function() end,
+                    function() end,
                     function()
                         return true
                     end
@@ -624,6 +726,7 @@ describe("agentic.acp.AgentConfigOptions", function()
                 local fresh = AgentConfigOptions:new(
                     function() end,
                     function() end,
+                    function() end,
                     function()
                         return true
                     end
@@ -646,6 +749,7 @@ describe("agentic.acp.AgentConfigOptions", function()
                 local notify_stub = spy.stub(Logger, "notify")
 
                 local fresh = AgentConfigOptions:new(
+                    function() end,
                     function() end,
                     function() end,
                     function()
@@ -695,6 +799,7 @@ describe("agentic.acp.AgentConfigOptions", function()
             local fresh = AgentConfigOptions:new(
                 function() end,
                 function() end,
+                function() end,
                 function()
                     return true
                 end
@@ -715,6 +820,7 @@ describe("agentic.acp.AgentConfigOptions", function()
             "shows model selector when set_legacy_models delivers models",
             function()
                 local fresh = AgentConfigOptions:new(
+                    function() end,
                     function() end,
                     function() end,
                     function()

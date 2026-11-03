@@ -265,16 +265,6 @@ so typing them in the input buffer runs the TUI flow via the LLM.
 - **Background jobs**: see "Background processes window" under
   Session/workflow.
 
-**Worth doing**
-
-- **`/effort`**: now unblocked. claude-agent-acp 0.39.0 emits the
-  `thought_level` ConfigOption (`id = "effort"`) when the current model
-  supports effort, and it is runtime-mutable via `session/set_config_option`.
-  The plugin already captures it into `AgentConfigOptions.thought_level`; a
-  selector reads `.options` and sends the chosen value. Provider-specific —
-  guard for bridges that don't emit it. See `lua/agentic/acp/AGENTS.md §
-  "thought_level (effort) ConfigOption — claude-agent-acp"`.
-
 **Blocked upstream or out of scope**
 
 - **`/permissions`**: no ACP surface for reading or writing persistent

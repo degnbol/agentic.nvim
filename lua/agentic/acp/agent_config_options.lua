@@ -2,7 +2,7 @@ local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
 
---- How a mode or model change should be reported to the user.
+--- How a mode, model or thought level change should be reported to the user.
 --- @class agentic.acp.AgentConfigOptions.ChangeOpts
 --- @field as_notice? boolean The user picked this value, so announce it as a command notice
 
@@ -16,17 +16,20 @@ local Logger = require("agentic.utils.logger")
 --- @field _pending_initial_model? string model id to apply once options arrive
 --- @field _set_mode_callback fun(mode_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
 --- @field _set_model_callback fun(model_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
+--- @field _set_thought_level_callback fun(value: string, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
 --- @field _is_agent_ready? fun(): boolean Returns true if an agent is attached and ready
 local AgentConfigOptions = {}
 AgentConfigOptions.__index = AgentConfigOptions
 
 --- @param set_mode_callback fun(mode_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
 --- @param set_model_callback fun(model_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
+--- @param set_thought_level_callback fun(value: string, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
 --- @param is_agent_ready fun(): boolean Returns true if an agent is attached and ready
 --- @return agentic.acp.AgentConfigOptions
 function AgentConfigOptions:new(
     set_mode_callback,
     set_model_callback,
+    set_thought_level_callback,
     is_agent_ready
 )
     local AgentModes = require("agentic.acp.agent_modes")
@@ -42,13 +45,14 @@ function AgentConfigOptions:new(
         _pending_initial_model = nil,
         _set_mode_callback = set_mode_callback,
         _set_model_callback = set_model_callback,
+        _set_thought_level_callback = set_thought_level_callback,
         _is_agent_ready = is_agent_ready,
     }, self)
 
     return self
 end
 
---- Bind the mode and model selector maps on a buffer.
+--- Bind the mode, model and thought level selector maps on a buffer.
 --- @param bufnr integer
 function AgentConfigOptions:bind_keymaps(bufnr)
     BufHelpers.multi_keymap_set(
@@ -67,6 +71,15 @@ function AgentConfigOptions:bind_keymaps(bufnr)
             self:show_model_selector(self._set_model_callback)
         end,
         { desc = "Agentic: Select Model" }
+    )
+
+    BufHelpers.multi_keymap_set(
+        Config.keymaps.widget.switch_thought_level,
+        bufnr,
+        function()
+            self:show_thought_level_selector(self._set_thought_level_callback)
+        end,
+        { desc = "Agentic: Select Thought Level" }
     )
 end
 
@@ -283,13 +296,16 @@ function AgentConfigOptions:get_model_name(model_value)
     return nil
 end
 
---- The name of the thought level the session runs at.
---- @return string|nil name Nil without a thought level option, or when its
+--- The thought level the session runs at, as `<option name>: <level name>`.
+--- @return string|nil label Nil without a thought level option, or when its
 ---   current value is not among its options
-function AgentConfigOptions:current_thought_level_name()
+function AgentConfigOptions:current_thought_level_label()
     local level = self.thought_level
-    local option = level and getter(level, level.currentValue)
-    return option and option.name
+    if not level then
+        return nil
+    end
+    local option = getter(level, level.currentValue)
+    return option and (level.name .. ": " .. option.name)
 end
 
 --- Pick a mode interactively. Like `show_model_selector`, every selection is
@@ -370,6 +386,42 @@ function AgentConfigOptions:show_model_selector(handle_model_change)
         { title = "Agentic" }
     )
     return false
+end
+
+--- Pick a thought level interactively and pass it on flagged `as_notice`.
+--- Notifies instead while no agent is ready, or when the session has no
+--- thought level option.
+--- @param handle_change fun(value: string, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil): any
+--- @return boolean shown
+function AgentConfigOptions:show_thought_level_selector(handle_change)
+    if self._is_agent_ready and not self._is_agent_ready() then
+        Logger.notify(
+            "Waiting for provider...",
+            vim.log.levels.INFO,
+            { title = "Agentic" }
+        )
+        return false
+    end
+
+    local level = self.thought_level
+    local shown = level ~= nil
+        and self:_show_selector(
+            level,
+            "Select " .. level.name .. ":",
+            function(value)
+                handle_change(value, { as_notice = true })
+            end
+        )
+
+    if not shown then
+        Logger.notify(
+            "This provider or model has no thought levels",
+            vim.log.levels.WARN,
+            { title = "Agentic" }
+        )
+    end
+
+    return shown
 end
 
 --- Show the model selector if it was requested before models were available
