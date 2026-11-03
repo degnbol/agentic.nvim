@@ -88,7 +88,8 @@ end
 --- Draw `winid` once at 'conceallevel' 0, then give it back its level and
 --- call `on_restored`. At level 2 or more, a window's first draw asks for
 --- every row from line 1 to the cursor whether it is a `conceal_lines` row,
---- which freezes a long chat. At level 0 it does not.
+--- at about 27 µs a row: 0.5 s at the end of an 18.8k-line chat. At level 0
+--- it does not.
 ---
 --- A no-op below level 2, and while a deferral already waits. When `winid`
 --- shows another buffer at restore time, it keeps level 0 and `on_restored`

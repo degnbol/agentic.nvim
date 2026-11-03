@@ -7,6 +7,7 @@ local ExtmarkBlock = require("agentic.utils.extmark_block")
 local FileSystem = require("agentic.utils.file_system")
 local Folds = require("agentic.ui.folds")
 local Glyphs = require("agentic.glyphs")
+local Intervals = require("agentic.utils.intervals")
 local Logger = require("agentic.utils.logger")
 local MarkdownGuard = require("agentic.utils.markdown_guard")
 local PromptBlocks = require("agentic.utils.prompt_blocks")
@@ -50,14 +51,30 @@ end
 --- range-parse (one per block update); `parse` short-circuits only when the
 --- range is already valid. Folds do not depend on this — `agentic.ui.folds`
 --- reads the root tree only.
+---
+--- Also parses the rows on view in every window showing `bufnr`, each taken
+--- as `TSHighlighter._on_start` takes them. A range parse replaces each
+--- injected tree's regions with the injections found in its range, so a parse
+--- of the block alone would drop the injections on view, and the next redraw
+--- would parse them again. The ranges are joined where they overlap: core
+--- injects a row once per range that holds it, and treats a range that only
+--- overlaps a parsed one as not parsed.
 --- @param bufnr integer
 --- @param start_row integer 0-indexed first row of the block
 --- @param end_row integer 0-indexed last row of the block
 local function materialize_injections(bufnr, start_row, end_row)
     local ok, parser = pcall(vim.treesitter.get_parser, bufnr)
-    if ok and parser then
-        parser:parse({ start_row, end_row })
+    if not (ok and parser) then
+        return
     end
+    local ranges = { { start_row, end_row } }
+    for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
+        table.insert(ranges, {
+            vim.fn.line("w0", winid) - 1,
+            vim.fn.line("w$", winid) + 1,
+        })
+    end
+    parser:parse(Intervals.union(ranges))
 end
 
 --- The status footer note of a tool call: its deciders, or nil when it has none.

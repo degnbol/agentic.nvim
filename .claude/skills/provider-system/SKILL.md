@@ -189,7 +189,7 @@ commands at top-level shell operators (&&, ||, ;, |).
 
 - `vim.treesitter.start(chat_bufnr, "agentic")` must be called on the chat
   buffer (done in `ChatBuffer.start`; `agentic` is a markdown-parser
-  clone whose `injections.scm` inherits markdown, so bash/zsh injection still
+  clone whose `injections.scm` copies markdown's, so bash/zsh injection still
   fires — see the folding note in the project CLAUDE.md). Falls back to
   `markdown` if the `agentic` language could not be registered.
 - The zsh treesitter parser must be installed (bash is aliased to zsh via
