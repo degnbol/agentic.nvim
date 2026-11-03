@@ -10,7 +10,7 @@ local SubagentInput = require("agentic.ui.subagent_input")
 local WidgetLayout = require("agentic.ui.widget_layout")
 
 --- A subagent, one child session of the conversation. Its label, prompt, type
---- and mode are on its block in the main chat.
+--- and mode are on its block in its parent's view.
 --- @class agentic.Subagents.Agent
 --- @field transcript? agentic.ui.SubagentTranscript Nil once the user wiped it
 --- @field open boolean Working, as far as this instance knows
@@ -39,6 +39,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @class agentic.Subagents
 --- @field _widget agentic.ui.ChatWidget
 --- @field _chat_writer agentic.ui.MessageWriter
+--- @field _chat_indicator agentic.ui.StatusIndicator
 --- @field _host agentic.Subagents.Host
 --- @field _agents table<string, agentic.Subagents.Agent> By child session id
 --- @field _inputs table<string, agentic.ui.SubagentInput> Message inputs of background subagents by child session id
@@ -51,13 +52,15 @@ local Subagents = {}
 Subagents.__index = Subagents
 
 --- @param widget agentic.ui.ChatWidget
---- @param chat_writer agentic.ui.MessageWriter Writer of the main chat, which holds the subagent blocks
+--- @param chat_writer agentic.ui.MessageWriter Writer of the main chat, which holds the main agent's subagent blocks
+--- @param chat_indicator agentic.ui.StatusIndicator Working indicator of the main chat
 --- @param host agentic.Subagents.Host
 --- @return agentic.Subagents
-function Subagents:new(widget, chat_writer, host)
+function Subagents:new(widget, chat_writer, chat_indicator, host)
     return setmetatable({
         _widget = widget,
         _chat_writer = chat_writer,
+        _chat_indicator = chat_indicator,
         _host = host,
         _agents = {},
         _inputs = {},
@@ -103,16 +106,11 @@ function Subagents:_set_open(agent, open)
     end
 end
 
---- The block of a subagent in the main chat, as the history holds it.
+--- The block of a subagent in its parent's view, as the history holds it.
 --- @param child_id string
 --- @return agentic.ui.ChatHistory.ToolCall|nil
 function Subagents:_agent_block(child_id)
-    for _, msg in ipairs(self._host.history().messages) do
-        if msg.type == "tool_call" and msg.tool_call_id == child_id then
-            return msg
-        end
-    end
-    return nil
+    return self._host.history():tool_call(child_id)
 end
 
 --- The key of a subagent's stored messages: its task id, else, while that
@@ -200,7 +198,7 @@ function Subagents:transcript(child_id)
         if agent.open then
             transcript.status_indicator:start("generating")
         end
-    elseif not vim.api.nvim_buf_is_loaded(transcript.bufnr) then
+    elseif not transcript:is_loaded() then
         -- Its `BufReadCmd` renders it now, before a caller writes to it,
         -- rather than as a side effect of that write.
         vim.fn.bufload(transcript.bufnr)
@@ -234,10 +232,29 @@ end
 function Subagents:loaded_transcript_of_key(agent_key)
     local child_id = self:_child_of_key(agent_key)
     local transcript = child_id and self._agents[child_id].transcript
-    if transcript and vim.api.nvim_buf_is_loaded(transcript.bufnr) then
+    if transcript and transcript:is_loaded() then
         return transcript
     end
     return nil
+end
+
+--- The writer of the buffer that renders a tool call record: the chat's, or
+--- its subagent's transcript's.
+--- @param record agentic.ui.ChatHistory.ToolCall
+--- @param make boolean Make, load and render the transcript when needed
+--- @return agentic.ui.MessageWriter|nil writer Nil when the transcript does not exist, or with `make` false, is not loaded
+function Subagents:record_writer(record, make)
+    local agent_key = record.agent_key
+    if not agent_key then
+        return self._chat_writer
+    end
+    local transcript
+    if make then
+        transcript = self:transcript_of_key(agent_key)
+    else
+        transcript = self:loaded_transcript_of_key(agent_key)
+    end
+    return transcript and transcript.writer
 end
 
 --- Give each subagent the history holds a transcript, unloaded, so it renders
@@ -404,8 +421,10 @@ function Subagents:read_records()
     end
 end
 
---- Give a subagent's block new identity and mode, in the chat and in the
---- history. No-op for a subagent without a block.
+--- Give a subagent's block new identity and mode, in the history and in its
+--- parent's view. A parent transcript that is not loaded renders it from the
+--- history when it loads, and a wiped one is not made again. No-op for a
+--- subagent without a block.
 --- @param child_id string
 --- @param subagent agentic.ui.MessageWriter.SubagentInfo
 function Subagents:_set_agent_info(child_id, subagent)
@@ -419,16 +438,20 @@ function Subagents:_set_agent_info(child_id, subagent)
         status = block.status,
         subagent = subagent,
     }
-    self._chat_writer:update_tool_call_block(update)
+    local writer = self:record_writer(block, false)
+    if writer then
+        writer:update_tool_call_block(update)
+    end
     self._host
         .history()
         :update_tool_call(child_id, ChatHistory.tool_call_record(update))
     self._host.history_changed()
 end
 
---- Start a subagent the provider announced: its block in the main chat,
---- `completed` from the start since it records the launch only, then its
---- transcript, closed until the agent reports work.
+--- Start a subagent the provider announced: its block in its parent's view
+--- (the main chat for a child of the main agent), `completed` from the start
+--- since it records the launch only, then its transcript, closed until the
+--- agent reports work.
 --- @param child_id string
 --- @param label string
 --- @param parent_session_id string The session that announced it
@@ -465,8 +488,14 @@ function Subagents:_open_agent(child_id, label, parent_session_id, replayed)
         argument = vim.api.nvim_buf_get_name(transcript.bufnr),
         subagent = subagent,
     }
-    self._chat_writer:write_tool_call_block(block)
-    history:add_message(ChatHistory.tool_call_record(block))
+    local writer, indicator = self:_view_of(parent_session_id)
+    writer:write_tool_call_block(block)
+    indicator:reposition()
+    local record = ChatHistory.tool_call_record(block)
+    if self._agents[parent_session_id] then
+        record.agent_key = self:agent_key(parent_session_id)
+    end
+    history:add_message(record)
     self._host.history_changed()
 
     if replayed then
@@ -550,25 +579,37 @@ function Subagents:close_all(state)
     end
 end
 
+--- The writer and working indicator of a session's buffer: a subagent's
+--- transcript, loaded and rendered, else the chat. Get them before adding
+--- what they write to the history: loading a transcript replays the history.
+--- @param session_id string
+--- @return agentic.ui.MessageWriter writer
+--- @return agentic.ui.StatusIndicator indicator
+function Subagents:_view_of(session_id)
+    if not self._agents[session_id] then
+        return self._chat_writer, self._chat_indicator
+    end
+    local transcript = self:transcript(session_id)
+    return transcript.writer, transcript.status_indicator
+end
+
 --- Write a session message or subagent end row to a subagent's transcript and
 --- add it to the history. While the subagent works, the row leaves its turn
 --- open; otherwise the row ends the turn.
 --- @param child_id string
 --- @param row agentic.ui.ChatHistory.SessionMessage|agentic.ui.ChatHistory.SubagentEnd Gets `agent_key` set
 function Subagents:_write_row(child_id, row)
-    -- First: reloading the transcript replays the history, which must not
-    -- hold the row yet.
-    local transcript = self:transcript(child_id)
+    local writer, indicator = self:_view_of(child_id)
     row.agent_key = self:agent_key(child_id)
     SessionResume.write_row(
-        transcript.writer,
+        writer,
         row,
         self._agents[child_id].open,
         function(id)
             return self:buffer_name(id)
         end
     )
-    transcript.status_indicator:reposition()
+    indicator:reposition()
     self._host.history():add_message(row)
     self._host.history_changed()
 end

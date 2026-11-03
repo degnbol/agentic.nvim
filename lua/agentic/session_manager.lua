@@ -96,7 +96,7 @@ end
 --- @field _thought_response_id? string `messageId` of the main agent's last thought chunk
 --- @field _response_boundary agentic.acp.ResponseBoundary The chat's. Each transcript has its own. Never reset: every session starts with the writer's prose run closed and history ending on a user message, where a stale verdict writes no break
 --- @field _title_user_set? boolean Set once the user picks a title via /rename; blocks the provider's auto-summary from overriding it
---- @field _history_to_send? agentic.ui.ChatHistory.Message[] Messages to prepend on next prompt submit, as a text transcript (the history prefix)
+--- @field _history_to_send? agentic.ui.ChatHistory History whose messages to prepend on next prompt submit, as a text transcript (the history prefix)
 --- @field _loading_saved boolean True while a load of a saved session is deferred or in flight. Stops the constructor's on-ready from starting a new session
 --- @field _session_epoch integer Monotonic counter incremented on each new_session/load; guards stale create_session callbacks
 --- @field _pending_load_session_id? string Deferred session/load until agent is ready
@@ -370,8 +370,12 @@ function SessionManager:new(provider)
 
     self.status_indicator = StatusIndicator:new(self.widget.buf_nrs.agent)
     self.message_writer = MessageWriter:new(self.widget.buf_nrs.agent)
-    self._subagents =
-        Subagents:new(self.widget, self.message_writer, self:_subagents_host())
+    self._subagents = Subagents:new(
+        self.widget,
+        self.message_writer,
+        self.status_indicator,
+        self:_subagents_host()
+    )
 
     self.permission_manager = PermissionManager:new(
         self.message_writer,
@@ -661,7 +665,7 @@ function SessionManager:_tagfunc(pattern, flags)
     end
     if #tags == 0 then
         local record = self:_background_job_record(name)
-        local target = record and self:_record_writer(record, true)
+        local target = record and self._subagents:record_writer(record, true)
         if record and target then
             local row = target:tool_call_row(record.tool_call_id)
             if row then
@@ -712,25 +716,6 @@ function SessionManager:_background_job_record(job_id)
     return nil
 end
 
---- The writer of the buffer that renders a tool call record: the chat's, or
---- its subagent's transcript's.
---- @param record agentic.ui.ChatHistory.ToolCall
---- @param make boolean Make, load and render the transcript when needed
---- @return agentic.ui.MessageWriter|nil writer Nil when the transcript does not exist, or with `make` false, is not loaded
-function SessionManager:_record_writer(record, make)
-    local agent_key = record.agent_key
-    if not agent_key then
-        return self.message_writer
-    end
-    local transcript
-    if make then
-        transcript = self._subagents:transcript_of_key(agent_key)
-    else
-        transcript = self._subagents:loaded_transcript_of_key(agent_key)
-    end
-    return transcript and transcript.writer
-end
-
 --- Merge `update` into a tool call's history record, and into its block when
 --- `writer` tracks it. Does not persist the history.
 --- @param writer agentic.ui.MessageWriter|nil
@@ -779,10 +764,13 @@ function SessionManager:_sync_job_stop(tool_call_id)
     if tracker.status == "completed" and not record.stopped_by then
         -- A transcript that is not loaded renders the field from the history
         -- when it loads.
-        self:_apply_tool_call_fields(self:_record_writer(record, false), {
-            tool_call_id = record.tool_call_id,
-            stopped_by = tool_call_id,
-        })
+        self:_apply_tool_call_fields(
+            self._subagents:record_writer(record, false),
+            {
+                tool_call_id = record.tool_call_id,
+                stopped_by = tool_call_id,
+            }
+        )
     end
 end
 
@@ -2987,7 +2975,7 @@ function SessionManager:_handle_input_submit_inner(input_text)
     if not is_command then
         -- After a re-create from history, prepend the history on first submit
         if self._history_to_send then
-            ChatHistory.prepend_history_messages(self._history_to_send, prompt)
+            self._history_to_send:prepend_history_messages(prompt)
             self._history_to_send = nil
         elseif self.chat_history.title == "" then
             self.chat_history:set_title(input_text) -- Set title for new session
@@ -3448,7 +3436,7 @@ function SessionManager:new_session(opts)
 
         if history then
             self.chat_history = history
-            self._history_to_send = history.messages
+            self._history_to_send = history
             -- Its `dirty` stands: the new id has no file yet, but nothing is
             -- lost unless the history is unsaved under the id it was saved by.
             self:_sync_modified(history)

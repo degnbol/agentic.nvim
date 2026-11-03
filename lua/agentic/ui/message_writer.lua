@@ -135,7 +135,7 @@ end
 --- @field file_created? boolean Whether the call created the file rather than changing existing content. Reported after the tool runs, so absent until then — a mutation with no value here has not been told either way, which is not the same as false.
 --- @field hunk_ranges? agentic.ui.MessageWriter.HunkRange[] Post-edit line range of each changed hunk, as reported by the provider. Not rendered; recorded so the range survives in the session file, which re-deriving from disk cannot (the file is post-edit by then).
 --- @field skill_path? string Absolute path to the SKILL.md a Skill call loaded, verified to exist when it was resolved. Absent when no root held the skill.
---- @field subagent? agentic.ui.MessageWriter.SubagentInfo Set on a subagent's block in the main chat
+--- @field subagent? agentic.ui.MessageWriter.SubagentInfo Set on a subagent's block in its parent's view
 --- @field decided_by? agentic.PermissionDecider[] What let the call run or stopped it; nil when the provider decided
 --- @field rejection? string One line from the provider saying why the call was rejected before it ran
 --- @field ended_as? string How the run holding the call ended while the call was open: `interrupted` for a stop, else a `CanonicalToolCall.stop_reason_word`. Shown when the call fails

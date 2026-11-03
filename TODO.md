@@ -20,7 +20,6 @@ Tracks are independent unless a note says otherwise.
 1. [`REFACTOR-agent-view-consolidation.md`](notes/REFACTOR-agent-view-consolidation.md).
    After `FIX-reapply-model.md`, which deletes the model-line dedupe this
    plan would otherwise move.
-- [`FIX-nested-subagent-blocks.md`](notes/FIX-nested-subagent-blocks.md).
 
 **Executed code**
 1. [`FIX-walk-file-model.md`](notes/FIX-walk-file-model.md)

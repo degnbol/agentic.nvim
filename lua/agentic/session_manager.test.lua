@@ -39,6 +39,7 @@ local function with_subagents(session)
     session._subagents = Subagents:new(
         session.widget,
         session.message_writer,
+        session.status_indicator,
         SessionManager._subagents_host(session)
     )
     return session
@@ -1197,7 +1198,7 @@ describe("agentic.SessionManager", function()
                     assert.equal(history, session.chat_history)
                     assert.equal("new-sid", history.session_id)
                     assert.are_not.equal(1, history.timestamp)
-                    assert.equal(history.messages, session._history_to_send)
+                    assert.equal(history, session._history_to_send)
                     assert.is_true(session._is_first_message)
                     assert.equal("/project/a", session._cwd)
                 end
@@ -4632,7 +4633,6 @@ describe("agentic.SessionManager", function()
                 _on_permission_decided = SessionManager._on_permission_decided,
                 _sync_job_stop = SessionManager._sync_job_stop,
                 _background_job_record = SessionManager._background_job_record,
-                _record_writer = SessionManager._record_writer,
                 _apply_tool_call_fields = SessionManager._apply_tool_call_fields,
             } --[[@as agentic.SessionManager]]
             with_subagents(session)
@@ -5172,6 +5172,9 @@ describe("agentic.SessionManager", function()
                                 },
                                 set_running = noop,
                                 set_context = noop,
+                                is_loaded = function()
+                                    return true
+                                end,
                             },
                         } --[[@as agentic.Subagents.Agent]]
                     end

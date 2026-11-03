@@ -1143,7 +1143,8 @@ its first sentence. The sign gives the kind:
     󰒊     Any other message, sent
     󰇮     Any other message, received
 
-Each subagent also has a block in the chat, which records its launch:
+Each subagent also has a block in the chat, or in the transcript of the
+subagent that launched it, which records its launch:
 
     Line             Content ~
     Heading          `<mode> <type> · <name>`

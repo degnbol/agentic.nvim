@@ -53,7 +53,7 @@ end
         assert.is_false(child.lua_get("_G.s._loading_saved"))
         assert.equal(1, child.lua_get([[_G.count_in_chat("saved question")]]))
         assert.equal(1, child.lua_get([[_G.count_in_chat("saved answer")]]))
-        assert.equal(2, child.lua_get("#_G.s._history_to_send"))
+        assert.equal(2, child.lua_get("#_G.s._history_to_send.messages"))
         assert.is_true(child.lua_get("_G.s._is_first_message"))
     end
 

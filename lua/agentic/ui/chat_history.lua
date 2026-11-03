@@ -297,20 +297,34 @@ function ChatHistory:append_agent_text(msg, starts_response)
     self.dirty = true
 end
 
---- Update an existing tool_call, main or subagent, by merging update data
+--- The record of a tool call, in the main chat's messages or a subagent's.
 --- @param tool_call_id string
---- @param update agentic.ui.ChatHistory.ToolCall
-function ChatHistory:update_tool_call(tool_call_id, update)
+--- @return agentic.ui.ChatHistory.ToolCall|nil
+function ChatHistory:tool_call(tool_call_id)
     for _, list in ipairs({ self.messages, self.subagent_messages }) do
         for i = #list, 1, -1 do
             local msg = list[i]
             if msg.type == "tool_call" and msg.tool_call_id == tool_call_id then
-                list[i] = vim.tbl_deep_extend("force", msg, update)
-                self.dirty = true
-                return
+                return msg --[[@as agentic.ui.ChatHistory.ToolCall]]
             end
         end
     end
+    return nil
+end
+
+--- Update an existing tool_call, main or subagent, by merging update data
+--- into its record in place. No-op when no record has the id.
+--- @param tool_call_id string
+--- @param update agentic.ui.ChatHistory.ToolCall
+function ChatHistory:update_tool_call(tool_call_id, update)
+    local msg = self:tool_call(tool_call_id)
+    if not msg then
+        return
+    end
+    for key, value in pairs(vim.tbl_deep_extend("force", {}, msg, update)) do
+        msg[key] = value
+    end
+    self.dirty = true
 end
 
 --- Apply updates to tool calls, main or subagent.
@@ -387,23 +401,13 @@ function ChatHistory.to_tool_call_block(record)
     return block
 end
 
---- The label of a session among `messages`: its SubAgent block's label, else
---- `main agent`. The block is the `tool_call` whose `tool_call_id` is the
---- session id.
---- @param messages agentic.ui.ChatHistory.Message[]
+--- The label of a session: its SubAgent block's label, else `main agent`.
+--- The block is the `tool_call` whose `tool_call_id` is the session id.
 --- @param session_id string|nil
 --- @return string
-function ChatHistory.session_label(messages, session_id)
-    for _, msg in ipairs(messages) do
-        if
-            msg.type == "tool_call"
-            and msg.tool_call_id == session_id
-            and msg.subagent
-        then
-            return msg.subagent.label
-        end
-    end
-    return "main agent"
+function ChatHistory:session_label(session_id)
+    local block = session_id and self:tool_call(session_id)
+    return block and block.subagent and block.subagent.label or "main agent"
 end
 
 --- One sequence entry per main-chat message, in order. Tool calls, prompts
@@ -425,12 +429,11 @@ function ChatHistory:sequence_entries()
     end, self.messages)
 end
 
---- Prepend `messages` to `prompt` as a text transcript (ACP content).
---- Synthetic prompts are skipped.
---- @param messages agentic.ui.ChatHistory.Message[]
+--- Prepend the main chat's messages to `prompt` as a text transcript (ACP
+--- content). Synthetic prompts are skipped.
 --- @param prompt agentic.acp.Content[] The prompt array to prepend to
-function ChatHistory.prepend_history_messages(messages, prompt)
-    for _, msg in ipairs(messages) do
+function ChatHistory:prepend_history_messages(prompt)
+    for _, msg in ipairs(self.messages) do
         -- Convert stored messages to ACP Content format
         if msg.type == "user" and not msg.synthetic then
             table.insert(prompt, { type = "text", text = "User: " .. msg.text })
@@ -483,8 +486,7 @@ function ChatHistory.prepend_history_messages(messages, prompt)
                     "%s %s %s:\n%s",
                     msg.kind:sub(1, 1):upper() .. msg.kind:sub(2),
                     sent and "sent to" or "received from",
-                    not peer and msg.sender_name
-                        or ChatHistory.session_label(messages, peer),
+                    not peer and msg.sender_name or self:session_label(peer),
                     msg.text
                 ),
             })

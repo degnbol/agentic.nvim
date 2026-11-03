@@ -354,7 +354,8 @@ _G.s.file_list:add(_G.file)
 _G.had_file = not _G.s.file_list:is_empty()
 _G.s._prompt_pending = 1
 _G.s._is_first_message = true
-_G.s._history_to_send = { { type = "user", text = "earlier" } }
+_G.s._history_to_send = require("agentic.ui.chat_history"):new()
+_G.s._history_to_send.messages = { { type = "user", text = "earlier" } }
 _G.s._subagents:_relay_to_agent("c1", "hi", { force = false })
 ]])
 

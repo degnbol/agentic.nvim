@@ -47,7 +47,7 @@ end
 --- @param host agentic.Subagents.Host
 --- @return agentic.Subagents
 local function make_subagents(host)
-    return Subagents:new({ buf_nrs = {} }, {}, host)
+    return Subagents:new({ buf_nrs = {} }, {}, {}, host)
 end
 
 describe("agentic.Subagents", function()

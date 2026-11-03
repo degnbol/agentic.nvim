@@ -130,6 +130,26 @@ _G.buf_sign_of = function(bufnr, title)
         end
     end
 end
+-- Whether a transcript's working indicator is on its last line.
+_G.indicator_at_end = function(child_id)
+    local transcript = _G.transcript(child_id)
+    local indicator = transcript.status_indicator
+    local pos = vim.api.nvim_buf_get_extmark_by_id(
+        transcript.bufnr,
+        vim.api.nvim_create_namespace("agentic_status"),
+        indicator._extmark_id,
+        {}
+    )
+    return pos[1] == vim.api.nvim_buf_line_count(transcript.bufnr) - 1
+end
+-- Put the cursor of the current window on the line `line`.
+_G.cursor_to_line = function(line)
+    for i, l in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
+        if l == line then
+            vim.api.nvim_win_set_cursor(0, { i, 3 })
+        end
+    end
+end
 _G.types = function()
     return vim.tbl_map(function(m)
         return m.type
@@ -1163,6 +1183,155 @@ end
         assert.equal(first, child.lua_get("vim.fn.line('.')"))
     end)
 
+    describe("a nested launch", function()
+        before_each(function()
+            child.lua([[
+_G.spawn("c1")
+_G.announce("c2", "beta", "c1")
+]])
+        end)
+
+        it("writes its block in its parent's transcript", function()
+            local name = child.lua_get([[_G.tname("c2")]])
+            assert.equal(1, count(child.lua_get([[_G.ttext("c1")]]), name))
+            assert.equal(
+                0,
+                count(
+                    child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]]),
+                    name
+                )
+            )
+            assert.equal(
+                child.lua_get([[_G.s._subagents:agent_key("c1")]]),
+                child.lua_get([[_G.block("c2").agent_key]])
+            )
+            assert.is_true(
+                child.lua_get(
+                    [[vim.iter(_G.s.chat_history.messages):all(function(m)
+    return m.tool_call_id ~= "c2"
+end)]]
+                )
+            )
+            assert.is_true(child.lua_get([[_G.indicator_at_end("c1")]]))
+        end)
+
+        it("gf on its block opens its transcript", function()
+            child.lua([[vim.cmd("tab sbuffer " .. _G.transcript("c1").bufnr)]])
+            -- Let the follow scroll land before the cursor is placed.
+            child.flush()
+            child.lua([[_G.cursor_to_line(_G.tname("c2"))]])
+            child.type_keys("gf")
+            child.flush()
+
+            assert.equal(
+                child.lua_get([[_G.transcript("c2").bufnr]]),
+                child.api.nvim_get_current_buf()
+            )
+        end)
+
+        it("a relabel updates its block in its parent's transcript", function()
+            child.lua([[
+_G.update("c1", { sessionUpdate = "subagent_update", sessionId = "c2", description = "gamma" })
+]])
+
+            assert.truthy(
+                child.lua_get([[_G.ttext("c1")]]):find("gamma", 1, true)
+            )
+        end)
+
+        it(
+            "a relabel while its parent's transcript is wiped updates the history only",
+            function()
+                child.lua([[
+vim.cmd.bwipeout({ args = { tostring(_G.transcript("c1").bufnr) }, bang = true })
+_G.update("c1", { sessionUpdate = "subagent_update", sessionId = "c2", description = "gamma" })
+]])
+
+                assert.is_true(child.lua_get([[_G.transcript("c1") == nil]]))
+                assert.equal(
+                    "gamma",
+                    child.lua_get([[_G.block("c2").subagent.label]])
+                )
+            end
+        )
+
+        it(
+            "a relabel while its parent's transcript is unloaded shows on its load",
+            function()
+                child.lua([[
+_G.transcript("c1"):unload()
+_G.update("c1", { sessionUpdate = "subagent_update", sessionId = "c2", description = "gamma" })
+vim.fn.bufload(_G.transcript("c1").bufnr)
+]])
+
+                assert.truthy(
+                    child.lua_get([[_G.ttext("c1")]]):find("gamma", 1, true)
+                )
+            end
+        )
+
+        it("shows once in its parent's transcript made again", function()
+            child.lua([[
+vim.cmd.bwipeout({ args = { tostring(_G.transcript("c1").bufnr) }, bang = true })
+_G.s._subagents:transcript("c1")
+]])
+
+            assert.equal(
+                1,
+                count(
+                    child.lua_get([[_G.ttext("c1")]]),
+                    child.lua_get([[_G.tname("c2")]])
+                )
+            )
+        end)
+    end)
+
+    for case, drop in pairs({
+        unloaded = [[_G.transcript("c1"):unload()]],
+        wiped = [[vim.cmd.bwipeout({ args = { tostring(_G.transcript("c1").bufnr) }, bang = true })]],
+    }) do
+        it(
+            "a nested launch shows once in a parent transcript " .. case,
+            function()
+                child.lua([[_G.spawn("c1")]])
+                child.lua(drop)
+                child.lua([[_G.announce("c2", "beta", "c1")]])
+
+                assert.equal(
+                    1,
+                    count(
+                        child.lua_get([[_G.ttext("c1")]]),
+                        child.lua_get([[_G.tname("c2")]])
+                    )
+                )
+            end
+        )
+    end
+
+    it(
+        "a nested launch before its parent's task id is known shows after a reload",
+        function()
+            child.lua([[
+_G.announce("c1", "alpha")
+_G.announce("c2", "beta", "c1")
+_G.message("toolu_c1", "root", "c1", "Find the files.")
+_G.s._subagents:_replay_transcript("c1")
+]])
+
+            assert.equal(
+                "toolu_c1",
+                child.lua_get([[_G.block("c2").agent_key]])
+            )
+            assert.equal(
+                1,
+                count(
+                    child.lua_get([[_G.ttext("c1")]]),
+                    child.lua_get([[_G.tname("c2")]])
+                )
+            )
+        end
+    )
+
     it("a wiped transcript comes back with the agent's next output", function()
         child.lua([[
 _G.spawn("c1")
@@ -1433,6 +1602,109 @@ end)]]
 ).subagents]])
         )
     end)
+
+    describe("a nested launch", function()
+        before_each(function()
+            child.lua([[
+_G.saved.subagents.c2 = { task_id = "toolu_2" }
+table.insert(_G.saved.subagent_messages, 2, {
+    type = "tool_call", tool_call_id = "c2", kind = "SubAgent",
+    status = "completed", argument = "agentic://999/subagent/helper-c2",
+    subagent = { label = "helper", mode = "blocking", confirmed = true },
+    agent_key = "toolu_1",
+})
+assert(_G.saved:save(vim.uv.fs_realpath("/tmp")) == nil)
+]])
+        end)
+
+        it(
+            "a load whose file holds it shows it once and leaves the parent's transcript unloaded",
+            function()
+                load([[_G.announce("c2", "helper", "c1", false)]])
+
+                assert.equal(
+                    6,
+                    child.lua_get("#_G.s.chat_history.subagent_messages")
+                )
+                assert.is_false(
+                    child.lua_get([[_G.transcript("c1"):is_loaded()]])
+                )
+                child.lua([[vim.fn.bufload(_G.transcript("c1").bufnr)]])
+                assert.equal(
+                    1,
+                    count(
+                        child.lua_get([[_G.ttext("c1")]]),
+                        child.lua_get([[_G.tname("c2")]])
+                    )
+                )
+                assert.equal(
+                    0,
+                    count(
+                        child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]]),
+                        child.lua_get([[_G.tname("c2")]])
+                    )
+                )
+            end
+        )
+
+        it(
+            "a re-create from history points its block at the new transcript",
+            function()
+                child.lua([[
+_G.s.agent._send_request = function(_, method, _, cb)
+    if method == "session/new" then _G.new_cb = cb end
+end
+_G.s:replace_with_history(vim.deepcopy(_G.saved))
+_G.new_cb({ sessionId = "sid-live" }, nil)
+]])
+                child.flush()
+
+                assert.equal(
+                    child.lua_get([[_G.tname("c2")]]),
+                    child.lua_get([[_G.block("c2").argument]])
+                )
+                child.lua(
+                    [[vim.cmd("tab sbuffer " .. _G.transcript("c1").bufnr)]]
+                )
+                child.flush()
+                child.lua([[_G.cursor_to_line(_G.tname("c2"))]])
+                child.type_keys("gf")
+                child.flush()
+
+                assert.equal(
+                    child.lua_get([[_G.transcript("c2").bufnr]]),
+                    child.api.nvim_get_current_buf()
+                )
+            end
+        )
+    end)
+
+    it(
+        "a load without a file shows a nested launch once in its parent's transcript",
+        function()
+            child.lua([[
+_G.s:_do_load_acp_session("sid-y", "/tmp")
+_G.update = function(source, update)
+    _G.s.agent.subscribers["sid-y"].on_session_update(update, source)
+end
+_G.announce("c1", "finder", "sid-y", { state = "running" })
+_G.call("c1", "t1")
+_G.announce("c2", "helper", "c1")
+_G.load_cb({}, nil)
+]])
+            child.flush()
+
+            local name = child.lua_get([[_G.tname("c2")]])
+            assert.equal(1, count(child.lua_get([[_G.ttext("c1")]]), name))
+            assert.equal(
+                0,
+                count(
+                    child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]]),
+                    name
+                )
+            )
+        end
+    )
 
     it(
         "a re-create from history in another session manager links the new buffers",

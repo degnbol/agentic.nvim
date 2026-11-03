@@ -370,12 +370,21 @@ describe("ChatHistory", function()
         end)
     end)
 
+    --- A history holding `messages` as its main chat's.
+    --- @param messages agentic.ui.ChatHistory.Message[]
+    --- @return agentic.ui.ChatHistory
+    local function history_of(messages)
+        local history = ChatHistory:new()
+        history.messages = messages
+        return history
+    end
+
     describe("prepend_history_messages", function()
         --- @param subagent agentic.ui.MessageWriter.SubagentInfo
         --- @return string text
         local function prepended(subagent)
             local prompt = {}
-            ChatHistory.prepend_history_messages({
+            history_of({
                 {
                     type = "tool_call",
                     tool_call_id = "child-1",
@@ -385,13 +394,13 @@ describe("ChatHistory", function()
                     body = { "Find the files." },
                     subagent = subagent,
                 },
-            }, prompt)
+            }):prepend_history_messages(prompt)
             return prompt[1].text
         end
 
         it("skips a synthetic prompt", function()
             local prompt = {}
-            ChatHistory.prepend_history_messages({
+            history_of({
                 {
                     type = "user",
                     text = "go",
@@ -405,13 +414,13 @@ describe("ChatHistory", function()
                     provider_name = "p",
                     synthetic = true,
                 },
-            }, prompt)
+            }):prepend_history_messages(prompt)
             assert.same({ { type = "text", text = "User: go" } }, prompt)
         end)
 
         it("sends nothing for side records", function()
             local prompt = {}
-            ChatHistory.prepend_history_messages({
+            history_of({
                 {
                     type = "side_records",
                     records = {
@@ -421,13 +430,13 @@ describe("ChatHistory", function()
                         },
                     },
                 },
-            }, prompt)
+            }):prepend_history_messages(prompt)
             assert.same({}, prompt)
         end)
 
         it("writes the range of a read", function()
             local prompt = {}
-            ChatHistory.prepend_history_messages({
+            history_of({
                 {
                     type = "tool_call",
                     tool_call_id = "tc-read",
@@ -436,7 +445,7 @@ describe("ChatHistory", function()
                     argument = "/tmp/f.lua",
                     read_range = { offset = 10, limit = 5 },
                 },
-            }, prompt)
+            }):prepend_history_messages(prompt)
             assert.equal(
                 "Tool call (read): /tmp/f.lua (10 - 14)",
                 prompt[1].text
@@ -445,7 +454,7 @@ describe("ChatHistory", function()
 
         it("writes a rejection line in place of the body", function()
             local prompt = {}
-            ChatHistory.prepend_history_messages({
+            history_of({
                 {
                     type = "tool_call",
                     tool_call_id = "tc-rm",
@@ -455,7 +464,7 @@ describe("ChatHistory", function()
                     body = { "Permission denied: no" },
                     decided_by = { "prompt-reject" },
                 },
-            }, prompt)
+            }):prepend_history_messages(prompt)
             assert.equal(
                 "Tool call (execute): rm -rf build\nResult: Rejected at the prompt",
                 prompt[1].text
@@ -464,7 +473,7 @@ describe("ChatHistory", function()
 
         it("writes the open range of a read", function()
             local prompt = {}
-            ChatHistory.prepend_history_messages({
+            history_of({
                 {
                     type = "tool_call",
                     tool_call_id = "tc-read",
@@ -473,7 +482,7 @@ describe("ChatHistory", function()
                     argument = "/tmp/f.lua",
                     read_range = { offset = 10 },
                 },
-            }, prompt)
+            }):prepend_history_messages(prompt)
             assert.equal(
                 "Tool call (read): /tmp/f.lua (10 - …)",
                 prompt[1].text
@@ -505,7 +514,7 @@ describe("ChatHistory", function()
 
         it("renders both views of a message, naming the peer", function()
             local prompt = {}
-            ChatHistory.prepend_history_messages({
+            history_of({
                 {
                     type = "tool_call",
                     tool_call_id = "child-1",
@@ -536,7 +545,7 @@ describe("ChatHistory", function()
                     text = "Found it.\nIn lib/.",
                 },
                 { type = "subagent_end", state = "completed" },
-            }, prompt)
+            }):prepend_history_messages(prompt)
 
             assert.same(
                 {
@@ -554,7 +563,7 @@ describe("ChatHistory", function()
 
         it("names a sender outside the conversation by its name", function()
             local prompt = {}
-            ChatHistory.prepend_history_messages({
+            history_of({
                 {
                     type = "session_message",
                     message_id = "m-1",
@@ -563,7 +572,7 @@ describe("ChatHistory", function()
                     sender_name = "agentic-nvim-45",
                     text = "Please rebase.",
                 },
-            }, prompt)
+            }):prepend_history_messages(prompt)
 
             assert.equal(
                 "Message received from agentic-nvim-45:\nPlease rebase.",
@@ -625,33 +634,34 @@ describe("ChatHistory", function()
     end)
 
     describe("session_label", function()
-        local messages = {
-            {
-                type = "tool_call",
-                tool_call_id = "child-1",
-                kind = "SubAgent",
-                status = "completed",
-                subagent = {
-                    label = "map UI",
-                    mode = "blocking",
-                    confirmed = true,
-                },
-            },
-        }
+        --- @return agentic.ui.ChatHistory
+        local function history()
+            local h = ChatHistory:new()
+            for id, key in pairs({ ["child-1"] = false, ["child-2"] = "t1" }) do
+                h:add_message({
+                    type = "tool_call",
+                    tool_call_id = id,
+                    kind = "SubAgent",
+                    status = "completed",
+                    subagent = {
+                        label = "map " .. id,
+                        mode = "blocking",
+                        confirmed = true,
+                    },
+                    agent_key = key or nil,
+                })
+            end
+            return h
+        end
 
-        it("gives a subagent's block label", function()
-            assert.equal(
-                "map UI",
-                ChatHistory.session_label(messages, "child-1")
-            )
+        it("gives a subagent's block label, in either list", function()
+            assert.equal("map child-1", history():session_label("child-1"))
+            assert.equal("map child-2", history():session_label("child-2"))
         end)
 
         it("gives main agent for any other session", function()
-            assert.equal(
-                "main agent",
-                ChatHistory.session_label(messages, "root")
-            )
-            assert.equal("main agent", ChatHistory.session_label(messages, nil))
+            assert.equal("main agent", history():session_label("root"))
+            assert.equal("main agent", history():session_label(nil))
         end)
     end)
 
@@ -1064,6 +1074,32 @@ describe("ChatHistory", function()
             assert.is_true(history.dirty)
         end)
 
+        describe("tool_call", function()
+            it("finds a record in either list", function()
+                local history = ChatHistory:new()
+                history:add_message({
+                    type = "tool_call",
+                    tool_call_id = "tc-main",
+                    status = "pending",
+                    kind = "read",
+                })
+                history:add_message({
+                    type = "tool_call",
+                    tool_call_id = "tc-sub",
+                    status = "pending",
+                    kind = "read",
+                    agent_key = "task-1",
+                })
+
+                assert.equal(history.messages[1], history:tool_call("tc-main"))
+                assert.equal(
+                    history.subagent_messages[1],
+                    history:tool_call("tc-sub")
+                )
+                assert.is_nil(history:tool_call("tc-none"))
+            end)
+        end)
+
         describe("update_tool_call", function()
             it("finds and merges tool_call by ID", function()
                 local history = ChatHistory:new()
@@ -1104,6 +1140,26 @@ describe("ChatHistory", function()
 
                 assert.equal("completed", history.subagent_messages[1].status)
                 assert.equal("task-1", history.subagent_messages[1].agent_key)
+            end)
+
+            it("merges into the record a lookup returned", function()
+                local history = ChatHistory:new()
+                history:add_message({
+                    type = "tool_call",
+                    tool_call_id = "tc-1",
+                    status = "pending",
+                    kind = "read",
+                })
+                local record = history:tool_call("tc-1") --[[@as agentic.ui.ChatHistory.ToolCall]]
+
+                history:update_tool_call("tc-1", {
+                    tool_call_id = "tc-1",
+                    status = "completed",
+                    type = "tool_call",
+                })
+
+                assert.equal(record, history:tool_call("tc-1"))
+                assert.equal("completed", record.status)
             end)
 
             it("does nothing if tool_call not found", function()
