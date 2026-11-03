@@ -10,56 +10,55 @@ Plans in `notes/`. Within a track, each plan needs the ones above it.
 Tracks are independent unless a note says otherwise.
 
 **Reapply model**
-1. [`PLAN-reapply-model.md`](notes/PLAN-reapply-model.md). Before
-   `PLAN-agent-view-consolidation.md`.
+1. [`FIX-reapply-model.md`](notes/FIX-reapply-model.md). Before
+   `REFACTOR-agent-view-consolidation.md`.
 
 **Session log:**
-1. [`PLAN-append-session-log.md`](notes/PLAN-append-session-log.md)
+1. [`PERF-append-session-log.md`](notes/PERF-append-session-log.md)
 
 **Subagents**
-1. [`PLAN-agent-view-consolidation.md`](notes/PLAN-agent-view-consolidation.md).
-   After `PLAN-reapply-model.md`, which deletes the model-line dedupe this
+1. [`REFACTOR-agent-view-consolidation.md`](notes/REFACTOR-agent-view-consolidation.md).
+   After `FIX-reapply-model.md`, which deletes the model-line dedupe this
    plan would otherwise move.
-- [`PLAN-nested-subagent-blocks.md`](notes/PLAN-nested-subagent-blocks.md).
+- [`FIX-nested-subagent-blocks.md`](notes/FIX-nested-subagent-blocks.md).
 
 **Executed code**
-1. [`PLAN-walk-file-model.md`](notes/PLAN-walk-file-model.md)
-2. [`PLAN-executed-code.md`](notes/PLAN-executed-code.md)
+1. [`FIX-walk-file-model.md`](notes/FIX-walk-file-model.md)
+2. [`FEAT-executed-code.md`](notes/FEAT-executed-code.md)
 
 **Tool call rendering**
-1. [`PLAN-silent-errors.md`](notes/PLAN-silent-errors.md)
-2. [`PLAN-failed-execute-body-offset.md`](notes/PLAN-failed-execute-body-offset.md):
+1. [`FIX-silent-errors.md`](notes/FIX-silent-errors.md)
+2. [`FIX-failed-execute-body-offset.md`](notes/FIX-failed-execute-body-offset.md):
    the offset is fixed; open question 2 stays. May retire: a rejected call
    no longer draws the deny-rule merged body, its only reachable case.
 
 **Input and queue**
-1. [`PLAN-shared-client-recovery.md`](notes/PLAN-shared-client-recovery.md)
-2. [`PLAN-usage-limit-queue.md`](notes/PLAN-usage-limit-queue.md). Its
+1. [`FIX-shared-client-recovery.md`](notes/FIX-shared-client-recovery.md)
+2. [`FEAT-usage-limit-queue.md`](notes/FEAT-usage-limit-queue.md). Its
    "Limit ownership" assumes a respawn replaces the client; rewrite it once 1
    lands.
 
 **Auto mode**
-1. [`PLAN-auto-mode-integration.md`](notes/PLAN-auto-mode-integration.md)
-2. [`PLAN-auto-mode-fix.md`](notes/PLAN-auto-mode-fix.md), which extends it
+1. [`FEAT-auto-mode-integration.md`](notes/FEAT-auto-mode-integration.md)
+2. [`FIX-auto-mode-fix.md`](notes/FIX-auto-mode-fix.md), which extends it
 
 **Budget:** merge branch `shared-budget`.
 
-**Peer name:** after `PLAN-usage-limit-queue.md` only to avoid a rebase (it
+**Peer name:** after `FEAT-usage-limit-queue.md` only to avoid a rebase (it
 rewrites the `new_session` and `_do_load_acp_session` sites this plan adds
 calls to).
-1. [`PLAN-peer-session-name.md`](notes/PLAN-peer-session-name.md)
+1. [`FEAT-peer-session-name.md`](notes/FEAT-peer-session-name.md)
 
 **No ordering:**
-[`PLAN-widget-clear-chat.md`](notes/PLAN-widget-clear-chat.md),
-[`PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md),
-[`PLAN-heading-command-flag.md`](notes/PLAN-heading-command-flag.md) (on hold;
-after `PLAN-placeholder-titles.md`),
-[`PLAN-updated-input-display.md`](notes/PLAN-updated-input-display.md),
-[`PLAN-completion-current-buf.md`](notes/PLAN-completion-current-buf.md),
-[`PLAN-deny-gate-flag-cap.md`](notes/PLAN-deny-gate-flag-cap.md),
-[`PLAN-inline-math-dollar-pairing.md`](notes/PLAN-inline-math-dollar-pairing.md),
-[`PLAN-placeholder-titles.md`](notes/PLAN-placeholder-titles.md),
-[`PLAN-discovered-skills.md`](notes/PLAN-discovered-skills.md).
+[`REFACTOR-widget-clear-chat.md`](notes/REFACTOR-widget-clear-chat.md),
+[`FEAT-gutter-identity.md`](notes/FEAT-gutter-identity.md),
+[`FIX-heading-command-flag.md`](notes/FIX-heading-command-flag.md) (on hold;
+after `FIX-placeholder-titles.md`),
+[`FEAT-updated-input-display.md`](notes/FEAT-updated-input-display.md),
+[`FIX-deny-gate-flag-cap.md`](notes/FIX-deny-gate-flag-cap.md),
+[`FIX-inline-math-dollar-pairing.md`](notes/FIX-inline-math-dollar-pairing.md),
+[`FIX-placeholder-titles.md`](notes/FIX-placeholder-titles.md),
+[`FEAT-discovered-skills.md`](notes/FEAT-discovered-skills.md).
 
 ## Bugs
 
@@ -300,7 +299,7 @@ so typing them in the input buffer runs the TUI flow via the LLM.
 
 One rule — *the sign column says what a region is, the buffer text says what it
 contains*. Foldable prose regions remain:
-[`notes/PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md).
+[`notes/FEAT-gutter-identity.md`](notes/FEAT-gutter-identity.md).
 
 ### Rendering
 

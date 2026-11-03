@@ -5,7 +5,7 @@ Status: reviewed — blocked on open questions 2 and 3 (items 1 and 7 wait on th
 - `notes/bug-silent-errors.md` (the report), `notes/audit-edge-cases.md` (4.1, 4.28)
 - `~/.claude/rules/lang-lua.md` ("pcall requires visible error handling"; silent `pcall` only for cleanup of already-invalid state)
 - `lua/agentic/utils/ansi.lua`, `lua/agentic/ui/chat_widget.lua`, `lua/agentic/ui/chat_buffer.lua`, `lua/agentic/utils/file_system.lua`, `lua/agentic/acp/acp_client.lua`, `lua/agentic/utils/grep_regex.lua`, `lua/agentic/ui/permission_manager.lua`, `lua/agentic/ui/tool_call_renderer.lua`, `lua/agentic/ui/message_writer.lua`, `lua/agentic/ui/floating_message.lua`, `lua/agentic/ui/status_indicator.lua`, `lua/agentic/utils/git_files.lua`, `lua/agentic/bootstrap.lua`, `lua/agentic/utils/buf_helpers.lua`, `lua/agentic/ui/subagent_transcript.lua`
-- `notes/PLAN-failed-execute-body-offset.md`
+- `notes/FIX-failed-execute-body-offset.md`
 - Tests: `lua/agentic/ui/permission_manager.test.lua`
 - Skills: `rendering`, `permissions`
 
@@ -28,7 +28,7 @@ Facts that decide the cases below (Neovim 0.12.6 runtime):
 ## Changes
 
 ### Removed pcalls
-1. **`ansi.lua:317-334`** — see Open question 2. The spans' columns match the lines written, but the start row is found by scanning the buffer for a `console` fence (`tool_call_renderer.lua:1565-1572`, `:1612-1618`; the second pattern `^`+console$` misses a `console-fold` fence and falls back to `start_row + 2`), and `PLAN-failed-execute-body-offset.md` finds a wrong offset reachable on deny-rule denials (merged body), harmful only with ANSI in that body. A raise from `MessageWriter:write_tool_call_block` (`message_writer.lua:2699`) is caught by `with_modifiable`, not the subscriber `pcall`; it ends the `_own_edit` callback before the block's range extmark and `self.tool_call_blocks[id]` are set (`:2737-2749`), so the block is orphaned: every later update warns "Tool call update for unknown block" (`:2805-2812`). Today the same fault only mis-highlights.
+1. **`ansi.lua:317-334`** — see Open question 2. The spans' columns match the lines written, but the start row is found by scanning the buffer for a `console` fence (`tool_call_renderer.lua:1565-1572`, `:1612-1618`; the second pattern `^`+console$` misses a `console-fold` fence and falls back to `start_row + 2`), and `FIX-failed-execute-body-offset.md` finds a wrong offset reachable on deny-rule denials (merged body), harmful only with ANSI in that body. A raise from `MessageWriter:write_tool_call_block` (`message_writer.lua:2699`) is caught by `with_modifiable`, not the subscriber `pcall`; it ends the `_own_edit` callback before the block's range extmark and `self.tool_call_blocks[id]` are set (`:2737-2749`), so the block is orphaned: every later update warns "Tool call update for unknown block" (`:2805-2812`). Today the same fault only mis-highlights.
 2. **`chat_widget.lua:351-367`** — call `nvim_buf_set_lines` directly inside the `BufHelpers.with_modifiable` callback. `with_modifiable` already checks validity and notifies on error (`buf_helpers.lua:14-36`).
 3. **`file_system.lua:168-196`** — drop the `pcall` and its `Logger.debug` around the buffer reload in `write_file`. The buffer is checked valid at `:163`; `modifiable` is forced on. Same change at **`acp_client.lua:946-971`** (the `fs/write_text_file` reload, same code, not in the report; its comment at `:931` says so). Suggested: move the reload into one `FileSystem` helper that both sites call. A raise mid-reload leaves `modifiable` forced on, and in `write_file` it also skips `callback(nil)`. If audit 4.1 removes the `write_file` reload, the `file_system.lua` part of this item goes with it. A raise in `write_file` propagates out of `SessionManager:_persist_history` (`session_manager.lua:240`); at turn end (`:3762`) it skips `_sync_modified`, the transient retry and `_dispatch_deferred_prompts`. Accepted because the reload `set_lines` cannot fail on the valid, forced-modifiable buffer; decide 4.1 first so this edit is not made on code about to be deleted.
 4. **`grep_regex.lua:547-554`** — drop the `pcall(vim.regex, …)` check in `translate`; keep `if not translation then return nil end`; delete the "A safety net" comment above it (`:546-547`). A pattern Vim rejects then reaches `regex_spans` (`tool_call_renderer.lua:498-502`), which already reports it as "Search highlight failed" (`:570-572`). Both `translate` callers (`tool_call_renderer.lua:1120`, `:1488`) feed only `extract_search_term_highlights`.
@@ -58,7 +58,7 @@ Facts that decide the cases below (Neovim 0.12.6 runtime):
 
 ## Non-goals
 - Whether to keep the `write_file` reload (audit 4.1).
-- The failed-execute body offset (`PLAN-failed-execute-body-offset.md`).
+- The failed-execute body offset (`FIX-failed-execute-body-offset.md`).
 - `_complete_request` (`permission_manager.lua:1093`) calls the callback without `pcall`; an error there already propagates.
 - The silent `if disk_lines` skip in both reloads (read failure right after a successful write).
 - The unused `filetype` option of `FloatingMessage.show`.

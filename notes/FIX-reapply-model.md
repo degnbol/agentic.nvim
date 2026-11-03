@@ -9,7 +9,7 @@ Status: reviewed
 - `lua/agentic/ui/chat_history.lua`: `model` field
 - `lua/agentic/session_manager.test.lua`: the `announce_model_loaded` cases
 - Skills: `session-lifecycle` (resume paths, `_loading_saved`/epoch/`destroyed` guards)
-- Related: `notes/PLAN-agent-view-consolidation.md` moves `announce_model_loaded` into `AgentView`. It lands after this plan, without the dedupe this plan deletes.
+- Related: `notes/REFACTOR-agent-view-consolidation.md` moves `announce_model_loaded` into `AgentView`. It lands after this plan, without the dedupe this plan deletes.
 - `b909dda` (landed) added `_render_history`. `1d6432e` added the epoch guard of the path A load callback.
 
 ## Background
@@ -86,7 +86,7 @@ The `Loaded` line means "from here on, model X". After a load or a re-create it 
 ## Non-goals
 - Showing model switches made before the resume. Switch lines are display-only (`write_message` never calls `add_message`), so the history does not hold them. Keeping them needs a history message type that is replayed but never sent to the model.
 - Showing the model in the header.
-- Subagent models (`notes/PLAN-agent-view-consolidation.md`).
+- Subagent models (`notes/REFACTOR-agent-view-consolidation.md`).
 
 ## Open questions
 1. **Model in the resume notice.** On path A the resume notice body already names the model, so with this change it appears twice. Keep both, or drop `Model: **Y**` from the notice so the `Loaded` line is the one model record, as on a new session?

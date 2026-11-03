@@ -1,7 +1,7 @@
 # Plan: one display path for main agent and subagent windows
 Status: reviewed (open questions)
 
-Lands after `PLAN-reapply-model.md`, which deletes the `_announced_model_id` dedupe, Subagent code is named as f87761d left it: class `Subagents` in `lua/agentic/subagents.lua` (`transcript`, `end_agent`, `forget`, `agent_of`, `agent_of_chunk`, `set_config_options`; private `_new_transcript`, `_replay_transcript`, `_start_agent`, `_open_input`, `_bind_agent_keymaps`).
+Lands after `FIX-reapply-model.md`, which deletes the `_announced_model_id` dedupe, Subagent code is named as f87761d left it: class `Subagents` in `lua/agentic/subagents.lua` (`transcript`, `end_agent`, `forget`, `agent_of`, `agent_of_chunk`, `set_config_options`; private `_new_transcript`, `_replay_transcript`, `_start_agent`, `_open_input`, `_bind_agent_keymaps`).
 
 ## Relevant files
 - `lua/agentic/session_manager.lua` (SM)

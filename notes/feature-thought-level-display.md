@@ -13,5 +13,5 @@ and in a change notice, because the bridge sends the effort levels per model
 (`session-effort.js`).
 
 ## Subagents
-`PLAN-agent-view-consolidation.md` shows a subagent's config with the main agent's code,
+`REFACTOR-agent-view-consolidation.md` shows a subagent's config with the main agent's code,
 so subagent transcripts get the same display.

@@ -1,6 +1,6 @@
 # PLAN: honour explicit `ask` gates under auto mode
 
-Status: reviewed spec. Extends `PLAN-auto-mode-integration.md`.
+Status: reviewed spec. Extends `FEAT-auto-mode-integration.md`.
 
 ## Background
 
