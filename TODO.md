@@ -58,7 +58,8 @@ after `PLAN-placeholder-titles.md`),
 [`PLAN-completion-current-buf.md`](notes/PLAN-completion-current-buf.md),
 [`PLAN-deny-gate-flag-cap.md`](notes/PLAN-deny-gate-flag-cap.md),
 [`PLAN-inline-math-dollar-pairing.md`](notes/PLAN-inline-math-dollar-pairing.md),
-[`PLAN-placeholder-titles.md`](notes/PLAN-placeholder-titles.md).
+[`PLAN-placeholder-titles.md`](notes/PLAN-placeholder-titles.md),
+[`PLAN-discovered-skills.md`](notes/PLAN-discovered-skills.md).
 
 ## Bugs
 
