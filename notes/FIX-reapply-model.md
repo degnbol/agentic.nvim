@@ -1,5 +1,5 @@
 # Plan: reapply and announce the model after a load or a re-create from history
-Status: reviewed
+Status: spec
 
 ## Relevant files
 - `lua/agentic/session_manager.lua` (SM): `new_session`, `_do_load_acp_session`, `replace_with_history`, `restart_session`, `switch_provider`, `announce_model_loaded`, `_handle_model_change`, `_sync_history_context`
@@ -19,7 +19,7 @@ A session is loaded, or re-created from history, by these paths:
 |---|---|---|---|
 | A. `_do_load_acp_session` | `session/load` providers (`SessionResume.resume`, `Agentic.load_acp_session`) | Yes, `set_pending_initial_model(model)` | In the resume notice body, `Provider: X · Model: Y`. A `Loaded` line also follows when the switch goes through (`_handle_model_change` → `announce_model_loaded`). |
 | B. `replace_with_history` | Providers without `session/load`, the fallback when `session/load` fails (`_new_session_after_failed_load`), `restart_session` | **No.** `new_session` with a `history` takes no `preserved_model`, and nothing reads `history.model`. | **No.** `new_session` writes the `Loaded` line only without a `history`. |
-| C. `SessionRecovery.respawn_preserving_history` | Respawn after a usage limit | **No**, as B. | **No** (`quiet_welcome`). |
+| C. `SessionRecovery.respawn_preserving_history` | Respawn after a usage limit (`_handle_input_submit_inner`) or a re-login the subprocess did not survive (`recover_after_reauth`) | **No**, as B. | **No** (`quiet_welcome`). |
 | D. `switch_provider` | Provider switch | Not applicable: a new provider. | **No.** |
 
 So on paths B and C the session continues on the provider's default model, and the chat does not say so. The skip came from commit a4c8974, whose reason (the model is in the header) that same commit made untrue.
@@ -64,8 +64,9 @@ The `Loaded` line means "from here on, model X". After a load or a re-create it 
 6. **`_do_load_acp_session`**:
    - Return early in the load callback when `self.destroyed`, beside the epoch check.
    - Replace the `set_pending_initial_model` call with `self:_reapply_model(model)`, after the resume notice.
+   - Drop `Model: **Y**` from the resume notice body; keep `Provider: **X**`. The notice names the saved model before the switch to it returns, so it is false when the switch fails or the model is not offered. The `Loaded` lines are the model record, as on a new session, where the welcome header names no model either.
 7. **`restart_session`**: pass the live model, `config_options:current_model_id()`, captured before `_cancel_session`. `replace_with_history` takes it as `opts.model`, which overrides `history.model`.
-8. **`respawn_preserving_history`**: capture `sm.config_options:current_model_id()` before invalidating the instance. In `on_created`, reapply it. Whether to announce it is Open question 2.
+8. **`respawn_preserving_history`**: capture `sm.config_options:current_model_id()` before invalidating the instance. In `on_created`, before the caller's `on_created`, `sm:_reapply_model(model)`. It announces like path B: a respawn is a re-create from history, and `quiet_welcome` only keeps the welcome header out of a running conversation. A silent reapply would also need a flag through `_handle_model_change`, whose switch callback writes its own `Loaded` line.
 9. **`switch_provider`**: `self:_reapply_model(nil)` after the provider notice in `on_created`.
 10. **`new_session`**: add a comment at the gate that skips the announce with `history`: a re-create from history announces after its own content, through `_reapply_model`.
 11. **Tests**, in `session_manager.test.lua` beside the `announce_model_loaded` cases, with a stub session:
@@ -74,7 +75,8 @@ The `Loaded` line means "from here on, model X". After a load or a re-create it 
     - Delete the dedupe cases (the repeated `announce_model_loaded("m")`).
     - `replace_with_history`: the `Loaded` line follows the replayed messages.
     - `restart_session`: the re-create gets the live model, not the one from the last save.
-    - Path A load callback: legacy `models` in the result fill the options; the callback writes nothing after `destroyed`.
+    - Path A load callback: legacy `models` in the result fill the options; the callback writes nothing after `destroyed`; the resume notice body names the provider and no model.
+    - `respawn_preserving_history`: the re-created session gets the model that ran before the respawn, and the chat ends with its `Loaded` line.
     - `AgentConfigOptions:has_model`, in `agent_config_options.test.lua`.
     - `make validate`.
 
@@ -87,7 +89,3 @@ The `Loaded` line means "from here on, model X". After a load or a re-create it 
 - Showing model switches made before the resume. Switch lines are display-only (`write_message` never calls `add_message`), so the history does not hold them. Keeping them needs a history message type that is replayed but never sent to the model.
 - Showing the model in the header.
 - Subagent models (`notes/REFACTOR-agent-view-consolidation.md`).
-
-## Open questions
-1. **Model in the resume notice.** On path A the resume notice body already names the model, so with this change it appears twice. Keep both, or drop `Model: **Y**` from the notice so the `Loaded` line is the one model record, as on a new session?
-2. **Announce on respawn.** The respawn after a usage limit passes `quiet_welcome` so that no session divider appears mid-conversation. Should it write the `Loaded` line (the model may have changed if the saved one is no longer offered), or only reapply the model?
