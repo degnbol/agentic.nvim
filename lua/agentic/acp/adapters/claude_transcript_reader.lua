@@ -220,6 +220,17 @@ function ClaudeTranscriptReader:_read_line(line)
         if self:_is_current(record) then
             local side
             if record.kind == "hook" then
+                -- Logged rather than shown, and dropped so the chat history
+                -- does not save it.
+                if record.detail then
+                    Logger.debug_to_file(
+                        "transcript hook detail:",
+                        record.hook_name,
+                        record.tool_call_id,
+                        record.detail
+                    )
+                    record.detail = nil
+                end
                 side = self:_hook_side_record(record, place)
             elseif record.kind == "loaded_file" then
                 side = self:_loaded_file_side_record(record, place)
@@ -238,10 +249,12 @@ function ClaudeTranscriptReader:_read_line(line)
     return records
 end
 
---- Give each `context` record without a command the `command`,
+--- Give each `context` record without a command or outcome the `command`,
 --- `duration_ms` and `hook_name` of the run in `_context_runs` that produced
 --- it, and remove that run from `_context_runs`. The record keeps its own
---- body: it is what the model received.
+--- body: it is what the model received. A record with an outcome, such as a
+--- stop, is not a run's context, and would take another hook's run on its
+--- call.
 --- @param records agentic.acp.ClaudeTranscriptRecord[] one entry's records. Paired ones are updated in place
 function ClaudeTranscriptReader:_pair_contexts(records)
     -- A context's text equals its run's `additionalContext` unless the CLI
@@ -254,6 +267,7 @@ function ClaudeTranscriptReader:_pair_contexts(records)
         return record.kind == "hook"
             and record.group == "context"
             and not record.command
+            and not record.outcome
     end, records)
 
     --- @type table<agentic.acp.ClaudeHookRecord, agentic.acp.ClaudeHookRecord>

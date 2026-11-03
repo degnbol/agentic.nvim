@@ -601,6 +601,205 @@ describe("ClaudeTranscriptRecords", function()
         end)
     end)
 
+    describe("hooks that acted", function()
+        it("gives a blocking error's reason without its command", function()
+            local record = decode_one(line({
+                type = "hook_blocking_error",
+                hookName = "PostToolUse:Bash",
+                toolUseID = "toolu_011gznEi52oQJqtB9pCFGANJ",
+                hookEvent = "PostToolUse",
+                blockingError = {
+                    blockingError = "[/tmp/hooktest/h/block.sh]: BLOCK-C reason\n",
+                    command = "/tmp/hooktest/h/block.sh",
+                },
+            }))
+
+            assert.equal("context", record.group)
+            assert.same({ "BLOCK-C reason" }, record.body)
+            assert.equal("blocked", record.outcome)
+            assert.equal("/tmp/hooktest/h/block.sh", record.command)
+            assert.equal("PostToolUse:Bash", record.hook_name)
+            assert.equal("toolu_011gznEi52oQJqtB9pCFGANJ", record.tool_call_id)
+        end)
+
+        it("strips exactly the prefix of a command holding `]: `", function()
+            local record = decode_one(line({
+                type = "hook_blocking_error",
+                hookName = "PostToolUse:Bash",
+                hookEvent = "PostToolUse",
+                blockingError = {
+                    blockingError = "[echo '[x]: y' >&2]: the reason",
+                    command = "echo '[x]: y' >&2",
+                },
+            }))
+
+            assert.same({ "the reason" }, record.body)
+        end)
+
+        it("gives a stopped continuation its stop reason", function()
+            local record = decode_one(line({
+                type = "hook_stopped_continuation",
+                message = "STOP-B",
+                hookName = "PostToolUse:Bash",
+                toolUseID = "toolu_011gznEi52oQJqtB9pCFGANJ",
+                hookEvent = "PostToolUse",
+            }))
+
+            assert.equal("context", record.group)
+            assert.same({ "STOP-B" }, record.body)
+            assert.equal("stopped", record.outcome)
+            assert.is_nil(record.command)
+            assert.equal("PostToolUse:Bash", record.hook_name)
+        end)
+
+        it("gives a system message to the user", function()
+            local record = decode_one(line({
+                type = "hook_system_message",
+                content = "SYSMSG-A",
+                hookName = "PostToolUse:Bash",
+                toolUseID = "toolu_01DhXekQhi6xwVEvVJMxiL8c",
+                hookEvent = "PostToolUse",
+            }))
+
+            assert.equal("message", record.group)
+            assert.same({ "SYSMSG-A" }, record.body)
+            assert.is_nil(record.outcome)
+        end)
+
+        it("ends an error during execution's body before its JSON", function()
+            local content = "PostToolUse hook returned updatedToolOutput that does not match Write's output shape; using original output. [\n"
+                .. '  {\n    "code": "invalid_value"\n  }\n]'
+            local record = decode_one(line({
+                type = "hook_error_during_execution",
+                content = content,
+                hookName = "PostToolUse:Write",
+                toolUseID = "toolu_018S3g7A9VkPVhosMp4kGLq1",
+                hookEvent = "PostToolUse",
+            }))
+
+            assert.equal("failure", record.group)
+            assert.same({
+                "PostToolUse hook returned updatedToolOutput that does not match Write's output shape; using original output.",
+            }, record.body)
+            assert.equal(content, record.detail)
+            assert.equal("PostToolUse:Write", record.hook_name)
+        end)
+
+        it("ends an error's body before a line opening JSON", function()
+            local record = decode_one(line({
+                type = "hook_error_during_execution",
+                content = "It failed.\n{\n}",
+                hookEvent = "PostToolUse",
+            }))
+
+            assert.same({ "It failed." }, record.body)
+        end)
+
+        it("names a permission decision by its event", function()
+            local record = decode_one(line({
+                type = "hook_permission_decision",
+                decision = "allow",
+                toolUseID = "toolu_018S3g7A9VkPVhosMp4kGLq1",
+                hookEvent = "PermissionRequest",
+            }))
+
+            assert.equal("passed", record.group)
+            assert.same({}, record.body)
+            assert.equal("allowed", record.outcome)
+            assert.equal("PermissionRequest", record.hook_name)
+            assert.is_nil(record.command)
+        end)
+
+        it("gives a permission decision other than allow as denied", function()
+            local record = decode_one(line({
+                type = "hook_permission_decision",
+                decision = "deny",
+                hookEvent = "PermissionRequest",
+            }))
+
+            assert.equal("denied", record.outcome)
+        end)
+
+        it("gives an unknown permission decision no outcome", function()
+            local record = decode_one(line({
+                type = "hook_permission_decision",
+                decision = "later",
+                hookEvent = "PermissionRequest",
+            }))
+
+            assert.is_nil(record.outcome)
+        end)
+
+        it("names a deferral without a tool by its event", function()
+            local record = decode_one(line({
+                type = "hook_deferred_tool",
+                hookName = "settings",
+                hookEvent = "PreToolUse",
+            }))
+
+            assert.equal("PreToolUse", record.hook_name)
+        end)
+
+        it("ignores a null command", function()
+            local record = decode_one(line(success(nil, { command = vim.NIL })))
+
+            assert.is_nil(record.command)
+        end)
+
+        it("names a deferral by its event and tool", function()
+            local record = decode_one(line({
+                type = "hook_deferred_tool",
+                toolUseID = "toolu_01GRMeZNHLwX3kbfW9GCLJBe",
+                toolName = "Bash",
+                toolInput = {
+                    command = "echo hi",
+                    description = "Print hi via echo",
+                },
+                hookName = "settings",
+                hookEvent = "PreToolUse",
+                permissionMode = "default",
+            }))
+
+            assert.equal("passed", record.group)
+            assert.same({}, record.body)
+            assert.equal("deferred", record.outcome)
+            assert.equal("PreToolUse:Bash", record.hook_name)
+        end)
+
+        it("reads a PreToolUse decision from a run's stdout", function()
+            local record = decode_one(line({
+                type = "hook_success",
+                hookName = "PreToolUse:Write",
+                toolUseID = "toolu_01UH17rf86oARiBUBhpBrWs3",
+                hookEvent = "PreToolUse",
+                content = "",
+                stdout = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}',
+                stderr = "",
+                exitCode = 0,
+                command = "/tmp/hooktest5/h/allow.sh",
+                durationMs = 179,
+            }))
+
+            assert.equal("passed", record.group)
+            assert.equal("allowed", record.outcome)
+        end)
+
+        it("gives a deferring run no outcome of its own", function()
+            local record =
+                decode_one(line(success({ permissionDecision = "defer" })))
+
+            assert.is_nil(record.outcome)
+        end)
+
+        it("names a record without hookName by its event", function()
+            local attachment = success(nil)
+            attachment.hookName = nil
+            local record = decode_one(line(attachment))
+
+            assert.equal("PreToolUse", record.hook_name)
+        end)
+    end)
+
     describe("lines that carry nothing", function()
         it("ignores a conversation entry", function()
             assert.same(

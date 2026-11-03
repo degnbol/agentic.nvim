@@ -1,3 +1,4 @@
+local MarkdownGuard = require("agentic.utils.markdown_guard")
 local TextWrap = require("agentic.utils.text_wrap")
 
 --- Fold levels and fold text for the chat buffer.
@@ -463,6 +464,29 @@ local function is_marked(bufnr, ns, row)
     return #marks > 0
 end
 
+--- `row` with the code span it starts with shortened to the filename, when
+--- the span's text holds a `/`. The span keeps its delimiters and pad, which
+--- stay valid for the shorter text.
+--- @param row string
+--- @return string
+local function shorten_leading_path(row)
+    local span = MarkdownGuard.backtick_spans(row)[1]
+    if not span or span.start ~= 0 then
+        return row
+    end
+    local run = row:match("^`+")
+    -- 1-based index of the closing run's first backtick.
+    local close_start = span.stop - #run + 1
+
+    local content = row:sub(#run + 1, close_start - 1)
+    local pad = content:match("^ .* $") and " " or ""
+    local text = content:sub(#pad + 1, #content - #pad)
+    if not text:find("/", 1, true) then
+        return row
+    end
+    return run .. pad .. vim.fs.basename(text) .. pad .. row:sub(close_start)
+end
+
 local FOLDTEXT_LEAD, FOLDTEXT_TAIL = "    ··· ", " ···"
 
 --- Highlight group of the foldtext.
@@ -476,9 +500,10 @@ local FOLDTEXT_HL = "Comment"
 --- A fold holding fence rows, and one whose opening fence row is marked in
 --- `NS_TITLED`, lead with their first row, cut so the fold text fits the
 --- window's text width: a closed execute block shows its command, and
---- a titled body what it is. The line count is read back out of the folded
---- rows rather than recorded at write time, so it describes what `zo` will
---- actually show.
+--- a titled body what it is. A titled row led by a code span holding a path
+--- shows only the path's filename in it. The line count is read back out of
+--- the folded rows rather than recorded at write time, so it describes what
+--- `zo` will actually show.
 --- @return {[1]: string, [2]: string}[] chunks
 function M.foldtext()
     local bufnr = vim.api.nvim_get_current_buf()
@@ -489,10 +514,14 @@ function M.foldtext()
 
     -- `first` is 1-indexed, so the 0-indexed fence row above it is first - 2.
     local fence_row = first - 2
-    if skip or is_marked(bufnr, M.NS_TITLED, fence_row) then
+    local titled = is_marked(bufnr, M.NS_TITLED, fence_row)
+    if skip or titled then
         local row = vim.trim(
             vim.api.nvim_buf_get_lines(bufnr, first - 1, first, false)[1]
         )
+        if titled then
+            row = shorten_leading_path(row)
+        end
         local frame = vim.fn.strdisplaywidth(
             FOLDTEXT_LEAD .. " · " .. summary .. FOLDTEXT_TAIL
         )

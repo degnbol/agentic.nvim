@@ -724,6 +724,42 @@ describe("agentic.ui.folds", function()
                 assert.equal("    ··· 2 lines ···", foldtext_of(3, 4))
             end)
 
+            it("shortens a leading path span to its filename", function()
+                vim.api.nvim_buf_set_lines(bufnr, 2, 3, false, {
+                    "`~/hooks/guard.sh` · blocked",
+                })
+                vim.api.nvim_buf_set_extmark(bufnr, NS_TITLED, 1, 0, {})
+
+                assert.equal(
+                    "    ··· `guard.sh` · blocked · 2 lines ···",
+                    foldtext_of(3, 4)
+                )
+            end)
+
+            it("shortens a path span with a double-backtick run", function()
+                vim.api.nvim_buf_set_lines(bufnr, 2, 3, false, {
+                    "`` /h/a`b.sh `` · 30 ms",
+                })
+                vim.api.nvim_buf_set_extmark(bufnr, NS_TITLED, 1, 0, {})
+
+                assert.equal(
+                    "    ··· `` a`b.sh `` · 30 ms · 2 lines ···",
+                    foldtext_of(3, 4)
+                )
+            end)
+
+            it("leaves a leading span without a slash whole", function()
+                vim.api.nvim_buf_set_lines(bufnr, 2, 3, false, {
+                    "`python3 x.py` · 30 ms",
+                })
+                vim.api.nvim_buf_set_extmark(bufnr, NS_TITLED, 1, 0, {})
+
+                assert.equal(
+                    "    ··· `python3 x.py` · 30 ms · 2 lines ···",
+                    foldtext_of(3, 4)
+                )
+            end)
+
             it("leads a titled `console-fold` with its first row", function()
                 vim.api.nvim_buf_set_lines(bufnr, 1, 2, false, {
                     "```console-fold",
@@ -798,6 +834,13 @@ describe("agentic.ui.folds", function()
                 assert.equal(
                     "    ··· rg foo · 3 lines ···",
                     joined_foldtext("rg foo")
+                )
+            end)
+
+            it("keeps a command led by a path span whole", function()
+                assert.equal(
+                    "    ··· `/usr/bin/x` foo · 3 lines ···",
+                    joined_foldtext("`/usr/bin/x` foo")
                 )
             end)
 

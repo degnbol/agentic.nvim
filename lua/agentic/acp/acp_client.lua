@@ -189,7 +189,8 @@ end
 --- | "context" context a hook delivered to the model
 --- | "passed" ran to completion with nothing to report; the body is empty
 --- | "stray" stdout the model did not see
---- | "failure" timed out, or exited non-zero with an error
+--- | "message" text the hook addressed to the user, which the model did not receive
+--- | "failure" timed out, exited non-zero with an error, or its output was rejected
 --- | "verbatim" the provider's own record of it did not parse; the body is that record
 
 --- Where a record the provider wrote outside the ACP feed belongs: right
@@ -206,6 +207,15 @@ end
 --- @field hook_name? string The hook's configured name, e.g. `PreToolUse:Bash`
 --- @field command? string The hook's invocation, when the record is of one run
 --- @field duration_ms? number How long that run took
+--- @field outcome? agentic.acp.HookOutcome What the hook did, when it did more than report
+
+--- @alias agentic.acp.HookOutcome
+--- | "blocked" the hook returned a blocking error; the model received its reason
+--- | "stopped" the hook ended the turn
+--- | "allowed" the hook approved the tool call
+--- | "denied" the hook refused the tool call
+--- | "asked" the hook sent the tool call to a permission prompt
+--- | "deferred" the hook deferred the tool call to the host
 
 --- A file the provider added to the model's context without a tool call.
 --- @class agentic.acp.LoadedFile : agentic.acp.Anchor

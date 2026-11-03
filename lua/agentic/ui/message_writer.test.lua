@@ -1070,6 +1070,30 @@ describe("agentic.ui.MessageWriter", function()
             assert.is_false(writer._pending_fold_ops[1].open)
         end)
 
+        it("leaves a block for the user open and undimmed", function()
+            writer:write_hook_block({
+                body = { "a message", "for you" },
+                title = TITLE,
+                for_user = true,
+            })
+
+            assert.equal(1, #writer._pending_fold_ops)
+            assert.is_true(writer._pending_fold_ops[1].open)
+            for _, mark in
+                ipairs(
+                    vim.api.nvim_buf_get_extmarks(
+                        bufnr,
+                        Renderer.NS_DECORATIONS,
+                        0,
+                        -1,
+                        { details = true }
+                    )
+                )
+            do
+                assert.is_true(mark[4].hl_group ~= Theme.HL_GROUPS.DIMMED_BLOCK)
+            end
+        end)
+
         it("writes nothing for an empty body, even with a title", function()
             writer:write_hook_block({ body = {}, title = TITLE })
 
@@ -1406,7 +1430,6 @@ describe("agentic.ui.MessageWriter", function()
             writer:write_loaded_file({ path = "/r/b.md", tool_call_id = "t1" })
 
             assert.same({
-                "",
                 file_row("/r/a.md"),
                 file_row("/r/b.md"),
                 "",
@@ -1430,7 +1453,6 @@ describe("agentic.ui.MessageWriter", function()
             writer:write_loaded_file({ path = "/r/b.md", tool_call_id = "t1" })
 
             assert.same({
-                "",
                 file_row("/r/a.md"),
                 "",
                 "```markdown-fold",
@@ -1560,7 +1582,6 @@ describe("agentic.ui.MessageWriter", function()
             writer:finalize_turn()
 
             assert.same({
-                "",
                 file_row("/r/a.md"),
                 "",
                 "###",
@@ -1609,7 +1630,6 @@ describe("agentic.ui.MessageWriter", function()
             })
 
             assert.same({
-                "",
                 file_row("/r/a.lua"),
                 "",
                 "###",
@@ -1656,7 +1676,6 @@ describe("agentic.ui.MessageWriter", function()
             writer:write_message_chunk(make_message_update("after the call\n"))
 
             assert.same({
-                "",
                 file_row("/r/a.md"),
                 "",
                 "###",
@@ -1747,6 +1766,13 @@ describe("agentic.ui.MessageWriter", function()
                 assert.same({ 0 }, dimmed_rows())
             end)
 
+            it("signs a failed row with the failed hook glyph", function()
+                writer:write_hook_row({ text = TEXT, failed = true })
+
+                assert.same({ { 0, Glyphs.HOOK_FAILED .. " " } }, rail())
+                assert.same({ 0 }, dimmed_rows())
+            end)
+
             it("keeps a row wider than the wrap width whole", function()
                 Config.windows.wrap_width = 20
                 writer:write_hook_row({ text = TEXT })
@@ -1761,7 +1787,6 @@ describe("agentic.ui.MessageWriter", function()
                 writer:write_hook_row({ text = "`b.sh`", tool_call_id = "t1" })
 
                 assert.same({
-                    "",
                     "  `a.sh`",
                     "  `b.sh`",
                     "",
@@ -3783,6 +3808,85 @@ describe("agentic.ui.MessageWriter", function()
         it("ignores an untracked call", function()
             writer:set_output_tail("other", { "a" }, true)
             assert.is_nil(row_of("a"))
+        end)
+
+        it("keeps a row joined under the block across a re-render", function()
+            local ns_anchors = vim.api.nvim_create_namespace("agentic_anchors")
+            local text = "`/hooks/guard.sh` · 30 ms"
+            writer:write_hook_row({ text = text, tool_call_id = "bg" })
+
+            --- Every mark on the hook row, by namespace, as
+            --- `{ namespace = { "sign:<text>" | "hl:<group>" | "mark" } }`.
+            --- @return table<integer, string[]> marks
+            --- @return integer row 0-indexed
+            local function marks_on_row()
+                local row = (row_of("  " .. text) or 0) - 1
+                assert.truthy(row >= 0)
+                local out = {}
+                for _, ns in ipairs({
+                    Renderer.NS_DECORATIONS,
+                    Renderer.NS_STATUS,
+                    Renderer.NS_DIFF_HIGHLIGHTS,
+                    ns_anchors,
+                }) do
+                    local found = {}
+                    for _, mark in
+                        ipairs(
+                            vim.api.nvim_buf_get_extmarks(
+                                bufnr,
+                                ns,
+                                { row, 0 },
+                                { row, -1 },
+                                { details = true }
+                            )
+                        )
+                    do
+                        local details = mark[4] or {}
+                        local sign, hl = details.sign_text, details.hl_group
+                        table.insert(
+                            found,
+                            sign and "sign:" .. sign
+                                or hl and "hl:" .. hl
+                                or "mark"
+                        )
+                    end
+                    table.sort(found)
+                    out[ns] = found
+                end
+                return out, row
+            end
+
+            local before, row_before = marks_on_row()
+
+            writer:set_output_tail("bg", { "a", "b", "c" }, true)
+
+            local after, row_after = marks_on_row()
+            assert.same({
+                [Renderer.NS_DECORATIONS] = {
+                    "hl:AgenticDimmedBlock",
+                    "sign:" .. Glyphs.HOOK .. " ",
+                },
+                [Renderer.NS_STATUS] = {},
+                [Renderer.NS_DIFF_HIGHLIGHTS] = {},
+                [ns_anchors] = { "mark" },
+            }, before)
+            assert.same(before, after)
+            assert.truthy(row_after > row_before)
+            assert.truthy(
+                vim.api
+                    .nvim_buf_get_lines(bufnr, row_after - 1, row_after, false)[1]
+                    :find("background", 1, true)
+            )
+            assert.equal(
+                row_after,
+                vim.api.nvim_buf_get_extmark_by_id(
+                    bufnr,
+                    ns_anchors,
+                    writer.tool_call_blocks["bg"].placed.mark_id,
+                    {}
+                )[1]
+            )
+            assert_one_sign_per_row()
         end)
 
         it(

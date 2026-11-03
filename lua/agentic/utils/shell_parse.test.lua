@@ -847,6 +847,39 @@ describe("ShellParse.extract_commands", function()
         end)
     end)
 
+    describe("leading_path", function()
+        it("resolves a single-quoted path", function()
+            assert.equal("/a b/x.sh", ShellParse.leading_path("'/a b/x.sh'"))
+        end)
+
+        it("resolves a double-quoted path", function()
+            assert.equal(
+                "/a b/x.sh",
+                ShellParse.leading_path('"/a b/x.sh" --flag')
+            )
+        end)
+
+        it("resolves an escaped space", function()
+            assert.equal("a b/x.sh", ShellParse.leading_path("a\\ b/x.sh"))
+        end)
+
+        it("keeps a tilde unexpanded", function()
+            assert.equal("~/x.sh", ShellParse.leading_path("~/x.sh"))
+        end)
+
+        it("is nil for a name without a slash", function()
+            assert.is_nil(ShellParse.leading_path("python3 x.py"))
+        end)
+
+        it("is nil for a path built from an expansion", function()
+            assert.is_nil(
+                ShellParse.leading_path(
+                    '"$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh'
+                )
+            )
+        end)
+    end)
+
     describe("runs_without_call", function()
         it("is true for names zsh calls on its own", function()
             for _, name in ipairs({

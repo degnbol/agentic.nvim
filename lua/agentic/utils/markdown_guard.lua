@@ -190,4 +190,6 @@ function M.words_within(text, width)
     return M.whole_within(text, width)
 end
 
+M.backtick_spans = backtick_spans
+
 return M

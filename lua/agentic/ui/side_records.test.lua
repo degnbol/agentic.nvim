@@ -101,10 +101,14 @@ describe("SideRecords.write", function()
             { group = "context", body = { "ctx" }, command = "guard.sh" },
         })
 
-        assert.same(
-            { { body = { "ctx" }, title = "`guard.sh`", failed = false } },
-            written
-        )
+        assert.same({
+            {
+                body = { "ctx" },
+                title = "`guard.sh`",
+                failed = false,
+                for_user = false,
+            },
+        }, written)
     end)
 
     it("forwards the tool call the record is anchored to", function()
@@ -174,6 +178,41 @@ describe("SideRecords.write", function()
                 title_of({ command = "echo `date`" })
             )
         end)
+
+        it("is the leading path, the outcome, then the duration", function()
+            assert.equal(
+                "`/tmp/h/allow.sh` · allowed · 179 ms",
+                title_of({
+                    command = "/tmp/h/allow.sh --quiet",
+                    outcome = "allowed",
+                    duration_ms = 179,
+                })
+            )
+        end)
+
+        it("shortens a path under the home directory", function()
+            assert.equal(
+                "`~/hooks/guard.sh` · blocked",
+                title_of({
+                    command = vim.env.HOME .. "/hooks/guard.sh",
+                    outcome = "blocked",
+                })
+            )
+        end)
+
+        it("shows a relative path verbatim", function()
+            assert.equal(
+                "`.claude/hooks/x.sh`",
+                title_of({ command = ".claude/hooks/x.sh" })
+            )
+        end)
+
+        it("follows a hook name with the outcome", function()
+            assert.equal(
+                "PostToolUse:Bash · stopped the turn",
+                title_of({ hook_name = "PostToolUse:Bash", outcome = "stopped" })
+            )
+        end)
     end)
 
     it("renders a record whose line did not parse", function()
@@ -200,7 +239,7 @@ describe("SideRecords.write", function()
         assert.is_false(written[1].failed)
     end)
 
-    it("writes a call's passes as rows after the rest", function()
+    it("writes records in the order given", function()
         --- @param command string
         --- @return table
         local function pass(command)
@@ -223,19 +262,67 @@ describe("SideRecords.write", function()
         })
 
         assert.same({
-            "write_hook_block",
             "write_hook_row",
+            "write_hook_block",
             "write_hook_row",
             "write_hook_row",
         }, calls)
         assert.same({ "ctx" }, written[1].body)
         assert.same({
             {
-                text = "`'/hooks/a guard.sh'` · 61 ms",
+                text = "`/hooks/a guard.sh` · 61 ms",
                 tool_call_id = "toolu_1",
+                failed = false,
             },
-            { text = "`/hooks/lint.sh` · 2.8 s", tool_call_id = "toolu_1" },
-            { text = "`/hooks/untimed.sh`", tool_call_id = "toolu_1" },
+            {
+                text = "`/hooks/lint.sh` · 2.8 s",
+                tool_call_id = "toolu_1",
+                failed = false,
+            },
+            {
+                text = "`/hooks/untimed.sh`",
+                tool_call_id = "toolu_1",
+                failed = false,
+            },
         }, rows)
+    end)
+
+    it("writes a failure with no body as a failed row", function()
+        local written, _, rows = write({
+            { group = "failure", body = {}, hook_name = "PostToolUse:Write" },
+        })
+
+        assert.equal(0, #written)
+        assert.same({ { text = "PostToolUse:Write", failed = true } }, rows)
+    end)
+
+    it("writes a hook that acted with no body as a row", function()
+        local written, _, rows = write({
+            {
+                group = "context",
+                body = {},
+                hook_name = "PostToolUse:Bash",
+                outcome = "stopped",
+            },
+        })
+
+        assert.equal(0, #written)
+        assert.same({
+            { text = "PostToolUse:Bash · stopped the turn", failed = false },
+        }, rows)
+    end)
+
+    it("flags a message for the user", function()
+        local written = write({
+            {
+                group = "message",
+                body = { "SYSMSG-A" },
+                hook_name = "PostToolUse:Bash",
+            },
+        })
+
+        assert.equal(1, #written)
+        assert.is_true(written[1].for_user)
+        assert.is_false(written[1].failed)
     end)
 end)

@@ -1,3 +1,4 @@
+local MiniTest = require("mini.test")
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
@@ -568,6 +569,64 @@ describe("ClaudeTranscriptReader", function()
             assert.equal(1, #records)
             assert.is_nil(records[1].command)
         end)
+
+        it("leaves a run to its context across a stop on its call", function()
+            local reader = reader_at(transcript)
+            local post = { hookEvent = "PostToolUse", toolUseID = "toolu_1" }
+            append({
+                json_run("h-1", "/hooks/guard.sh", "guard says hi", post),
+                {
+                    type = "attachment",
+                    uuid = "s-1",
+                    timestamp = AFTER,
+                    attachment = vim.tbl_extend("force", post, {
+                        type = "hook_stopped_continuation",
+                        message = "stop",
+                    }),
+                },
+                merged("c-1", { "guard says hi" }, post),
+            })
+
+            local records = hooks(reader:drain())
+
+            assert.equal(2, #records)
+            assert.equal("stopped", records[1].outcome)
+            assert.is_nil(records[1].command)
+            assert.equal("/hooks/guard.sh", records[2].command)
+        end)
+    end)
+
+    it("logs a record's detail instead of returning it", function()
+        local debug_to_file = spy.stub(Logger, "debug_to_file")
+        MiniTest.finally(function()
+            debug_to_file:revert()
+        end)
+        local reader = reader_at(transcript)
+        append({
+            {
+                type = "attachment",
+                uuid = "e-1",
+                timestamp = AFTER,
+                attachment = {
+                    type = "hook_error_during_execution",
+                    hookName = "PostToolUse:Write",
+                    hookEvent = "PostToolUse",
+                    toolUseID = "toolu_1",
+                    content = "It failed. [\n]",
+                },
+            },
+        })
+
+        local records = hooks(reader:drain())
+
+        assert.equal(1, #records)
+        assert.same({ "It failed." }, records[1].body)
+        assert.is_nil((records[1] --[[@as table]]).detail)
+        assert.equal(1, debug_to_file.call_count)
+        local logged =
+            table.concat(vim.tbl_map(tostring, debug_to_file.calls[1]), " ")
+        assert.truthy(logged:find("It failed. [\n]", 1, true))
+        assert.truthy(logged:find("toolu_1", 1, true))
     end)
 
     it("names stop hook feedback after its own command", function()

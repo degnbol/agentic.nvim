@@ -551,6 +551,30 @@ function M.command_name(node, src)
     return name_node and command_name_text(name_node, src)
 end
 
+--- The path a command line runs first, as written: the name of its first
+--- `command` node when that holds a `/`. No file system access, so `~` and
+--- relative paths stay as they are.
+--- @param command string
+--- @return string|nil path nil when the line does not parse, or its first command's name is not a static path
+function M.leading_path(command)
+    local root = ZshParse.parse_command(command)
+    local function first_command(node)
+        if node:type() == "command" then
+            return node
+        end
+        for child in node:iter_children() do
+            local found = first_command(child)
+            if found then
+                return found
+            end
+        end
+        return nil
+    end
+    local node = root and first_command(root)
+    local name = node and M.command_name(node, command)
+    return name and name:find("/", 1, true) and name or nil
+end
+
 --- Every name a `function_definition` defines (`function a b { … }` defines
 --- two), unescaped (`l\s() …` defines `ls`).
 --- @param node TSNode a `function_definition`

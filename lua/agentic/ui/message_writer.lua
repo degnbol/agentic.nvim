@@ -1167,11 +1167,12 @@ end
 --- @class agentic.ui.MessageWriter.CollapsedRegionOpts
 --- @field titled? boolean The body's first row names it, and the foldtext leads with that row
 --- @field open? boolean Leave the fold open
+--- @field undimmed? boolean Leave the body at normal brightness
 --- @field table_row_ends? integer[] 1-based indices into the body of lines to highlight as table row ends
 
 --- Stamp a collapsed region already in the buffer: `sign` on its first body
---- row, the rail beneath, the whole body dimmed, and the fold closed when the
---- body has one, unless `opts.open`.
+--- row, the rail beneath, the whole body dimmed unless `opts.undimmed`, and
+--- the fold closed when the body has one, unless `opts.open`.
 --- @param bufnr integer
 --- @param body_start integer 0-indexed first body row of the region
 --- @param body_end integer 0-indexed last body row of the region, inclusive
@@ -1185,7 +1186,9 @@ function MessageWriter:_decorate_collapsed_region(
     opts
 )
     render_collapsed_region(bufnr, body_start, body_end, sign)
-    Renderer.set_dim_range(bufnr, body_start, body_end)
+    if not opts.undimmed then
+        Renderer.set_dim_range(bufnr, body_start, body_end)
+    end
     mark_table_row_ends(bufnr, body_start, opts.table_row_ends or {})
     -- Same measure `collapsed_region_lines` folds on: a one-row body has no
     -- fence, and so no fold to set.
@@ -1338,8 +1341,9 @@ end
 --- Insert lines below `last_row`, the last row of what is placed there, and
 --- record them as placed last.
 ---
---- A row after a row joins its group, above the group's trailing blank.
---- Anything else goes after that blank, followed by a blank of its own.
+--- A row after a row, or a first row under a tool call or compaction, joins
+--- it, above any trailing blank. Anything else goes after that blank,
+--- followed by a blank of its own.
 --- Either blank may be missing: a prose chunk writes into the buffer's last
 --- row, so prose that followed `last_row` at the end of the buffer starts on
 --- it. A missing blank is put back, which keeps the prose its own paragraph.
@@ -1370,8 +1374,11 @@ function MessageWriter:_insert_after(placed, last_row, lines, kind)
         false
     )[1] == ""
 
+    -- Only a tool call's `Placed` lacks a mark while nothing is under it; the
+    -- prompt anchor and the end row group always have one.
+    local first_under_call = placed.mark_id == nil
     local insert_row, prefix, suffix
-    if kind == "row" and placed.last_kind == "row" then
+    if kind == "row" and (placed.last_kind == "row" or first_under_call) then
         insert_row = last_row + 1
         prefix = {}
         suffix = separated and {} or { "" }
@@ -1432,6 +1439,7 @@ end
 --- @field body string[] The hook's output, unwrapped
 --- @field title? string First row of the region, above the body and never wrapped
 --- @field failed? boolean The hook timed out or exited non-zero with an error
+--- @field for_user? boolean Text addressed to the user: left open and not dimmed
 
 --- Write a collapsed region under `anchor` when that is still in the buffer,
 --- so it reads under the call or prompt it belongs to rather than under
@@ -1501,7 +1509,8 @@ function MessageWriter:write_hook_block(block)
     local wrapped, table_row_ends = self:_wrap_prose(block.body)
     local sign = (block.failed and Glyphs.HOOK_FAILED or Glyphs.HOOK) .. " "
     self:_place_collapsed_region(block, block.title, wrapped, sign, {
-        open = block.failed,
+        open = block.failed or block.for_user,
+        undimmed = block.for_user,
         table_row_ends = table_row_ends,
     })
 end
@@ -1524,14 +1533,17 @@ end
 
 --- @class agentic.ui.MessageWriter.HookRow : agentic.acp.Anchor
 --- @field text string The row, never wrapped
+--- @field failed? boolean Signed with Glyphs.HOOK_FAILED
 
---- Write one dimmed row under the hook glyph, right after what caused it, or
+--- Write one dimmed row under the hook glyph, or the failed hook glyph when
+--- `hook.failed`, right after what caused it, or
 --- at the end when that is not in the buffer (`_place_row`).
 --- @param hook agentic.ui.MessageWriter.HookRow
 function MessageWriter:write_hook_row(hook)
+    local glyph = hook.failed and Glyphs.HOOK_FAILED or Glyphs.HOOK
     self:_place_row(hook, hook.text, function(bufnr, at)
         vim.api.nvim_buf_set_extmark(bufnr, Renderer.NS_DECORATIONS, at, 0, {
-            sign_text = Glyphs.HOOK .. " ",
+            sign_text = glyph .. " ",
             sign_hl_group = Theme.HL_GROUPS.GLYPH_AGENT,
         })
         Renderer.set_dim_range(bufnr, at, at)

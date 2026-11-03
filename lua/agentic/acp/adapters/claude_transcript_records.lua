@@ -17,6 +17,7 @@ local M = {}
 --- @field timestamp? string ISO-8601 UTC, fixed width so string order is time order
 --- @field hook_event? string the event the hook fired on, e.g. `PreToolUse`
 --- @field tool_call_id? string what the hook fired on, verbatim from `toolUseID`. Only a `toolu_`-prefixed value is a tool call id: an event with no call to name puts `"SessionStart"`, `hook-<uuid>` or a bare message uuid in the same slot
+--- @field detail? string The full content of an error during execution, of which `body` holds only the leading prose
 
 --- @class agentic.acp.ClaudeLoadedFileRecord
 --- @field kind "loaded_file"
@@ -114,10 +115,17 @@ local function failure_body(attachment)
     return lines
 end
 
---- The `hookSpecificOutput.additionalContext` a hook's stdout carries as JSON.
+--- @param value any
+--- @return string|nil
+local function string_or_nil(value)
+    return type(value) == "string" and value or nil
+end
+
+--- The `hookSpecificOutput` a hook's stdout carries as JSON. Stdout that is
+--- not JSON is the common case, not an error.
 --- @param stdout any
---- @return string|nil context nil when `stdout` is not JSON carrying a string context
-local function json_context(stdout)
+--- @return table|nil specific nil when `stdout` is not JSON carrying a `hookSpecificOutput` table
+local function hook_specific_output(stdout)
     if type(stdout) ~= "string" then
         return nil
     end
@@ -125,13 +133,90 @@ local function json_context(stdout)
     local specific = ok
         and type(output) == "table"
         and output.hookSpecificOutput
-    local context = type(specific) == "table" and specific.additionalContext
-    return type(context) == "string" and context or nil
+    return type(specific) == "table" and specific or nil
 end
 
+--- The `hookSpecificOutput.additionalContext` a hook's stdout carries as JSON.
+--- @param stdout any
+--- @return string|nil context nil when `stdout` is not JSON carrying a string context
+local function json_context(stdout)
+    local specific = hook_specific_output(stdout)
+    return specific and string_or_nil(specific.additionalContext)
+end
+
+--- The `blockingError` table of a hook attachment.
+--- @param attachment table
+--- @return table blocking empty when the attachment has none
+local function blocking_error_of(attachment)
+    return type(attachment.blockingError) == "table"
+            and attachment.blockingError
+        or {}
+end
+
+--- The reason a `hook_blocking_error` carries, without the `[<command>]: `
+--- prefix the CLI puts on it.
+--- @param blocking table the attachment's `blockingError`
+--- @return string[]
+local function blocking_error_body(blocking)
+    local text = blocking.blockingError
+    if type(text) ~= "string" then
+        return {}
+    end
+    -- The known command, not `split_command`: its non-greedy match ends early
+    -- on a command that holds `]: `.
+    if type(blocking.command) == "string" then
+        local prefix = "[" .. blocking.command .. "]: "
+        if vim.startswith(text, prefix) then
+            text = text:sub(#prefix + 1)
+        end
+    end
+    return body_lines(text)
+end
+
+--- The prose a diagnostic leads with: its lines up to the JSON dump that
+--- follows, which opens on a line that starts or ends with `[` or `{`.
+--- @param content any
+--- @return string[]
+local function prose_lines(content)
+    --- @type string[]
+    local lines = {}
+    for _, line in ipairs(body_lines(content)) do
+        if line:match("^%s*[%[{]") then
+            break
+        end
+        local before_dump = line:match("^(.-)%s*[%[{]%s*$")
+        table.insert(lines, before_dump or line)
+        if before_dump then
+            break
+        end
+    end
+    return lines
+end
+
+--- Outcomes of a hook's permission decision. `defer` is left out: the CLI
+--- records a deferral as a `hook_deferred_tool` attachment.
+--- @type table<string, agentic.acp.HookOutcome>
+local PERMISSION_OUTCOMES =
+    { allow = "allowed", deny = "denied", ask = "asked" }
+
+--- The `hookSpecificOutput.permissionDecision` a hook's stdout carries as
+--- JSON, as an outcome.
+--- @param stdout any
+--- @return agentic.acp.HookOutcome|nil outcome nil when `stdout` is not JSON carrying an allow, deny or ask
+local function permission_outcome(stdout)
+    local specific = hook_specific_output(stdout)
+    return specific and PERMISSION_OUTCOMES[specific.permissionDecision]
+end
+
+--- How a hook attachment shows.
+--- @class agentic.acp.ClaudeHookClassification
+--- @field group agentic.acp.ClaudeHookRecordGroup
+--- @field body string[]
+--- @field outcome? agentic.acp.HookOutcome
+--- @field detail? string
+
 --- @param attachment table any hook attachment but `hook_additional_context`
---- @return agentic.acp.ClaudeHookRecordGroup|nil group nil when the attachment is not a hook record
---- @return string[] body
+--- @return agentic.acp.ClaudeHookClassification|nil classification nil when the attachment is not a hook record
 local function classify(attachment)
     local kind = attachment.type
 
@@ -140,33 +225,94 @@ local function classify(attachment)
         if #body == 0 then
             local context = body_lines(json_context(attachment.stdout))
             if #context > 0 then
-                return "context_run", context
+                return { group = "context_run", body = context }
             end
-            return "passed", body
+            return {
+                group = "passed",
+                body = body,
+                outcome = permission_outcome(attachment.stdout),
+            }
         end
         if STDOUT_CONTEXT_EVENTS[attachment.hookEvent] then
-            return "context", body
+            return { group = "context", body = body }
         end
-        return "stray", body
+        return { group = "stray", body = body }
     end
 
     if kind == "hook_non_blocking_error" then
         if attachment.stderr == NO_STDERR then
-            return "passed", {}
+            return { group = "passed", body = {} }
         end
-        return "failure", failure_body(attachment)
+        return { group = "failure", body = failure_body(attachment) }
     end
 
     if kind == "hook_cancelled" then
         -- Not timed out: the turn was cancelled while the hook ran, or the
         -- hook was skipped inside an agent a hook spawned (no `timedOut`).
         if attachment.timedOut ~= true then
-            return nil, {}
+            return nil
         end
-        return "failure", failure_body(attachment)
+        return { group = "failure", body = failure_body(attachment) }
     end
 
-    return nil, {}
+    if kind == "hook_blocking_error" then
+        return {
+            group = "context",
+            body = blocking_error_body(blocking_error_of(attachment)),
+            outcome = "blocked",
+        }
+    end
+
+    if kind == "hook_stopped_continuation" then
+        return {
+            group = "context",
+            body = body_lines(attachment.message),
+            outcome = "stopped",
+        }
+    end
+
+    if kind == "hook_system_message" then
+        return { group = "message", body = body_lines(attachment.content) }
+    end
+
+    if kind == "hook_error_during_execution" then
+        return {
+            group = "failure",
+            body = prose_lines(attachment.content),
+            detail = type(attachment.content) == "string"
+                    and attachment.content
+                or nil,
+        }
+    end
+
+    if kind == "hook_permission_decision" then
+        return {
+            group = "passed",
+            body = {},
+            outcome = PERMISSION_OUTCOMES[attachment.decision],
+        }
+    end
+
+    if kind == "hook_deferred_tool" then
+        return { group = "passed", body = {}, outcome = "deferred" }
+    end
+
+    return nil
+end
+
+--- The command a hook attachment ran and the name it goes by.
+--- @param attachment table
+--- @return string|nil command
+--- @return string|nil hook_name the configured name, else the event; for a deferral `<event>:<tool>`, as its `hookName` names a config source
+local function hook_identity(attachment)
+    local command = string_or_nil(attachment.command)
+        or string_or_nil(blocking_error_of(attachment).command)
+    local event = string_or_nil(attachment.hookEvent)
+    local tool = string_or_nil(attachment.toolName)
+    if attachment.type == "hook_deferred_tool" then
+        return command, event and tool and event .. ":" .. tool or event
+    end
+    return command, string_or_nil(attachment.hookName) or event
 end
 
 --- The hook records a transcript entry carries as its attachment. A
@@ -189,31 +335,28 @@ local function attachment_records(entry)
         return records
     end
 
-    local group, bodies
+    --- @type agentic.acp.ClaudeHookClassification[]
+    local classifications
     if attachment.type == "hook_additional_context" then
         local content = attachment.content
-        group = "context"
-        bodies = vim.tbl_map(
-            body_lines,
-            type(content) == "table" and content or { content }
-        )
+        classifications = vim.tbl_map(function(element)
+            return { group = "context", body = body_lines(element) }
+        end, type(content) == "table" and content or { content })
     else
-        local body
-        group, body = classify(attachment)
-        bodies = { body }
-    end
-    if not group then
-        return records
+        classifications = { classify(attachment) }
     end
 
-    for _, body in ipairs(bodies) do
+    local command, hook_name = hook_identity(attachment)
+    for _, classification in ipairs(classifications) do
         table.insert(records, {
             kind = "hook",
-            group = group,
-            body = body,
+            group = classification.group,
+            body = classification.body,
+            outcome = classification.outcome,
+            detail = classification.detail,
             timestamp = entry.timestamp,
-            command = attachment.command,
-            hook_name = attachment.hookName,
+            command = command,
+            hook_name = hook_name,
             hook_event = attachment.hookEvent,
             duration_ms = attachment.durationMs,
             tool_call_id = attachment.toolUseID,
@@ -373,12 +516,6 @@ local function tool_use_records(entry)
         end
     end
     return records
-end
-
---- @param value any
---- @return string|nil
-local function string_or_nil(value)
-    return type(value) == "string" and value or nil
 end
 
 --- The `origin` of a message another session or a subagent sent: on a user
