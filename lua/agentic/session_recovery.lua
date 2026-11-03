@@ -1,8 +1,9 @@
 -- Recovery flows for the session manager:
 --   - Login through the provider's ACP auth methods (/login), offered after an
 --     auth error.
---   - Conversation-preserving subprocess respawn, after a usage_limit stall or
---     a re-login the subprocess did not survive.
+--   - A new ACP session that carries the conversation, after a usage_limit
+--     error, and a restart of the provider subprocess for every session on
+--     it, after a re-login the live session did not cover.
 --   - Auto-continue retry after usage_limit errors.
 --   - Silent auto-retry after transient server errors.
 --   - Surfacing of "successful but empty" prompt responses.
@@ -20,6 +21,7 @@ local Config = require("agentic.config")
 local Duration = require("agentic.utils.duration")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
+local SessionRegistry = require("agentic.session_registry")
 
 local M = {}
 
@@ -351,16 +353,22 @@ end
 --- the subprocess and its query stream up, so the live session takes the next
 --- prompt with the refreshed credentials. A subprocess that did exit — the case
 --- `1ccfdaa` was written for — shows up as a non-`ready` `agent.state`, since
---- the transport reports the exit as `disconnected`; that one respawns, keeping
---- the conversation.
+--- the transport reports the exit as `disconnected`; it is restarted, and
+--- every session on it continues with its conversation.
 ---
 --- The live branch is taken at most once per unresolved auth failure. Whether a
 --- running query picks up the refreshed credentials is unknowable from here
 --- (the CLI is a compiled binary), so `_reauth_live_retry` records that the
---- cheap recovery has been spent and a second auth error respawns rather than
---- offering the same retry forever. A successful turn clears it — that is the
---- only evidence the credentials took — so the flag deliberately outlives
---- `/new` and a resume, where nothing about the subprocess has been settled.
+--- cheap recovery has been spent and a second auth error restarts the
+--- subprocess rather than offering the same retry forever. A successful turn
+--- clears it — that is the only evidence the credentials took — so the flag
+--- deliberately outlives `/new` and a resume, where nothing about the
+--- subprocess has been settled.
+---
+--- It restarts rather than opening a new ACP session because only a restart
+--- makes every provider read the credentials again. The credentials belong to
+--- the account, so every other session on the subprocess holds the same stale
+--- ones and gets a new ACP session too.
 --- @param sm agentic.SessionManager
 function M.recover_after_reauth(sm)
     if
@@ -374,7 +382,7 @@ function M.recover_after_reauth(sm)
         return
     end
 
-    M.respawn_preserving_history(sm, function()
+    M.restart_client(sm, function()
         M._announce_reauth(sm, {
             "New session — your conversation is re-sent as context on the next message.",
         })
@@ -418,42 +426,84 @@ function M.cancel_retry_timer(sm, reset_attempts)
     end
 end
 
---- Replace the provider subprocess while keeping the conversation and its
---- model. The replacement ACP session is empty provider-side, so the prior
---- messages are queued as context for the next submit.
+--- Move the session to a new ACP session on the same client, carrying its
+--- model and, as context for the next submit, its conversation. Clears `sm.session_id` and the todo list and cancels pending
+--- permission requests at once. The old session is closed first, so its
+--- cancelled turns answer before the new session exists. Nothing is created
+--- when `sm` is destroyed or moves on (its epoch changes) before then.
 --- @param sm agentic.SessionManager
---- @param on_created fun()|nil Runs after the replacement session is created
-function M.respawn_preserving_history(sm, on_created)
-    local AgentInstance = require("agentic.acp.agent_instance")
-    local provider_name = sm.agent.provider_name
-
-    local saved_history = sm.chat_history
+--- @param on_created fun()|nil Runs after the new session is created
+function M.renew_session(sm, on_created)
+    local old_id = sm.session_id
+    local epoch = sm._session_epoch
     local model = sm.config_options:current_model_id()
-
-    -- Stopping the instance disconnects the transport, which fails every
-    -- request callback still pending on it rather than orphaning them.
-    AgentInstance.invalidate(provider_name)
     sm.session_id = nil
     sm.permission_manager:cancel_requests()
     sm.todo_list:clear()
 
-    sm.agent = AgentInstance.get_instance(provider_name, function(client)
-        vim.schedule(function()
-            if sm.destroyed then
-                return
-            end
-            sm.agent = client
+    local function create()
+        if sm.destroyed or sm._session_epoch ~= epoch then
+            return
+        end
+        sm:new_session({
+            history = sm.chat_history,
+            quiet_welcome = true,
+            on_created = function()
+                sm:_reapply_model(model)
+                if on_created then
+                    on_created()
+                end
+            end,
+        })
+    end
 
-            sm:new_session({
-                history = saved_history,
-                quiet_welcome = true,
-                on_created = function()
-                    sm:_reapply_model(model)
-                    if on_created then
-                        on_created()
-                    end
-                end,
-            })
+    if old_id then
+        sm.agent:close_session(old_id, create)
+    else
+        create()
+    end
+end
+
+--- Restart the provider subprocess of `sm`'s client and move every session on
+--- that client to a new ACP session, each carrying its own conversation.
+--- Clears each session's `session_id` and cancels its pending permission
+--- requests at once. A session destroyed or moved on (its epoch changed)
+--- during the restart gets no new ACP session.
+--- @param sm agentic.SessionManager
+--- @param on_created fun()|nil Runs after `sm`'s new session is created. Does not run when a later restart supersedes this one before it is ready
+function M.restart_client(sm, on_created)
+    local agent = sm.agent
+    -- Sessions without a session_id too: a `session/new` sent to a dead
+    -- subprocess fails only at the stop, and leaves its session with none.
+    --- @type table<agentic.SessionManager, integer>
+    local epochs = {}
+    for _, session in pairs(SessionRegistry.by_id) do
+        if session.agent == agent then
+            epochs[session] = session._session_epoch
+        end
+    end
+
+    -- Before the restart, so the answers to open permission requests reach
+    -- the subprocess that asked, and `renew_session` closes no session on a
+    -- subprocess that is gone.
+    for session in pairs(epochs) do
+        session.permission_manager:cancel_requests()
+        session.session_id = nil
+    end
+
+    agent:restart(function()
+        vim.schedule(function()
+            for session, epoch in pairs(epochs) do
+                if
+                    not session.destroyed
+                    and session._session_epoch == epoch
+                then
+                    M.renew_session(
+                        session,
+                        session == sm and on_created or nil
+                    )
+                end
+            end
         end)
     end)
 end
@@ -635,7 +685,7 @@ end
 --- ACP has no turn-level resume — `session/resume` re-attaches to a *session*,
 --- and only `session/prompt` makes an agent generate — so a fresh prompt on the
 --- still-live session is the whole recovery. `failActive` rejects the turn
---- without tearing down the provider's consumer, so no respawn is needed. No
+--- without tearing down the provider's consumer, so no new session is needed. No
 --- delay: the retry goes out immediately.
 --- Only call when `should_retry_transient` returned true; it owns the guards.
 --- @param sm agentic.SessionManager

@@ -116,7 +116,7 @@ end
 --- @field _retry_timer? uv.uv_timer_t Scheduled auto-continue timer for usage limit errors
 --- @field _retry_keymap? {bufnr: number, lhs: string} Active cancel-retry keymap
 --- @field _retry_attempt number Consecutive auto-continue attempts (0 = first try)
---- @field _reauth_live_retry boolean Set when a re-login was answered by keeping the live session, cleared by the next successful turn; a re-login while still set respawns instead
+--- @field _reauth_live_retry boolean Set when a re-login was answered by keeping the live session, cleared by the next successful turn; a re-login while still set restarts the provider subprocess instead
 --- @field _transient_attempt number Consecutive silent retries of transient server errors (0 = none this chain)
 --- @field _checktime_scheduled boolean Coalesces rapid checktime calls into one deferred check
 local SessionManager = {}
@@ -1305,7 +1305,7 @@ function SessionManager:_delete_session()
             -- Deleting is the one transition with no new_session after it, so
             -- nothing else supersedes the callbacks left in flight: a turn
             -- callback would write the file back, a re-auth callback would
-            -- respawn what the user just removed.
+            -- renew what the user just removed.
             self:_advance_session_epoch()
             self:_truncate_queue()
             Logger.notify(
@@ -2767,11 +2767,13 @@ end
 --- bring the counter back down. A load or a re-create from history leaves
 --- `_cancel_session` unrun.
 --- The same holds for the load gate and replay hold of a load the refused
---- callback would have ended.
+--- callback would have ended, and for `is_generating`, which the refused
+--- prompt callback would have cleared.
 function SessionManager:_advance_session_epoch()
     self._session_epoch = self._session_epoch + 1
     self._subagents:forget()
     self:_set_prompt_pending(0)
+    self:_set_generating(false)
     self._loading = false
     self._replay_hold = nil
     self._replay_dropped = nil
@@ -3278,20 +3280,15 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
             if err.code == ACPClient.ERROR_CODES.AUTH_REQUIRED then
                 Recovery.offer_login(self)
             elseif error_type == "usage_limit" then
-                -- claude-agent-acp's prompt generator does NOT close on
-                -- RequestError.internalError (acp-agent.js:449-450, 600-609),
-                -- so subsequent prompts to the same subprocess return
-                -- end_turn with zero usage — content silently lost. Respawn
-                -- now so that by the time auto-continue fires (or the user
-                -- submits manually), the next prompt hits a fresh pipeline.
-                -- See `.claude/skills/issues/references/chunk-flush.md`.
-                -- Close the gate before the respawn, not after: respawn runs a
-                -- new_session whether or not auto-continue is enabled, and its
-                -- drain would otherwise dispatch into a still-limited
-                -- provider. Ordering here rather than relying on respawn's
-                -- chain happening to go through vim.schedule.
+                -- claude-agent-acp reuses a stalled query after this error,
+                -- so the next prompt can end with no content. It keeps one
+                -- query per ACP session, so a new ACP session gets a fresh
+                -- one. See `.claude/skills/issues/references/chunk-flush.md`.
+                -- Close the gate before the renewal, not after: the renewal's
+                -- new_session drains when it completes, which would otherwise
+                -- dispatch into a still-limited provider.
                 self._usage_reset_epoch = reset_epoch
-                Recovery.respawn_preserving_history(self)
+                Recovery.renew_session(self)
                 if reset_epoch then
                     Recovery.offer_auto_continue(self, reset_epoch)
                 end
@@ -3474,8 +3471,8 @@ function SessionManager:new_session(opts)
         -- Add initial welcome message after session is created
         -- Defer to avoid fast event context issues
         -- For a re-create from history: write welcome first, then replay via on_created
-        -- quiet_welcome is used by post-usage-limit subprocess respawn so
-        -- the chat does not get a session-header divider mid-conversation.
+        -- quiet_welcome is used by a session renewal so the chat does not
+        -- get a session-header divider mid-conversation.
         vim.schedule(function()
             if not quiet_welcome then
                 local welcome_message = SessionManager._generate_welcome_header(

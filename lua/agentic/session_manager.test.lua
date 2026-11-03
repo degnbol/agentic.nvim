@@ -3581,7 +3581,7 @@ describe("agentic.SessionManager", function()
         --- @type TestStub
         local login_stub
         --- @type TestStub
-        local respawn_stub
+        local renew_stub
         --- @type TestStub
         local auto_continue_stub
         --- @type TestStub
@@ -3592,7 +3592,7 @@ describe("agentic.SessionManager", function()
         before_each(function()
             restore_stub = spy.stub(Recovery, "restore_refused_prompt")
             login_stub = spy.stub(Recovery, "offer_login")
-            respawn_stub = spy.stub(Recovery, "respawn_preserving_history")
+            renew_stub = spy.stub(Recovery, "renew_session")
             auto_continue_stub = spy.stub(Recovery, "offer_auto_continue")
             schedule_stub = spy.stub(vim, "schedule")
             schedule_stub:invokes(function(fn)
@@ -3603,7 +3603,7 @@ describe("agentic.SessionManager", function()
         after_each(function()
             restore_stub:revert()
             login_stub:revert()
-            respawn_stub:revert()
+            renew_stub:revert()
             auto_continue_stub:revert()
             schedule_stub:revert()
         end)
@@ -4200,11 +4200,11 @@ describe("agentic.SessionManager", function()
             end)
         end)
 
-        it("billing_error offers no login, respawn or auto-continue", function()
+        it("billing_error offers no login, renewal or auto-continue", function()
             local session = make_session("billing_error")
             session:_handle_input_submit("hello")
             assert.spy(login_stub).was.called(0)
-            assert.spy(respawn_stub).was.called(0)
+            assert.spy(renew_stub).was.called(0)
             assert.spy(auto_continue_stub).was.called(0)
         end)
 
@@ -4215,7 +4215,7 @@ describe("agentic.SessionManager", function()
             })
             session:_handle_input_submit("hello")
             assert.spy(login_stub).was.called(1)
-            assert.spy(respawn_stub).was.called(0)
+            assert.spy(renew_stub).was.called(0)
         end)
 
         -- The code is the signal, not the classification of the message.
@@ -4238,7 +4238,7 @@ describe("agentic.SessionManager", function()
             })
             session:_handle_input_submit("hello")
             assert.spy(login_stub).was.called(1)
-            assert.spy(respawn_stub).was.called(0)
+            assert.spy(renew_stub).was.called(0)
         end)
 
         -- A turn that worked is the only evidence the refreshed credentials
@@ -4915,6 +4915,7 @@ describe("agentic.SessionManager", function()
                 session_id = "s-1",
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
+                _set_generating = function() end,
                 _sync_modified = function() end,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
             } --[[@as agentic.SessionManager]]
@@ -4925,6 +4926,27 @@ describe("agentic.SessionManager", function()
             assert.equal(4, session._session_epoch)
             assert.equal(0, session._prompt_pending)
             assert.is_nil(session:_submit_defer_reason("hello"))
+        end)
+
+        -- The refused prompt callback is what would have cleared it.
+        it("ends the outgoing turn's generating state", function()
+            local running = spy.new(function() end)
+            local session = {
+                _session_epoch = 0,
+                _prompt_pending = 1,
+                is_generating = true,
+                widget = { set_running = running },
+                _advance_session_epoch = SessionManager._advance_session_epoch,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _set_generating = SessionManager._set_generating,
+                _sync_modified = function() end,
+            } --[[@as agentic.SessionManager]]
+            with_subagents(session)
+
+            session:_advance_session_epoch()
+
+            assert.is_false(session.is_generating)
+            assert.is_false(running.calls[1][2])
         end)
     end)
 
@@ -5578,7 +5600,7 @@ describe("agentic.SessionManager", function()
 
             it("draws a prompt withdrawn without a stop as rejected", function()
                 prompt("tc-1")
-                -- What a respawn or a provider switch does to open prompts.
+                -- What a renewal or a provider switch does to open prompts.
                 session.permission_manager:cancel_requests()
                 deferred.drain()
 

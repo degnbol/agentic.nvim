@@ -1,4 +1,4 @@
---- @diagnostic disable: invisible, assign-type-mismatch, missing-fields, return-type-mismatch
+--- @diagnostic disable: invisible, assign-type-mismatch, missing-fields, return-type-mismatch, param-type-mismatch
 local Logger = require("agentic.utils.logger")
 local MiniTest = require("mini.test")
 local assert = require("tests.helpers.assert")
@@ -719,7 +719,7 @@ describe("agentic.acp.ACPClient", function()
                 callbacks = {},
                 capabilities = {},
                 provider_config = { auth_method = auth_method },
-                _on_ready = on_ready,
+                _connection = 0,
                 transport = {
                     start = function()
                         client.state = "connected"
@@ -734,7 +734,7 @@ describe("agentic.acp.ACPClient", function()
                     cb({}, authenticate_err)
                 end
             end
-            client:_connect()
+            client:_connect(on_ready)
             return client
         end
 
@@ -820,6 +820,228 @@ describe("agentic.acp.ACPClient", function()
             assert.spy(notify_stub).was.called(1)
             assert.truthy(notify_stub.calls[1][1]:find("nope", 1, true))
             assert.equal(vim.log.levels.WARN, notify_stub.calls[1][2])
+        end)
+    end)
+
+    describe("restart", function()
+        local notify_stub
+        --- @type tests.helpers.Deferred
+        local deferred
+        --- Methods sent, by request id.
+        --- @type table<integer, string>
+        local sent
+
+        before_each(function()
+            notify_stub = spy.stub(Logger, "notify")
+            deferred = Deferred.capture()
+        end)
+
+        after_each(function()
+            notify_stub:revert()
+            deferred.revert()
+        end)
+
+        --- A client connected with `on_ready`. Its transport stops by
+        --- reporting `disconnected`, which fails the pending requests as a
+        --- real stop does.
+        --- @param auth_method string|nil Configured `auth_method`
+        --- @param on_ready fun(client: agentic.acp.ACPClient)
+        --- @return agentic.acp.ACPClient client
+        local function connect(auth_method, on_ready)
+            sent = {}
+            --- @type agentic.acp.ACPClient
+            local client
+            client = setmetatable({
+                state = "disconnected",
+                callbacks = {},
+                subscribers = {},
+                id_counter = 0,
+                capabilities = {},
+                provider_config = { auth_method = auth_method },
+                _connection = 0,
+                _on_ready = on_ready,
+                _session_roots = {},
+                _children = {},
+                _tool_call_kinds = ToolCallKinds:new(),
+                transport = {
+                    start = function()
+                        client.state = "connected"
+                    end,
+                    stop = function()
+                        client:_set_state("disconnected")
+                    end,
+                    send = function(_self, data)
+                        local message = vim.json.decode(data)
+                        sent[message.id] = message.method
+                        return true
+                    end,
+                },
+            }, { __index = ACPClient }) --[[@as agentic.acp.ACPClient]]
+            client:_connect(on_ready)
+            return client
+        end
+
+        --- Answer request `id` with `result`.
+        --- @param client agentic.acp.ACPClient
+        --- @param id integer
+        --- @param result table
+        local function answer(client, id, result)
+            client.callbacks[id](result, nil)
+            client.callbacks[id] = nil
+        end
+
+        local KEY = {
+            protocolVersion = 1,
+            authMethods = { { id = "key", name = "K" } },
+        }
+
+        it("gives the new subprocess's ready to the passed callback", function()
+            local creator = spy.new(function() end)
+            local client = connect(nil, creator)
+            answer(client, 1, { protocolVersion = 1 })
+            local replacement = spy.new(function() end)
+
+            client:restart(replacement)
+            answer(client, 2, { protocolVersion = 1 })
+
+            assert.equal("ready", client.state)
+            assert.spy(creator).was.called(1)
+            assert.spy(replacement).was.called(1)
+        end)
+
+        it("unsubscribes every session after their disconnect", function()
+            local client = connect(nil, function() end)
+            answer(client, 1, { protocolVersion = 1 })
+            local on_disconnect = spy.new(function() end)
+            client.subscribers.s1 = { on_disconnect = on_disconnect }
+
+            client:restart(function() end)
+            deferred.drain()
+
+            assert.spy(on_disconnect).was.called(1)
+            assert.is_nil(client.subscribers.s1)
+        end)
+
+        -- The creator's first start never ran, so it runs on the new
+        -- subprocess, before the passed callback.
+        it("ignores a failed initialize of the old connection", function()
+            local order = {}
+            local client = connect(nil, function()
+                table.insert(order, "creator")
+            end)
+
+            client:restart(function()
+                table.insert(order, "replacement")
+            end)
+            deferred.drain()
+
+            assert.equal("initializing", client.state)
+            assert.equal("initialize", sent[2])
+            answer(client, 2, { protocolVersion = 1 })
+            assert.equal("ready", client.state)
+            assert.same({ "creator", "replacement" }, order)
+        end)
+
+        it("ignores the startup authenticate of the old connection", function()
+            local creator = spy.new(function() end)
+            local client = connect("key", creator)
+            answer(client, 1, KEY)
+            assert.equal("authenticate", sent[2])
+            local replacement = spy.new(function() end)
+
+            client:restart(replacement)
+            deferred.drain()
+
+            assert.equal("initializing", client.state)
+            assert.spy(creator).was.called(0)
+            assert.spy(replacement).was.called(0)
+            assert.spy(notify_stub).was.called(0)
+        end)
+    end)
+
+    describe("close_session", function()
+        local notify_stub
+        --- @type tests.helpers.Deferred
+        local deferred
+
+        before_each(function()
+            notify_stub = spy.stub(Logger, "notify")
+            deferred = Deferred.capture()
+        end)
+
+        after_each(function()
+            notify_stub:revert()
+            deferred.revert()
+        end)
+
+        --- A client subscribed to `s1`, recording what it sends.
+        --- @param capabilities table|nil `agent_capabilities`
+        --- @return agentic.acp.ACPClient client
+        --- @return { method: string, params: table, cb: function|nil }[] sent
+        local function make_client(capabilities)
+            local sent = {}
+            local client = setmetatable({
+                agent_capabilities = capabilities,
+                subscribers = { s1 = {} },
+                _session_roots = {},
+                _children = {},
+                _tool_call_kinds = ToolCallKinds:new(),
+            }, { __index = ACPClient }) --[[@as agentic.acp.ACPClient]]
+            client._send_request = function(_self, method, params, cb)
+                table.insert(
+                    sent,
+                    { method = method, params = params, cb = cb }
+                )
+            end
+            client._send_notification = function(_self, method, params)
+                table.insert(sent, { method = method, params = params })
+            end
+            return client, sent
+        end
+
+        local CAN_CLOSE = { sessionCapabilities = { close = {} } }
+
+        it("sends session/close and calls back after its answer", function()
+            local client, sent = make_client(CAN_CLOSE)
+            local on_closed = spy.new(function() end)
+
+            client:close_session("s1", on_closed)
+
+            assert.is_nil(client.subscribers.s1)
+            assert.equal(1, #sent)
+            assert.equal("session/close", sent[1].method)
+            assert.same({ sessionId = "s1" }, sent[1].params)
+            assert.spy(on_closed).was.called(0)
+            sent[1].cb({}, nil)
+            assert.spy(on_closed).was.called(1)
+            assert.spy(notify_stub).was.called(0)
+        end)
+
+        it("reports an error answer and still calls back", function()
+            local client, sent = make_client(CAN_CLOSE)
+            local on_closed = spy.new(function() end)
+
+            client:close_session("s1", on_closed)
+            sent[1].cb(nil, { code = -32603, message = "boom" })
+
+            assert.spy(notify_stub).was.called(1)
+            assert.truthy(notify_stub.calls[1][1]:find("boom", 1, true))
+            assert.spy(on_closed).was.called(1)
+        end)
+
+        it("cancels without the capability", function()
+            local client, sent = make_client({ loadSession = true })
+            local on_closed = spy.new(function() end)
+
+            client:close_session("s1", on_closed)
+
+            assert.is_nil(client.subscribers.s1)
+            assert.equal(1, #sent)
+            assert.equal("session/cancel", sent[1].method)
+            assert.same({ sessionId = "s1" }, sent[1].params)
+            assert.spy(on_closed).was.called(0)
+            deferred.drain()
+            assert.spy(on_closed).was.called(1)
         end)
     end)
 

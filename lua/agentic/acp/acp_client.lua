@@ -66,7 +66,9 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 
 --- @class agentic.acp.ACPClient : agentic.acp.ACPClientData
 --- @field provider_name agentic.UserConfig.ProviderName Config key of the provider this client runs
---- @field _on_ready fun(client: agentic.acp.ACPClient)
+--- @field _on_ready fun(client: agentic.acp.ACPClient) Ready callback passed to `new`, run again when a dropped connection reconnects
+--- @field _connection integer Number of connections started. Callbacks of an earlier connection are ignored
+--- @field _was_ready? boolean Whether any connection has reached `ready`
 --- @field _notified_output table<string, true> Process output summaries already shown as a notification by this client
 --- @field _loading_sessions table<string, boolean> Session IDs currently being loaded via session/load
 --- @field _children table<string, string> Child session id → the subscribed root session that spawned it, directly or through other children
@@ -130,6 +132,7 @@ function ACPClient:new(config, on_ready)
 
     local client = setmetatable(instance, self) --[[@as agentic.acp.ACPClient]]
     client._on_ready = on_ready
+    client._connection = 0
     client._loading_sessions = {}
     client._children = {}
     client._session_roots = {}
@@ -137,7 +140,7 @@ function ACPClient:new(config, on_ready)
     client._notified_output = {}
 
     client:_setup_transport()
-    client:_connect()
+    client:_connect(on_ready)
     return client
 end
 
@@ -466,7 +469,7 @@ function ACPClient:_setup_transport()
             end,
             on_reconnect = function()
                 if self.state == "disconnected" then
-                    self:_connect()
+                    self:_connect(self._on_ready)
                 end
             end,
             on_stdout_line = function(line)
@@ -1171,10 +1174,38 @@ function ACPClient:stop()
     end
 end
 
-function ACPClient:_connect()
+--- Stop the provider subprocess and start a new one in this same client
+--- object. No ACP session survives the restart: every subscriber gets
+--- `on_disconnect`, then is unsubscribed.
+--- @param on_ready fun(client: agentic.acp.ACPClient) Runs once the new subprocess is ready. The callback passed to `new` runs before it only when the client was never ready
+function ACPClient:restart(on_ready)
+    self:stop()
+    for session_id in pairs(self.subscribers) do
+        self:unsubscribe(session_id)
+    end
+
+    local first_start = not self._was_ready and self._on_ready
+    if first_start then
+        self:_connect(function(client)
+            first_start(client)
+            on_ready(client)
+        end)
+    else
+        self:_connect(on_ready)
+    end
+end
+
+--- Start the subprocess and initialize it.
+--- @param on_ready fun(client: agentic.acp.ACPClient) Runs once the client is ready
+function ACPClient:_connect(on_ready)
     if self.state ~= "disconnected" or not self.transport then
         return
     end
+
+    -- A stop fails the old subprocess's pending requests after this
+    -- connection has started. Their callbacks must not act on the new one.
+    self._connection = self._connection + 1
+    local connection = self._connection
 
     self.transport:start()
 
@@ -1196,6 +1227,9 @@ function ACPClient:_connect()
     }
 
     self:_send_request("initialize", init_params, function(result, err)
+        if connection ~= self._connection then
+            return
+        end
         if not result or err then
             self:_set_state("error")
             Logger.notify(
@@ -1210,7 +1244,8 @@ function ACPClient:_connect()
 
         local function go_ready()
             self:_set_state("ready")
-            self._on_ready(self)
+            self._was_ready = true
+            on_ready(self)
         end
 
         -- No notice for an unadvertised `auth_method`: the advertised set can
@@ -1221,6 +1256,9 @@ function ACPClient:_connect()
             return
         end
         self:authenticate(startup_method.id, function(auth_err)
+            if connection ~= self._connection then
+                return
+            end
             if auth_err then
                 Logger.notify(
                     string.format(
@@ -1485,6 +1523,36 @@ function ACPClient:cancel_session(session_id)
     self:_send_notification("session/cancel", {
         sessionId = session_id,
     })
+end
+
+--- End a session. Unsubscribe it, then send `session/close` when the agent
+--- advertises it, else `session/cancel`. A failed close is shown as a
+--- warning.
+--- @param session_id string
+--- @param on_closed fun() Runs after the agent answers `session/close`, so
+--- after the session's cancelled turns have answered. Without the capability,
+--- runs on the next event loop tick
+function ACPClient:close_session(session_id, on_closed)
+    local session_caps = self.agent_capabilities
+        and self.agent_capabilities.sessionCapabilities
+    if not (session_caps and session_caps.close) then
+        self:cancel_session(session_id)
+        vim.schedule(on_closed)
+        return
+    end
+
+    self:unsubscribe(session_id)
+    self:_send_request("session/close", {
+        sessionId = session_id,
+    }, function(_result, err)
+        if err then
+            Logger.notify(
+                "Failed to close session: " .. (err.message or vim.inspect(err)),
+                vim.log.levels.WARN
+            )
+        end
+        on_closed()
+    end)
 end
 
 return ACPClient

@@ -452,9 +452,11 @@ There are two paths that use this asymmetry differently:
 - **Path B — re-create from history: `new_session({ history })`.** Used by
   Path A's fallback and `restart_session` (both through
   `replace_with_history`, which also replays the saved messages into the
-  chat buffer), a provider switch, and `respawn_preserving_history`
-  (`session_recovery.lua`: a usage-limit error on the claude-agent-acp
-  subprocess, and a re-login the subprocess did not survive). `new_session` stashes the history on `self._history_to_send`.
+  chat buffer), a provider switch, and `renew_session`
+  (`session_recovery.lua`: same client, new ACP session) after a usage
+  limit, and for every session on a client that `restart_client` restarts
+  after a re-login. `new_session` stashes the history on
+  `self._history_to_send`.
   On the first `send_prompt`, `ChatHistory.prepend_history_messages`
   (`ui/chat_history.lua`) injects them as text Content blocks
   (`"User: …"`, `"Assistant: …"`, `"Assistant (thinking): …"`, `"Tool
@@ -508,8 +510,8 @@ prompt generator — the bytes never leave the bridge, so:
   never arrives. Client-layer tests in isolation cannot reproduce it.
 - **Do not add client-side state resets** ("redraw", reset turn state) as a
   "fix" — they don't touch the bridge's stalled generator.
-- Viable workarounds are upstream-level: respawn the subprocess before
-  auto-continue (Path B `respawn_preserving_history`), re-prepending history.
+- The viable workaround avoids the stalled generator: a new ACP session
+  when the limit is reported (Path B `renew_session`).
 
 ### Silent upstream failure — opencode + litellm
 
@@ -536,7 +538,7 @@ otherwise-working sessions — stalled generators per "Prompt loop stall",
 cancelled turns reusing the prompt loop, models that simply return
 nothing. There is no protocol-level way to distinguish these from a
 client. A first-turn-only gate was tried and removed: `_is_first_message`
-is also reset by a Path B respawn, so "first turn" doesn't
+is also reset by a Path B renewal, so "first turn" doesn't
 correspond to "first user prompt to the live agent", and the heuristic
 produced false-positive Error blocks for normal empty responses.
 
