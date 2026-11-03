@@ -370,14 +370,29 @@ function MessageWriter:new(bufnr)
     -- apply the pending ops, whose flush scrolls against the folds as they
     -- end up.
     vim.api.nvim_create_autocmd("BufWinEnter", {
+        group = group,
         buffer = bufnr,
         callback = function()
             local winid = vim.api.nvim_get_current_win()
             if vim.api.nvim_win_get_buf(winid) == bufnr then
+                ChatBuffer.defer_conceal(winid, function()
+                    instance:on_row_heights_changed(winid)
+                end)
                 instance:on_window_shown(winid)
                 instance:replay_folds(winid)
             end
             instance:flush_pending_fold_ops()
+        end,
+    })
+    -- A split of a window showing the buffer fires no BufWinEnter.
+    vim.api.nvim_create_autocmd("WinNew", {
+        group = group,
+        buffer = bufnr,
+        callback = function()
+            local winid = vim.api.nvim_get_current_win()
+            if vim.api.nvim_win_get_buf(winid) == bufnr then
+                instance:on_window_split(winid)
+            end
         end,
     })
 
@@ -454,12 +469,53 @@ function MessageWriter:on_window_shown(winid)
         self._user_controlled[winid] = true
         return
     end
+    self:_follow_from_top(winid)
+end
+
+--- Put `winid` in following, with the next scroll taking it from the top to
+--- the follow target. With `follow.enabled` off, put it on the last line.
+--- @param winid integer A window showing the buffer
+function MessageWriter:_follow_from_top(winid)
     if Config.follow and Config.follow.enabled == false then
         self:go_to_bottom(winid)
         return
     end
     self._newly_shown[winid] = true
     self:follow_in(winid)
+end
+
+--- Take in `winid`, a new window split from one that shows the buffer. It
+--- takes the mode of the window it was split from, as vim copies that
+--- window's view into it. A window with no such source (`:tab split`)
+--- follows. Public so the autocmd closure can reach it without tripping
+--- LuaLS's invisible-field check.
+--- @param winid integer The new window
+function MessageWriter:on_window_split(winid)
+    local source = vim.fn.win_getid(vim.fn.winnr("#"))
+    if
+        source ~= winid
+        and vim.api.nvim_win_is_valid(source)
+        and vim.api.nvim_win_get_buf(source) == self.bufnr
+    then
+        self._user_controlled[winid] = self._user_controlled[source]
+    end
+    ChatBuffer.defer_conceal(winid, function()
+        self:on_row_heights_changed(winid)
+    end)
+end
+
+--- Place `winid` again after its row heights changed. In user control it
+--- keeps its topline. Following, it is placed as a window that newly shows
+--- the buffer (`_follow_from_top`). Public so the closure can reach it
+--- without tripping LuaLS's invisible-field check.
+--- @param winid integer A window showing the buffer
+function MessageWriter:on_row_heights_changed(winid)
+    if self._user_controlled[winid] then
+        -- The change in rows is then no motion.
+        self:_own_change(function() end)
+        return
+    end
+    self:_follow_from_top(winid)
 end
 
 --- Leave a window that newly shows the buffer before the next scheduled
@@ -560,13 +616,16 @@ function MessageWriter:on_view_change(winid, resized)
     end
 end
 
---- Put `winid` in following, with its cursor and view on the last line.
+--- Put `winid` in following, with its cursor on the last line and that line
+--- at the bottom of the window.
 --- @param winid integer A window showing the buffer
 function MessageWriter:go_to_bottom(winid)
     self._user_controlled[winid] = nil
     self:_own_change(function()
         vim.api.nvim_win_call(winid, function()
-            vim.cmd("normal! G")
+            -- `G` keeps a topline that has the last line in view, with
+            -- empty rows below it.
+            vim.cmd("normal! Gzb")
         end)
     end)
 end

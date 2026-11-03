@@ -1,6 +1,7 @@
 --- Rendering setup for chat-style buffers, the ones a MessageWriter writes
 --- tool-call blocks and prose into.
 
+local AfterDraw = require("agentic.utils.after_draw")
 local Config = require("agentic.config")
 local Theme = require("agentic.theme")
 local Treesitter = require("agentic.utils.treesitter")
@@ -71,16 +72,54 @@ function ChatBuffer.resolved_win_opts(bufnr)
     )
 end
 
---- 'conceallevel' that `bufnr` shows at: the value in the first window
---- showing it, else the value a window gets when it enters `bufnr`.
+--- 'conceallevel' that `bufnr` shows at: the level of the first window
+--- showing it, else the value a window gets when it enters `bufnr`. A window
+--- that `ChatBuffer.defer_conceal` holds at 0 counts at the level it gets back.
 --- @param bufnr integer
 --- @return integer
 function ChatBuffer.conceallevel(bufnr)
     local winid = vim.fn.win_findbuf(bufnr)[1]
     if winid then
-        return vim.wo[winid].conceallevel
+        return vim.w[winid].agentic_conceallevel or vim.wo[winid].conceallevel
     end
     return ChatBuffer.resolved_win_opts(bufnr).conceallevel
+end
+
+--- Draw `winid` once at 'conceallevel' 0, then give it back its level and
+--- call `on_restored`. At level 2 or more, a window's first draw asks for
+--- every row from line 1 to the cursor whether it is a `conceal_lines` row,
+--- which freezes a long chat. At level 0 it does not.
+---
+--- A no-op below level 2, and while a deferral already waits. When `winid`
+--- shows another buffer at restore time, it keeps level 0 and `on_restored`
+--- is not called.
+--- @param winid integer A window showing a chat-style buffer
+--- @param on_restored fun() Called once the level is back, with the window's rows at new heights
+function ChatBuffer.defer_conceal(winid, on_restored)
+    local level = vim.wo[winid].conceallevel
+    if vim.w[winid].agentic_conceallevel or level < 2 then
+        return
+    end
+    local bufnr = vim.api.nvim_win_get_buf(winid)
+    -- Read only here and by `ChatBuffer.conceallevel`.
+    vim.w[winid].agentic_conceallevel = level
+    vim.api.nvim_set_option_value(
+        "conceallevel",
+        0,
+        { win = winid, scope = "local" }
+    )
+    AfterDraw.once(winid, function()
+        vim.w[winid].agentic_conceallevel = nil
+        if vim.api.nvim_win_get_buf(winid) ~= bufnr then
+            return
+        end
+        vim.api.nvim_set_option_value(
+            "conceallevel",
+            level,
+            { win = winid, scope = "local" }
+        )
+        on_restored()
+    end)
 end
 
 --- Table cell measure for `bufnr`: display cells of markdown cell text
