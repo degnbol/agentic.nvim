@@ -177,6 +177,14 @@ function ACPClient:subagent_record(_session_id, _child_id)
     return nil
 end
 
+--- The provider's name for the session. Adapters for providers that name
+--- sessions override this.
+--- @param _session_id string
+--- @return string|nil name Nil when the provider has none for the session
+function ACPClient:name(_session_id)
+    return nil
+end
+
 --- @alias agentic.acp.HookRecordGroup
 --- | "context" context a hook delivered to the model
 --- | "passed" ran to completion with nothing to report; the body is empty

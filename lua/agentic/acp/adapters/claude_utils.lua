@@ -454,6 +454,46 @@ function M.exec_shell(env)
         or known_executable_shell(child_env("SHELL"))
 end
 
+--- Whether a process with this pid is running.
+--- @param pid any
+--- @return boolean
+local function is_running(pid)
+    -- Not 0 or below, which signal process groups rather than one process.
+    return type(pid) == "number" and pid > 0 and vim.uv.kill(pid, 0) == 0
+end
+
+--- The name of the newest running CLI process for a session, from the file
+--- each process keeps at `<config_dir>/sessions/<pid>.json`. A file whose
+--- process has exited is skipped; it is left by a crash.
+--- @param config_dir string
+--- @param session_id string
+--- @return string|nil name Nil when no process runs the session, or the newest has no name
+function M.process_name(config_dir, session_id)
+    local dir = vim.fs.joinpath(config_dir, "sessions")
+    local newest
+    for file, type_ in vim.fs.dir(dir) do
+        -- The format is undocumented and the CLI rewrites the file while it
+        -- runs, so a file that does not decode is skipped.
+        local entry = type_ == "file"
+            and vim.endswith(file, ".json")
+            and FileSystem.read_json(vim.fs.joinpath(dir, file))
+        if
+            type(entry) == "table"
+            and entry.sessionId == session_id
+            and type(entry.startedAt) == "number"
+            and (not newest or entry.startedAt > newest.startedAt)
+            and is_running(entry.pid)
+        then
+            newest = entry
+        end
+    end
+    local name = newest and newest.name
+    if type(name) ~= "string" or name == "" then
+        return nil
+    end
+    return name
+end
+
 --- The directory Claude Code keeps a session's side files in,
 --- `<config_dir>/projects/<project>/<session_id>`, whichever project it is
 --- under.

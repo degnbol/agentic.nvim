@@ -352,6 +352,13 @@ function ClaudeAgentACPAdapter:subagent_record(session_id, child_id)
     return record
 end
 
+--- The name Claude Code gives the CLI process running the session.
+--- @param session_id string
+--- @return string|nil name
+function ClaudeAgentACPAdapter:name(session_id)
+    return ClaudeUtils.process_name(self:claude_config_dir(), session_id)
+end
+
 --- The bridge tags a subagent's updates with `_meta.claudeCode.parentToolUseId`.
 --- @param update agentic.acp.SessionUpdateMessage
 --- @return string|nil

@@ -102,6 +102,7 @@ end
 --- @field _cwd string Working directory of the ACP session. Also selects the project folder of its session file
 --- @field _pending_load_model? string Model id to apply after session/load succeeds
 --- @field _usage? agentic.ui.InfoPanel.Usage
+--- @field _name? string The provider's name for the session as last shown
 --- @field _available_commands? agentic.acp.AvailableCommand[] The provider's last advertised slash commands; nil before the first advertisement
 --- @field _last_prompt? string
 --- @field destroyed boolean Flag set on destroy() to guard async callbacks
@@ -1799,6 +1800,7 @@ function SessionManager:_info_snapshot()
         model = model_id and (options:model_display(model_id)),
         mode = mode_id and options:get_mode_name(mode_id),
         thought_level = options:current_thought_level_label(),
+        name = self._name,
         auth = self.agent.auth_status,
         usage = self._usage,
         budget = vim.g.agentic_budget,
@@ -1815,6 +1817,27 @@ function SessionManager:render_info()
     end
     InfoPanel.render(info, self:_info_snapshot(), os.time())
     self.widget:resize_panel("info")
+end
+
+--- Show the provider's current name for the session: a notice when it changes
+--- to a name, and the info panel on any change.
+function SessionManager:_refresh_name()
+    if self.destroyed or not self.session_id then
+        return
+    end
+    local name = self.agent:name(self.session_id)
+    if name == self._name then
+        return
+    end
+    self._name = name
+    if name then
+        self.message_writer:write_notice({
+            glyph = Glyphs.COMMAND.agents,
+            title = name,
+            mid_turn = self.is_generating,
+        })
+    end
+    self:render_info()
 end
 
 --- Show or hide the info panel.
@@ -3291,6 +3314,8 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
         end
 
         self:_finalize_turn(turn_usage)
+        -- The provider can rename the session while it runs.
+        self:_refresh_name()
 
         if not session_busy then
             self.status_indicator:stop()
@@ -3420,6 +3445,8 @@ function SessionManager:new_session(opts)
             self:_sync_modified(history)
         end
         self.session_id = response.sessionId
+        -- The name was the old session's.
+        self._name = nil
         self.chat_history.session_id = response.sessionId
         self.chat_history.timestamp = os.time()
         self._grant_command:apply_defaults()
@@ -3474,6 +3501,8 @@ function SessionManager:new_session(opts)
             if on_created then
                 on_created()
             end
+            -- After on_created, so the notice follows any history it replays.
+            self:_refresh_name()
 
             self:_dispatch_deferred_prompts()
         end)
@@ -3656,6 +3685,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                 },
             })
             self:_reapply_model(model)
+            self:_refresh_name()
 
             -- The only drain on this path: `_loading_saved` keeps the
             -- constructor's on-ready from running new_session, and
@@ -3755,6 +3785,7 @@ function SessionManager:_reset_conversation()
     self.widget:set_idle(false)
     self._history_to_send = nil
     self._usage = nil
+    self._name = nil
     self:_update_chat_header()
     self:render_info()
 end

@@ -392,6 +392,103 @@ describe("agentic.acp.adapters.ClaudeUtils", function()
             write_meta("a4", { "[]" })
             assert.is_nil(ClaudeUtils.subagent_meta(session_dir, "a4"))
         end)
+
+        describe("process_name", function()
+            --- @param pid integer
+            --- @param lines string[]
+            local function write_process(pid, lines)
+                local dir = vim.fs.joinpath(config_dir, "sessions")
+                vim.fn.mkdir(dir, "p")
+                vim.fn.writefile(lines, vim.fs.joinpath(dir, pid .. ".json"))
+            end
+
+            --- A process file, run by this process unless `fields` gives a pid.
+            --- @param file_id integer
+            --- @param fields table
+            local function write_entry(file_id, fields)
+                fields.pid = fields.pid or vim.uv.os_getpid()
+                write_process(file_id, { vim.json.encode(fields) })
+            end
+
+            it("reads the name of the process running the session", function()
+                write_entry(1, {
+                    sessionId = "other",
+                    startedAt = 5,
+                    name = "agentic-nvim-01",
+                })
+                write_entry(2, {
+                    sessionId = session_id,
+                    startedAt = 1,
+                    name = "agentic-nvim-02",
+                })
+                write_process(3, { "{torn" })
+
+                assert.equal(
+                    "agentic-nvim-02",
+                    ClaudeUtils.process_name(config_dir, session_id)
+                )
+            end)
+
+            it("takes the newest of two processes", function()
+                write_entry(1, {
+                    sessionId = session_id,
+                    startedAt = 2,
+                    name = "agentic-nvim-new",
+                })
+                write_entry(2, {
+                    sessionId = session_id,
+                    startedAt = 1,
+                    name = "agentic-nvim-old",
+                })
+
+                assert.equal(
+                    "agentic-nvim-new",
+                    ClaudeUtils.process_name(config_dir, session_id)
+                )
+            end)
+
+            it("skips the file of a process that has exited", function()
+                local exited = vim.system({ "true" })
+                exited:wait()
+                write_entry(1, {
+                    sessionId = session_id,
+                    startedAt = 2,
+                    pid = exited.pid,
+                    name = "agentic-nvim-crashed",
+                })
+                write_entry(2, {
+                    sessionId = session_id,
+                    startedAt = 1,
+                    name = "agentic-nvim-live",
+                })
+
+                assert.equal(
+                    "agentic-nvim-live",
+                    ClaudeUtils.process_name(config_dir, session_id)
+                )
+            end)
+
+            it("has no name when the newest process has none", function()
+                write_entry(1, {
+                    sessionId = session_id,
+                    startedAt = 1,
+                    name = "agentic-nvim-old",
+                })
+                write_entry(2, { sessionId = session_id, startedAt = 2 })
+                assert.is_nil(ClaudeUtils.process_name(config_dir, session_id))
+
+                write_entry(2, {
+                    sessionId = session_id,
+                    startedAt = 2,
+                    name = "",
+                })
+                assert.is_nil(ClaudeUtils.process_name(config_dir, session_id))
+            end)
+
+            it("has no name without a sessions directory", function()
+                assert.is_nil(ClaudeUtils.process_name(config_dir, session_id))
+            end)
+        end)
     end)
 
     describe("budget_windows", function()

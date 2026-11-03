@@ -767,6 +767,7 @@ describe("agentic.SessionManager", function()
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _prompt_pending = 0,
                 _dispatch_deferred_prompts = noop,
+                _refresh_name = noop,
                 _cancel_session = SessionManager._cancel_session,
                 _reset_conversation = SessionManager._reset_conversation,
                 _set_available_commands = SessionManager._set_available_commands,
@@ -1769,6 +1770,62 @@ describe("agentic.SessionManager", function()
             session:restart_session()
 
             assert.same({ model = "live" }, replace_spy.calls[1][3])
+        end)
+    end)
+
+    describe("_refresh_name", function()
+        --- @param name string|nil The provider's name for the session
+        local function make_session(name)
+            local session = {
+                session_id = "s",
+                is_generating = false,
+                agent = {
+                    name = function()
+                        return name
+                    end,
+                },
+                message_writer = { write_notice = spy.new(function() end) },
+                render_info = spy.new(function() end),
+                _refresh_name = SessionManager._refresh_name,
+            }
+            return session
+        end
+
+        it("writes a notice and renders the panel for a new name", function()
+            local session = make_session("agentic-nvim-06")
+
+            session:_refresh_name()
+            session:_refresh_name()
+
+            assert.spy(session.message_writer.write_notice).was.called(1)
+            local notice = session.message_writer.write_notice.calls[1][2]
+            assert.equal(Glyphs.COMMAND.agents, notice.glyph)
+            assert.equal("agentic-nvim-06", notice.title)
+            assert.spy(session.render_info).was.called(1)
+        end)
+
+        it("clears a name that went away without a notice", function()
+            local session = make_session(nil)
+            session._name = "agentic-nvim-06"
+
+            session:_refresh_name()
+
+            assert.is_nil(session._name)
+            assert.spy(session.message_writer.write_notice).was.called(0)
+            assert.spy(session.render_info).was.called(1)
+        end)
+
+        it("reads nothing without a session or once destroyed", function()
+            local unstarted = make_session("agentic-nvim-06")
+            unstarted.session_id = nil
+            local destroyed = make_session("agentic-nvim-06")
+            destroyed.destroyed = true
+
+            unstarted:_refresh_name()
+            destroyed:_refresh_name()
+
+            assert.is_nil(unstarted._name)
+            assert.is_nil(destroyed._name)
         end)
     end)
 
@@ -3444,6 +3501,7 @@ describe("agentic.SessionManager", function()
                 },
                 _end_open_tool_calls = noop,
                 _finalize_turn = SessionManager._finalize_turn,
+                _refresh_name = noop,
                 _drain_side_records = SessionManager._drain_side_records,
                 _held_tool_call_updates = {},
                 status_indicator = { start = noop, stop = noop },
@@ -3631,6 +3689,7 @@ describe("agentic.SessionManager", function()
                 },
                 _end_open_tool_calls = SessionManager._end_open_tool_calls,
                 _finalize_turn = SessionManager._finalize_turn,
+                _refresh_name = noop,
                 _drain_side_records = SessionManager._drain_side_records,
                 _held_tool_call_updates = {},
                 status_indicator = { start = noop, stop = noop },

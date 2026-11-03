@@ -1638,6 +1638,22 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             assert.is_nil(client:subagent_record("s2", "a1"))
         end)
 
+        it("names a session by its CLI process", function()
+            local dir = vim.fs.joinpath(config_dir, "sessions")
+            vim.fn.mkdir(dir, "p")
+            vim.fn.writefile({
+                vim.json.encode({
+                    pid = vim.uv.os_getpid(),
+                    sessionId = "s1",
+                    startedAt = 1,
+                    name = "agentic-nvim-06",
+                }),
+            }, vim.fs.joinpath(dir, "77477.json"))
+
+            assert.equal("agentic-nvim-06", adapter():name("s1"))
+            assert.is_nil(adapter():name("s2"))
+        end)
+
         it("reads a subagent update's spawning Task id from its tag", function()
             local client = adapter()
 

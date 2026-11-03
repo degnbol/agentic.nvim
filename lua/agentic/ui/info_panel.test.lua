@@ -106,6 +106,18 @@ describe("agentic.ui.InfoPanel", function()
             )
         end)
 
+        it("shows the name after the agent, when there is one", function()
+            assert.same(
+                { "- Agent: Claude", "- Name: agentic-nvim-06" },
+                vim.list_slice(
+                    texts({ provider = "Claude", name = "agentic-nvim-06" }),
+                    1,
+                    2
+                )
+            )
+            assert.is_nil(line_starting({ provider = "Claude" }, "- Name:"))
+        end)
+
         it("shows the account with its detail and identity", function()
             local lines = texts({
                 provider = "Claude",

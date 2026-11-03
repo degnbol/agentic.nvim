@@ -18,6 +18,7 @@ local DAY = 24 * 3600
 --- @field model? string
 --- @field mode? string
 --- @field thought_level? string
+--- @field name? string The provider's name for the session
 --- @field auth? agentic.acp.AuthStatus
 --- @field usage? agentic.ui.InfoPanel.Usage
 --- @field budget? agentic.acp.BudgetWindow[]
@@ -146,6 +147,9 @@ function InfoPanel.lines(snap, now)
         "- Agent: "
             .. join(snap.provider, snap.model, snap.thought_level, snap.mode),
     }
+    if snap.name then
+        table.insert(texts, "- Name: " .. snap.name)
+    end
     vim.list_extend(texts, account_lines(snap.auth))
     -- Cost only with the totals, as `/context` shows them.
     local totals = InfoPanel.context_totals(snap.usage)

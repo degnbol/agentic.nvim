@@ -1112,7 +1112,8 @@ not listed.
 ------------------------------------------------------------------------------
 9.6 SESSION INFO                                          *agentic-info-panel*
 
-A toggled panel with the session's agent, account, context and usage limits.
+A toggled panel with the session's agent, name, account, context and usage
+limits.
 
 ------------------------------------------------------------------------------
 9.7 SUBAGENTS                                              *agentic-subagents*
