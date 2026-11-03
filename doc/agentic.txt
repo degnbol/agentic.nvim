@@ -48,8 +48,9 @@ CONTENTS                                                    *agentic-contents*
        9.8 Tags ............................................... |agentic-tags|
    10. Highlight groups ................................. |agentic-highlights|
    11. Autocmds ........................................... |agentic-autocmds|
-   12. Health check ......................................... |agentic-health|
-   13. Debug and logging ..................................... |agentic-debug|
+   12. Integrations ................................... |agentic-integrations|
+   13. Health check ......................................... |agentic-health|
+   14. Debug and logging ..................................... |agentic-debug|
 
 ==============================================================================
 1. INTRODUCTION                                         *agentic-introduction*
@@ -1303,13 +1304,41 @@ User AgenticBudgetChanged
     `vim.g.agentic_budget`, see |agentic-budget|.
 
 ==============================================================================
-12. HEALTH CHECK                                              *agentic-health*
+12. INTEGRATIONS                                        *agentic-integrations*
+
+SNACKS.NVIM                                      *agentic-integrations-snacks*
+
+A snacks picker can open its choice in the window of the chat or a subagent
+transcript.
+
+WARNING: after a snacks picker previews the chat or a transcript, the next
+window that shows it gets the global 'signcolumn' and 'winhighlight'. To
+limit that reset to file buffers, add this once snacks is loaded:
+>lua
+    require("snacks.picker.core.preview")
+    for _, autocmd in ipairs(vim.api.nvim_get_autocmds({
+        group = "snacks.picker.preview.wo", event = "BufWinEnter",
+    })) do
+        vim.api.nvim_del_autocmd(autocmd.id)
+        vim.api.nvim_create_autocmd("BufWinEnter", {
+            group = autocmd.group,
+            callback = function(ev)
+                if vim.bo[ev.buf].buftype == "" then
+                    return autocmd.callback(ev)
+                end
+            end,
+        })
+    end
+<
+
+==============================================================================
+13. HEALTH CHECK                                              *agentic-health*
 >vim
     :checkhealth agentic
 <
 
 ==============================================================================
-13. DEBUG AND LOGGING                                          *agentic-debug*
+14. DEBUG AND LOGGING                                          *agentic-debug*
 
 >lua
     require("agentic").setup({ debug = true, log = true })

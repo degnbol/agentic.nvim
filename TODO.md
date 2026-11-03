@@ -7,57 +7,56 @@ minor").
 ## Plan order
 
 Plans in `notes/`. Within a track, each plan needs the ones above it.
-Tracks are independent unless a note says otherwise.
+Tracks are independent unless a note says otherwise. Priority: P1 high
+(breakage, security), P2 medium, P3 low (cosmetic, refactor, perf).
 
 **Reapply model**
-1. [`FIX-reapply-model.md`](notes/FIX-reapply-model.md). Before
+1. P1 [`FIX-reapply-model.md`](notes/FIX-reapply-model.md). Before
    `REFACTOR-agent-view-consolidation.md`.
 
 **Session log:**
-1. [`PERF-append-session-log.md`](notes/PERF-append-session-log.md)
+1. P3 [`PERF-append-session-log.md`](notes/PERF-append-session-log.md)
 
 **Subagents**
-1. [`REFACTOR-agent-view-consolidation.md`](notes/REFACTOR-agent-view-consolidation.md).
+1. P3 [`REFACTOR-agent-view-consolidation.md`](notes/REFACTOR-agent-view-consolidation.md).
    After `FIX-reapply-model.md`, which deletes the model-line dedupe this
    plan would otherwise move.
 
 **Executed code**
-1. [`FIX-walk-file-model.md`](notes/FIX-walk-file-model.md)
-2. [`FEAT-executed-code.md`](notes/FEAT-executed-code.md)
+1. P1 [`FIX-walk-file-model.md`](notes/FIX-walk-file-model.md)
+2. P2 [`FEAT-executed-code.md`](notes/FEAT-executed-code.md)
 
 **Tool call rendering**
-1. [`FIX-silent-errors.md`](notes/FIX-silent-errors.md)
-2. [`FIX-failed-execute-body-offset.md`](notes/FIX-failed-execute-body-offset.md):
+1. P2 [`FIX-silent-errors.md`](notes/FIX-silent-errors.md)
+2. P3 [`FIX-failed-execute-body-offset.md`](notes/FIX-failed-execute-body-offset.md):
    the offset is fixed; open question 2 stays. May retire: a rejected call
    no longer draws the deny-rule merged body, its only reachable case.
 
 **Input and queue**
-1. [`FIX-shared-client-recovery.md`](notes/FIX-shared-client-recovery.md)
-2. [`FEAT-usage-limit-queue.md`](notes/FEAT-usage-limit-queue.md). Its
-   "Limit ownership" assumes a respawn replaces the client; rewrite it once 1
-   lands.
+1. P2 [`FEAT-usage-limit-queue.md`](notes/FEAT-usage-limit-queue.md). After
+   merging branch `fix-shared-client-recovery`.
 
 **Auto mode**
-1. [`FEAT-auto-mode-integration.md`](notes/FEAT-auto-mode-integration.md)
-2. [`FIX-auto-mode-fix.md`](notes/FIX-auto-mode-fix.md), which extends it
+1. P2 [`FEAT-auto-mode-integration.md`](notes/FEAT-auto-mode-integration.md)
+2. P1 [`FIX-auto-mode-fix.md`](notes/FIX-auto-mode-fix.md), which extends it
 
 **Budget:** merge branch `shared-budget`.
 
 **Peer name:** after `FEAT-usage-limit-queue.md` only to avoid a rebase (it
 rewrites the `new_session` and `_do_load_acp_session` sites this plan adds
 calls to).
-1. [`FEAT-peer-session-name.md`](notes/FEAT-peer-session-name.md)
+1. P3 [`FEAT-peer-session-name.md`](notes/FEAT-peer-session-name.md)
 
 **No ordering:**
-[`REFACTOR-widget-clear-chat.md`](notes/REFACTOR-widget-clear-chat.md),
-[`FEAT-gutter-identity.md`](notes/FEAT-gutter-identity.md),
-[`FIX-heading-command-flag.md`](notes/FIX-heading-command-flag.md) (on hold;
-after `FIX-placeholder-titles.md`),
-[`FEAT-updated-input-display.md`](notes/FEAT-updated-input-display.md),
-[`FIX-deny-gate-flag-cap.md`](notes/FIX-deny-gate-flag-cap.md),
-[`FIX-inline-math-dollar-pairing.md`](notes/FIX-inline-math-dollar-pairing.md),
-[`FIX-placeholder-titles.md`](notes/FIX-placeholder-titles.md),
-[`FEAT-discovered-skills.md`](notes/FEAT-discovered-skills.md).
+- P2 [`FIX-deny-gate-flag-cap.md`](notes/FIX-deny-gate-flag-cap.md)
+- P2 [`FIX-placeholder-titles.md`](notes/FIX-placeholder-titles.md)
+- P3 [`REFACTOR-widget-clear-chat.md`](notes/REFACTOR-widget-clear-chat.md)
+- P3 [`FEAT-gutter-identity.md`](notes/FEAT-gutter-identity.md)
+- P3 [`FIX-heading-command-flag.md`](notes/FIX-heading-command-flag.md) (on
+  hold; after `FIX-placeholder-titles.md`)
+- P3 [`FEAT-updated-input-display.md`](notes/FEAT-updated-input-display.md)
+- P3 [`FIX-inline-math-dollar-pairing.md`](notes/FIX-inline-math-dollar-pairing.md)
+- P3 [`FEAT-discovered-skills.md`](notes/FEAT-discovered-skills.md)
 
 ## Bugs
 
@@ -677,9 +676,6 @@ We could consider adding a code comment or some other acp docs to point this out
 ## Investigations
 
 - **Manual code review**: this repo is heavily vibe-coded.
-
-- **Respawn after a usage limit**: if claude-agent-acp now closes its prompt
-  generator on errors, `respawn_preserving_history` is unnecessary.
 
 
 ## Housekeeping

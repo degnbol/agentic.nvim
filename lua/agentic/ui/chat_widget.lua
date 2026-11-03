@@ -877,6 +877,12 @@ function ChatWidget:_apply_buf_opts(bufnr, panel)
     -- The panel the buffer is, so a buffer alone names its header; `agent` and
     -- `subagent` share a filetype.
     vim.b[bufnr].agentic_window = panel
+    -- A snacks picker opens its choice in a window that shows a file or a
+    -- buffer with this b-var: so a transcript's window may take it, and a
+    -- panel's window never does.
+    if panel == "agent" or panel == "subagent" then
+        vim.b[bufnr].snacks_main = true
+    end
     for key, value in pairs(panel_buf_opts(panel)) do
         vim.api.nvim_set_option_value(key, value, { buf = bufnr })
     end

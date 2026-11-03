@@ -1267,6 +1267,18 @@ describe("agentic.ui.ChatWidget", function()
             assert.is_false(vim.api.nvim_buf_is_valid(widget.buf_nrs.input))
         end)
 
+        it("marks the transcripts, and no other panel, as main", function()
+            local subagent = vim.api.nvim_create_buf(true, true)
+            widget:setup_panel_buf(subagent, "subagent")
+
+            assert.is_true(vim.b[buf_nrs.agent].snacks_main)
+            assert.is_true(vim.b[subagent].snacks_main)
+            for _, panel in ipairs({ "input", "info", "files" }) do
+                assert.is_nil(vim.b[buf_nrs[panel]].snacks_main)
+            end
+            vim.api.nvim_buf_delete(subagent, { force = true })
+        end)
+
         it("returns nil and makes no buffer after destroy", function()
             widget:destroy()
             local before = #vim.api.nvim_list_bufs()
