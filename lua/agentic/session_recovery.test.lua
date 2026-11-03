@@ -661,11 +661,34 @@ describe("agentic.session_recovery", function()
                     cancel_requests = function() end,
                 },
                 todo_list = { clear = function() end },
+                config_options = {
+                    current_model_id = function()
+                        return "live"
+                    end,
+                },
+                _reapply_model = function() end,
                 new_session = spy.new(function(_, opts)
                     opts.on_created()
                 end),
             } --[[@as agentic.SessionManager]]
         end
+
+        it("reapplies the model that ran before the respawn", function()
+            local session = make_session()
+            local order = {}
+            session._reapply_model = function(_, model_id)
+                table.insert(order, "reapply " .. model_id)
+            end
+
+            Recovery.respawn_preserving_history(session, function()
+                table.insert(order, "on_created")
+            end)
+            -- The new session's options hold no model yet when it is created.
+            session.config_options.current_model_id = function() end
+            fire_ready({ state = "ready" })
+
+            assert.same({ "reapply live", "on_created" }, order)
+        end)
 
         it("carries the conversation into the new session", function()
             local session = make_session()

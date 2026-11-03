@@ -314,9 +314,6 @@ function SessionManager:new(provider)
         _checktime_scheduled = false,
         _output_tails = {},
         _held_tool_call_updates = {},
-        --- @type string|nil Last model id announced via announce_model_loaded;
-        --- dedups the start/pending-flush double-announce (reset per new_session)
-        _announced_model_id = nil,
     }, self)
 
     local agent = AgentInstance.get_instance(provider, function(_client)
@@ -2464,19 +2461,14 @@ end
 --- loaded/switched. Display-only: not persisted, not sent to the model, not
 --- replayed.
 ---
---- Prose rather than a notice because this is the session-start announce, which
---- lands directly under the `#` welcome header and reads as that header's
---- detail. An explicit switch renders as a notice instead
---- (`_notice_model_switched`).
----
---- Consecutive duplicate ids are suppressed: the session-start announce and the
---- pending-initial-model flush both fire for the same id.
+--- Prose rather than a notice because it marks the model a session starts or
+--- resumes on, under the `#` welcome header or after a replay. An explicit
+--- switch renders as a notice instead (`_notice_model_switched`).
 --- @param model_id string|nil
 function SessionManager:announce_model_loaded(model_id)
-    if not model_id or model_id == self._announced_model_id then
+    if not model_id then
         return
     end
-    self._announced_model_id = model_id
 
     local name, description = self:_resolve_model_display(model_id)
 
@@ -2489,20 +2481,42 @@ function SessionManager:announce_model_loaded(model_id)
     self.message_writer:write_message(ACPPayloads.generate_agent_message(lines))
 end
 
---- Announce a model the user just switched to, as a command notice.
+--- Announce the current model at the end of the chat, then switch the session
+--- to `model_id`.
 ---
---- Unlike the session-start announce this never dedups on
---- `_announced_model_id`: the picker refuses a selection equal to the current
---- model, so any id arriving here is a real change, and a provider-side switch
---- (`_handle_new_config_options`, e.g. a rate-limit fallback) moves
---- `currentValue` without announcing — leaving the flag equal to the id the
---- user may switch back to, where suppressing would drop the notice entirely.
+--- The switch announces `model_id` only once it succeeds; a turn sent before
+--- then runs on the current model. A `model_id` the provider does not offer
+--- keeps the current model and warns. Before any model options arrive,
+--- `model_id` is queued until they do.
+--- @param model_id string|nil nil keeps the current model
+function SessionManager:_reapply_model(model_id)
+    local options = self.config_options
+    local current_model_id = options:current_model_id()
+    self:announce_model_loaded(current_model_id)
+    if not model_id then
+        return
+    end
+
+    if current_model_id and not options:has_model(model_id) then
+        Logger.notify(
+            string.format(
+                "Saved model '%s' not offered by the provider. Using '%s'",
+                model_id,
+                current_model_id
+            ),
+            vim.log.levels.WARN
+        )
+        return
+    end
+    options:set_pending_initial_model(model_id)
+end
+
+--- Announce a model the user just switched to, as a command notice.
 --- @param model_id string|nil
 function SessionManager:_notice_model_switched(model_id)
     if not model_id then
         return
     end
-    self._announced_model_id = model_id
 
     local name, description = self:_resolve_model_display(model_id)
 
@@ -3437,10 +3451,6 @@ function SessionManager:new_session(opts)
         self:_cancel_session()
     end
 
-    -- Reset so the session-start marker always writes, even when /new keeps the
-    -- same model; the pending-initial-model flush below still gets deduped.
-    self._announced_model_id = nil
-
     self.status_indicator:start("busy")
 
     local handlers = self:_build_handlers()
@@ -3458,7 +3468,7 @@ function SessionManager:new_session(opts)
         -- unused session a resume replaces) while session/new was in flight.
         -- Its agent and widget are gone but the callback closure still holds
         -- a reference to self.
-        -- Continuing would fall through to _handle_new_config_options etc. on
+        -- Continuing would fall through to _apply_session_options etc. on
         -- wiped buffers.
         if self.destroyed then
             if response and response.sessionId and self.agent then
@@ -3504,20 +3514,7 @@ function SessionManager:new_session(opts)
             data = { session_id = response.sessionId },
         })
 
-        if response.configOptions then
-            Logger.debug("Provider announce configOptions")
-            self:_handle_new_config_options(response.configOptions)
-        else
-            if response.modes then
-                Logger.debug("Provider announce legacy mode")
-                self.config_options:set_legacy_modes(response.modes)
-            end
-
-            if response.models then
-                Logger.debug("Provider announce legacy models")
-                self.config_options:set_legacy_models(response.models)
-            end
-        end
+        self:_apply_session_options(response)
 
         if preserved_model then
             self.config_options:set_pending_initial_model(preserved_model)
@@ -3549,15 +3546,12 @@ function SessionManager:new_session(opts)
                     ACPPayloads.generate_user_message(welcome_message)
                 )
 
-                -- Announce the effective model directly under the welcome
-                -- header. preserved_model (if it differs from the provider
-                -- default) is being switched in asynchronously via the flush
-                -- above; name it here so the marker shows the model the
-                -- session will actually use, not the transient default.
+                -- A re-create from history replays after this, so its
+                -- on_created announces the model. The switch to
+                -- preserved_model announces itself.
                 if not history then
                     self:announce_model_loaded(
-                        preserved_model
-                            or self.config_options:current_model_id()
+                        self.config_options:current_model_id()
                     )
                 end
             end
@@ -3721,39 +3715,33 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                 self._subagents:add_history_transcripts()
             end
 
-            -- Apply configOptions the provider returned with session/load,
-            -- so the config options hold the loaded session's mode/model
-            -- rather than stale state from a pre-switch session.
-            if result and result.configOptions then
-                self:_handle_new_config_options(result.configOptions)
-            end
-
-            local opts = self.config_options
-            if model then
-                opts:set_pending_initial_model(model)
+            -- The options the provider returned with session/load, so they
+            -- hold the loaded session's mode and model rather than stale
+            -- state from a pre-switch session.
+            if result then
+                self:_apply_session_options(result)
+                self:render_info()
             end
 
             -- A load whose replay added nothing to the file writes nothing.
-            -- The model saved here can be the one from before the pending
-            -- model takes effect; the next turn's save corrects it.
+            -- The model saved here can be the one from before the switch to
+            -- the saved model takes effect; the next turn's save corrects it.
             if self.chat_history.dirty then
                 self:_history_changed(self.chat_history)
             end
 
-            local provider_label = self.agent.provider_config.name
-                or self.agent.provider_name
-            local model_label = model or opts:current_model_id()
             self.message_writer:write_notice({
                 glyph = Glyphs.RESUME,
                 title = session_id:sub(1, 8),
                 body = {
                     string.format(
-                        "Provider: **%s** · Model: **%s**",
-                        provider_label,
-                        model_label or "unknown"
+                        "Provider: **%s**",
+                        self.agent.provider_config.name
+                            or self.agent.provider_name
                     ),
                 },
             })
+            self:_reapply_model(model)
 
             -- The only drain on this path: `_loading_saved` keeps the
             -- constructor's on-ready from running new_session, and
@@ -3762,9 +3750,9 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
             -- above reaches a drain of its own and a top-of-callback one
             -- would double-send.
             --
-            -- set_pending_initial_model applies the saved model
-            -- asynchronously, so a drained turn may run on the provider
-            -- default rather than the session's own model.
+            -- `_reapply_model` switches to the saved model asynchronously,
+            -- so a drained turn may run on the provider default rather than
+            -- the session's own model.
             self:_dispatch_deferred_prompts()
         end
     )
@@ -3913,12 +3901,14 @@ function SessionManager:switch_provider(provider_name)
                 history = saved_history,
                 on_created = function()
                     -- Nothing else names the new provider: the welcome
-                    -- header takes it and discards it, and a session
-                    -- carrying a history skips the model announce.
+                    -- header takes it and discards it.
                     self.message_writer:write_notice({
                         glyph = Glyphs.PROVIDER,
                         title = self.agent.provider_config.name,
                     })
+                    self:announce_model_loaded(
+                        self.config_options:current_model_id()
+                    )
                 end,
             })
         end)
@@ -3986,6 +3976,27 @@ function SessionManager:add_buffer_diagnostics_to_context(bufnr)
     return self.diagnostics_list:add_many(diagnostics)
 end
 
+--- Store the mode and model options of a session/new or session/load result,
+--- in either the configOptions or the legacy form.
+--- @param response table The RPC result
+function SessionManager:_apply_session_options(response)
+    if response.configOptions then
+        Logger.debug("Provider announce configOptions")
+        self.config_options:set_options(response.configOptions)
+        return
+    end
+
+    if response.modes then
+        Logger.debug("Provider announce legacy mode")
+        self.config_options:set_legacy_modes(response.modes)
+    end
+
+    if response.models then
+        Logger.debug("Provider announce legacy models")
+        self.config_options:set_legacy_models(response.models)
+    end
+end
+
 --- @param new_config_options agentic.acp.ConfigOption[]
 function SessionManager:_handle_new_config_options(new_config_options)
     self.config_options:set_options(new_config_options)
@@ -4003,10 +4014,12 @@ end
 
 --- Replace the conversation with `history` in a new ACP session: clear the
 --- chat, take the history's title and file tally, and once the session is
---- created, replay the messages into the chat. The history is sent with the
---- first prompt.
+--- created, replay the messages into the chat and put the session back on its
+--- model. The history is sent with the first prompt.
 --- @param history agentic.ui.ChatHistory
-function SessionManager:replace_with_history(history)
+--- @param opts {model?: string}|nil `model` overrides the model saved in `history`
+function SessionManager:replace_with_history(history, opts)
+    local model = opts and opts.model or history.model
     self:clear_chat()
     -- Held while session/new is in flight, and kept if it fails.
     self:_install_history(history)
@@ -4014,6 +4027,7 @@ function SessionManager:replace_with_history(history)
         history = history,
         on_created = function()
             self:_render_history()
+            self:_reapply_model(model)
         end,
     })
 end
@@ -4064,8 +4078,10 @@ function SessionManager:restart_session()
     end
 
     local saved_history = vim.deepcopy(self.chat_history)
+    -- The history's model is the one at its last save.
+    local model = self.config_options:current_model_id()
     self:_cancel_session()
-    self:replace_with_history(saved_history)
+    self:replace_with_history(saved_history, { model = model })
 end
 
 return SessionManager

@@ -418,9 +418,9 @@ function M.cancel_retry_timer(sm, reset_attempts)
     end
 end
 
---- Replace the provider subprocess while keeping the conversation.
---- The replacement ACP session is empty provider-side, so the prior messages
---- are queued as context for the next submit.
+--- Replace the provider subprocess while keeping the conversation and its
+--- model. The replacement ACP session is empty provider-side, so the prior
+--- messages are queued as context for the next submit.
 --- @param sm agentic.SessionManager
 --- @param on_created fun()|nil Runs after the replacement session is created
 function M.respawn_preserving_history(sm, on_created)
@@ -428,6 +428,7 @@ function M.respawn_preserving_history(sm, on_created)
     local provider_name = sm.agent.provider_name
 
     local saved_history = sm.chat_history
+    local model = sm.config_options:current_model_id()
 
     -- Stopping the instance disconnects the transport, which fails every
     -- request callback still pending on it rather than orphaning them.
@@ -446,7 +447,12 @@ function M.respawn_preserving_history(sm, on_created)
             sm:new_session({
                 history = saved_history,
                 quiet_welcome = true,
-                on_created = on_created,
+                on_created = function()
+                    sm:_reapply_model(model)
+                    if on_created then
+                        on_created()
+                    end
+                end,
             })
         end)
     end)

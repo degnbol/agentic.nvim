@@ -1,8 +1,6 @@
 # Plan: one display path for main agent and subagent windows
 Status: spec
 
-Lands after `FIX-reapply-model.md`, which deletes the `_announced_model_id` dedupe and adds `_reapply_model`.
-
 ## Relevant files
 - `lua/agentic/session_manager.lua` (SM)
 - `lua/agentic/subagents.lua` (`Subagents`: `new`, `transcript`, `end_agent`, `forget`, `agent_of`, `agent_of_chunk`, `set_config_options`, `record_writer`, `_view_of`, `_open_agent`, `_write_row`, `_new_transcript`, `_replay_transcript`, `_start_agent`)
@@ -31,7 +29,7 @@ The rule: the same kind of information shows the same way in the main chat and i
 
 SessionManager builds the main chat's writer, indicator and response boundary as its own fields. `SubagentTranscript:new` builds the same three classes a second time. `announce_model_loaded` reads `self.config_options` and `self.message_writer` (through `_resolve_model_display` and `_model_title`), so a transcript cannot use it. A subagent's own options are kept on its `Subagents.Agent` record (`set_config_options`) and never shown.
 
-What the main chat shows of model and mode, once `FIX-reapply-model.md` lands:
+What the main chat shows of model and mode:
 - A `Loaded` line, meaning "from here on, model X": for a new session, and at the end of a load, a re-create from history or a provider switch (`_reapply_model`); a second one when a queued saved model takes effect.
 - Switch notices only for changes the user makes in the picker (`as_notice`). A change the provider makes (`_handle_new_config_options`) writes nothing.
 - `Loaded` lines and notices are not in the history, so a replay (`_reload_chat`) drops them.

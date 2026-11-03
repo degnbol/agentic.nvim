@@ -748,6 +748,11 @@ describe("agentic.SessionManager", function()
                 _stop_output_tails = SessionManager._stop_output_tails,
                 _cancel_retry_timer = noop,
                 _do_load_acp_session = SessionManager._do_load_acp_session,
+                _apply_session_options = SessionManager._apply_session_options,
+                _reapply_model = SessionManager._reapply_model,
+                announce_model_loaded = SessionManager.announce_model_loaded,
+                _resolve_model_display = SessionManager._resolve_model_display,
+                _model_title = SessionManager._model_title,
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _prompt_pending = 0,
                 _dispatch_deferred_prompts = noop,
@@ -906,6 +911,58 @@ describe("agentic.SessionManager", function()
             captured_load_cb(nil, nil)
 
             assert.is_false(session._loading_saved)
+        end)
+
+        it("takes legacy models from the load result", function()
+            local session = make_load_session()
+            session.config_options = AgentConfigOptions:new(
+                function() end,
+                function() end,
+                function() end,
+                function()
+                    return true
+                end
+            )
+
+            session:_do_load_acp_session("test-session-id", "/tmp")
+            captured_load_cb({
+                models = {
+                    availableModels = { { modelId = "m", name = "M" } },
+                    currentModelId = "m",
+                },
+            }, nil)
+
+            assert.equal("m", session.config_options:current_model_id())
+        end)
+
+        it("writes nothing after the session is destroyed", function()
+            local session = make_load_session()
+            local notice_spy = spy.new(function() end)
+            session.message_writer.write_notice = notice_spy
+
+            session:_do_load_acp_session("test-session-id", "/tmp")
+            session.destroyed = true
+            captured_load_cb(nil, nil)
+
+            assert.spy(notice_spy).was.called(0)
+        end)
+
+        it("reapplies the saved model after the resume notice", function()
+            local session = make_load_session()
+            local order = {}
+            local notice_spy = spy.new(function()
+                table.insert(order, "notice")
+            end)
+            session.message_writer.write_notice = notice_spy
+            session._reapply_model = function(_, model_id)
+                table.insert(order, "reapply " .. model_id)
+            end
+
+            session:_do_load_acp_session("test-session-id", "/tmp", "saved")
+            captured_load_cb(nil, nil)
+
+            assert.same({ "Provider: **Test**" }, notice_spy.calls[1][2].body)
+            assert.same({ "notice", "reapply saved" }, order)
         end)
 
         it("clears _loading_saved on failed load", function()
@@ -1393,7 +1450,6 @@ describe("agentic.SessionManager", function()
             local write_spy = spy.new(function() end)
             local notice_spy = spy.new(function() end)
             local session = {
-                _announced_model_id = nil,
                 config_options = {
                     get_model = function(_, id)
                         return models[id]
@@ -1500,17 +1556,6 @@ describe("agentic.SessionManager", function()
             assert.equal("**Loaded M** · m", written_text(write_spy, 1))
         end)
 
-        it("suppresses a consecutive duplicate id", function()
-            local session, write_spy = make_session({
-                ["m"] = { value = "m", name = "M", description = "desc" },
-            })
-
-            session:announce_model_loaded("m")
-            session:announce_model_loaded("m")
-
-            assert.spy(write_spy).was.called(1)
-        end)
-
         it("ignores nil model id", function()
             local session, write_spy = make_session({})
 
@@ -1547,20 +1592,6 @@ describe("agentic.SessionManager", function()
             )
         end)
 
-        it("notices a switch back to an already-announced model", function()
-            -- A provider-side change (rate-limit fallback) moves the current
-            -- model without announcing, so the flag can still hold the id the
-            -- user switches back to. The switch is real; the notice must show.
-            local session, _, notice_spy = make_session({
-                ["m"] = { value = "m", name = "M" },
-            })
-
-            session:announce_model_loaded("m")
-            session:_notice_model_switched("m")
-
-            assert.spy(notice_spy).was.called(1)
-        end)
-
         it("takes the notice level from the generating state", function()
             local session, _, notice_spy = make_session({
                 ["m"] = { value = "m", name = "M" },
@@ -1570,6 +1601,225 @@ describe("agentic.SessionManager", function()
             session:_notice_model_switched("m")
 
             assert.is_true(notice_spy.calls[1][2].mid_turn)
+        end)
+    end)
+
+    describe("_reapply_model", function()
+        --- @type TestStub
+        local notify_stub
+
+        before_each(function()
+            notify_stub = spy.stub(Logger, "notify")
+        end)
+
+        after_each(function()
+            notify_stub:revert()
+        end)
+
+        --- @param current string
+        --- @return agentic.acp.ConfigOption
+        local function model_option(current)
+            --- @type agentic.acp.ConfigOption
+            local option = {
+                id = "model",
+                category = "model",
+                currentValue = current,
+                description = "",
+                name = "Model",
+                options = {
+                    { value = "a", name = "A" },
+                    { value = "b", name = "B" },
+                },
+            }
+            return option
+        end
+
+        --- A session whose provider offers models `a` and `b` and runs `a`, or
+        --- reports no models yet when `offers_models` is false.
+        --- @param offers_models boolean
+        --- @return agentic.SessionManager session
+        --- @return TestSpy write_spy
+        --- @return TestSpy set_option_spy
+        local function make_session(offers_models)
+            local noop = function() end
+            local write_spy = spy.new(noop)
+            local set_option_spy = spy.new(noop)
+            --- @type agentic.SessionManager
+            local session
+            local config_options = AgentConfigOptions:new(
+                noop,
+                function(model_id, is_legacy, opts)
+                    session:_handle_model_change(model_id, is_legacy, opts)
+                end,
+                noop,
+                function()
+                    return true
+                end
+            )
+            if offers_models then
+                config_options:set_options({ model_option("a") })
+            end
+            session = {
+                session_id = "s",
+                agent = { set_config_option = set_option_spy },
+                config_options = config_options,
+                message_writer = { write_message = write_spy },
+                render_info = noop,
+                _handle_new_config_options = SessionManager._handle_new_config_options,
+                _resolve_model_display = SessionManager._resolve_model_display,
+                _model_title = SessionManager._model_title,
+                announce_model_loaded = SessionManager.announce_model_loaded,
+                _reapply_model = SessionManager._reapply_model,
+                _handle_model_change = SessionManager._handle_model_change,
+                _set_session_option = SessionManager._set_session_option,
+            } --[[@as agentic.SessionManager]]
+            return session, write_spy, set_option_spy
+        end
+
+        --- @param write_spy TestSpy
+        --- @return string[]
+        local function written_texts(write_spy)
+            return vim.tbl_map(function(call)
+                return call[2].content.text
+            end, write_spy.calls)
+        end
+
+        it("announces the current model without a saved one", function()
+            local session, write_spy, set_option_spy = make_session(true)
+
+            session:_reapply_model(nil)
+
+            assert.same({ "**Loaded A** · a" }, written_texts(write_spy))
+            assert.spy(set_option_spy).was.called(0)
+        end)
+
+        it("switches to an offered saved model", function()
+            local session, write_spy, set_option_spy = make_session(true)
+
+            session:_reapply_model("b")
+
+            assert.same({ "**Loaded A** · a" }, written_texts(write_spy))
+            assert.equal("b", set_option_spy.calls[1][4])
+        end)
+
+        it("does not switch to the saved model when it is current", function()
+            local session, _, set_option_spy = make_session(true)
+
+            session:_reapply_model("a")
+
+            assert.spy(set_option_spy).was.called(0)
+        end)
+
+        it("announces the saved model once the switch succeeds", function()
+            local session, write_spy, set_option_spy = make_session(true)
+
+            session:_reapply_model("b")
+            set_option_spy.calls[1][5]({ configOptions = { model_option("b") } })
+
+            assert.same(
+                { "**Loaded A** · a", "**Loaded B** · b" },
+                written_texts(write_spy)
+            )
+        end)
+
+        it("announces no model when the switch fails", function()
+            local session, write_spy, set_option_spy = make_session(true)
+
+            session:_reapply_model("b")
+            set_option_spy.calls[1][5](nil, { message = "refused" })
+
+            assert.same({ "**Loaded A** · a" }, written_texts(write_spy))
+            assert.equal(vim.log.levels.ERROR, notify_stub.calls[1][2])
+        end)
+
+        it("warns about a saved model the provider does not offer", function()
+            local session, write_spy, set_option_spy = make_session(true)
+
+            session:_reapply_model("gone")
+
+            assert.same({ "**Loaded A** · a" }, written_texts(write_spy))
+            assert.spy(set_option_spy).was.called(0)
+            assert.equal(vim.log.levels.WARN, notify_stub.calls[1][2])
+            assert.truthy(notify_stub.calls[1][1]:find("gone", 1, true))
+        end)
+
+        it("queues the saved model before any model options", function()
+            local session, write_spy = make_session(false)
+
+            session:_reapply_model("b")
+
+            assert.spy(write_spy).was.called(0)
+            assert.spy(notify_stub).was.called(0)
+            assert.equal("b", session.config_options._pending_initial_model)
+        end)
+    end)
+
+    describe("replace_with_history", function()
+        --- @param order string[] Receives the steps in the order they run
+        --- @return agentic.SessionManager
+        local function make_session(order)
+            local noop = function() end
+            return {
+                clear_chat = noop,
+                _install_history = noop,
+                new_session = function(_, opts)
+                    opts.on_created()
+                end,
+                _render_history = function()
+                    table.insert(order, "render")
+                end,
+                _reapply_model = function(_, model_id)
+                    table.insert(order, "reapply " .. tostring(model_id))
+                end,
+                replace_with_history = SessionManager.replace_with_history,
+            } --[[@as agentic.SessionManager]]
+        end
+
+        it("reapplies the history's model after the replay", function()
+            local order = {}
+            local history = ChatHistory:new()
+            history.model = "saved"
+
+            make_session(order):replace_with_history(history)
+
+            assert.same({ "render", "reapply saved" }, order)
+        end)
+
+        it("takes a given model over the history's", function()
+            local order = {}
+            local history = ChatHistory:new()
+            history.model = "saved"
+
+            make_session(order):replace_with_history(
+                history,
+                { model = "live" }
+            )
+
+            assert.same({ "render", "reapply live" }, order)
+        end)
+    end)
+
+    describe("restart_session", function()
+        it("re-creates the session on its live model", function()
+            local history = ChatHistory:new()
+            history:add_message({ type = "user", text = "hi" })
+            history.model = "saved"
+            local replace_spy = spy.new(function() end)
+            local session = {
+                chat_history = history,
+                config_options = {
+                    current_model_id = function()
+                        return "live"
+                    end,
+                },
+                _cancel_session = function() end,
+                replace_with_history = replace_spy,
+                restart_session = SessionManager.restart_session,
+            } --[[@as agentic.SessionManager]]
+
+            session:restart_session()
+
+            assert.same({ model = "live" }, replace_spy.calls[1][3])
         end)
     end)
 
@@ -2127,6 +2377,8 @@ describe("agentic.SessionManager", function()
                 todo_list = { clear = function() end },
                 message_writer = { write_notice = write_notice },
                 chat_history = saved_history,
+                config_options = { current_model_id = function() end },
+                announce_model_loaded = function() end,
                 new_session = new_session_spy,
                 switch_provider = SessionManager.switch_provider,
             } --[[@as agentic.SessionManager]]
@@ -2216,7 +2468,7 @@ describe("agentic.SessionManager", function()
             assert.spy(session.new_session).was.called(1)
         end)
 
-        it("names the new provider in a notice from on_created", function()
+        it("names the new provider, then its model, from on_created", function()
             local AgentInstance = require("agentic.acp.agent_instance")
             local mock_new_agent = {
                 provider_config = { name = "New Provider" },
@@ -2229,7 +2481,10 @@ describe("agentic.SessionManager", function()
             end)
 
             local captured_on_created
-            local notice_spy = spy.new(function() end)
+            local order = {}
+            local notice_spy = spy.new(function()
+                table.insert(order, "notice")
+            end)
             local session = {
                 is_generating = false,
                 session_id = "old-session",
@@ -2244,6 +2499,14 @@ describe("agentic.SessionManager", function()
                 message_writer = { write_notice = notice_spy },
                 widget = { buf_nrs = {} },
                 chat_history = { messages = {}, session_id = "old" },
+                config_options = {
+                    current_model_id = function()
+                        return "m"
+                    end,
+                },
+                announce_model_loaded = function(_, model_id)
+                    table.insert(order, "announce " .. model_id)
+                end,
                 new_session = spy.new(function(_self, opts)
                     captured_on_created = opts.on_created
                 end),
@@ -2256,8 +2519,8 @@ describe("agentic.SessionManager", function()
             session:switch_provider("new-provider")
             captured_on_created()
 
-            assert.spy(notice_spy).was.called(1)
             assert.equal("New Provider", notice_spy.calls[1][2].title)
+            assert.same({ "notice", "announce m" }, order)
         end)
     end)
 

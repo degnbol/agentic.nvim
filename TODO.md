@@ -10,17 +10,11 @@ Plans in `notes/`. Within a track, each plan needs the ones above it.
 Tracks are independent unless a note says otherwise. Priority: P1 high
 (breakage, security), P2 medium, P3 low (cosmetic, refactor, perf).
 
-**Reapply model**
-1. P1 [`FIX-reapply-model.md`](notes/FIX-reapply-model.md). Before
-   `REFACTOR-agent-view-consolidation.md`.
-
 **Session log:**
 1. P3 [`PERF-append-session-log.md`](notes/PERF-append-session-log.md)
 
 **Subagents**
-1. P3 [`REFACTOR-agent-view-consolidation.md`](notes/REFACTOR-agent-view-consolidation.md).
-   After `FIX-reapply-model.md`, which deletes the model-line dedupe this
-   plan would otherwise move.
+1. P3 [`REFACTOR-agent-view-consolidation.md`](notes/REFACTOR-agent-view-consolidation.md)
 
 **Executed code**
 1. P1 [`FIX-walk-file-model.md`](notes/FIX-walk-file-model.md)

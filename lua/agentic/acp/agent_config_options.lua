@@ -162,14 +162,20 @@ function AgentConfigOptions:current_mode_id()
         or self.legacy_agent_modes.current_mode_id
 end
 
+--- Whether the provider offers a model, as a config option or a legacy model.
+--- @param model_id string
+--- @return boolean
+function AgentConfigOptions:has_model(model_id)
+    return self:get_model(model_id) ~= nil
+        or self.legacy_agent_models:get_model(model_id) ~= nil
+end
+
 --- Queue a model id to apply once configOptions (or legacy models) become
 --- available, or apply it now if it already is.
 --- @param model_id string
 function AgentConfigOptions:set_pending_initial_model(model_id)
     self._pending_initial_model = model_id
-    if
-        self:get_model(model_id) or self.legacy_agent_models:get_model(model_id)
-    then
+    if self:has_model(model_id) then
         self:_flush_pending_initial_model()
     end
 end
@@ -186,15 +192,11 @@ function AgentConfigOptions:_flush_pending_initial_model()
         return
     end
 
-    local is_legacy
-    if self:get_model(model_id) then
-        is_legacy = false
-    elseif self.legacy_agent_models:get_model(model_id) then
-        is_legacy = true
-    else
+    if not self:has_model(model_id) then
         return
     end
 
+    local is_legacy = self:get_model(model_id) == nil
     self._pending_initial_model = nil
     self._set_model_callback(model_id, is_legacy)
 end

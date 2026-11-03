@@ -31,7 +31,7 @@ Two races leave a callback acting on a session that has moved on:
 2. **Session destroyed while its `session/new` is in flight:** the unused
    session a resume replaces (through `BufWinLeave`), or `:bd` right after
    creation. The callback closure holds the destroyed `self`; when the
-   response arrives it would run `_handle_new_config_options` against wiped
+   response arrives it would run `_apply_session_options` against wiped
    buffers. Bail out at the top of the create_session callback when
    `self.destroyed` is true.
 
@@ -58,8 +58,8 @@ Two races leave a callback acting on a session that has moved on:
 - Any async callback on a SessionManager that writes to its buffers or the
   registry must check `self.destroyed` — the instance may have been
   replaced while the RPC was in flight.
-- `_do_load_acp_session` must feed `result.configOptions` through
-  `_handle_new_config_options` on success (mirrors the `new_session` path) —
+- `_do_load_acp_session` must feed `result` through
+  `_apply_session_options` on success (as `new_session` does) —
   otherwise a loaded session has no config options.
 
 ## The in-flight counter

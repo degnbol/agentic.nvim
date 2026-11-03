@@ -225,6 +225,24 @@ describe("agentic.acp.AgentConfigOptions", function()
         end)
     end)
 
+    describe("has_model", function()
+        it("finds a config option model and a legacy model", function()
+            assert.is_false(config_options:has_model("claude-sonnet"))
+
+            config_options:set_options({ model_option })
+            config_options.legacy_agent_models:set_models({
+                availableModels = {
+                    { modelId = "legacy", name = "Legacy", description = "" },
+                },
+                currentModelId = "legacy",
+            })
+
+            assert.is_true(config_options:has_model("claude-sonnet"))
+            assert.is_true(config_options:has_model("legacy"))
+            assert.is_false(config_options:has_model("nonexistent"))
+        end)
+    end)
+
     describe("current_mode_id", function()
         it("returns the config value, else the legacy id, else nil", function()
             assert.is_nil(config_options:current_mode_id())
