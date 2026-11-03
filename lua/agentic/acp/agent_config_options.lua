@@ -283,6 +283,15 @@ function AgentConfigOptions:get_model_name(model_value)
     return nil
 end
 
+--- The name of the thought level the session runs at.
+--- @return string|nil name Nil without a thought level option, or when its
+---   current value is not among its options
+function AgentConfigOptions:current_thought_level_name()
+    local level = self.thought_level
+    local option = level and getter(level, level.currentValue)
+    return option and option.name
+end
+
 --- Pick a mode interactively. Like `show_model_selector`, every selection is
 --- a user switch and is flagged as such; `set_initial_mode` calls the same
 --- callback without the flag.

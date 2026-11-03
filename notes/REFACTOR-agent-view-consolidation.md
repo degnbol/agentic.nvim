@@ -23,7 +23,6 @@ Lands after `FIX-reapply-model.md`, which deletes the `_announced_model_id` dedu
   - `lua/agentic/acp/agent_config_options.test.lua`
   - `tests/integration/test_native_subagents.lua` ("a child's config options stay out of the main agent's")
   - `tests/integration/test_subagent_inputs.lua`
-- Consumer: `notes/feature-thought-level-display.md`.
 - Skills: `session-lifecycle` (header pipeline), `follow` (writes go through `_schedule_follow`/`_own_edit`; attention badges), `rendering`, `provider-system`, `lua-class`.
 - Rule: `.claude/rules/provider-specific.md`.
 
@@ -47,7 +46,7 @@ The header (`vim.b.agentic_header`, rendered by incline) is short on room. Its c
 | 5 | Opening line in body | `# <date> · <id8>` (`_generate_welcome_header`, from `new_session`). Not replayed on `:e` (`_reload_chat`). | `## <mode> <type> · <label>` (`SubagentTranscript:restart` → `write_subagent_heading`, `ToolCallLayout.subagent_heading`). Rewritten on `:e` (`_replay_transcript`). | No |
 | 6 | Model | Body line `**Loaded <name>** · <id>` + description (`announce_model_loaded`, from `new_session` and `_handle_model_change`). Switch notice (`_notice_model_switched`). Name in the info panel. | Stored on the agent record, not shown | No |
 | 7 | Mode | Switch notice from the picker (`_notice_mode_switched`). Name in the info panel. Legacy `current_mode_update` in `_on_session_update` ignores the source session. | Stored, not shown | No |
-| 8 | Thought level | Stored (`AgentConfigOptions.thought_level`), not shown | Stored, not shown | n/a (separate ticket) |
+| 8 | Thought level | On the model line and switch notice title, for the current model (`_model_title`) | Stored, not shown | No |
 | 9 | Model/mode picker keys | `self.config_options:bind_keymaps` in `_setup_session_buf`, on every session buffer | The same call reaches transcripts (`_new_transcript` → `setup_buf`) and message inputs (`_open_input`). The keys act on the **main** agent's options. | Same keys, main target |
 | 10 | Header title | `#<n> <title or Agentic Chat>` (`ChatWidget:set_chat_title`), icon `Glyphs.AGENT` | `#<child session id> › <heading>` (`SubagentTranscript:set_header`), icon `Glyphs.AGENT` | Icon shared |
 | 11 | Header context | `<n>k` tokens (`_update_chat_header`) | Nil while running; the end word after the end (`SubagentTranscript:set_context` from `end_agent`) | No |
@@ -172,7 +171,6 @@ Provider-specific code: none moves. `subagent_task_id`, `subagent_record` and fr
 
 ## Non-goals
 - Adding anything to the header (`vim.b.agentic_header`).
-- Thought-level display (`notes/feature-thought-level-display.md`). Once it lands, both windows get it through `AgentView`.
 - Changing the subagent block in the main chat.
 
 ## Open questions

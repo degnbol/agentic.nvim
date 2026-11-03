@@ -348,8 +348,8 @@ via the ACP `session/set_config_option` method and rebuilt on model switch —
 mirroring the TUI's `/effort`.
 
 The plugin's `AgentConfigOptions:set_options` already dispatches on
-`category == "thought_level"` (`agent_config_options.lua:88-89`), so the option
-is captured into `self.thought_level`. A `/effort`-equivalent selector is now
+`category == "thought_level"`, so the option is captured into
+`self.thought_level`. A `/effort`-equivalent selector is now
 unblocked: it would read `self.thought_level.options` and send the chosen value
 via `session/set_config_option`. Provider-specific — non-Claude bridges may not
 emit it.

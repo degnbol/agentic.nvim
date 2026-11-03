@@ -237,6 +237,30 @@ describe("agentic.acp.AgentConfigOptions", function()
         end)
     end)
 
+    describe("current_thought_level_name", function()
+        it("returns the current value's name", function()
+            config_options:set_options({ thought_option })
+
+            assert.equal("Normal", config_options:current_thought_level_name())
+        end)
+
+        it("returns nil without a thought level option", function()
+            config_options:set_options({ model_option })
+
+            assert.is_nil(config_options:current_thought_level_name())
+        end)
+
+        it("returns nil when the current value is not an option", function()
+            config_options:set_options({
+                vim.tbl_extend("force", thought_option, {
+                    currentValue = "ghost",
+                }) --[[@as agentic.acp.ConfigOption]],
+            })
+
+            assert.is_nil(config_options:current_thought_level_name())
+        end)
+    end)
+
     describe("set_initial_mode", function()
         --- @type TestStub
         local notify_stub

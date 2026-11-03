@@ -1387,7 +1387,9 @@ describe("agentic.SessionManager", function()
 
     describe("model announce", function()
         --- @param models table<string, agentic.acp.ConfigOption.Option>
-        local function make_session(models)
+        --- @param current { model_id?: string, thought_level?: string }|nil
+        local function make_session(models, current)
+            current = current or {}
             local write_spy = spy.new(function() end)
             local notice_spy = spy.new(function() end)
             local session = {
@@ -1396,6 +1398,13 @@ describe("agentic.SessionManager", function()
                     get_model = function(_, id)
                         return models[id]
                     end,
+                    current_model_id = function()
+                        return current.model_id
+                    end,
+                    current_thought_level_name = function()
+                        return current.thought_level
+                    end,
+                    thought_level = { name = "Effort" },
                     legacy_agent_models = {
                         get_model = function() end,
                     },
@@ -1405,6 +1414,7 @@ describe("agentic.SessionManager", function()
                     write_notice = notice_spy,
                 },
                 _resolve_model_display = SessionManager._resolve_model_display,
+                _model_title = SessionManager._model_title,
                 announce_model_loaded = SessionManager.announce_model_loaded,
                 _notice_model_switched = SessionManager._notice_model_switched,
             } --[[@as agentic.SessionManager]]
@@ -1465,6 +1475,32 @@ describe("agentic.SessionManager", function()
             )
         end)
 
+        it("adds the thought level of the current model", function()
+            local session, write_spy = make_session(
+                { ["m"] = { value = "m", name = "M" } },
+                { model_id = "m", thought_level = "High" }
+            )
+
+            session:announce_model_loaded("m")
+
+            assert.equal(
+                "**Loaded M** · m · Effort: High",
+                written_text(write_spy, 1)
+            )
+        end)
+
+        it("omits the thought level of a model not yet current", function()
+            -- A model still being switched in may run at another level.
+            local session, write_spy = make_session(
+                { ["m"] = { value = "m", name = "M" } },
+                { model_id = "default", thought_level = "High" }
+            )
+
+            session:announce_model_loaded("m")
+
+            assert.equal("**Loaded M** · m", written_text(write_spy, 1))
+        end)
+
         it("suppresses a consecutive duplicate id", function()
             local session, write_spy = make_session({
                 ["m"] = { value = "m", name = "M", description = "desc" },
@@ -1496,6 +1532,20 @@ describe("agentic.SessionManager", function()
             local notice = notice_spy.calls[1][2]
             assert.equal("M · m", notice.title)
             assert.same({ "desc" }, notice.body)
+        end)
+
+        it("adds the thought level to a switch notice", function()
+            local session, _, notice_spy = make_session(
+                { ["m"] = { value = "m", name = "M" } },
+                { model_id = "m", thought_level = "Medium" }
+            )
+
+            session:_notice_model_switched("m")
+
+            assert.equal(
+                "M · m · Effort: Medium",
+                notice_spy.calls[1][2].title
+            )
         end)
 
         it("notices a switch back to an already-announced model", function()

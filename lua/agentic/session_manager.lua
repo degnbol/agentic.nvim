@@ -2415,6 +2415,23 @@ function SessionManager:_resolve_model_display(model_id)
     return name, description
 end
 
+--- A model's title: `label`, `model_id` and, for the current model only, its
+--- thought level, joined by ` · `. The provider reports the thought level of
+--- the current model only.
+--- @param label string
+--- @param model_id string
+--- @return string title
+function SessionManager:_model_title(label, model_id)
+    local parts = { label, model_id }
+    local options = self.config_options
+    local level = model_id == options:current_model_id()
+        and options:current_thought_level_name()
+    if level then
+        table.insert(parts, options.thought_level.name .. ": " .. level)
+    end
+    return table.concat(parts, " · ")
+end
+
 --- Write a two-line "Loaded <model>" marker into the chat buffer announcing
 --- which model is now active, with its full id and description. Doubles as a
 --- temporal marker — its scrollback position shows when the model was
@@ -2437,7 +2454,8 @@ function SessionManager:announce_model_loaded(model_id)
 
     local name, description = self:_resolve_model_display(model_id)
 
-    local lines = { string.format("**Loaded %s** · %s", name, model_id) }
+    local lines =
+        { self:_model_title(string.format("**Loaded %s**", name), model_id) }
     if description and description ~= "" then
         table.insert(lines, description)
     end
@@ -2470,7 +2488,7 @@ function SessionManager:_notice_model_switched(model_id)
 
     self.message_writer:write_notice({
         glyph = Glyphs.COMMAND.model,
-        title = string.format("%s · %s", name, model_id),
+        title = self:_model_title(name, model_id),
         body = body,
         mid_turn = self.is_generating,
     })
