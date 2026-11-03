@@ -5,7 +5,7 @@ Status: reviewed
 - `lua/agentic/session_manager.lua` (SM): `new_session`, `_do_load_acp_session`, `replace_with_history`, `restart_session`, `switch_provider`, `announce_model_loaded`, `_handle_model_change`, `_sync_history_context`
 - `lua/agentic/session_recovery.lua`: `respawn_preserving_history`
 - `lua/agentic/acp/agent_config_options.lua`: `set_pending_initial_model`, `_flush_pending_initial_model`, `get_model`
-- `lua/agentic/session_resume.lua`: `check_conflict`, `do_restore` (the two resume paths)
+- `lua/agentic/session_resume.lua`: `resume`
 - `lua/agentic/ui/chat_history.lua`: `model` field
 - `lua/agentic/session_manager.test.lua`: the `announce_model_loaded` cases
 - Skills: `session-lifecycle` (resume paths, `_loading_saved`/epoch/`destroyed` guards)
@@ -17,8 +17,8 @@ A session is loaded, or re-created from history, by these paths:
 
 | Path | Used by | Saved model reapplied? | Model shown? |
 |---|---|---|---|
-| A. `_do_load_acp_session` | `session/load` providers (`SessionResume.do_restore`, `Agentic.load_acp_session`) | Yes, `set_pending_initial_model(model)` | In the resume notice body, `Provider: X · Model: Y`. A `Loaded` line also follows when the switch goes through (`_handle_model_change` → `announce_model_loaded`). |
-| B. `replace_with_history` | Providers without `session/load`, the fallback when `session/load` fails (`_new_session_after_failed_load`), `restart_session` | **No.** `new_session` with `restore_mode` takes no `preserved_model`, and nothing reads `history.model`. | **No.** `new_session` writes the `Loaded` line only outside `restore_mode`. |
+| A. `_do_load_acp_session` | `session/load` providers (`SessionResume.resume`, `Agentic.load_acp_session`) | Yes, `set_pending_initial_model(model)` | In the resume notice body, `Provider: X · Model: Y`. A `Loaded` line also follows when the switch goes through (`_handle_model_change` → `announce_model_loaded`). |
+| B. `replace_with_history` | Providers without `session/load`, the fallback when `session/load` fails (`_new_session_after_failed_load`), `restart_session` | **No.** `new_session` with a `history` takes no `preserved_model`, and nothing reads `history.model`. | **No.** `new_session` writes the `Loaded` line only without a `history`. |
 | C. `SessionRecovery.respawn_preserving_history` | Respawn after a usage limit | **No**, as B. | **No** (`quiet_welcome`). |
 | D. `switch_provider` | Provider switch | Not applicable: a new provider. | **No.** |
 

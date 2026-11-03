@@ -19,10 +19,8 @@ Tracks are independent unless a note says otherwise.
 **Subagents**
 1. [`PLAN-agent-view-consolidation.md`](notes/PLAN-agent-view-consolidation.md).
    After `PLAN-reapply-model.md`, which deletes the model-line dedupe this
-   plan would otherwise move, and after Session resume 1, whose `Subagents`
-   class it is written against.
+   plan would otherwise move.
 - [`PLAN-nested-subagent-blocks.md`](notes/PLAN-nested-subagent-blocks.md).
-  After Session resume 1 only to avoid a rebase.
 
 **Executed code**
 1. [`PLAN-walk-file-model.md`](notes/PLAN-walk-file-model.md)
