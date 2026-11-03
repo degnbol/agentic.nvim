@@ -34,7 +34,7 @@ auto-approves never reaches us. An unconditional block needs a settings.json
 user edits `~/.claude/settings.json` for those.
 
 State is per-session: it clears when the session ends or a saved session
-loads, and survives a stop, a respawn and a provider switch.
+loads, and survives a stop, a renewal and a provider switch.
 
 ## Permission flow
 

@@ -1,5 +1,6 @@
 --- @diagnostic disable: invisible, missing-fields, assign-type-mismatch, need-check-nil, undefined-field, param-type-mismatch, return-type-mismatch
 local assert = require("tests.helpers.assert")
+local Deferred = require("tests.helpers.deferred")
 local spy = require("tests.helpers.spy")
 
 local Recovery = require("agentic.session_recovery")
@@ -81,9 +82,9 @@ describe("agentic.session_recovery", function()
             assert.spy(submit_spy).was.called(0)
         end)
 
-        -- respawn_preserving_history clears session_id and repopulates it from
-        -- an async new_session, so this window is reachable. An unprompted turn
-        -- must not land on a half-respawned provider.
+        -- renew_session clears session_id and repopulates it from an async
+        -- new_session, so this window is reachable. An unprompted turn must
+        -- not land between the two sessions.
         it("sends nothing without a session", function()
             local session = session_with(false)
             session.session_id = nil
@@ -185,7 +186,7 @@ describe("agentic.session_recovery", function()
         --- @type TestStub
         local schedule_stub
         --- @type TestStub
-        local respawn_stub
+        local restart_stub
         --- What `authenticate` answers; overridden per case.
         --- @type agentic.acp.ACPError|nil
         local auth_err
@@ -209,8 +210,8 @@ describe("agentic.session_recovery", function()
             schedule_stub:invokes(function(fn)
                 fn()
             end)
-            respawn_stub = spy.stub(Recovery, "respawn_preserving_history")
-            respawn_stub:invokes(function(_sm, on_created)
+            restart_stub = spy.stub(Recovery, "restart_client")
+            restart_stub:invokes(function(_sm, on_created)
                 on_created()
             end)
         end)
@@ -219,7 +220,7 @@ describe("agentic.session_recovery", function()
             notify_stub:revert()
             system_stub:revert()
             schedule_stub:revert()
-            respawn_stub:revert()
+            restart_stub:revert()
         end)
 
         --- A session on an agent that advertises `methods`, recording what it
@@ -429,7 +430,7 @@ describe("agentic.session_recovery", function()
                         last_notice()[1]
                     )
                     assert.equal(0, #sink.notices)
-                    assert.spy(respawn_stub).was.called(0)
+                    assert.spy(restart_stub).was.called(0)
                     assert.spy(on_done).was.called(1)
                 end)
             end
@@ -498,7 +499,7 @@ describe("agentic.session_recovery", function()
 
                 assert.spy(on_done).was.called(1)
                 assert.equal(0, #sink.notices)
-                assert.spy(respawn_stub).was.called(0)
+                assert.spy(restart_stub).was.called(0)
             end)
         end)
 
@@ -510,7 +511,7 @@ describe("agentic.session_recovery", function()
 
                 Recovery.run_login(session, AGENT, function() end)
 
-                assert.spy(respawn_stub).was.called(0)
+                assert.spy(restart_stub).was.called(0)
                 assert.equal(1, #sink.notices)
                 assert.is_nil(sink.notices[1].body)
                 assert.is_true(session._reauth_live_retry)
@@ -518,25 +519,28 @@ describe("agentic.session_recovery", function()
 
             -- The flag survives only while no turn has succeeded, so a second
             -- auth error means keeping the session did not work.
-            it("respawns once the live retry is spent", function()
+            it("restarts the client once the live retry is spent", function()
                 local session, sink = make_session({ AGENT })
                 session._reauth_live_retry = true
 
                 Recovery.run_login(session, AGENT, function() end)
 
-                assert.spy(respawn_stub).was.called(1)
+                assert.spy(restart_stub).was.called(1)
                 assert.equal(1, #sink.notices[1].body)
             end)
 
-            it("respawns when the subprocess did not survive", function()
-                local session, sink = make_session({ AGENT })
-                session.agent.state = "disconnected"
+            it(
+                "restarts the client when the subprocess did not survive",
+                function()
+                    local session, sink = make_session({ AGENT })
+                    session.agent.state = "disconnected"
 
-                Recovery.run_login(session, AGENT, function() end)
+                    Recovery.run_login(session, AGENT, function() end)
 
-                assert.spy(respawn_stub).was.called(1)
-                assert.equal(1, #sink.notices[1].body)
-            end)
+                    assert.spy(restart_stub).was.called(1)
+                    assert.equal(1, #sink.notices[1].body)
+                end
+            )
 
             it("recovers nothing after a failed login", function()
                 local session, sink = make_session({ AGENT })
@@ -544,7 +548,7 @@ describe("agentic.session_recovery", function()
 
                 Recovery.run_login(session, AGENT, function() end)
 
-                assert.spy(respawn_stub).was.called(0)
+                assert.spy(restart_stub).was.called(0)
                 assert.equal(0, #sink.notices)
             end)
 
@@ -560,7 +564,7 @@ describe("agentic.session_recovery", function()
 
                 Recovery.run_login(session, AGENT, on_done)
 
-                assert.spy(respawn_stub).was.called(0)
+                assert.spy(restart_stub).was.called(0)
                 assert.equal(0, #sink.notices)
                 assert.spy(on_done).was.called(1)
             end)
@@ -616,94 +620,206 @@ describe("agentic.session_recovery", function()
         end)
     end)
 
-    describe("respawn_preserving_history", function()
-        local AgentInstance = require("agentic.acp.agent_instance")
+    describe("session renewal", function()
+        local SessionRegistry = require("agentic.session_registry")
 
-        --- @type TestStub
-        local invalidate_stub
-        --- @type TestStub
-        local get_instance_stub
-        --- @type TestStub
-        local schedule_stub
-        --- @type fun(client: table)
+        --- @type tests.helpers.Deferred
+        local deferred
+        --- @type table<integer, agentic.SessionManager>
+        local original_sessions
+        --- `on_closed` of each `close_session`, by session id.
+        --- @type table<string, fun()>
+        local close_answers
+        --- `on_ready` of the last `restart`.
+        --- @type fun(client: table)|nil
         local fire_ready
+        --- A shared client, recording what each session held when `restart`
+        --- ran.
+        local client
+        --- Each session's `session_id` and permission cancels at `restart`.
+        --- @type table<agentic.SessionManager, { session_id: string|nil, cancels: integer }>
+        local at_restart
 
         before_each(function()
-            schedule_stub = spy.stub(vim, "schedule")
-            schedule_stub:invokes(function(fn)
-                fn()
-            end)
-            invalidate_stub = spy.stub(AgentInstance, "invalidate")
-            get_instance_stub = spy.stub(AgentInstance, "get_instance")
-            get_instance_stub:invokes(function(_name, on_ready)
-                fire_ready = on_ready
-            end)
+            deferred = Deferred.capture()
+            original_sessions = SessionRegistry.by_id
+            SessionRegistry.by_id = {}
+            close_answers = {}
+            fire_ready = nil
+            at_restart = {}
+            client = {
+                state = "ready",
+                stop = spy.new(function() end),
+                close_session = spy.new(function(_self, session_id, on_closed)
+                    close_answers[session_id] = on_closed
+                end),
+                restart = spy.new(function(self, on_ready)
+                    for _, session in pairs(SessionRegistry.by_id) do
+                        at_restart[session] = {
+                            session_id = session.session_id,
+                            cancels = session.permission_manager.cancel_requests.call_count,
+                        }
+                    end
+                    self.state = "initializing"
+                    fire_ready = on_ready
+                end),
+            }
         end)
 
         after_each(function()
-            schedule_stub:revert()
-            invalidate_stub:revert()
-            get_instance_stub:revert()
+            deferred.revert()
+            SessionRegistry.by_id = original_sessions
         end)
 
+        --- A registered session on `agent` holding ACP session `session_id`.
+        --- @param id integer `SessionManager.id`
+        --- @param session_id string|nil
+        --- @param agent table|nil Default the shared client
         --- @return agentic.SessionManager
-        local function make_session()
-            return {
-                session_id = "old",
+        local function make_session(id, session_id, agent)
+            local session = {
+                id = id,
+                session_id = session_id,
                 destroyed = false,
-                agent = { provider_name = "opencode-acp" },
+                _session_epoch = 0,
+                agent = agent or client,
                 chat_history = {
-                    session_id = "old",
+                    session_id = session_id,
                     timestamp = 1,
                     messages = { { type = "user", text = "hi" } },
                 },
                 permission_manager = {
-                    cancel_requests = function() end,
+                    cancel_requests = spy.new(function() end),
                 },
                 todo_list = { clear = function() end },
-                new_session = spy.new(function(_, opts)
-                    opts.on_created()
+                new_session = spy.new(function(self, opts)
+                    self._session_epoch = self._session_epoch + 1
+                    if opts.on_created then
+                        opts.on_created()
+                    end
                 end),
             } --[[@as agentic.SessionManager]]
+            SessionRegistry.by_id[id] = session
+            return session
         end
 
-        it("carries the conversation into the new session", function()
-            local session = make_session()
-            local former_history = session.chat_history
-            local created = false
+        describe("renew_session", function()
+            it("creates the new session after the old one closes", function()
+                local session = make_session(1, "old")
+                local history = session.chat_history
+                local created = spy.new(function() end)
 
-            Recovery.respawn_preserving_history(session, function()
-                created = true
+                Recovery.renew_session(session, created)
+
+                assert.equal(client, session.agent)
+                assert.is_nil(session.session_id)
+                assert
+                    .spy(session.permission_manager.cancel_requests).was
+                    .called(1)
+                assert.equal("old", client.close_session.calls[1][2])
+                assert.spy(session.new_session).was.called(0)
+
+                close_answers.old()
+
+                local opts = session.new_session.calls[1][2]
+                assert.equal(history, opts.history)
+                assert.is_true(opts.quiet_welcome)
+                assert.spy(created).was.called(1)
             end)
-            fire_ready({ state = "ready" })
 
-            local opts = session.new_session.calls[1][2]
-            assert.equal(former_history, opts.history)
-            assert.is_true(opts.quiet_welcome)
-            assert.is_true(created)
+            it("creates nothing for a session destroyed meanwhile", function()
+                local session = make_session(1, "old")
+
+                Recovery.renew_session(session)
+                session.destroyed = true
+                close_answers.old()
+
+                assert.spy(session.new_session).was.called(0)
+            end)
+
+            it("creates nothing for a session that moved on", function()
+                local session = make_session(1, "old")
+
+                Recovery.renew_session(session)
+                session._session_epoch = session._session_epoch + 1
+                close_answers.old()
+
+                assert.spy(session.new_session).was.called(0)
+            end)
+
+            it("creates at once without a session id", function()
+                local session = make_session(1, nil)
+
+                Recovery.renew_session(session)
+
+                assert.spy(client.close_session).was.called(0)
+                assert.spy(session.new_session).was.called(1)
+            end)
+
+            it("leaves the shared client running", function()
+                local session = make_session(1, "old")
+                local sibling = make_session(2, "other")
+
+                Recovery.renew_session(session)
+                close_answers.old()
+
+                assert.spy(client.stop).was.called(0)
+                assert.spy(client.restart).was.called(0)
+                assert.equal(client, sibling.agent)
+                assert.equal("other", sibling.session_id)
+            end)
         end)
 
-        it("creates nothing for a session destroyed meanwhile", function()
-            local session = make_session()
+        describe("restart_client", function()
+            it("renews every live session on the client", function()
+                local session = make_session(1, "a")
+                local sibling = make_session(2, "b")
+                local pending = make_session(3, nil)
+                local moved = make_session(4, "d")
+                local elsewhere = make_session(5, "e", { state = "ready" })
+                local created = spy.new(function() end)
 
-            Recovery.respawn_preserving_history(session)
-            session.destroyed = true
-            fire_ready({ state = "ready" })
+                Recovery.restart_client(session, created)
 
-            assert.spy(session.new_session).was.called(0)
-        end)
+                -- Prompts are answered while the old subprocess still runs.
+                assert.spy(client.restart).was.called(1)
+                for _, held in ipairs({ session, sibling, pending, moved }) do
+                    assert.same(
+                        { session_id = nil, cancels = 1 },
+                        at_restart[held]
+                    )
+                end
+                assert.equal("e", elsewhere.session_id)
+                assert
+                    .spy(elsewhere.permission_manager.cancel_requests).was
+                    .called(0)
 
-        it("respawns the session's provider, not the default", function()
-            local session = make_session()
-            assert.are_not.equal(
-                "opencode-acp",
-                require("agentic.config").provider
-            )
+                moved._session_epoch = moved._session_epoch + 1
+                fire_ready(client)
+                deferred.drain()
 
-            Recovery.respawn_preserving_history(session)
+                assert.spy(client.close_session).was.called(0)
+                for _, renewed in ipairs({ session, sibling, pending }) do
+                    assert.spy(renewed.new_session).was.called(1)
+                end
+                assert.spy(moved.new_session).was.called(0)
+                assert.spy(elsewhere.new_session).was.called(0)
+                assert.spy(created).was.called(1)
+                assert.is_nil(sibling.new_session.calls[1][2].on_created)
+            end)
 
-            assert.equal("opencode-acp", invalidate_stub.calls[1][1])
-            assert.equal("opencode-acp", get_instance_stub.calls[1][1])
+            it("renews no session destroyed during the restart", function()
+                local session = make_session(1, "a")
+                local sibling = make_session(2, "b")
+
+                Recovery.restart_client(session)
+                sibling.destroyed = true
+                fire_ready(client)
+                deferred.drain()
+
+                assert.spy(session.new_session).was.called(1)
+                assert.spy(sibling.new_session).was.called(0)
+            end)
         end)
     end)
 

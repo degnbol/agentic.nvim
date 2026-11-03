@@ -59,7 +59,7 @@ The header (`vim.b.agentic_header`, rendered by incline) is short on room. Its c
 | 17 | Turn end | `_finalize_turn`: `finalize_turn`, `set_turn_usage` footer, side-record drain | `end_agent`: an end row (`subagent_end`). No usage footer. | No |
 | 18 | Cancelled stamping | `_mark_unresolved_tool_calls_cancelled` | `end_agent`, unless `completed` | Yes |
 | 19 | Errors | `write_error_message` / `write_error_action` in the body (`_dispatch_turn` callback) | The end row carries the error text as its body; the header context shows the end word | No |
-| 20 | Todo list | `TodoList` on the `todos` panel (`SessionManager:new`). `plan` → `todo_list:render` in `_on_session_update`, source ignored. Cleared by `new_session`, `_reset_conversation`, `switch_provider`, `respawn_preserving_history`. | Missing. A child's `plan` would render into the main panel. | No |
+| 20 | Todo list | `TodoList` on the `todos` panel (`SessionManager:new`). `plan` → `todo_list:render` in `_on_session_update`, source ignored. Cleared by `new_session`, `_reset_conversation`, `switch_provider`, `renew_session`. | Missing. A child's `plan` would render into the main panel. | No |
 | 21 | Input | `input` panel, `Prompt` | Background only: `SubagentInput`, `Message to <label>`, same icon. Blocking: the session input (`_agent_input_win`). | Icon shared, code separate |
 | 22 | Stop key | `stop_generation` (`_bind_owner_keymaps`) | Cancels the child session (`_bind_agent_keymaps`, `_open_input`) | Separate, by design |
 | 23 | Re-render on `:e` | `_reload_chat` | `_replay_transcript` | Near-copy |

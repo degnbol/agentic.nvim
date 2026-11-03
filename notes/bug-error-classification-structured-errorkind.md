@@ -3,7 +3,7 @@
 ## Symptom
 
 A claude.ai subscription that hits its limit with extra usage blocked shows a
-raw error, with no hint, no respawn, no reset gate and no auto-continue:
+raw error, with no hint, no session renewal, no reset gate and no auto-continue:
 
 ```
 ## Error
@@ -71,7 +71,7 @@ site only: an API error whose message contains `credit balance is too low`
 Thus the current hint (`error_report.lua:15`) is wrong for the one case
 that reaches it. It says "Organisation spend limit reached … run /usage-credits".
 The correct action for low credit balance is to add funds in the Console. The
-display-only dispatch (no reauth, no respawn, no auto-continue) is correct for
+display-only dispatch (no reauth, no renewal, no auto-continue) is correct for
 it.
 
 ## Fix direction
@@ -92,7 +92,7 @@ it.
 
 1. **Transient 429 vs limit rejection.** `rate_limit` also covers a plain 429
    (`Request rejected (429) · …`, `apiErrorIsTransient`). Mapping all of
-   `rate_limit` to `usage_limit` makes a capacity 429 respawn the subprocess
+   `rate_limit` to `usage_limit` makes a capacity 429 renew the session
    and set a gate. Decide if the class needs a second signal (an `exhausted`
    window in `vim.g.agentic_budget`, or the message prefix `You've hit your` /
    `You've reached your`, which the bridge itself uses in
@@ -106,4 +106,4 @@ it.
    primary source.
 3. **What to do with no epoch.** The org-spend-cap text has no reset clause.
    If no window is `exhausted`, decide between hint-only (no
-   gate, no respawn) and respawn without auto-continue.
+   gate, no renewal) and renewal without auto-continue.

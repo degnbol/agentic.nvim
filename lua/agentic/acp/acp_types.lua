@@ -39,6 +39,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @class agentic.acp.AgentCapabilities
 --- @field loadSession boolean
 --- @field promptCapabilities agentic.acp.PromptCapabilities
+--- @field sessionCapabilities? { close?: table }
 
 --- @class agentic.acp.PromptCapabilities
 --- @field image boolean
