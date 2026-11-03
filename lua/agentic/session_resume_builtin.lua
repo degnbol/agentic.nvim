@@ -2,25 +2,25 @@
 --- Keymaps: <CR> resume, dd delete, u undo delete, <Tab> toggle scope, q close.
 --- Deletions are deferred — files are removed from disk only when the picker closes.
 local Logger = require("agentic.utils.logger")
-local SessionRestore = require("agentic.session_restore")
+local SessionResume = require("agentic.session_resume")
 
---- @class agentic.SessionRestoreBuiltin
+--- @class agentic.SessionResumeBuiltin
 local M = {}
 
---- @class agentic.SessionRestoreBuiltin.Opts
---- @field scope agentic.SessionRestore.Scope
+--- @class agentic.SessionResumeBuiltin.Opts
+--- @field scope agentic.SessionResume.Scope
 --- @field mods? vim.api.keyset.cmd_mods
 --- @field marked_id? string ACP session id to mark
 
---- @class agentic.SessionRestoreBuiltin.DeleteEntry
+--- @class agentic.SessionResumeBuiltin.DeleteEntry
 --- @field index integer Original index in items list at time of deletion
---- @field item agentic.SessionRestore.PickerItem
+--- @field item agentic.SessionResume.PickerItem
 
 --- Populate the quickfix list with session items.
 --- Uses standard qf fields (filename, lnum, text) so quicker.nvim and other qf
 --- plugins render aligned columns automatically.
---- @param items agentic.SessionRestore.PickerItem[]
---- @param scope agentic.SessionRestore.Scope
+--- @param items agentic.SessionResume.PickerItem[]
+--- @param scope agentic.SessionResume.Scope
 --- @param marked_id string|nil
 --- @return integer|nil current_idx 1-based index of the marked session, if found
 local function set_qf_items(items, scope, marked_id)
@@ -56,7 +56,7 @@ local function set_qf_items(items, scope, marked_id)
 end
 
 --- Commit pending deletions to disk.
---- @param pending agentic.SessionRestoreBuiltin.DeleteEntry[]
+--- @param pending agentic.SessionResumeBuiltin.DeleteEntry[]
 --- @return integer deleted
 --- @return integer failed
 local function commit_deletes(pending)
@@ -74,12 +74,12 @@ local function commit_deletes(pending)
     return deleted, failed
 end
 
---- @param items agentic.SessionRestore.PickerItem[]
---- @param on_select fun(item: agentic.SessionRestore.PickerItem)
---- @param opts agentic.SessionRestoreBuiltin.Opts
+--- @param items agentic.SessionResume.PickerItem[]
+--- @param on_select fun(item: agentic.SessionResume.PickerItem)
+--- @param opts agentic.SessionResumeBuiltin.Opts
 function M.show(items, on_select, opts) -- luacheck: ignore
     local scope = opts.scope or "local"
-    --- @type agentic.SessionRestoreBuiltin.DeleteEntry[]
+    --- @type agentic.SessionResumeBuiltin.DeleteEntry[]
     local pending_deletes = {}
     local committed = false
 
@@ -210,7 +210,7 @@ function M.show(items, on_select, opts) -- luacheck: ignore
         commit_and_notify()
         vim.cmd("cclose")
         local new_scope = scope == "all" and "local" or "all"
-        SessionRestore.show_picker({
+        SessionResume.show_picker({
             scope = new_scope,
             mods = opts.mods,
             marked_id = opts.marked_id,

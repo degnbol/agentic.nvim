@@ -446,35 +446,32 @@ tool-call blocks) is visible to the user only. It is not part of the
 agent's conversation history and does not survive session resume into
 the model's context.
 
-There are three restore mechanisms that use this asymmetry differently:
+There are two paths that use this asymmetry differently:
 
-- **Path A — true ACP `session/load`.** Sends the saved `sessionId` and
+- **Path A — load: ACP `session/load`.** Sends the saved `sessionId` and
   the provider replays its own history via `session/update`
   notifications. `_history_to_send` is *not* set. Used by
-  `SessionRestore.resume`. Path B when the load fails (an agent without
+  `SessionResume.resume`. Path B when the load fails (an agent without
   `loadSession` fails it at once) and the session file is readable.
-- **Path B — `restore_from_history`** (`session_manager.lua`). Used by
-  Path A's fallback and `restart_session`. Replays the saved messages into
-  the chat buffer locally. `new_session({ history })` stashes them on
-  `self._history_to_send`.
-  On the first `send_prompt`, `ChatHistory.prepend_restored_messages`
+- **Path B — re-create from history: `new_session({ history })`.** Used by
+  Path A's fallback and `restart_session` (both through
+  `replace_with_history`, which also replays the saved messages into the
+  chat buffer), a provider switch, and `respawn_preserving_history`
+  (`session_recovery.lua`: a usage-limit error on the claude-agent-acp
+  subprocess, and a re-login the subprocess did not survive). `new_session` stashes the history on `self._history_to_send`.
+  On the first `send_prompt`, `ChatHistory.prepend_history_messages`
   (`ui/chat_history.lua`) injects them as text Content blocks
   (`"User: …"`, `"Assistant: …"`, `"Assistant (thinking): …"`, `"Tool
   call (…): …\nResult:\n…"`) ahead of the user's prompt. The provider
   sees one large user message — tool-call provenance is collapsed
   into prose, no native conversation state.
-- **Path C — `respawn_preserving_history`** (`session_recovery.lua`).
-  Triggered by `max_tokens` / usage-limit stalls on the
-  claude-agent-acp subprocess, and by a re-login the subprocess did not
-  survive. Kills the agent and passes the history to
-  `new_session({ history })`, as Path B does.
 
 This is the inverse of the "user_message_chunk replay" point below:
 that section explains what the *client* receives on Path A (the
 provider's history); this point explains what the *model* receives
 (nothing the client wrote into its own buffer, only what the client
-sent via session/prompt — including the Path B text prefix when that
-fallback fires).
+sent via session/prompt — including the Path B text prefix on the
+first prompt after a re-create).
 
 ### user_message_chunk contains full prompt content
 
@@ -516,7 +513,7 @@ prompt generator — the bytes never leave the bridge, so:
 - **Do not add client-side state resets** ("redraw", reset turn state) as a
   "fix" — they don't touch the bridge's stalled generator.
 - Viable workarounds are upstream-level: respawn the subprocess before
-  auto-continue (Path C `respawn_preserving_history`), re-prepending history.
+  auto-continue (Path B `respawn_preserving_history`), re-prepending history.
 
 ### Silent upstream failure — opencode + litellm
 
@@ -543,7 +540,7 @@ otherwise-working sessions — stalled generators per "Prompt loop stall",
 cancelled turns reusing the prompt loop, models that simply return
 nothing. There is no protocol-level way to distinguish these from a
 client. A first-turn-only gate was tried and removed: `_is_first_message`
-is also reset by a Path C respawn, so "first turn" doesn't
+is also reset by a Path B respawn, so "first turn" doesn't
 correspond to "first user prompt to the live agent", and the heuristic
 produced false-positive Error blocks for normal empty responses.
 

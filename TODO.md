@@ -9,10 +9,6 @@ minor").
 Plans in `notes/`. Within a track, each plan needs the ones above it.
 Tracks are independent unless a note says otherwise.
 
-**Resume terminology:** a mechanical rename: a plan that lands after it
-renames its references first.
-1. [`PLAN-resume-terminology.md`](notes/PLAN-resume-terminology.md)
-
 **Reapply model**
 1. [`PLAN-reapply-model.md`](notes/PLAN-reapply-model.md). Before
    `PLAN-agent-view-consolidation.md`.

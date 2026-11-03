@@ -3,9 +3,9 @@ local MiniTest = require("mini.test")
 local Glyphs = require("agentic.glyphs")
 local spy = require("tests.helpers.spy")
 
-describe("SessionRestore", function()
-    --- @type agentic.SessionRestore
-    local SessionRestore
+describe("SessionResume", function()
+    --- @type agentic.SessionResume
+    local SessionResume
     local ChatHistory
     local SessionRegistry
     local Logger
@@ -59,8 +59,8 @@ describe("SessionRestore", function()
 
     local original_loaded = {}
     local niled_modules = {
-        "agentic.session_restore",
-        "agentic.session_restore_builtin",
+        "agentic.session_resume",
+        "agentic.session_resume_builtin",
         "agentic.ui.chat_history",
         "agentic.session_registry",
         "agentic.utils.logger",
@@ -73,13 +73,13 @@ describe("SessionRestore", function()
             package.loaded[mod] = nil
         end
 
-        SessionRestore = require("agentic.session_restore")
+        SessionResume = require("agentic.session_resume")
         ChatHistory = require("agentic.ui.chat_history")
         SessionRegistry = require("agentic.session_registry")
         Logger = require("agentic.utils.logger")
         Config = require("agentic.config")
 
-        Config.session_restore = { picker = "builtin", cd_on_load = false }
+        Config.sessions = { picker = "builtin", cd_on_load = false }
 
         chat_history_list_stub = spy.stub(ChatHistory, "list_sessions")
         session_registry_stub = spy.stub(SessionRegistry, "create")
@@ -107,7 +107,7 @@ describe("SessionRestore", function()
 
     describe("build_items", function()
         it("formats as date │ title", function()
-            local items = SessionRestore.build_items(test_sessions)
+            local items = SessionResume.build_items(test_sessions)
             assert.equal(2, #items)
             assert.truthy(items[1].display:match("│ First chat"))
             assert.truthy(items[1].display:match("^%d%d%d%d%-%d%d%-%d%d"))
@@ -124,7 +124,7 @@ describe("SessionRestore", function()
                 { home .. "x/y", home .. "x/y" },
             }
             for _, case in ipairs(cases) do
-                local items = SessionRestore.build_items({
+                local items = SessionResume.build_items({
                     {
                         session_id = "s",
                         title = "t",
@@ -142,12 +142,12 @@ describe("SessionRestore", function()
 
         it("uses (no title) for missing titles", function()
             --- @diagnostic disable-next-line: missing-fields
-            local items = SessionRestore.build_items({ { session_id = "s1" } })
+            local items = SessionResume.build_items({ { session_id = "s1" } })
             assert.truthy(items[1].display:match("%(no title%)"))
         end)
 
         it("passes prompt_count through to items", function()
-            local items = SessionRestore.build_items({
+            local items = SessionResume.build_items({
                 {
                     session_id = "s1",
                     title = "With count",
@@ -167,7 +167,7 @@ describe("SessionRestore", function()
         end)
 
         it("strips newlines from multi-line titles", function()
-            local items = SessionRestore.build_items({
+            local items = SessionResume.build_items({
                 {
                     session_id = "s1",
                     title = "First line\nSecond line\nThird",
@@ -183,7 +183,7 @@ describe("SessionRestore", function()
     --- @diagnostic disable: missing-fields
     describe("format_preview", function()
         it("formats user messages with heading", function()
-            local lines = SessionRestore.format_preview({
+            local lines = SessionResume.format_preview({
                 { type = "user", text = "Hello world" },
             })
             assert.truthy(vim.tbl_contains(lines, "## You"))
@@ -193,14 +193,14 @@ describe("SessionRestore", function()
         it("skips a synthetic prompt", function()
             assert.same(
                 {},
-                SessionRestore.format_preview({
+                SessionResume.format_preview({
                     { type = "user", text = "continue", synthetic = true },
                 })
             )
         end)
 
         it("formats agent messages with heading", function()
-            local lines = SessionRestore.format_preview({
+            local lines = SessionResume.format_preview({
                 { type = "agent", text = "Response text" },
             })
             assert.truthy(vim.tbl_contains(lines, "## Agent"))
@@ -208,7 +208,7 @@ describe("SessionRestore", function()
         end)
 
         it("formats a message row as a heading over its text", function()
-            local lines = SessionRestore.format_preview({
+            local lines = SessionResume.format_preview({
                 {
                     type = "session_message",
                     message_id = "m1",
@@ -239,7 +239,7 @@ describe("SessionRestore", function()
         it("truncates long thought blocks", function()
             local long_thought =
                 table.concat(vim.fn["repeat"]({ "line" }, 10), "\n")
-            local lines = SessionRestore.format_preview({
+            local lines = SessionResume.format_preview({
                 { type = "thought", text = long_thought },
             })
             local more_line = vim.tbl_filter(function(l)
@@ -249,7 +249,7 @@ describe("SessionRestore", function()
         end)
 
         it("shows tool call with status icon", function()
-            local lines = SessionRestore.format_preview({
+            local lines = SessionResume.format_preview({
                 {
                     type = "tool_call",
                     kind = "edit",
@@ -269,7 +269,7 @@ describe("SessionRestore", function()
             rejected = { status = "failed", decided_by = { "prompt-reject" } },
         }) do
             it("shows the " .. icon_key .. " icon", function()
-                local lines = SessionRestore.format_preview({
+                local lines = SessionResume.format_preview({
                     vim.tbl_extend("force", {
                         type = "tool_call",
                         kind = "edit",
@@ -287,7 +287,7 @@ describe("SessionRestore", function()
         end
 
         it("marks a saved cancelled tool call as interrupted", function()
-            local lines = SessionRestore.format_preview({
+            local lines = SessionResume.format_preview({
                 {
                     type = "tool_call",
                     kind = "edit",
@@ -310,7 +310,7 @@ describe("SessionRestore", function()
         end)
 
         it("produces no lines with embedded newlines", function()
-            local lines = SessionRestore.format_preview({
+            local lines = SessionResume.format_preview({
                 { type = "user", text = "line1\nline2\nline3" },
                 { type = "agent", text = "resp1\nresp2" },
                 {
@@ -334,8 +334,8 @@ describe("SessionRestore", function()
 
         before_each(function()
             builtin_show_stub =
-                spy.stub(require("agentic.session_restore_builtin"), "show")
-            resume_stub = spy.stub(SessionRestore, "resume")
+                spy.stub(require("agentic.session_resume_builtin"), "show")
+            resume_stub = spy.stub(SessionResume, "resume")
         end)
 
         after_each(function()
@@ -346,7 +346,7 @@ describe("SessionRestore", function()
         it("notifies and skips picker when no sessions exist", function()
             setup_list_stub({})
 
-            SessionRestore.show_picker()
+            SessionResume.show_picker()
 
             assert.spy(logger_notify_stub).was.called(1)
             assert.equal(
@@ -358,7 +358,7 @@ describe("SessionRestore", function()
         end)
 
         it("joins a notice with the empty-list notification", function()
-            SessionRestore.show_picker({ sessions = {}, notice = "No match" })
+            SessionResume.show_picker({ sessions = {}, notice = "No match" })
 
             assert.spy(logger_notify_stub).was.called(1)
             assert.equal(
@@ -376,7 +376,7 @@ describe("SessionRestore", function()
                     on_select(items[1])
                 end)
 
-                SessionRestore.show_picker({
+                SessionResume.show_picker({
                     mods = mods,
                     marked_id = "session-2",
                 })
@@ -396,7 +396,7 @@ describe("SessionRestore", function()
             open_session_stub:returns(open_session)
             local mods = { tab = 1 }
 
-            SessionRestore.resume({ session_id = "sid-x" }, mods)
+            SessionResume.resume({ session_id = "sid-x" }, mods)
 
             assert.same(
                 { open_session.widget, mods, TARGET_WIN, n = 3 },
@@ -411,7 +411,7 @@ describe("SessionRestore", function()
             session_registry_stub:returns(session)
             local mods = { vertical = true }
 
-            SessionRestore.resume({
+            SessionResume.resume({
                 session_id = "sid-x",
                 cwd = "/p",
                 provider = "codex-acp",
@@ -434,7 +434,7 @@ describe("SessionRestore", function()
                 Config.acp_providers = {}
                 session_registry_stub:returns(create_mock_session())
 
-                SessionRestore.resume({
+                SessionResume.resume({
                     session_id = "sid-x",
                     cwd = "/p",
                     --- @diagnostic disable-next-line: assign-type-mismatch
@@ -462,7 +462,7 @@ describe("SessionRestore", function()
             local session = create_mock_session()
             session_registry_stub:returns(session)
 
-            SessionRestore.resume({ session_id = "sid-x" })
+            SessionResume.resume({ session_id = "sid-x" })
 
             assert.equal("codex-acp", session_registry_stub.calls[1][1])
             assert.same(
@@ -476,7 +476,7 @@ describe("SessionRestore", function()
             function()
                 session_registry_stub:returns(create_mock_session())
 
-                SessionRestore.resume({ session_id = "sid-x" })
+                SessionResume.resume({ session_id = "sid-x" })
 
                 assert.is_nil(session_registry_stub.calls[1][1])
                 assert.spy(logger_notify_stub).was.called(0)
@@ -484,7 +484,7 @@ describe("SessionRestore", function()
         )
 
         it("changes directory to the session cwd with cd_on_load", function()
-            Config.session_restore.cd_on_load = true
+            Config.sessions.cd_on_load = true
             session_registry_stub:returns(create_mock_session())
             local before = vim.fn.getcwd()
             local dir = vim.fn.tempname()
@@ -493,7 +493,7 @@ describe("SessionRestore", function()
                 vim.api.nvim_set_current_dir(before)
             end)
 
-            SessionRestore.resume({ session_id = "sid-x", cwd = dir })
+            SessionResume.resume({ session_id = "sid-x", cwd = dir })
 
             assert.equal(
                 vim.uv.fs_realpath(dir),
@@ -518,9 +518,9 @@ describe("SessionRestore", function()
         end
 
         before_each(function()
-            find_stub = spy.stub(SessionRestore, "find")
-            show_picker_stub = spy.stub(SessionRestore, "show_picker")
-            resume_stub = spy.stub(SessionRestore, "resume")
+            find_stub = spy.stub(SessionResume, "find")
+            show_picker_stub = spy.stub(SessionResume, "show_picker")
+            resume_stub = spy.stub(SessionResume, "resume")
         end)
 
         after_each(function()
@@ -533,7 +533,7 @@ describe("SessionRestore", function()
             setup_find({ test_sessions[1] })
             local mods = { tab = 1 }
 
-            SessionRestore.pick("First chat", { mods = mods })
+            SessionResume.pick("First chat", { mods = mods })
 
             assert.same({ test_sessions[1], mods, n = 2 }, resume_stub.calls[1])
             assert.spy(show_picker_stub).was.called(0)
@@ -542,7 +542,7 @@ describe("SessionRestore", function()
         it("picks among several matches in scope all", function()
             setup_find(test_sessions)
 
-            SessionRestore.pick("session", { marked_id = "m" })
+            SessionResume.pick("session", { marked_id = "m" })
 
             local opts = show_picker_stub.calls[1][1]
             assert.equal("all", opts.scope)
@@ -554,7 +554,7 @@ describe("SessionRestore", function()
         it("picks in scope local with a notice when nothing matches", function()
             setup_find({})
 
-            SessionRestore.pick("nope")
+            SessionResume.pick("nope")
 
             local opts = show_picker_stub.calls[1][1]
             assert.is_nil(opts.scope)
@@ -563,8 +563,8 @@ describe("SessionRestore", function()
         end)
 
         it("picks in scope local for a nil or empty query", function()
-            SessionRestore.pick(nil)
-            SessionRestore.pick("")
+            SessionResume.pick(nil)
+            SessionResume.pick("")
 
             assert.spy(find_stub).was.called(0)
             for _, call in ipairs(show_picker_stub.calls) do
@@ -580,7 +580,7 @@ describe("SessionRestore", function()
         it("lists the project folder of the editor cwd", function()
             setup_list_stub()
 
-            SessionRestore.list("local", function() end)
+            SessionResume.list("local", function() end)
 
             assert.equal(vim.fn.getcwd(), chat_history_list_stub.calls[1][1])
         end)
@@ -598,7 +598,7 @@ describe("SessionRestore", function()
                 flush_thought_run = function() end,
             }
 
-            SessionRestore.replay_messages(
+            SessionResume.replay_messages(
                 writer --[[@as agentic.ui.MessageWriter]],
                 { { type = "user", text = "continue", synthetic = true } },
                 no_buffer
@@ -622,7 +622,7 @@ describe("SessionRestore", function()
                 flush_thought_run = flush_spy,
             }
 
-            SessionRestore.replay_messages(
+            SessionResume.replay_messages(
                 writer --[[@as agentic.ui.MessageWriter]],
                 {
                     { type = "user", text = "Hello" },
@@ -642,7 +642,7 @@ describe("SessionRestore", function()
                 flush_thought_run = function() end,
             }
 
-            SessionRestore.replay_messages(
+            SessionResume.replay_messages(
                 writer --[[@as agentic.ui.MessageWriter]],
                 {
                     {
@@ -681,7 +681,7 @@ describe("SessionRestore", function()
                 write_notice = notice_spy,
                 flush_thought_run = spy.new(function() end),
             }
-            SessionRestore.replay_messages(
+            SessionResume.replay_messages(
                 writer --[[@as agentic.ui.MessageWriter]],
                 rows,
                 buffer_name
@@ -873,7 +873,7 @@ describe("SessionRestore", function()
                 flush_thought_run = flush_spy,
             }
 
-            SessionRestore.replay_messages(
+            SessionResume.replay_messages(
                 writer --[[@as agentic.ui.MessageWriter]],
                 {
                     { type = "thought", text = "Thinking..." },
@@ -900,7 +900,7 @@ describe("SessionRestore", function()
                 flush_thought_run = flush_spy,
             }
 
-            SessionRestore.replay_messages(
+            SessionResume.replay_messages(
                 writer --[[@as agentic.ui.MessageWriter]],
                 {
                     {
@@ -929,7 +929,7 @@ describe("SessionRestore", function()
                 flush_thought_run = spy.new(function() end),
             }
 
-            SessionRestore.replay_messages(
+            SessionResume.replay_messages(
                 writer --[[@as agentic.ui.MessageWriter]],
                 {
                     {
@@ -961,7 +961,7 @@ describe("SessionRestore", function()
                 flush_thought_run = spy.new(function() end),
             }
 
-            SessionRestore.replay_messages(
+            SessionResume.replay_messages(
                 writer --[[@as agentic.ui.MessageWriter]],
                 {
                     {
@@ -989,7 +989,7 @@ describe("SessionRestore", function()
                 flush_thought_run = spy.new(function() end),
             }
 
-            SessionRestore.replay_messages(
+            SessionResume.replay_messages(
                 writer --[[@as agentic.ui.MessageWriter]],
                 {
                     {
@@ -1022,7 +1022,7 @@ describe("SessionRestore", function()
                 flush_thought_run = spy.new(function() end),
             }
 
-            SessionRestore.replay_messages(
+            SessionResume.replay_messages(
                 writer --[[@as agentic.ui.MessageWriter]],
                 {
                     {
@@ -1063,7 +1063,7 @@ describe("SessionRestore", function()
                     table.insert(body, "match " .. i)
                 end
 
-                SessionRestore.replay_messages(
+                SessionResume.replay_messages(
                     writer --[[@as agentic.ui.MessageWriter]],
                     {
                         {
@@ -1147,7 +1147,7 @@ describe("SessionRestore", function()
                 }
             end
 
-            SessionRestore.replay_messages(writer, {
+            SessionResume.replay_messages(writer, {
                 {
                     type = "user",
                     text = "go",

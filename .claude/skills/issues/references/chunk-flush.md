@@ -119,15 +119,11 @@ dispatch layer to receive.
 Anything at the MessageWriter / dispatch / ACPClient layer is a dead
 end. The two approaches that can actually recover:
 
-1. **Respawn before auto-continue.** Before
-   `_offer_auto_continue`'s timer callback sends
-   `session/prompt("continue")`, tear down the current session via
-   `new_session({ on_created = ... })` and resend. This kills the
-   stuck claude-agent-acp subprocess, spawns a fresh one, and
-   re-establishes the ACP pipeline. Session state is lost unless
-   `chat_history` is re-prepended (the plugin already does this for
-   session restore). Cost: full subprocess restart per usage-limit
-   event, but auto-continue only fires once per reset cycle.
+1. **Respawn before auto-continue.** Implemented as
+   `respawn_preserving_history` (`session_recovery.lua`): on a usage-limit
+   error it kills the stuck claude-agent-acp subprocess and re-creates the
+   session from history on a fresh one. Cost: full subprocess restart per
+   usage-limit event, but auto-continue only fires once per reset cycle.
 2. **Report upstream and wait for a fix.** The root cause belongs in
    claude-agent-acp / claude-agent-sdk / the `claude` CLI. A minimal
    repro against `agentclientprotocol/claude-agent-acp` referencing

@@ -3,7 +3,7 @@ local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
 local ChatHistory = require("agentic.ui.chat_history")
-local SessionRestore = require("agentic.session_restore")
+local SessionResume = require("agentic.session_resume")
 local Subagents = require("agentic.subagents")
 
 --- The host spies a test reads.
@@ -145,7 +145,7 @@ describe("agentic.Subagents", function()
         local write_row_stub
 
         before_each(function()
-            write_row_stub = spy.stub(SessionRestore, "write_row")
+            write_row_stub = spy.stub(SessionResume, "write_row")
         end)
 
         after_each(function()

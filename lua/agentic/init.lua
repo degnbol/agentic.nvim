@@ -1,6 +1,6 @@
 local Config = require("agentic.config")
 local SessionRegistry = require("agentic.session_registry")
-local SessionRestore = require("agentic.session_restore")
+local SessionResume = require("agentic.session_resume")
 local Object = require("agentic.utils.object")
 local WidgetLayout = require("agentic.ui.widget_layout")
 local PermissionStructured = require("agentic.utils.permission_structured")
@@ -152,7 +152,7 @@ end
 --- @param model string|nil Model id. When nil, the saved one
 --- @param mods vim.api.keyset.cmd_mods|nil Command modifiers. A split or tab modifier shows the chat in a new window
 function Agentic.load_acp_session(session_id, cwd, model, mods)
-    SessionRestore.resume(
+    SessionResume.resume(
         { session_id = session_id, cwd = cwd, model = model },
         mods
     )
@@ -163,7 +163,7 @@ end
 --- @param query string
 --- @param callback fun(matches: agentic.ui.ChatHistory.SessionMeta[])
 function Agentic.resolve_session(query, callback)
-    SessionRestore.find(query, callback)
+    SessionResume.find(query, callback)
 end
 
 --- Resume the saved session that `query` matches by id prefix, else by exact
@@ -173,7 +173,7 @@ end
 --- @param mods vim.api.keyset.cmd_mods|nil
 function Agentic.resume_session(query, mods)
     local owner = SessionRegistry.owner_of_buf(vim.api.nvim_get_current_buf())
-    SessionRestore.pick(query, {
+    SessionResume.pick(query, {
         mods = mods,
         marked_id = owner and owner.session_id,
     })

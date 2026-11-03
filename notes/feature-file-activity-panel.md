@@ -126,7 +126,7 @@ an unspecified lifecycle, so this plan owes an explicit one.
 | Ctrl-C (`stop_generation`) | **preserve** |
 | `/new` (`_cancel_session`) | **clear** |
 | Load (`_do_load_acp_session`) | **clear**, then the saved log (dedupes the replay) |
-| Restore from history (`restore_from_history`) | **clear**, then the saved log |
+| Restore from history (`replace_with_history`) | **clear**, then the saved log |
 | Restart (`restart_session`) | **clear**, then the same conversation's log |
 | Provider switch (`switch_provider`) | preserve |
 | Respawn after usage limit | preserve |
@@ -326,12 +326,12 @@ the v1 schema even though v1 does not render it.
 ## Persistence
 
 Persist the op log in the session JSON via `ChatHistory`. It cannot be
-derived from replay: on Path B, `SessionRestore.replay_messages`
-(`session_restore.lua:346-357`) repopulates the chat buffer by calling
+derived from replay: on Path B, `SessionResume.replay_messages`
+(`session_resume.lua:346-357`) repopulates the chat buffer by calling
 `writer:write_tool_call_block` **directly**, bypassing `SessionManager`'s
 tool-call handlers entirely. Nothing would append. (The frequently-cited
 "Path B collapses tool calls into prose" is a different mechanism —
-`ChatHistory.prepend_restored_messages`, which governs what the *model*
+`ChatHistory.prepend_history_messages`, which governs what the *model*
 sees, not what the client renders.)
 
 On Path A the log is restored and replay re-fires the handlers; the

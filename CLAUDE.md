@@ -67,8 +67,8 @@ arithmetic pitfall").
 
 Three closely related areas — all covered by the `session-lifecycle` project skill.
 Load that skill before editing `session_manager.lua`, `chat_history.lua`, or
-`window_decoration.lua`. It documents: the three ACP session/load race conditions
-and their `_restoring`/`_session_epoch`/`destroyed` guards; the MessageWriter
+`window_decoration.lua`. It documents: the ACP session/load race conditions
+and their `_loading_saved`/`_session_epoch`/`destroyed` guards; the MessageWriter
 cross-turn flag hazards (which flags exist, where each resets); and the header
 state pipeline (`WindowDecoration.set_header()` → `vim.b[buf].agentic_header`
 → `AgenticHeadersChanged` autocmd → external plugins).

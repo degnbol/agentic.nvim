@@ -4,7 +4,7 @@ local Child = require("tests.helpers.child")
 --- Lua run in each child: a throwaway session store, three project dirs and
 --- `_G.dir_of`, the editor cwd after a `:cd` into one of them.
 local SETUP = [[
-require("agentic.config").session_restore.storage_path = vim.fn.tempname()
+require("agentic.config").sessions.storage_path = vim.fn.tempname()
 _G.ChatHistory = require("agentic.ui.chat_history")
 _G.dirs = {}
 _G.dir_of = {}

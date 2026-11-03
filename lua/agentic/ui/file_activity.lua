@@ -136,7 +136,7 @@ end
 
 --- Record a file operation. Idempotent in `op.tool_call_id`: a provider may
 --- repeat a completion (hook retry cycles), and `session/load` replays every
---- tool call into the same handlers on top of a restored log.
+--- tool call into the same handlers on top of the log read from the session file.
 --- @param op { tool_call_id: string, path: string, op: agentic.ui.FileActivity.OpClass, dest_path?: string, ranges?: agentic.ui.MessageWriter.HunkRange[] }
 --- @return boolean recorded False when this tool call was already in the log
 function FileActivity:record(op)

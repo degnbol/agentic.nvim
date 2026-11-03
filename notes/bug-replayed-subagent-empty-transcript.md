@@ -19,7 +19,7 @@ read from code.
   The record lookup (`_read_agent_record` → `agent:subagent_record`, a meta
   file named by the agent id) misses that id, so the block's
   `subagent` info has no `agent_type`, a predicted mode and `confirmed = false`.
-- `_restore_transcripts` maps the file's messages (keyed by `task_id`) to the
+- `_add_history_transcripts` maps the file's messages (keyed by `task_id`) to the
   live child id from the file. It makes one transcript for that id, which holds
   the messages, and one empty transcript for the replay id, which the block
   points to.

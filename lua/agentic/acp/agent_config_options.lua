@@ -13,7 +13,7 @@ local Logger = require("agentic.utils.logger")
 --- @field legacy_agent_modes agentic.acp.AgentModes
 --- @field legacy_agent_models agentic.acp.AgentModels
 --- @field _pending_model_select boolean
---- @field _pending_initial_model? string model id to apply once options arrive (session restore)
+--- @field _pending_initial_model? string model id to apply once options arrive
 --- @field _set_mode_callback fun(mode_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
 --- @field _set_model_callback fun(model_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
 --- @field _is_agent_ready? fun(): boolean Returns true if an agent is attached and ready
@@ -150,7 +150,7 @@ function AgentConfigOptions:current_mode_id()
 end
 
 --- Queue a model id to apply once configOptions (or legacy models) become
---- available. Used by session restore to reapply the saved model.
+--- available, or apply it now if it already is.
 --- @param model_id string
 function AgentConfigOptions:set_pending_initial_model(model_id)
     self._pending_initial_model = model_id

@@ -15,7 +15,7 @@ CONTENTS                                                    *agentic-contents*
        4.3  Keymaps ................................. |agentic-config-keymaps|
        4.4  Tool call display .................. |agentic-config-tool-display|
        4.5  Permissions ......................... |agentic-config-permissions|
-       4.6  Session restore ................. |agentic-config-session-restore|
+       4.6  Sessions ............................... |agentic-config-sessions|
        4.7  Hooks ..................................... |agentic-config-hooks|
        4.8  Settings ............................... |agentic-config-settings|
        4.9  Miscellaneous .............................. |agentic-config-misc|
@@ -330,10 +330,9 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     `allow_always`, `reject_once`, `__reject_all__`, `reject_always`.
 
 ------------------------------------------------------------------------------
-4.6 SESSION RESTORE                           *agentic-config-session-restore*
+4.6 SESSIONS                                         *agentic-config-sessions*
 
-                                             *agentic-config-session_restore*
-`session_restore` table
+`sessions` table
     `storage_path`      string | nil
                         (default: `~/.cache/nvim/agentic/sessions/`)
     `picker`            `"quickfix"` | `"fzf-lua"` | `"select"`
@@ -603,7 +602,7 @@ Applied to all buffers in the widget (chat, prompt, panels).
     Key              Field               Mode    Description ~
     `<localLeader>m`   `change_mode`         n/v     Switch agent mode
     `<C-c>`            `stop_generation`     n/i     Stop generation
-    `<localLeader>R`   `restore_session`     n       Pick a saved session
+    `<localLeader>R`   `resume_session`      n       Pick a saved session
     `<localLeader>p`   `switch_provider`     n       Switch this session's provider
     `<localLeader>M`   `switch_model`        n       Switch model
     `<localLeader>!`   `restart_session`     n       Restart session
@@ -723,7 +722,7 @@ and appear in slash-command completion.
                        history and in the header state.
     `/delete`          Delete the current session from disk and clear the
                        UI. Prompts first while
-                       `session_restore.confirm_delete` is on.
+                       `sessions.confirm_delete` is on.
     `/context`         Token-usage readout for the session.
     `/grant [path]`    Grant a path for auto-approval. See
                        |agentic-permissions-grant|.
@@ -767,7 +766,7 @@ notices as well as prompts (|agentic-keymaps-agent|).
     as |agentic.load_acp_session()| does. Several matches open the picker
     on those matches, across all projects. No match notifies and opens the
     picker for this project. Takes |:command-modifiers|: `:tab AgenticResume`
-    shows the resumed chat in a new tabpage. `session_restore.cd_on_load`
+    shows the resumed chat in a new tabpage. `sessions.cd_on_load`
     governs the working directory.
 
 ==============================================================================
@@ -969,7 +968,7 @@ the session. It is 'modified' while the session's history is not yet
 written, and `:w` on it writes the session file.
 
 Notices, errors and the session-start line are not saved: `:e` and a
-restore do not render them again.
+resume do not render them again.
 
 A session with no messages and an empty input ends when no window shows its
 chat.
@@ -1102,7 +1101,7 @@ HEAD, so committing the agent's work drops its rows. Rows for untracked
 files that still exist, and every row outside a git repository, stay.
 `windows.activity.hide_reverted = false` keeps them all.
 
-The list survives a session restore and a provider switch. `/new`
+The list survives a resume and a provider switch. `/new`
 and `/clear` start a new conversation, and empty it.
 
 Only the file-editing tools are tracked. Files a shell command changes are
@@ -1164,19 +1163,19 @@ A `to_input` key in a background subagent's transcript opens its message
 input. `:w` there sends the text to the subagent through the main agent, as
 your prompt in the chat; `@path` stays text. A blocking subagent has no
 message input: in its transcript, `to_input` keys go to the session's input.
-A restored background subagent gets its input when it runs again.
+A background subagent from a saved history gets its input when it runs again.
 
 `<C-c>` in a subagent's transcript or message input sends the interrupt to
 that subagent; the main agent's turn goes on.
 
-Transcripts are saved with the session (|agentic-buffers|) and come back on
-load and restore.
+Transcripts are saved with the session (|agentic-buffers|) and come back on a
+resume and a re-create from history.
 
 ------------------------------------------------------------------------------
 9.8 TAGS                                                        *agentic-tags*
 
 Some rows of the chat and the subagent transcripts are tags. Tags come back
-with a restored session.
+with a resumed session.
 
     Tag                  Defined at ~
     Message id           Each row of a message between agents

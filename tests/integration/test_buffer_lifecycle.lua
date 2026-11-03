@@ -27,7 +27,7 @@ describe("Buffer lifecycle", function()
         child.cmd("Agentic")
         child.flush()
         child.lua([[
-require("agentic.config").session_restore.storage_path = vim.fn.tempname()
+require("agentic.config").sessions.storage_path = vim.fn.tempname()
 _G.s = require("agentic.session_registry").owner_of_buf(
     vim.api.nvim_get_current_buf()
 )
@@ -127,7 +127,7 @@ vim.api.nvim_set_current_win(_G.s.widget:home_win())
             assert.is_true(session_file_exists())
         end)
 
-        it("is clean after a restore", function()
+        it("is clean after a re-create from history", function()
             open_session()
             child.lua([[
 _G.s.chat_history:add_message(_G.user_msg("unsaved"))
@@ -140,7 +140,7 @@ _G.s.agent._send_request = function(_, method, _, cb)
 end
 local history = require("agentic.ui.chat_history"):new()
 history.messages = { _G.user_msg("restored") }
-_G.s:restore_from_history(history)
+_G.s:replace_with_history(history)
 _G.new_cb({ sessionId = "sid-2" }, nil)
 ]])
             child.flush()

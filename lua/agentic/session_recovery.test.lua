@@ -548,7 +548,7 @@ describe("agentic.session_recovery", function()
                 assert.equal(0, #sink.notices)
             end)
 
-            -- An advanced epoch is `/new`, a restore, a provider switch or
+            -- An advanced epoch is `/new`, a resume, a provider switch or
             -- `/delete` landing during the login.
             it("recovers nothing into a replaced session", function()
                 local session, sink = make_session({ AGENT })

@@ -206,7 +206,7 @@ function Theme.setup()
         { Theme.HL_GROUPS.ERROR_HEADING, { link = "DiagnosticError" } },
         { Theme.HL_GROUPS.ERROR_BODY, { link = "DiagnosticVirtualTextError" } },
 
-        -- Picker highlights (session restore quickfix)
+        -- Picker highlights (session resume quickfix)
         { Theme.HL_GROUPS.PICKER_DATE, { link = "Comment" } },
         { Theme.HL_GROUPS.PICKER_DELIM, { link = "Delimiter" } },
 

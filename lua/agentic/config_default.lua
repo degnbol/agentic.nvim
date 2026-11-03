@@ -266,7 +266,7 @@ local ConfigDefault = {
             toggle_activity = "<localLeader>f",
             toggle_info = "<localLeader>I",
             restart_session = "<localLeader>!",
-            restore_session = "<localLeader>R",
+            resume_session = "<localLeader>R",
             refresh = "",
             toggle_follow = "<localLeader>a",
             goto_bottom = "<localLeader>G",
@@ -545,7 +545,7 @@ local ConfigDefault = {
         write_submit = true,
     },
 
-    --- @class agentic.UserConfig.SessionRestore
+    --- @class agentic.UserConfig.Sessions
     --- @field storage_path? string Path to store session data; if nil, default path is used: ~/.cache/nvim/agentic/sessions/
     --- @field picker? "quickfix"|"fzf-lua"|"select" Session picker backend.
     --- "quickfix" (default) — quickfix window with delete/undo/scope toggle keymaps.
@@ -553,7 +553,7 @@ local ConfigDefault = {
     --- "select" — delegates to vim.ui.select (works with dressing.nvim, etc; no scope toggle or delete).
     --- @field confirm_delete? boolean Prompt for confirmation before /delete (default: true)
     --- @field cd_on_load? boolean Change nvim's working directory to the session's recorded cwd on resume (default: true). Applies to every resume: the picker, `:AgenticResume` and `load_acp_session`.
-    session_restore = {
+    sessions = {
         storage_path = nil,
         picker = "quickfix",
         confirm_delete = true,

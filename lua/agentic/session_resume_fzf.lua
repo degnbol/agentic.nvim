@@ -1,17 +1,17 @@
 local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
-local SessionRestore = require("agentic.session_restore")
+local SessionResume = require("agentic.session_resume")
 
---- @class agentic.SessionRestoreFzf
+--- @class agentic.SessionResumeFzf
 local M = {}
 
---- @class agentic.SessionRestoreFzf.Opts
---- @field scope agentic.SessionRestore.Scope
+--- @class agentic.SessionResumeFzf.Opts
+--- @field scope agentic.SessionResume.Scope
 
 --- Show the fzf-lua session picker with preview and scope toggle.
---- @param items agentic.SessionRestore.PickerItem[]
---- @param on_select fun(item: agentic.SessionRestore.PickerItem)
---- @param opts agentic.SessionRestoreFzf.Opts
+--- @param items agentic.SessionResume.PickerItem[]
+--- @param on_select fun(item: agentic.SessionResume.PickerItem)
+--- @param opts agentic.SessionResumeFzf.Opts
 --- @return boolean success
 function M.show(items, on_select, opts)
     local fzf_ok, fzf = pcall(require, "fzf-lua")
@@ -50,9 +50,8 @@ function M.show(items, on_select, opts)
     local function refresh_items()
         local show_cwd = scope == "all"
 
-        SessionRestore.list(scope, function(sessions)
-            items =
-                SessionRestore.build_items(sessions, { show_cwd = show_cwd })
+        SessionResume.list(scope, function(sessions)
+            items = SessionResume.build_items(sessions, { show_cwd = show_cwd })
         end)
         preview_cache = {}
     end
@@ -82,7 +81,7 @@ function M.show(items, on_select, opts)
             return "Failed to parse session"
         end
 
-        local lines = SessionRestore.format_preview(data.messages)
+        local lines = SessionResume.format_preview(data.messages)
         local result = table.concat(lines, "\n")
         preview_cache[item.session_id] = result
         return result

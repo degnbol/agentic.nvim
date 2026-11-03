@@ -15,7 +15,7 @@ Not covered: `lua/agentic/utils/permission_rules.lua` (its reviewer did not fini
 ## 0. Bugs found on the way (not edge cases)
 
 Fixed on 2026-10-26, with tests (`make validate` passes):
-- 0.1 `session_manager.lua` create callback: dropped `self._restoring or`. `restore_from_history` without `reuse_session` now keeps its session (`restart_session`, the `session/load` fallback, conflicting restores without `session/load`).
+- 0.1 `session_manager.lua` create callback: dropped `self._loading_saved or`. `replace_with_history` without `reuse_session` now keeps its session (`restart_session`, the `session/load` fallback, conflicting restores without `session/load`).
 - 0.4 `ansi.lua`: SGR numbers capped at 255, so out-of-range colours build a valid hex.
 - 0.5 `chat_widget.lua`: prompt-navigation keys read the config directly; `false` now disables them.
 - 0.6 `agent_config_options.lua` `set_initial_mode`: no warning when `default_mode` is already current.
@@ -39,27 +39,27 @@ Questions for the user:
 
 | # | Where | What | Kind | Reach | Harm | LOC | Origin |
 |---|---|---|---|---|---|---|---|
-| 1.1 | SM:384-387, 4312-4314, + `self.agent and` at 213, 464, 2986, 3958, 4139-4141; `session_restore.lua:41-43`; `session_recovery.lua:360,636` | nil checks on `get_instance`, which errors and never returns nil | correctness | dead | none | 14 | 020679c… |
+| 1.1 | SM:384-387, 4312-4314, + `self.agent and` at 213, 464, 2986, 3958, 4139-4141; `session_resume.lua:41-43`; `session_recovery.lua:360,636` | nil checks on `get_instance`, which errors and never returns nil | correctness | dead | none | 14 | 020679c… |
 | 1.2 | SM:2629, 2633 | `_budget_status` unit scaling "cheap insurance" | cosmetic | dead | none | 3 | 0ba65c2 spec |
 | 1.3 | SM:4135, 4144-4148 | `opts and opts.set_pending_initial_model` | correctness | dead | none | 4 | 6df25d8 |
 | 1.4 | SM:207, 217-218, 3801 | `self.file_activity` / `self.config_options` guards | correctness | dead | none | 3 | 64cbb2e |
 | 1.5 | SM:1599-1601 | `_rename_session` empty-title guard | correctness | dead | none | 3 | 6c7058c |
 | 1.6 | SM:193-196 | welcome header "unknown" fallback, unused param | cosmetic | dead | none | 1 | f02f7c0 |
-| 1.7 | `session_restore_builtin.lua:171` | undo-index clamp | correctness | dead | none | 1 | cf2cf0b |
-| 1.8 | `session_restore_builtin.lua:50-52` | `if current_idx then` around a nil-able assignment | cosmetic | dead | none | 3 | 292b0ee |
-| 1.9 | `session_restore_builtin.lua:62-64` | empty early return; loop gives the same | correctness | dead | none | 3 | cf2cf0b |
-| 1.10 | `session_restore_builtin.lua:80`; `session_restore.lua:264, 335` | `or` fallbacks for config with defaults | cosmetic | dead | none | 3 | — |
-| 1.11 | `session_restore.lua:28` | `chat_history ~= nil` | correctness | dead | none | 1 | 463420a |
-| 1.12 | `session_restore.lua:419-422` | empty-query early return | correctness | rare (Lua API only) | "ambiguous prefix" warning | 4 | 6bf816c |
+| 1.7 | `session_resume_builtin.lua:171` | undo-index clamp | correctness | dead | none | 1 | cf2cf0b |
+| 1.8 | `session_resume_builtin.lua:50-52` | `if current_idx then` around a nil-able assignment | cosmetic | dead | none | 3 | 292b0ee |
+| 1.9 | `session_resume_builtin.lua:62-64` | empty early return; loop gives the same | correctness | dead | none | 3 | cf2cf0b |
+| 1.10 | `session_resume_builtin.lua:80`; `session_resume.lua:264, 335` | `or` fallbacks for config with defaults | cosmetic | dead | none | 3 | — |
+| 1.11 | `session_resume.lua:28` | `chat_history ~= nil` | correctness | dead | none | 1 | 463420a |
+| 1.12 | `session_resume.lua:419-422` | empty-query early return | correctness | rare (Lua API only) | "ambiguous prefix" warning | 4 | 6bf816c |
 | 1.13 | SM:3206-3211 | re-check gate before resubmitting a held prompt | cosmetic | reach | second "Message held" line | 5 | 5d55c36 |
 | 1.14 | SM:2017 | `deep_equal` dedupe of deciders | cosmetic | reach | same footer redrawn, no-op save | 1 | 6e03546 |
 | 1.15 | SM:1913-1915 | stdout text only while generating | cosmetic | reach | stray provider output between turns | 3 | abf0f18 |
 | 1.16 | SM:2658, 2660, 2733-2737 | provider-specific display cases in general code (`default`/`build` mode hidden, `" Mode"` strip, `"Default…"` model name) | cosmetic | reach | default mode/`Default (recommended)` shown; also breaks the provider-specific rule | 7 | 48ef318, c6a4ac8, a07b596 |
-| 1.17 | `session_restore.lua:97-104` | "no saved provider" warning | cosmetic | rare (legacy files) | one warning fewer | 8 | 6df25d8 |
+| 1.17 | `session_resume.lua:97-104` | "no saved provider" warning | cosmetic | rare (legacy files) | one warning fewer | 8 | 6df25d8 |
 | 1.18 | SM:605-610 | "chat stays modified" warning on `:w` mid-turn | cosmetic | reach | `:wqa` stops silently | 6 | c61b19f |
-| 1.19 | `session_restore_builtin.lua:93-111` | quickfix picker cosmetics (current-line highlight, plurals) | cosmetic | reach | "1 sessions", wrong highlight | 8 | 5edcf28, cf2cf0b |
+| 1.19 | `session_resume_builtin.lua:93-111` | quickfix picker cosmetics (current-line highlight, plurals) | cosmetic | reach | "1 sessions", wrong highlight | 8 | 5edcf28, cf2cf0b |
 | 1.20 | `session_recovery.lua:58-68` | usage lines in the unexpected-stopReason error | cosmetic | reach | no token counts in that error | 11 | 67efbfe |
-| 1.21 | `session_restore.lua:245-258` | thought truncation in picker preview | cosmetic | reach | longer previews | 12 | 8964594 |
+| 1.21 | `session_resume.lua:245-258` | thought truncation in picker preview | cosmetic | reach | longer previews | 12 | 8964594 |
 | 1.22 | `session_recovery.lua:533-536` | `if not timer` after `new_timer()` | correctness | ? (allocation failure) | none in practice | 4 | 40f682b spec |
 | 1.23 | SM:2641-2643, 2705-2707 | budget 5% noise floor and mark logic | cosmetic | reach | false warning glyph early in a window | 4 | 0ba65c2 |
 | 1.24 | SM:3333-3353 | `_warn_unadvertised_command` (opencode drops unknown commands; the rationale sits in general code) | cosmetic | reach | silent drop on opencode | 21 | 944b6d6 obs |

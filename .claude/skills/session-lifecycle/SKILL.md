@@ -1,14 +1,20 @@
 ---
 name: session-lifecycle
-description: Session lifecycle races, epoch guard, cross-turn MessageWriter state, and header state pipeline. Use when editing SessionManager, ChatHistory, session creation or session restore paths, the _restoring/_session_epoch/destroyed guards, MessageWriter cross-turn flags (reset at turn boundary), ChatWidget header rendering, WindowDecoration, or vim.b[buf].agentic_header. Covers "session restore", "epoch guard", "MessageWriter cross-turn state", and "header state pipeline".
+description: Session lifecycle races, epoch guard, cross-turn MessageWriter state, and header state pipeline. Use when editing SessionManager, ChatHistory, session creation, load (Path A) or re-create-from-history (Path B) paths, the _loading_saved/_session_epoch/destroyed guards, MessageWriter cross-turn flags (reset at turn boundary), ChatWidget header rendering, WindowDecoration, or vim.b[buf].agentic_header. Covers "session resume", "epoch guard", "MessageWriter cross-turn state", and "header state pipeline".
 ---
 
 # Session lifecycle
 
+| Term | Meaning | Not |
+|---|---|---|
+| resume | The user action: go on with a saved conversation (picker, `:AgenticResume`, `agentic.load_acp_session()`). Ends on Path A or Path B. | ACP `session/resume`, which the plugin does not send |
+| load | ACP `session/load` (Path A). The agent replays the conversation. Every resume of a session not open in a chat starts here. | reading the session file ("read the saved file") |
+| re-create from history | Path B: a new ACP session carrying the saved history (`new_session({ history })`). Callers: `provider-system` § "Chat buffer is UI only". | |
+| replay | Saved messages written into a chat buffer: by the agent during a load (`session/update`), or from the file (`replay_messages`). | |
+
 ## Session lifecycle races and the epoch guard
 
-For the three restore paths (`session/load`, `restore_from_history`,
-`respawn_preserving_history`) and what each sends on the wire, see the
+For Path A and Path B and what each sends on the wire, see the
 `provider-system` skill § "Chat buffer is UI only". A `session/load` with a
 session file renders the file; the replay is held and only its tail after
 the file is dispatched (`_dispatch_replay_tail`).
@@ -18,8 +24,8 @@ Two races leave a callback acting on a session that has moved on:
 1. **Constructor on-ready race:** `AgentInstance.get_instance()` calls `on_ready`
    synchronously when the instance already exists. The constructor wraps the
    inner logic in `vim.schedule`. When `load_acp_session()` is called immediately
-   after construction (from `SessionRestore.resume`), the deferred callback fires
-   after `_do_load_acp_session` — without the `_restoring` guard it would call
+   after construction (from `SessionResume.resume`), the deferred callback fires
+   after `_do_load_acp_session` — without the `_loading_saved` guard it would call
    `new_session()`, replacing the loaded session.
 
 2. **Session destroyed while its `session/new` is in flight:** the unused
@@ -31,7 +37,7 @@ Two races leave a callback acting on a session that has moved on:
 
 **Guards:**
 
-- `_restoring` flag — prevents the deferred on-ready callback (race 1).
+- `_loading_saved` flag — prevents the deferred on-ready callback (race 1).
 - `_session_epoch` counter — monotonically incremented by `new_session()`,
   `_do_load_acp_session` and `_delete_session` (which ends a conversation with
   no `new_session` behind it). The `create_session` and `session/load`
@@ -42,7 +48,7 @@ Two races leave a callback acting on a session that has moved on:
 - `destroyed` flag — set in `SessionManager:destroy`; `SessionRegistry.destroy`
   is a no-op once it is set. Checked at the top of the `create_session`
   callback for race 2 (`destroy` advances neither the epoch nor
-  `_restoring`).
+  `_loading_saved`).
 
 **Rules:**
 
@@ -54,7 +60,7 @@ Two races leave a callback acting on a session that has moved on:
   replaced while the RPC was in flight.
 - `_do_load_acp_session` must feed `result.configOptions` through
   `_handle_new_config_options` on success (mirrors the `new_session` path) —
-  otherwise a restored session has no config options.
+  otherwise a loaded session has no config options.
 
 ## The in-flight counter
 

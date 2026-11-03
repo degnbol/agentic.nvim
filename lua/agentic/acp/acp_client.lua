@@ -893,7 +893,7 @@ end
 
 --- Directories a skill loaded in this session may live under, in precedence
 --- order (see `SkillPath.roots`). Per session rather than per client: one
---- client serves every tabpage using the provider, and a restored session
+--- client serves every tabpage using the provider, and a resumed session
 --- carries the cwd it was saved with, not the editor's current one.
 --- @param session_id string|nil
 --- @return string[] roots Empty for a session this client neither created nor loaded

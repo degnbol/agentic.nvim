@@ -15,7 +15,7 @@ Lands after `PLAN-reapply-model.md`, which deletes the `_announced_model_id` ded
 - `lua/agentic/ui/status_indicator.lua`
 - `lua/agentic/ui/message_writer.lua` (`write_subagent_heading`)
 - `lua/agentic/ui/tool_call_layout.lua` (`subagent_heading`)
-- `lua/agentic/session_restore.lua` (`write_row`, `replay_messages`)
+- `lua/agentic/session_resume.lua` (`write_row`, `replay_messages`)
 - `lua/agentic/config_default.lua` (`windows.stack`, `headers`)
 - Tests:
   - `lua/agentic/session_manager.test.lua` (the `announce_model_loaded`, `_notice_model_switched` and `_notice_mode_switched` cases)
@@ -54,7 +54,7 @@ The header (`vim.b.agentic_header`, rendered by incline) is short on room. Its c
 | 12 | Header state | `running` (`ChatWidget:set_running`), `idle` at an unseen turn end (`_notify_attention(true)`), `waiting` for a hidden permission float (`_on_permission_hidden`) | `running` (`SubagentTranscript:set_running`), `waiting` on the transcript (`_on_permission_hidden` with its `badge_bufnr`). No `idle` or bell at `end_agent`. | `running`/`waiting` shared, `idle` main only |
 | 13 | Header user customisation | `Config.headers.agent` | Looked up as `subagent` / `message` (`resolve_header_text` reads `agentic_window`). Both absent from the `headers` defaults. | Same mechanism, separate keys |
 | 14 | Buffer name | `ChatWidget:set_chat_title` → `WindowDecoration.buffer_name` | `SubagentTranscript:new` (`name_tail`) → `WindowDecoration.buffer_name` | Yes |
-| 15 | User prompt in body | `write_user_prompt` on submit (`_send_user_prompt`) and in load replay (`user_message_chunk`) | The launch prompt and relayed messages are `session_message` rows (`SessionRestore.write_row`) in the main chat and the transcript. A child's `user_message_chunk` is skipped. | No |
+| 15 | User prompt in body | `write_user_prompt` on submit (`_send_user_prompt`) and in load replay (`user_message_chunk`) | The launch prompt and relayed messages are `session_message` rows (`SessionResume.write_row`) in the main chat and the transcript. A child's `user_message_chunk` is skipped. | No |
 | 16 | Tool call blocks, permission float | `_writer_for`, `_indicator_for`, `_on_tool_call`, PermissionManager's writer lookup | Same path | Yes |
 | 17 | Turn end | `_finalize_turn`: `finalize_turn`, `set_turn_usage` footer, side-record drain | `end_agent`: an end row (`subagent_end`). No usage footer. | No |
 | 18 | Cancelled stamping | `_mark_unresolved_tool_calls_cancelled` | `end_agent`, unless `completed` | Yes |

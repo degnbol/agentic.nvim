@@ -5,7 +5,7 @@ local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
 local Json = require("agentic.utils.json")
 local Logger = require("agentic.utils.logger")
-local SessionRestore = require("agentic.session_restore")
+local SessionResume = require("agentic.session_resume")
 local SubagentInput = require("agentic.ui.subagent_input")
 local WidgetLayout = require("agentic.ui.widget_layout")
 
@@ -15,7 +15,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field transcript? agentic.ui.SubagentTranscript Nil once the user wiped it
 --- @field open boolean Working, as far as this instance knows
 --- @field record_read boolean The provider's record of the spawn has been read
---- @field parent_session_id? string The session that announced it. Nil for one restored from a file
+--- @field parent_session_id? string The session that announced it. Nil for one read from a session file
 --- @field title? string The provider's title for it, the label's fallback
 --- @field description? string The provider's description of its task, the label
 --- @field config_options? agentic.acp.AgentConfigOptions Its own, once the provider reports any
@@ -164,7 +164,7 @@ function Subagents:_replay_transcript(child_id)
     local rows =
         self._host.history():messages_for_agent(self:agent_key(child_id))
     transcript:restart(block and block.subagent)
-    SessionRestore.replay_messages(transcript.writer, rows, function(id)
+    SessionResume.replay_messages(transcript.writer, rows, function(id)
         return self:buffer_name(id)
     end)
     transcript.status_indicator:reposition()
@@ -176,7 +176,7 @@ function Subagents:_replay_transcript(child_id)
     if not agent.open then
         for i = #rows, 1, -1 do
             if rows[i].type == "subagent_end" then
-                end_state = SessionRestore.end_state(rows[i])
+                end_state = SessionResume.end_state(rows[i])
                 break
             end
         end
@@ -560,7 +560,7 @@ function Subagents:_write_row(child_id, row)
     -- hold the row yet.
     local transcript = self:transcript(child_id)
     row.agent_key = self:agent_key(child_id)
-    SessionRestore.write_row(
+    SessionResume.write_row(
         transcript.writer,
         row,
         self._agents[child_id].open,
@@ -574,8 +574,8 @@ function Subagents:_write_row(child_id, row)
 end
 
 --- Name of a session's buffer: a subagent's transcript, nil while it has
---- none, else the chat. Any other id counts as the root, since a restore into
---- a new session leaves the old root id in the history's rows.
+--- none, else the chat. Any other id counts as the root, since a re-create from
+--- history leaves the old root id in the history's rows.
 --- @param session_id string
 --- @return string|nil
 function Subagents:buffer_name(session_id)
@@ -622,7 +622,7 @@ function Subagents:update(update, source_session_id, replayed)
         end
     end
     agent.title, agent.description = title, description
-    -- An agent restored from a file has none; the parent never changes.
+    -- An agent read from a session file has none; the parent never changes.
     agent.parent_session_id = agent.parent_session_id or source_session_id
 
     local state = Json.present(update.state)
@@ -856,7 +856,7 @@ end
 
 --- Give a running subagent known to run in the background a message input,
 --- shown in no window. No-op when it has one, for an agent that has ended or
---- was restored, and for a provider whose main agent cannot message one.
+--- was read from a session file, and for a provider whose main agent cannot message one.
 --- @param child_id string
 function Subagents:_open_input(child_id)
     local agent = self._agents[child_id]

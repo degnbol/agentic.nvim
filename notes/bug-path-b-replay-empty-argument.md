@@ -4,7 +4,7 @@ Line numbers against `cc07515` + working tree.
 
 ## Mechanism
 
-`ChatHistory.prepend_restored_messages` gates on the argument being present
+`ChatHistory.prepend_history_messages` gates on the argument being present
 (`chat_history.lua:236`):
 
 ```lua

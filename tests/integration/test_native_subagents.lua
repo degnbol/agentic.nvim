@@ -5,7 +5,7 @@ local Child = require("tests.helpers.child")
 --- prompt from the user in its history, a throwaway session store and Claude
 --- config dir, and helpers that feed it what the bridge sends.
 local SETUP = [[
-require("agentic.config").session_restore.storage_path = vim.fn.tempname()
+require("agentic.config").sessions.storage_path = vim.fn.tempname()
 vim.cmd("Agentic")
 _G.s = require("agentic.session_registry").current()
 _G.s.session_id = "root"
@@ -264,7 +264,7 @@ _G.state("c1", { state = "_paused" })
         "a message from a child is no delegation and no launch prompt",
         function()
             child.lua([[
--- An ancestor announced without state or prompt, as for a restored child.
+-- An ancestor announced without state or prompt, as for a child from a session file.
 _G.announce("c1", "alpha", "root", false)
 _G.announce("c2", "beta", "c1")
 _G.update("c1", {
@@ -297,7 +297,7 @@ _G.update("c1", {
     it("a later announce gives a known agent its parent", function()
         child.lua([[
 _G.spawn("c1")
--- As for an agent restored from a file.
+-- As for an agent read from a session file.
 _G.s._subagents._agents.c1.parent_session_id = nil
 _G.announce("c1", "find it", "root", false)
 ]])
@@ -1179,7 +1179,7 @@ _G.chunk("c1", " second", "toolu_c1")
     end)
 end)
 
-describe("subagents on load and restore", function()
+describe("subagents on load and re-create from history", function()
     local child = Child.new()
 
     before_each(function()
@@ -1435,7 +1435,7 @@ end)]]
     end)
 
     it(
-        "a restore into another session manager links the new buffers",
+        "a re-create from history in another session manager links the new buffers",
         function()
             child.lua([[
 vim.cmd("tabnew")
@@ -1448,7 +1448,7 @@ _G.s2 = require("agentic.session_registry").current()
 _G.s2.agent._send_request = function(_, method, _, cb)
     if method == "session/new" then _G.new_cb = cb end
 end
-_G.s2:restore_from_history(vim.deepcopy(_G.saved))
+_G.s2:replace_with_history(vim.deepcopy(_G.saved))
 _G.new_cb({ sessionId = "sid-live" }, nil)
 ]])
             child.flush()
@@ -1869,9 +1869,9 @@ _G.s:_on_tool_call({
         assert.equal(1, child.lua_get("#_G.sides"))
     end)
 
-    it("a restored row shows the sender's name", function()
+    it("a replayed row shows the sender's name", function()
         child.lua([[
-require("agentic.session_restore").replay_messages(_G.s.message_writer, { {
+require("agentic.session_resume").replay_messages(_G.s.message_writer, { {
     type = "session_message", message_id = "m-1", kind = "message",
     view = "received", sender_name = "agentic-nvim-45",
     text = "Please rebase. Then tell me.",

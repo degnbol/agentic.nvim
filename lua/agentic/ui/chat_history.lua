@@ -10,7 +10,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field text string Raw user input text, not the buffer formatted content
 --- @field timestamp integer Unix timestamp when message was sent
 --- @field provider_name string
---- @field synthetic? boolean Sent by the plugin, not typed. Kept as a session/load alignment key; every rendering of the history skips it, so a restore reads the response as one continuous turn
+--- @field synthetic? boolean Sent by the plugin, not typed. Kept as a session/load alignment key; every rendering of the history skips it, so a replay reads the response as one continuous turn
 
 --- @class agentic.ui.ChatHistory.AgentMessage
 --- @field type "agent"
@@ -98,13 +98,13 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field session_id? string
 --- @field timestamp integer Unix timestamp when session was created
 --- @field messages agentic.ui.ChatHistory.Message[]
---- @field subagent_messages agentic.ui.ChatHistory.Message[] Kept apart from `messages`, which are what a restore sends to the provider, what the picker previews and what the chat replays
+--- @field subagent_messages agentic.ui.ChatHistory.Message[] Kept apart from `messages`, which are what a re-create from history sends to the provider, what the picker previews and what the chat replays
 --- @field subagents table<string, agentic.ui.ChatHistory.Subagent> Child session id -> what the session records about that subagent
 --- @field title string
 --- @field provider? agentic.UserConfig.ProviderName config key
 --- @field model? string model id
 --- @field provider_version? string provider binary version
---- @field file_activity? agentic.ui.FileActivity.Data Tally of files the agent changed. Cannot be rebuilt from `messages`: the restore path that replays them writes tool-call blocks straight to the chat buffer, bypassing the handlers that record ops.
+--- @field file_activity? agentic.ui.FileActivity.Data Tally of files the agent changed. Cannot be rebuilt from `messages`: the replay writes tool-call blocks straight to the chat buffer, bypassing the handlers that record ops.
 --- @field dirty boolean Mutated since the last `save` or `load`, so the session file is behind. Set by every mutating method; assign `messages` or `title` only through them.
 local ChatHistory = {}
 ChatHistory.__index = ChatHistory
@@ -425,11 +425,11 @@ function ChatHistory:sequence_entries()
     end, self.messages)
 end
 
---- Prepend restored messages to prompt in ACP Content format. Synthetic
---- prompts are skipped.
+--- Prepend `messages` to `prompt` as a text transcript (ACP content).
+--- Synthetic prompts are skipped.
 --- @param messages agentic.ui.ChatHistory.Message[]
 --- @param prompt agentic.acp.Content[] The prompt array to prepend to
-function ChatHistory.prepend_restored_messages(messages, prompt)
+function ChatHistory.prepend_history_messages(messages, prompt)
     for _, msg in ipairs(messages) do
         -- Convert stored messages to ACP Content format
         if msg.type == "user" and not msg.synthetic then
@@ -601,7 +601,7 @@ end
 --- Get the base storage path for all session folders.
 --- @return string
 function ChatHistory.get_base_storage_path()
-    return Config.session_restore.storage_path
+    return Config.sessions.storage_path
         or vim.fs.joinpath(
             vim.fn.stdpath("cache") --[[@as string]],
             "agentic",

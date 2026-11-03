@@ -47,8 +47,8 @@ describe("ChatHistory", function()
         end)
 
         local Config = require("agentic.config")
-        original_storage_path = Config.session_restore.storage_path
-        Config.session_restore.storage_path = "/test/storage"
+        original_storage_path = Config.sessions.storage_path
+        Config.sessions.storage_path = "/test/storage"
 
         ChatHistory = require("agentic.ui.chat_history")
     end)
@@ -62,7 +62,7 @@ describe("ChatHistory", function()
         write_file_stub:revert()
         read_from_disk_stub:revert()
         local Config = require("agentic.config")
-        Config.session_restore.storage_path = original_storage_path
+        Config.sessions.storage_path = original_storage_path
         package.loaded["agentic.ui.chat_history"] = nil
     end)
 
@@ -75,8 +75,7 @@ describe("ChatHistory", function()
 
     --- Make writes and reads use the disk, in a fresh storage folder.
     local function use_disk()
-        require("agentic.config").session_restore.storage_path =
-            vim.fn.tempname()
+        require("agentic.config").sessions.storage_path = vim.fn.tempname()
         write_file_stub:invokes(function(path, content, callback)
             vim.fn.mkdir(vim.fs.dirname(path), "p")
             vim.fn.writefile(vim.split(content, "\n"), path)
@@ -371,12 +370,12 @@ describe("ChatHistory", function()
         end)
     end)
 
-    describe("prepend_restored_messages", function()
+    describe("prepend_history_messages", function()
         --- @param subagent agentic.ui.MessageWriter.SubagentInfo
         --- @return string text
         local function prepended(subagent)
             local prompt = {}
-            ChatHistory.prepend_restored_messages({
+            ChatHistory.prepend_history_messages({
                 {
                     type = "tool_call",
                     tool_call_id = "child-1",
@@ -392,7 +391,7 @@ describe("ChatHistory", function()
 
         it("skips a synthetic prompt", function()
             local prompt = {}
-            ChatHistory.prepend_restored_messages({
+            ChatHistory.prepend_history_messages({
                 {
                     type = "user",
                     text = "go",
@@ -412,7 +411,7 @@ describe("ChatHistory", function()
 
         it("sends nothing for side records", function()
             local prompt = {}
-            ChatHistory.prepend_restored_messages({
+            ChatHistory.prepend_history_messages({
                 {
                     type = "side_records",
                     records = {
@@ -428,7 +427,7 @@ describe("ChatHistory", function()
 
         it("writes the range of a read", function()
             local prompt = {}
-            ChatHistory.prepend_restored_messages({
+            ChatHistory.prepend_history_messages({
                 {
                     type = "tool_call",
                     tool_call_id = "tc-read",
@@ -446,7 +445,7 @@ describe("ChatHistory", function()
 
         it("writes a rejection line in place of the body", function()
             local prompt = {}
-            ChatHistory.prepend_restored_messages({
+            ChatHistory.prepend_history_messages({
                 {
                     type = "tool_call",
                     tool_call_id = "tc-rm",
@@ -465,7 +464,7 @@ describe("ChatHistory", function()
 
         it("writes the open range of a read", function()
             local prompt = {}
-            ChatHistory.prepend_restored_messages({
+            ChatHistory.prepend_history_messages({
                 {
                     type = "tool_call",
                     tool_call_id = "tc-read",
@@ -506,7 +505,7 @@ describe("ChatHistory", function()
 
         it("renders both views of a message, naming the peer", function()
             local prompt = {}
-            ChatHistory.prepend_restored_messages({
+            ChatHistory.prepend_history_messages({
                 {
                     type = "tool_call",
                     tool_call_id = "child-1",
@@ -555,7 +554,7 @@ describe("ChatHistory", function()
 
         it("names a sender outside the conversation by its name", function()
             local prompt = {}
-            ChatHistory.prepend_restored_messages({
+            ChatHistory.prepend_history_messages({
                 {
                     type = "session_message",
                     message_id = "m-1",

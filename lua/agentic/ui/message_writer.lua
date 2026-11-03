@@ -133,7 +133,7 @@ end
 --- @field shell? "bash"|"zsh" Shell the provider runs commands in, when known
 --- @field exits_plan? boolean The call asks the user to approve a plan and leave plan mode
 --- @field file_created? boolean Whether the call created the file rather than changing existing content. Reported after the tool runs, so absent until then — a mutation with no value here has not been told either way, which is not the same as false.
---- @field hunk_ranges? agentic.ui.MessageWriter.HunkRange[] Post-edit line range of each changed hunk, as reported by the provider. Not rendered; recorded so the range survives a session restore, which re-deriving from disk cannot (the file is post-edit by then).
+--- @field hunk_ranges? agentic.ui.MessageWriter.HunkRange[] Post-edit line range of each changed hunk, as reported by the provider. Not rendered; recorded so the range survives in the session file, which re-deriving from disk cannot (the file is post-edit by then).
 --- @field skill_path? string Absolute path to the SKILL.md a Skill call loaded, verified to exist when it was resolved. Absent when no root held the skill.
 --- @field subagent? agentic.ui.MessageWriter.SubagentInfo Set on a subagent's block in the main chat
 --- @field decided_by? agentic.PermissionDecider[] What let the call run or stopped it; nil when the provider decided
@@ -1394,7 +1394,7 @@ end
 --- it. Nothing shows meanwhile except the status indicator, which already says
 --- "thinking".
 ---
---- Public because `SessionRestore.replay_messages` ends on this too — a stored
+--- Public because `SessionResume.replay_messages` ends on this too — a stored
 --- history whose last entry is a thought would otherwise stay buffered until
 --- the next turn's first write and render under the new prompt.
 function MessageWriter:flush_thought_run()

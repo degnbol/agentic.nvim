@@ -20,13 +20,13 @@ each clears or redraws the owned panels after it, so no path shows the
 mismatch today:
 - `_reset_conversation` clears `todo_list` and `file_activity`, then resets
   `_usage` and calls `render_info`.
-- `_fallback_restore_from_local` clears `todo_list` and `file_activity`.
-- `restore_from_history` is reached from `_fallback_restore_from_local` and
+- `_new_session_after_failed_load` clears `todo_list` and `file_activity`.
+- `replace_with_history` is reached from `_new_session_after_failed_load` and
   from `restart_session` after `_cancel_session` (→ `_reset_conversation`).
   `_install_history` clears and reloads `file_activity`.
 
 After the change the `info` panel keeps the owner's last snapshot on the
-`_fallback_restore_from_local` path instead of going blank. The change makes
+`_new_session_after_failed_load` path instead of going blank. The change makes
 each panel buffer written only by its owner.
 
 Origin: the "Restore here" branch of `do_restore` cleared by hand and left

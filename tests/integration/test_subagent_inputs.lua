@@ -9,7 +9,7 @@ local Child = require("tests.helpers.child")
 --- `_G.bells`.
 local SETUP = [[
 local Config = require("agentic.config")
-Config.session_restore.storage_path = vim.fn.tempname()
+Config.sessions.storage_path = vim.fn.tempname()
 Config.acp_providers["claude-agent-acp"].subagents.force_background = true
 Config.keymaps.prompt.submit = "<F5>"
 vim.cmd("Agentic")

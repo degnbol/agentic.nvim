@@ -108,7 +108,7 @@ None of these can land alone.
 `make validate` on `assign-type-mismatch`.
 
 No `--[[@as]]` casts are needed anywhere: §2 assigns through an untyped
-`update`, and §1e's `session_restore.lua:350` sits inside an already-annotated
+`update`, and §1e's `session_resume.lua:350` sits inside an already-annotated
 constructor. Verified by applying §1a+§1b+§1e+§2 to a scratch copy and running
 `make luals`' exact invocation — the only residual diagnostics are the six
 CamelCase literals in tests (§1f's `message_writer.test.lua:4172`, `:4186`;
@@ -147,14 +147,14 @@ Making the four reachable means passing the resolved kind into
 not part of a rename.
 
 ### 1e. Normalise the restore boundary
-`session_restore.lua:350` (`kind = msg.kind`) replays kinds persisted raw by
+`session_resume.lua:350` (`kind = msg.kind`) replays kinds persisted raw by
 `session_manager.lua:1020`. **Sessions on disk hold `Skill` (94),
 `TodoWrite` (65), `SubAgent` (25), `WebSearch` (9)** — all of them on
 `messages[].type == "tool_call"` records, exactly what `:350` replays. Without a normalise here
 §1a silently breaks every session predating it. Nothing tests this.
 
 Two other persisted-kind readers are display-only and unaffected:
-`session_restore.lua:249` (picker label) and `chat_history.lua:156`
+`session_resume.lua:249` (picker label) and `chat_history.lua:156`
 (prompt reconstruction, `"Tool call (%s): %s"` — its text changes from
 `Tool call (SubAgent)` to `Tool call (subagent)` on resume; cosmetic).
 
@@ -262,7 +262,7 @@ Every other non-test **ACP-vocabulary** `kind = "…"` in the repo is one of
 §1a's mints or an already-lowercase literal needing no change: `claude:65`,
 `claude:203` (`switch_mode`) and `opencode:54` (`search`). A bare
 `grep 'kind = "'` also returns trust-scope and bash-effect literals — those are
-the other vocabularies under Hazards, not misses. `session_restore.lua:350`
+the other vocabularies under Hazards, not misses. `session_resume.lua:350`
 (§1e) is `kind = msg.kind`, so it never appears in that grep at all.
 
 ## 4. Delete the four option-kind normalise calls

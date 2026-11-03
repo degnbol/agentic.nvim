@@ -108,7 +108,7 @@ identifies it. No note owns it yet.
 
 ## Non-goals
 
-- Prose regions in a replayed chat. `SessionRestore.replay_messages` writes
+- Prose regions in a replayed chat. `SessionResume.replay_messages` writes
   agent prose through `write_message`, which starts no prose run, so a replayed
   buffer has no `╭─` regions and no prose folds. Command notices are not in
   `ChatHistory` either. A fix would bracket each user→agent boundary in replay.

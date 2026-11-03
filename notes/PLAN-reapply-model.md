@@ -2,13 +2,13 @@
 Status: reviewed
 
 ## Relevant files
-- `lua/agentic/session_manager.lua` (SM): `new_session`, `_do_load_acp_session`, `restore_from_history`, `restart_session`, `switch_provider`, `announce_model_loaded`, `_handle_model_change`, `_sync_history_context`
+- `lua/agentic/session_manager.lua` (SM): `new_session`, `_do_load_acp_session`, `replace_with_history`, `restart_session`, `switch_provider`, `announce_model_loaded`, `_handle_model_change`, `_sync_history_context`
 - `lua/agentic/session_recovery.lua`: `respawn_preserving_history`
 - `lua/agentic/acp/agent_config_options.lua`: `set_pending_initial_model`, `_flush_pending_initial_model`, `get_model`
-- `lua/agentic/session_restore.lua`: `check_conflict`, `do_restore` (the two resume paths)
+- `lua/agentic/session_resume.lua`: `check_conflict`, `do_restore` (the two resume paths)
 - `lua/agentic/ui/chat_history.lua`: `model` field
 - `lua/agentic/session_manager.test.lua`: the `announce_model_loaded` cases
-- Skills: `session-lifecycle` (resume paths, `_restoring`/epoch/`destroyed` guards)
+- Skills: `session-lifecycle` (resume paths, `_loading_saved`/epoch/`destroyed` guards)
 - Related: `notes/PLAN-agent-view-consolidation.md` moves `announce_model_loaded` into `AgentView`. It lands after this plan, without the dedupe this plan deletes.
 - `b909dda` (landed) added `_render_history`. `1d6432e` added the epoch guard of the path A load callback.
 
@@ -17,8 +17,8 @@ A session is loaded, or re-created from history, by these paths:
 
 | Path | Used by | Saved model reapplied? | Model shown? |
 |---|---|---|---|
-| A. `_do_load_acp_session` | `session/load` providers (`SessionRestore.do_restore`, `Agentic.load_acp_session`) | Yes, `set_pending_initial_model(model)` | In the resume notice body, `Provider: X · Model: Y`. A `Loaded` line also follows when the switch goes through (`_handle_model_change` → `announce_model_loaded`). |
-| B. `restore_from_history` | Providers without `session/load`, the fallback when `session/load` fails (`_fallback_restore_from_local`), `restart_session` | **No.** `new_session` with `restore_mode` takes no `preserved_model`, and nothing reads `history.model`. | **No.** `new_session` writes the `Loaded` line only outside `restore_mode`. |
+| A. `_do_load_acp_session` | `session/load` providers (`SessionResume.do_restore`, `Agentic.load_acp_session`) | Yes, `set_pending_initial_model(model)` | In the resume notice body, `Provider: X · Model: Y`. A `Loaded` line also follows when the switch goes through (`_handle_model_change` → `announce_model_loaded`). |
+| B. `replace_with_history` | Providers without `session/load`, the fallback when `session/load` fails (`_new_session_after_failed_load`), `restart_session` | **No.** `new_session` with `restore_mode` takes no `preserved_model`, and nothing reads `history.model`. | **No.** `new_session` writes the `Loaded` line only outside `restore_mode`. |
 | C. `SessionRecovery.respawn_preserving_history` | Respawn after a usage limit | **No**, as B. | **No** (`quiet_welcome`). |
 | D. `switch_provider` | Provider switch | Not applicable: a new provider. | **No.** |
 
@@ -60,11 +60,11 @@ The `Loaded` line means "from here on, model X". After a load or a re-create it 
    - `model_id` not offered by a provider that reports models: `Logger.notify` a WARN naming the saved and the current model.
    - So a load or re-create onto another model shows two lines, `Loaded <default>` then `Loaded <saved>`. Each line is true when written, and no line names a model whose switch failed.
 4. **Remove the dedupe.** Delete `_announced_model_id` and its reads and writes (`SessionManager:new`, `announce_model_loaded`, `_notice_model_switched`, `new_session`). `new_session` announces `current_model_id()` in place of `preserved_model`, and the switch to `preserved_model` announces itself, as in step 3.
-5. **`restore_from_history`**: new `opts.model?: string`. In its `new_session` `on_created`, `self:_reapply_model(opts.model or history.model)` after `_render_history()`. Not in `_render_history`: path A calls it before the load and reapplies after the resume notice (step 6).
+5. **`replace_with_history`**: new `opts.model?: string`. In its `new_session` `on_created`, `self:_reapply_model(opts.model or history.model)` after `_render_history()`. Not in `_render_history`: path A calls it before the load and reapplies after the resume notice (step 6).
 6. **`_do_load_acp_session`**:
    - Return early in the load callback when `self.destroyed`, beside the epoch check.
    - Replace the `set_pending_initial_model` call with `self:_reapply_model(model)`, after the resume notice.
-7. **`restart_session`**: pass the live model, `config_options:current_model_id()`, captured before `_cancel_session`. `restore_from_history` takes it as `opts.model`, which overrides `history.model`.
+7. **`restart_session`**: pass the live model, `config_options:current_model_id()`, captured before `_cancel_session`. `replace_with_history` takes it as `opts.model`, which overrides `history.model`.
 8. **`respawn_preserving_history`**: capture `sm.config_options:current_model_id()` before invalidating the instance. In `on_created`, reapply it. Whether to announce it is Open question 2.
 9. **`switch_provider`**: `self:_reapply_model(nil)` after the provider notice in `on_created`.
 10. **`new_session`**: add a comment at the gate that skips the announce with `history`: a re-create from history announces after its own content, through `_reapply_model`.
@@ -72,7 +72,7 @@ The `Loaded` line means "from here on, model X". After a load or a re-create it 
     - `_reapply_model`: announces the current model; queues an offered saved model; a saved model not offered gives a WARN; no model options queue it without a WARN; nil only announces.
     - A successful switch to the queued model writes a second `Loaded` line; a failed one writes the ERROR and no line.
     - Delete the dedupe cases (the repeated `announce_model_loaded("m")`).
-    - `restore_from_history`: the `Loaded` line follows the replayed messages.
+    - `replace_with_history`: the `Loaded` line follows the replayed messages.
     - `restart_session`: the re-create gets the live model, not the one from the last save.
     - Path A load callback: legacy `models` in the result fill the options; the callback writes nothing after `destroyed`.
     - `AgentConfigOptions:has_model`, in `agent_config_options.test.lua`.

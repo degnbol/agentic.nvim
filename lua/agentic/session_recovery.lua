@@ -82,7 +82,7 @@ end
 --- indistinguishable from the user's own and goes in too. The prompt's text
 --- goes on top of the input in `bufnr` and the context panels it consumed are
 --- attached again. The provider keeps the refused message in its
---- conversation, so the restored history and system info it carried are not
+--- conversation, so the history prefix and system info it carried are not
 --- sent again. Writes what was returned and the number of drafted prompts to
 --- the chat. No-op once the widget is destroyed.
 --- @param sm agentic.SessionManager
@@ -261,7 +261,7 @@ function M.run_login(sm, method, on_done)
         Logger.notify("Stopped the running login.")
     end
 
-    -- The conversation can be replaced during the login (`/new`, a restore, a
+    -- The conversation can be replaced during the login (`/new`, a resume, a
     -- provider switch, `/delete`); recovering into the replacement would
     -- recover the wrong conversation.
     local epoch = sm._session_epoch
@@ -360,7 +360,7 @@ end
 --- cheap recovery has been spent and a second auth error respawns rather than
 --- offering the same retry forever. A successful turn clears it — that is the
 --- only evidence the credentials took — so the flag deliberately outlives
---- `/new` and a restore, where nothing about the subprocess has been settled.
+--- `/new` and a resume, where nothing about the subprocess has been settled.
 --- @param sm agentic.SessionManager
 function M.recover_after_reauth(sm)
     if
@@ -608,7 +608,7 @@ function M.should_retry_transient(sm, err, turn_session_id)
     end
     -- A pending session/prompt callback outlives cancel_session, which drops
     -- the subscriber but not ACPClient.callbacks. So this failure can arrive
-    -- after /new, a restore or a provider switch installed a different
+    -- after /new, a resume or a provider switch installed a different
     -- session — resending would inject an unprompted turn into it.
     if sm.session_id == nil or sm.session_id ~= turn_session_id then
         return false

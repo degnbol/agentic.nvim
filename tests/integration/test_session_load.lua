@@ -7,7 +7,7 @@ describe("session/load history", function()
     before_each(function()
         child.setup()
         child.lua([[
-require("agentic.config").session_restore.storage_path = vim.fn.tempname()
+require("agentic.config").sessions.storage_path = vim.fn.tempname()
 vim.cmd("Agentic")
 _G.s = require("agentic.session_registry").current()
 _G.persists = 0
@@ -131,7 +131,7 @@ describe("session/load from the session file", function()
     before_each(function()
         child.setup()
         child.lua([[
-require("agentic.config").session_restore.storage_path = vim.fn.tempname()
+require("agentic.config").sessions.storage_path = vim.fn.tempname()
 vim.cmd("Agentic")
 _G.s = require("agentic.session_registry").current()
 _G.s.agent.agent_capabilities = { loadSession = true }

@@ -672,7 +672,7 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
-    describe("_do_load_acp_session: _restoring flag", function()
+    describe("_do_load_acp_session: _loading_saved flag", function()
         --- @type TestStub
         local schedule_stub
         --- @type TestStub
@@ -688,7 +688,7 @@ describe("agentic.SessionManager", function()
             captured_load_cb = nil
             return with_subagents({
                 session_id = nil,
-                _restoring = false,
+                _loading_saved = false,
                 _session_epoch = 0,
                 _is_first_message = true,
                 agent = {
@@ -777,18 +777,18 @@ describe("agentic.SessionManager", function()
             end)
             exec_autocmds_stub = spy.stub(vim.api, "nvim_exec_autocmds")
             -- A load looks up the saved file in every project folder.
-            original_storage_path = Config.session_restore.storage_path
-            Config.session_restore.storage_path = vim.fn.tempname()
+            original_storage_path = Config.sessions.storage_path
+            Config.sessions.storage_path = vim.fn.tempname()
         end)
 
         after_each(function()
             schedule_stub:revert()
             exec_autocmds_stub:revert()
-            Config.session_restore.storage_path = original_storage_path
+            Config.sessions.storage_path = original_storage_path
         end)
 
         it(
-            "sets _restoring = true immediately to block deferred new_session",
+            "sets _loading_saved = true immediately to block deferred new_session",
             function()
                 local session = make_load_session()
 
@@ -799,8 +799,8 @@ describe("agentic.SessionManager", function()
 
                 session:_do_load_acp_session("test-session-id", "/tmp")
 
-                -- _restoring must be true while load is in flight
-                assert.is_true(session._restoring)
+                -- _loading_saved must be true while load is in flight
+                assert.is_true(session._loading_saved)
             end
         )
 
@@ -895,7 +895,7 @@ describe("agentic.SessionManager", function()
             )
         end
 
-        it("clears _restoring on successful load", function()
+        it("clears _loading_saved on successful load", function()
             local session = make_load_session()
 
             session:_do_load_acp_session("test-session-id", "/tmp")
@@ -904,15 +904,15 @@ describe("agentic.SessionManager", function()
             -- Simulate successful completion
             captured_load_cb(nil, nil)
 
-            assert.is_false(session._restoring)
+            assert.is_false(session._loading_saved)
         end)
 
-        it("clears _restoring on failed load", function()
+        it("clears _loading_saved on failed load", function()
             local session = make_load_session()
             local notify_stub = spy.stub(Logger, "notify")
 
-            -- Stub _fallback_restore_from_local to avoid side effects
-            session._fallback_restore_from_local = function() end
+            -- Stub _new_session_after_failed_load to avoid side effects
+            session._new_session_after_failed_load = function() end
 
             session:_do_load_acp_session("test-session-id", "/tmp")
 
@@ -920,7 +920,7 @@ describe("agentic.SessionManager", function()
             -- Simulate failure
             captured_load_cb(nil, { message = "not found" })
 
-            assert.is_false(session._restoring)
+            assert.is_false(session._loading_saved)
             notify_stub:revert()
         end)
 
@@ -959,7 +959,7 @@ describe("agentic.SessionManager", function()
                     session.new_session = SessionManager.new_session
                     session.config_options.set_initial_mode = function() end
                     local fallback = spy.new(function() end)
-                    session._fallback_restore_from_local = fallback
+                    session._new_session_after_failed_load = fallback
 
                     session:_do_load_acp_session("loaded-sid", "/tmp")
                     local load_cb = captured_load_cb
@@ -996,7 +996,7 @@ describe("agentic.SessionManager", function()
             })
             local notify_stub = spy.stub(Logger, "notify")
             local fallback = spy.new(function() end)
-            session._fallback_restore_from_local = fallback
+            session._new_session_after_failed_load = fallback
             local render = spy.new(function() end)
             session._render_history = render
 
@@ -1015,7 +1015,7 @@ describe("agentic.SessionManager", function()
         it("clears the load gate when the load fails", function()
             local session = make_load_session()
             local notify_stub = spy.stub(Logger, "notify")
-            session._fallback_restore_from_local = function() end
+            session._new_session_after_failed_load = function() end
 
             session:_do_load_acp_session("test-session-id", "/tmp")
             captured_load_cb(nil, { message = "not found" })
@@ -1040,7 +1040,7 @@ describe("agentic.SessionManager", function()
 
             local notify_stub = spy.stub(Logger, "notify")
             local failed = make_load_session()
-            failed._fallback_restore_from_local = function() end
+            failed._new_session_after_failed_load = function() end
             failed._dispatch_deferred_prompts = function()
                 drains = drains + 1
             end
@@ -1102,13 +1102,13 @@ describe("agentic.SessionManager", function()
                 assert.equal(2, session._session_epoch)
                 assert.equal("loaded-sid-aaa", session.session_id)
 
-                -- Step 3: load completes, _restoring cleared
+                -- Step 3: load completes, _loading_saved cleared
                 assert.is_not_nil(captured_load_cb)
                 captured_load_cb(nil, nil) -- success
-                assert.is_false(session._restoring)
+                assert.is_false(session._loading_saved)
 
                 -- Step 4: stale create_session response arrives AFTER load
-                -- This is the race: _restoring=false, but epoch mismatch
+                -- This is the race: _loading_saved=false, but epoch mismatch
                 captured_create_cb({ sessionId = "stale-new-sid-bbb" }, nil)
 
                 -- session_id must NOT have been overwritten
@@ -1118,7 +1118,7 @@ describe("agentic.SessionManager", function()
             end
         )
 
-        it("keeps the create response of a restore from history", function()
+        it("keeps the create response of a re-create from history", function()
             local session = make_load_session()
             --- @type fun(result: table|nil, err: table|nil)|nil
             local captured_create_cb
@@ -3340,7 +3340,7 @@ describe("agentic.SessionManager", function()
                 assert.equal(0, session._prompt_pending)
             end)
 
-            -- A cancelled prompt's callback outlives /new or a restore.
+            -- A cancelled prompt's callback outlives /new or a resume.
             -- Decrementing then would report the session idle while the turn
             -- that replaced it is still running.
             it("ignores a callback from a superseded session", function()
@@ -3351,7 +3351,7 @@ describe("agentic.SessionManager", function()
                 end
 
                 session:_handle_input_submit("hello")
-                -- /new or a restore between send and callback.
+                -- /new or a resume between send and callback.
                 session._session_epoch = session._session_epoch + 1
                 session._prompt_pending = 1 -- the replacement turn
                 resolve({ stopReason = "cancelled" }, nil)
@@ -3516,7 +3516,7 @@ describe("agentic.SessionManager", function()
                     },
                 }, sink.history_updates)
                 -- The sweep has to precede the save, or the footer comes back
-                -- from a restore still reading `pending`.
+                -- from a resume still reading `pending`.
                 assert.equal(1, sink.updates_at_save)
             end)
 
@@ -3951,7 +3951,7 @@ describe("agentic.SessionManager", function()
                 local session = make_session(nil, TRANSIENT, sink)
                 session.agent.send_prompt = function(_self, _sid, prompt, cb)
                     table.insert(sink.prompts, prompt)
-                    -- /new, a restore or a provider switch between send and
+                    -- /new, a resume or a provider switch between send and
                     -- callback: the pending callback outlives cancel_session.
                     session.session_id = "s-2"
                     cb(nil, TRANSIENT)
@@ -4453,7 +4453,7 @@ describe("agentic.SessionManager", function()
 
     describe("_advance_session_epoch", function()
         -- Releasing the counter belongs to the epoch, not to _cancel_session:
-        -- a restore advances the epoch without cancelling, and the epoch guard
+        -- a resume advances the epoch without cancelling, and the epoch guard
         -- then refuses the outgoing turn's decrement, so nothing else would
         -- ever bring it back down.
         it("releases the in-flight gate for the outgoing session", function()
@@ -5296,7 +5296,7 @@ describe("agentic.SessionManager", function()
             end)
 
             it(
-                "queues the closed folds of a restored rejected block",
+                "queues the closed folds of a replayed rejected block",
                 function()
                     session.message_writer:write_tool_call_block(
                         ChatHistory.to_tool_call_block({
@@ -6119,7 +6119,7 @@ describe("agentic.SessionManager", function()
             assert.equal("0.66.0", session.chat_history.provider_version)
         end)
 
-        it("keeps a restored version when the agent reports none", function()
+        it("keeps a saved version when the agent reports none", function()
             local session = make_session(nil, "0.65.0")
 
             session:_sync_history_context(session.chat_history)

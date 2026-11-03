@@ -7,7 +7,7 @@ describe("a history carried into a new ACP session", function()
     before_each(function()
         child.setup()
         child.lua([[
-require("agentic.config").session_restore.storage_path = vim.fn.tempname()
+require("agentic.config").sessions.storage_path = vim.fn.tempname()
 vim.cmd("Agentic")
 _G.s = require("agentic.session_registry").current()
 _G.s.agent.agent_capabilities = { loadSession = true }
@@ -50,7 +50,7 @@ end
     --- answer shown once and queued for the first prompt.
     local function assert_carried()
         assert.equal("sid-new", child.lua_get("_G.s.session_id"))
-        assert.is_false(child.lua_get("_G.s._restoring"))
+        assert.is_false(child.lua_get("_G.s._loading_saved"))
         assert.equal(1, child.lua_get([[_G.count_in_chat("saved question")]]))
         assert.equal(1, child.lua_get([[_G.count_in_chat("saved answer")]]))
         assert.equal(2, child.lua_get("#_G.s._history_to_send"))
@@ -138,12 +138,12 @@ _G.new_cb({ sessionId = "sid-new" }, nil)
     end)
 
     it(
-        "restore_from_history keeps the history when session/new fails",
+        "replace_with_history keeps the history when session/new fails",
         function()
             child.lua([[
 _G.h = require("agentic.ui.chat_history"):new()
 _G.h:add_message(_G.msg("user", "saved question"))
-_G.s:restore_from_history(_G.h)
+_G.s:replace_with_history(_G.h)
 _G.new_cb(nil, { code = -32603, message = "nope" })
 ]])
             child.flush()

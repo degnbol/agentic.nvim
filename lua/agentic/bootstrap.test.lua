@@ -45,7 +45,7 @@ describe("agentic.Bootstrap", function()
             ":AgenticResume {query} gives a chat parsed as the agentic language",
             function()
                 child.lua([[
-                    require("agentic.session_restore").find = function(_, callback)
+                    require("agentic.session_resume").find = function(_, callback)
                         callback({ {
                             session_id = "sid-x",
                             cwd = vim.fn.getcwd(),
