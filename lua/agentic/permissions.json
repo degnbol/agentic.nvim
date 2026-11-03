@@ -463,6 +463,13 @@
     ]
   },
 
+  "opencode": {
+    "read_only": [{ "positionals": ["models"] }],
+    "ask":       [{ "positionals": ["models"], "options": ["refresh"] }],
+    "arity":     { "models": { "booleans": ["--verbose", "--pure", "--print-logs"],
+                               "takers":   ["--log-level"] } }
+  },
+
   "pacman": {
     "read_only": [
       { "options": ["Q"] },
