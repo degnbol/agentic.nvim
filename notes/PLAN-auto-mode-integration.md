@@ -1,22 +1,5 @@
 # PLAN: deterministic permission ladder as a PreToolUse hook, classifier as fallback
 
-Status: **grilled, forks resolved; Phase 1 complete and verified live** (the
-`decide` refactor, `session_id → SessionManager` lookup, RPC module + hook
-script, `AGENTIC_SOCK` at spawn, and the inline hook registration in
-`session/new` **and** `session/load` `_meta` are all done and unit-tested — see
-"Single source of truth", "Session routing", "Transport", "Hook registration",
-and "Phasing" below). The live bridge chain is confirmed: a real auto-mode Bash
-call reached the hook, matched its session's `PermissionManager`, ran `decide`,
-and fell through to the classifier as `undecided` — proving `AGENTIC_SOCK`
-propagation and `CLAUDE_CODE_SESSION_ID == session_id` routing end-to-end.
-Merge-asymmetry and
-permission-flow claims are sourced from the `acp` skill's
-`references/claude-agent.md`; the env/session-id **routing** facts in "Resolved
-by source" are now **recorded there** (§ "Hook process environment"), so an implementer
-can re-derive the socket routing.
-The two Phase-0 source verifications the earlier draft worried about are now
-**done** (see "Resolved by source" below).
-
 ## Goal
 
 Let a user opt a session into Claude's **auto** mode so the SDK's LLM
@@ -296,21 +279,6 @@ Blocking-`wait()` surface, for the record (all kept — pumping, not eliminated)
 
 ## Phasing
 
-- **Phase 1 (spike):** `decide` refactor **(done)**; `session_id →
-  SessionManager` lookup **(done)**; RPC handler calling `decide` directly
-  **(done)** — hook calls `evaluate` → `decide`, no `add_request`, so the
-  optional defensive `_process_next` deferral (§ "Reentrancy") is unneeded and
-  skipped; hook script (self-scoping + fail-open + `diff` reconstruction from
-  `rawInput`) **(done)**; `AGENTIC_SOCK` at spawn **(done)**. (The
-  `<localLeader>m` mode-switch keymap already landed separately, so no keymap
-  work remains.) Inline hook registration in `session/new` + `session/load`
-  `_meta.claudeCode.options.settings.hooks` **(done)** — § "Hook registration
-  (no file)". Live e2e **(done)** — a real auto-mode Bash call was routed
-  through the hook and logged `undecided (falls through to classifier)`,
-  confirming socket propagation, session-id routing, and `decide` all fire
-  end-to-end. `permission_hook.evaluate` logs its verdict per call (gated by
-  `Config.log`) so allow/deny/undecided/unmatched/no-session are all
-  distinguishable at runtime. **Phase 1 complete.**
 - **Phase 2 (productionise):** config flag to enable, failure-mode coverage,
   multi-nvim same-cwd check.
 - **Phase 3 (measure):** RPC latency (risk 1); only revisit transport if
@@ -326,4 +294,4 @@ Blocking-`wait()` surface, for the record (all kept — pumping, not eliminated)
   lives in the shell `case` and is exercised by the e2e driver.
   `canUseTool`/hook parity is structural (one `decide`, two callers) rather than
   a separate assertion.
-- **E2e:** the driver-harness assertions in Phase 1.
+- **E2e:** the driver harness.

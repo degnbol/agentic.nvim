@@ -40,7 +40,6 @@ Tracks are independent unless a note says otherwise.
 
 **Auto mode**
 1. [`PLAN-auto-mode-integration.md`](notes/PLAN-auto-mode-integration.md)
-   (phase 1 done)
 2. [`PLAN-auto-mode-fix.md`](notes/PLAN-auto-mode-fix.md), which extends it
 
 **Budget:** merge branch `shared-budget`.
@@ -52,7 +51,7 @@ calls to).
 
 **No ordering:**
 [`PLAN-widget-clear-chat.md`](notes/PLAN-widget-clear-chat.md),
-[`PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md) (unit 8 left),
+[`PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md),
 [`PLAN-heading-command-flag.md`](notes/PLAN-heading-command-flag.md) (on hold;
 after `PLAN-placeholder-titles.md`),
 [`PLAN-updated-input-display.md`](notes/PLAN-updated-input-display.md),
@@ -88,7 +87,9 @@ as a prompt) and is correct as written; fix the mapping, not the help.
 
 - **Cancel sweep misses errored turns**: it keys on `stopReason == "cancelled"`,
   so an errored turn strands the same footers. A provider that never answers at
-  all needs a sweep in `SessionManager:_refresh`.
+  all needs a sweep in `SessionManager:_refresh`. A tool call cut off
+  mid-flight by a cancel also keeps a status line that never reaches a final
+  status.
 
 - After auto-continue after reaching a limit the "Continue" is sent correctly to chat but then nothing appears in chat from the model.
   After closing the program (nvim), restarting and resuming the session a response is visible immediately in chat, i.e. the continue was successful but the chat didn't show the response from the model.
@@ -150,6 +151,9 @@ rg -n ""todowrite"|@alias|@class.*ToolCall" lua/agentic/ui/message_writer.lua
   when writing to the chat buffer. Investigate.
 
 ### Interactions
+
+- The terminal bell rings at every turn end while the chat is unfocused, not
+  only when the user's input is needed.
 
 - Insert mode in AgenticInput then mouse click in AgenticChat leaves cursor in input mode in chat which is never valid.
   I think we should switch to normal mode automatically when changing window focus to AgenticChat (regardless of the way focus was changed).
@@ -294,7 +298,7 @@ so typing them in the input buffer runs the TUI flow via the LLM.
 ### Gutter identity glyphs
 
 One rule — *the sign column says what a region is, the buffer text says what it
-contains*. Units 1–7 have landed; foldable prose regions remain:
+contains*. Foldable prose regions remain:
 [`notes/PLAN-gutter-identity.md`](notes/PLAN-gutter-identity.md).
 
 ### Rendering
@@ -674,6 +678,9 @@ We could consider adding a code comment or some other acp docs to point this out
 ## Investigations
 
 - **Manual code review**: this repo is heavily vibe-coded.
+
+- **Respawn after a usage limit**: if claude-agent-acp now closes its prompt
+  generator on errors, `respawn_preserving_history` is unnecessary.
 
 
 ## Housekeeping

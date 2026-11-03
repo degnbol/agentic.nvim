@@ -14,14 +14,7 @@ Not covered: `lua/agentic/utils/permission_rules.lua` (its reviewer did not fini
 
 ## 0. Bugs found on the way (not edge cases)
 
-Fixed on 2026-10-26, with tests (`make validate` passes):
-- 0.1 `session_manager.lua` create callback: dropped `self._loading_saved or`. `replace_with_history` without `reuse_session` now keeps its session (`restart_session`, the `session/load` fallback, conflicting restores without `session/load`).
-- 0.4 `ansi.lua`: SGR numbers capped at 255, so out-of-range colours build a valid hex.
-- 0.5 `chat_widget.lua`: prompt-navigation keys read the config directly; `false` now disables them.
-- 0.6 `agent_config_options.lua` `set_initial_mode`: no warning when `default_mode` is already current.
-- 0.7 `claude_utils.lua`: `"Preparing file…"` replaces the dead `Write` placeholder. Not handled: `Task (… effort)`.
-- 0.8 `claude_agent_acp_adapter.lua`: Bash description also read from `command_description`.
-- 0.11 `text_matcher.lua`: the trailing-whitespace strategy trims all trailing whitespace (this also removes 6.1's unused `trim` modes).
+- 0.7 `claude_utils.lua`: not handled: `Task (… effort)`.
 
 Reports, each getting a plan:
 - 0.2, 0.3 (git fails open; same-second cache) → fixed

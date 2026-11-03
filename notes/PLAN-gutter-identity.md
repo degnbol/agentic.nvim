@@ -28,31 +28,6 @@ read/edit distinction. `copy_extmarks` in the installed plugin's
 because a pinned block's kind is implied by what is on screen, and the blocks
 whose kind is not self-evident are short enough to keep their heading in view.
 
-### Shipped units
-
-The rule is in force. Units 1 to 7 have shipped or moved out; the code is the
-reference.
-
-1. Command notices — `MessageWriter:write_notice`, `glyphs.lua`.
-2. Gutter region signs — `ExtmarkBlock.render_block`/`render_rail`,
-   `ToolCallRenderer.render_decorations`, `render_region_rail` in
-   `message_writer.lua`.
-3. and 7. Prose run regions — every prose run holding more than one paragraph
-   takes a `╭─` region, re-stamped as the run streams (`render_prose_region`,
-   `has_paragraph_break`, `_rebuild_prose_region`, `_extend_prose_region`).
-   Every writer that interrupts prose, and `finalize_turn`/`end_runs`, ends the
-   run through `MessageWriter:_end_prose_run`.
-4. Mid-turn prompt splitting the prose run — moved to the queue gate
-   (`19fa6d6`). `write_user_prompt` ends the run it interrupts through
-   `_end_prose_run`.
-5. Collapsed thought runs — `MessageWriter:flush_thought_run` →
-   `_append_collapsed_region` → `render_collapsed_region` (glyph on the first
-   body row). Insert-mode fold repair: `_rebuild_folds_after_insert`.
-6. Hook activity — recovered from the CLI transcript
-   (`claude_transcript_reader.lua`), rendered by `write_hook_block` (through
-   `_place_collapsed_region`) and `write_hook_row`. The history keeps them as
-   `side_records` messages (`SideRecords.write`).
-
 ### Glyph vocabulary
 
 `glyphs.lua`. Nerd Font `nf-md-*`, never emoji, and every new glyph must avoid

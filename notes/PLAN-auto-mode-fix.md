@@ -1,8 +1,6 @@
 # PLAN: honour explicit `ask` gates under auto mode
 
-Status: reviewed spec. Extends `PLAN-auto-mode-integration.md`; needs its
-Phase 1 (done: `decide` refactor, hook transport, session routing, inline hook
-registration).
+Status: reviewed spec. Extends `PLAN-auto-mode-integration.md`.
 
 ## Background
 
