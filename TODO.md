@@ -23,19 +23,11 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
    the offset is fixed; open question 2 stays. May retire: a rejected call
    no longer draws the deny-rule merged body, its only reachable case.
 
-**Input and queue**
-1. P2 [`FEAT-usage-limit-queue.md`](notes/FEAT-usage-limit-queue.md). After
-   merging branch `fix-shared-client-recovery`.
-
 **Auto mode**
 1. P2 [`FEAT-auto-mode-integration.md`](notes/FEAT-auto-mode-integration.md)
 2. P1 [`FIX-auto-mode-fix.md`](notes/FIX-auto-mode-fix.md), which extends it
 
-**Budget:** merge branch `shared-budget`.
-
-**Peer name:** after `FEAT-usage-limit-queue.md` only to avoid a rebase (it
-rewrites the `new_session` and `_do_load_acp_session` sites this plan adds
-calls to).
+**Peer name:**
 1. P3 [`FEAT-peer-session-name.md`](notes/FEAT-peer-session-name.md)
 
 **No ordering:**
@@ -48,6 +40,7 @@ calls to).
 - P3 [`FEAT-updated-input-display.md`](notes/FEAT-updated-input-display.md)
 - P3 [`FIX-inline-math-dollar-pairing.md`](notes/FIX-inline-math-dollar-pairing.md)
 - P3 [`FEAT-discovered-skills.md`](notes/FEAT-discovered-skills.md)
+- P3 [`FIX-context-highlight-parser-gate.md`](notes/FIX-context-highlight-parser-gate.md)
 
 ## Bugs
 
@@ -138,6 +131,11 @@ rg -n ""todowrite"|@alias|@class.*ToolCall" lua/agentic/ui/message_writer.lua
 
 - **Large tool call outputs** (e.g. long file reads) can cause visible lag
   when writing to the chat buffer. Investigate.
+
+- **Edit diff highlighting rebuilds the file per hunk**: each render
+  reconstructs and parses the file once per hunk per side
+  (`highlight_map_in_context` from `hunk_rows` in `tool_call_layout.lua`).
+  Splice every hunk into one reconstruction per side.
 
 ### Interactions
 
