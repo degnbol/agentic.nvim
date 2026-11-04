@@ -777,7 +777,11 @@ function ChatWidget:_stage_input(text)
         BufHelpers.insert_text(lines)
         return
     end
-    local row = BufHelpers.append_paragraph(input, lines)
+    local row = BufHelpers.insert_paragraph(
+        input,
+        vim.api.nvim_buf_line_count(input),
+        lines
+    )
 
     if vim.api.nvim_get_mode().mode:match("^[vVsS\22\19]") then
         vim.cmd("normal! \27")

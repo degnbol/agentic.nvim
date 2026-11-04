@@ -65,9 +65,8 @@ Two races leave a callback acting on a session that has moved on:
 ## The in-flight counter
 
 `_prompt_pending` counts outstanding prompt callbacks. It gates no submit — the
-provider runs a mid-turn prompt as the next turn — only the automatic drains
-(`_drain_queue`, `_dispatch_deferred_prompts`), which is what advances the queue
-one block per turn. The prompt callback reads it as "a turn is still
+provider runs a mid-turn prompt as the next turn — only `_drain_queue`, which
+advances the queue one block per turn. The prompt callback reads it as "a turn is still
 streaming": it runs the turn boundary below but not the idle signals
 (`_set_generating(false)`, indicator, `_notify_attention`). An epoch mismatch runs neither.
 

@@ -1978,7 +1978,7 @@ end
 --- user did, and an error is not that.
 ---
 --- The block stays open — `write_error_action` extends it with whatever the
---- classification leads to (a countdown, a login offer), so the error and the
+--- classification leads to (a send time, a login offer), so the error and the
 --- plugin's response to it read as one region.
 --- @param err agentic.acp.ACPError
 --- @return string|nil error_type Error class for caller to dispatch on (errorKind-first)
@@ -2102,8 +2102,8 @@ end
 --- Write a line in the error style, joined to the error region above it when it
 --- directly follows one.
 ---
---- Two populations of caller. What an error led to — an auto-continue
---- countdown, a login offer — lands under the error that prompted it and
+--- Two populations of caller. What an error led to — when queued prompts
+--- send, a login offer — lands under the error that prompted it and
 --- belongs in its region. Standalone plugin notices (a rejected
 --- `/grant` scope, a truncated queue) reach the same styling with no error
 --- above them, and get no region.

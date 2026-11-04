@@ -4,7 +4,7 @@ local WindowDecoration = require("agentic.ui.window_decoration")
 
 --- Callbacks of a message input.
 --- @class agentic.ui.SubagentInput.Handlers
---- @field on_submit fun(text: string, opts: agentic.ui.PromptInput.SubmitOpts): boolean Send the text to the subagent. False keeps it in the buffer
+--- @field on_submit fun(text: string): boolean Send the text to the subagent. False keeps it in the buffer
 --- @field setup_buf fun(bufnr: integer) Called after the input binds its own maps, on creation and on each reload of the buffer
 --- @field on_wipeout fun() Called once when the buffer is wiped other than by `destroy`
 
@@ -33,10 +33,10 @@ function SubagentInput:new(name, label, widget, handlers)
             bufnr,
             { icon = "󰦨", title = "Message to " .. label }
         )
-        PromptInput.bind_submit(bufnr, function(opts)
+        PromptInput.bind_submit(bufnr, function()
             vim.cmd("stopinsert")
             local text = self:text()
-            if handlers.on_submit(text, opts) then
+            if handlers.on_submit(text) then
                 vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
             end
             BufHelpers.sync_modified(bufnr)

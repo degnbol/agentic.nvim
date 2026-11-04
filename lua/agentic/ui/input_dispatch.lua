@@ -34,7 +34,6 @@ local _dispatches = {}
 
 --- @class agentic.ui.InputDispatch.SubmitOpts
 --- @field send? agentic.ui.InputDispatch.SendOpts Slice to submit; the whole input buffer when absent
---- @field force? boolean Send now even if the session would defer the prompt
 
 --- A linewise or charwise region of a buffer.
 --- @class agentic.ui.InputDispatch.Span
@@ -193,8 +192,7 @@ function InputDispatch:submit(opts)
         self:_queue_line_range(next_block.sr, range.er)
     end
 
-    local dispatched =
-        self.on_submit(head.text, { from_buffer = true, force = opts.force })
+    local dispatched = self.on_submit(head.text, { from_buffer = true })
     if not dispatched then
         self:_queue_line_range(range.sr, head.er)
         -- The text is held, not sent: it stays modified.
@@ -471,11 +469,12 @@ end
 --- them, so regions never overlap or double-highlight.
 --- @param sr integer
 --- @param er integer
+--- @return integer mark_id
 function InputDispatch:_queue_line_range(sr, er)
     self:_clear_queued_in_range(sr, er)
     local buf = self._bufnr
     local last = vim.api.nvim_buf_get_lines(buf, er, er + 1, false)[1] or ""
-    vim.api.nvim_buf_set_extmark(buf, NS_QUEUED, sr, 0, {
+    return vim.api.nvim_buf_set_extmark(buf, NS_QUEUED, sr, 0, {
         end_row = er,
         end_col = #last,
         hl_group = Theme.HL_GROUPS.QUEUED_REGION,
@@ -606,6 +605,86 @@ function InputDispatch:consume_queued_block()
     return head.block
 end
 
+--- Add text to the input as a queued paragraph of its own, at the end unless
+--- `first` is set. Leaves focus, mode, cursor and the other regions' tags
+--- alone. Leading and trailing empty lines of the text are dropped.
+--- @param text string
+--- @param opts { first?: boolean }|nil first: put the paragraph above the first queued region, or at the top of the input when none is queued
+--- @return integer|nil mark_id The region's tag, or nil when the text has no lines or the input is wiped
+function InputDispatch:queue_paragraph(text, opts)
+    local lines = vim.split(text, "\n", { trimempty = true })
+    local buf = self:_valid_buf()
+    if #lines == 0 or not buf then
+        return nil
+    end
+    local row = vim.api.nvim_buf_line_count(buf)
+    if opts and opts.first then
+        local head = vim.api.nvim_buf_get_extmarks(
+            buf,
+            NS_QUEUED,
+            0,
+            -1,
+            { limit = 1 }
+        )[1]
+        row = head and head[2] or 0
+    end
+    -- Lines inserted at a region's first row would untag it.
+    self._draining = true
+    local first_row = BufHelpers.insert_paragraph(buf, row, lines)
+    self._draining = false
+    BufHelpers.sync_modified(buf)
+    return self:_queue_line_range(first_row, first_row + #lines - 1)
+end
+
+--- Add text to the top of the input as a draft paragraph (see
+--- `BufHelpers.prepend_draft`), keeping the queued regions tagged.
+--- @param text string
+function InputDispatch:prepend_draft(text)
+    local buf = self:_valid_buf()
+    if not buf then
+        return
+    end
+    -- Lines inserted at a region's first row would untag it.
+    self._draining = true
+    BufHelpers.prepend_draft(buf, text)
+    self._draining = false
+end
+
+--- Delete the queued region `mark_id` tags if its lines are exactly `text`,
+--- with the blank row that separates it from the paragraph above, or below
+--- when it starts the input. No-op when the tag is gone (any edit to the
+--- region removes it) or names other text.
+--- @param mark_id integer
+--- @param text string
+function InputDispatch:delete_queued_region(mark_id, text)
+    local buf = self:_valid_buf()
+    if not buf then
+        return
+    end
+    local mark = vim.api.nvim_buf_get_extmark_by_id(
+        buf,
+        NS_QUEUED,
+        mark_id,
+        { details = true }
+    )
+    if #mark == 0 then
+        return
+    end
+    local sr, er = mark[1], mark[3].end_row --[[@as integer]]
+    local lines = vim.api.nvim_buf_get_lines(buf, sr, er + 1, false)
+    if not vim.deep_equal(lines, vim.split(text, "\n")) then
+        return
+    end
+    vim.api.nvim_buf_del_extmark(buf, NS_QUEUED, mark_id)
+    local separator = sr > 0 and sr - 1 or er + 1
+    local separator_line =
+        vim.api.nvim_buf_get_lines(buf, separator, separator + 1, false)[1]
+    if separator_line and not separator_line:match("%S") then
+        sr, er = math.min(sr, separator), math.max(er, separator)
+    end
+    self:_delete_dispatched_lines(sr, er)
+end
+
 --- Drop every queued region, leaving the text as ordinary draft in place.
 function InputDispatch:cancel_queue()
     local buf = self:_valid_buf()
@@ -667,8 +746,8 @@ function InputDispatch:bind()
     local bufnr = self._bufnr
     local keymaps = Config.keymaps.prompt
 
-    PromptInput.bind_submit(bufnr, function(opts)
-        self:submit(opts)
+    PromptInput.bind_submit(bufnr, function()
+        self:submit()
     end)
 
     for _, binding in ipairs(BINDINGS) do

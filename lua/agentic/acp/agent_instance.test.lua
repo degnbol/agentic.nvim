@@ -52,4 +52,27 @@ describe("agentic.acp.AgentInstance", function()
             assert.equal("gemini-acp", gemini.provider_name)
         end)
     end)
+
+    describe("cleanup_all", function()
+        it("stops each client's usage limit", function()
+            for _, stub in pairs(new_stubs) do
+                stub:invokes(function()
+                    return {
+                        usage_limit = { stop = spy.new(function() end) },
+                        stop = function() end,
+                    }
+                end)
+            end
+            local clients = {
+                AgentInstance.get_instance("opencode-acp"),
+                AgentInstance.get_instance("gemini-acp"),
+            }
+
+            AgentInstance:cleanup_all()
+
+            for _, client in ipairs(clients) do
+                assert.spy(client.usage_limit.stop).was.called(1)
+            end
+        end)
+    end)
 end)

@@ -12,7 +12,7 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
 ### Session & workflow
 
 - Any number of sessions, each chat in any window of any tabpage
-- Auto-continue scheduled after usage-limit reset (WIP)
+- Prompts queue during a usage limit and send when it lifts
 - Attention bell/badge when chat is unfocused or no chat window follows
 - Follow toggle (default: `<localLeader>a`)
 - `:Agentic` shows the chat in the current window, and modifiers such as `:tab Agentic` or `:vert Agentic` place it

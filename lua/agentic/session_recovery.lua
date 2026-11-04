@@ -4,13 +4,14 @@
 --   - A new ACP session that carries the conversation, after a usage_limit
 --     error, and a restart of the provider subprocess for every session on
 --     it, after a re-login the live session did not cover.
---   - Auto-continue retry after usage_limit errors.
+--   - The automatic "continue" queued after a usage limit.
 --   - Silent auto-retry after transient server errors.
 --   - Surfacing of "successful but empty" prompt responses.
 --   - Return of a refused prompt: its text and context go back to the input,
 --     and everything queued behind it becomes draft.
+--   - Requeue of a prompt the usage limit turned away.
 -- All functions take the SessionManager (`sm`) as the first argument and
--- read/write its fields (`_retry_*`, `_session_epoch`, `destroyed`, ...).
+-- read/write its fields (`_transient_attempt`, `_session_epoch`, `destroyed`, ...).
 -- LuaLS treats those underscore-prefixed fields as private to SessionManager;
 -- this module is a tightly-coupled helper that legitimately reaches in.
 --- @diagnostic disable: invisible
@@ -22,6 +23,7 @@ local Duration = require("agentic.utils.duration")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 local SessionRegistry = require("agentic.session_registry")
+local UsageLimit = require("agentic.acp.usage_limit")
 
 local M = {}
 
@@ -78,15 +80,26 @@ function M.surface_unexpected_response(sm, response)
     sm.message_writer:write_error_message(synthetic_error)
 end
 
+--- Attach the context panel items a prompt consumed again.
+--- @param sm agentic.SessionManager
+--- @param consumed agentic.SessionManager.PanelContext
+local function reattach_context(sm, consumed)
+    for _, selection in ipairs(consumed.selections) do
+        sm.code_selection:add(selection)
+    end
+    for _, file in ipairs(consumed.files) do
+        sm.file_list:add(file)
+    end
+    sm.diagnostics_list:add_many(consumed.diagnostics)
+end
+
 --- Give a refused prompt back for editing. Every queued block becomes draft,
---- and a deferred prompt with no buffer range goes into the session's input,
---- since both expected the prompt to succeed. A held synthetic "continue" is
---- indistinguishable from the user's own and goes in too. The prompt's text
+--- since it was written expecting the prompt to succeed. The prompt's text
 --- goes on top of the input in `bufnr` and the context panels it consumed are
---- attached again. The provider keeps the refused message in its
---- conversation, so the history prefix and system info it carried are not
---- sent again. Writes what was returned and the number of drafted prompts to
---- the chat. No-op once the widget is destroyed.
+--- attached again. The provider keeps the refused message in its conversation, so the
+--- history prefix and system info it carried are not sent again. Writes what
+--- was returned and the number of drafted prompts to the chat. No-op once the
+--- widget is destroyed.
 --- @param sm agentic.SessionManager
 --- @param text string The refused prompt as the user wrote it
 --- @param consumed agentic.SessionManager.PanelContext What the prompt took from the context panels
@@ -95,28 +108,15 @@ function M.restore_refused_prompt(sm, text, consumed, bufnr)
     if sm.destroyed then
         return
     end
-    --- The session's input, made again when wiped; never nil before destroy.
-    --- @return integer
-    local function input()
-        return sm.widget:panel_buf("input") --[[@as integer]]
-    end
     local count = sm.widget.input_dispatch:queued_block_count()
     sm.widget.input_dispatch:cancel_queue()
-    if sm._pending_bufferless_prompt then
-        BufHelpers.prepend_draft(input(), sm._pending_bufferless_prompt)
-        sm._pending_bufferless_prompt = nil
-        count = count + 1
-    end
+    sm._continue_mark = nil
 
-    BufHelpers.prepend_draft(bufnr or input(), text)
-
-    for _, selection in ipairs(consumed.selections) do
-        sm.code_selection:add(selection)
-    end
-    for _, file in ipairs(consumed.files) do
-        sm.file_list:add(file)
-    end
-    sm.diagnostics_list:add_many(consumed.diagnostics)
+    BufHelpers.prepend_draft(
+        bufnr or sm.widget:panel_buf("input") --[[@as integer]],
+        text
+    )
+    reattach_context(sm, consumed)
 
     local key = Config.keymaps.widget.switch_model
     if type(key) == "string" and key ~= "" then
@@ -131,9 +131,51 @@ function M.restore_refused_prompt(sm, text, consumed, bufnr)
     end
     if count > 0 then
         sm.message_writer:write_error_action(
-            string.format("%d held or queued prompt(s) left as draft.", count)
+            string.format("%d queued prompt(s) left as draft.", count)
         )
     end
+end
+
+--- Put a prompt the usage limit turned away back in the input, as the first
+--- queued region, ahead of the text already queued, and attach the context
+--- panels it consumed again. No-op once the widget is
+--- destroyed.
+--- @param sm agentic.SessionManager
+--- @param text string The prompt as the user wrote it
+--- @param consumed agentic.SessionManager.PanelContext What the prompt took from the context panels
+function M.requeue_limited_prompt(sm, text, consumed)
+    if sm.destroyed then
+        return
+    end
+    -- The automatic "continue" stays recognisable, so `/new` and a give-up
+    -- still withdraw it.
+    local is_auto_continue = sm._continue_mark ~= nil and text == "continue"
+    local mark = sm:_queue_input(text, { first = true })
+    if is_auto_continue then
+        sm._continue_mark = mark
+    end
+    reattach_context(sm, consumed)
+end
+
+--- Put a prompt the usage limit turned away back as a draft on top of the
+--- input in `bufnr`, and attach the context panels it consumed again. Leaves
+--- the queue alone. No-op once the widget is destroyed.
+--- @param sm agentic.SessionManager
+--- @param text string The prompt as the user wrote it
+--- @param consumed agentic.SessionManager.PanelContext What the prompt took from the context panels
+--- @param bufnr integer|nil Input to put the text in, default the session's input
+function M.return_limited_prompt(sm, text, consumed, bufnr)
+    if sm.destroyed then
+        return
+    end
+    if bufnr then
+        BufHelpers.prepend_draft(bufnr, text)
+    else
+        -- Making the input makes its dispatch.
+        sm.widget:panel_buf("input")
+        sm.widget.input_dispatch:prepend_draft(text)
+    end
+    reattach_context(sm, consumed)
 end
 
 --- Point the user at /login after an auth error, when the agent advertises a
@@ -403,29 +445,6 @@ function M._announce_reauth(sm, body)
     })
 end
 
---- Cancel a pending auto-continue timer and remove the cancel keymap.
---- @param sm agentic.SessionManager
---- @param reset_attempts? boolean Also reset the retry attempt counter (default: true)
-function M.cancel_retry_timer(sm, reset_attempts)
-    if sm._retry_timer then
-        sm._retry_timer:stop()
-        sm._retry_timer:close()
-        sm._retry_timer = nil
-    end
-
-    local km = sm._retry_keymap
-    if km then
-        if vim.api.nvim_buf_is_valid(km.bufnr) then
-            pcall(vim.keymap.del, "n", km.lhs, { buffer = km.bufnr })
-        end
-        sm._retry_keymap = nil
-    end
-
-    if reset_attempts ~= false then
-        sm._retry_attempt = 0
-    end
-end
-
 --- Move the session to a new ACP session on the same client, carrying its
 --- model and, as context for the next submit, its conversation. Clears `sm.session_id` and the todo list and cancels pending
 --- permission requests at once. The old session is closed first, so its
@@ -508,120 +527,57 @@ function M.restart_client(sm, on_created)
     end)
 end
 
---- Schedule auto-continue after a usage limit error.
---- On the first attempt, waits until `reset_epoch + 2 min`. On subsequent
---- attempts (provider's reset time was inaccurate), retries with a fixed
---- 5-minute backoff. Gives up after 3 consecutive attempts.
+--- Report when queued prompts send, and queue a "continue" in an empty input
+--- so the stopped turn resumes then. Queues nothing when
+--- `auto_continue_on_usage_limit` is off, the input holds text or is being
+--- typed in, or the limit came back `UsageLimit.MAX_ATTEMPTS` times in a row.
 --- @param sm agentic.SessionManager
---- @param reset_epoch number Epoch seconds when usage resets
-function M.offer_auto_continue(sm, reset_epoch)
-    if not sm.agent:auto_continue_on_usage_limit() then
-        return
-    end
-
-    local MAX_RETRIES = 3
-    local RETRY_BACKOFF_S = 5 * 60 -- 5 minutes
-
-    if sm._retry_attempt >= MAX_RETRIES then
-        sm.message_writer:write_error_action(
-            string.format(
-                "Auto-continue gave up after %d attempts. Send a message manually when usage resets.",
-                MAX_RETRIES
-            )
+--- @param limit agentic.acp.UsageLimit The limit the turn hit
+function M.offer_auto_continue(sm, limit)
+    local auto_continue = sm.agent:auto_continue_on_usage_limit()
+    local attempt_suffix = ""
+    if
+        auto_continue
+        and limit.attempt > 1
+        and limit.attempt <= UsageLimit.MAX_ATTEMPTS
+    then
+        attempt_suffix = string.format(
+            " (attempt %d/%d)",
+            limit.attempt,
+            UsageLimit.MAX_ATTEMPTS
         )
-        sm._retry_attempt = 0
-        return
     end
-
-    M.cancel_retry_timer(sm, false)
-
-    local delay_s
-    if sm._retry_attempt > 0 then
-        -- Previous auto-continue got another usage limit error — the provider's
-        -- reset time was inaccurate. Use a fixed backoff instead.
-        delay_s = RETRY_BACKOFF_S
-    else
-        delay_s = math.max(reset_epoch - os.time(), 10)
-        -- Add buffer to avoid racing the exact reset moment
-        delay_s = delay_s + 120
-    end
-
-    sm._retry_attempt = sm._retry_attempt + 1
-
-    local duration = Duration.format(delay_s)
-    local attempt_suffix = sm._retry_attempt > 1
-            and string.format(
-                " (attempt %d/%d)",
-                sm._retry_attempt,
-                MAX_RETRIES
-            )
-        or ""
-
     sm.message_writer:write_error_action(
         string.format(
-            "Auto-continuing in %s%s. Press [c] to cancel.",
-            duration,
+            "Usage limit: queued prompts send in %s%s.",
+            Duration.format(limit.lifts_at - os.time()),
             attempt_suffix
         )
     )
 
-    local chat_bufnr = sm.widget.buf_nrs.agent
-    local lhs = "c"
-
-    vim.keymap.set("n", lhs, function()
-        M.cancel_retry_timer(sm)
-        Logger.notify("Auto-continue cancelled.")
-    end, { buffer = chat_bufnr, nowait = true })
-
-    sm._retry_keymap = { bufnr = chat_bufnr, lhs = lhs }
-
-    local timer = vim.uv.new_timer()
-    if not timer then
+    if not auto_continue then
         return
     end
-    sm._retry_timer = timer
-
-    timer:start(
-        delay_s * 1000,
-        0,
-        vim.schedule_wrap(function()
-            M._fire_auto_continue(sm)
-        end)
-    )
-end
-
---- Resume after a usage-limit pause: send whatever the user queued during it,
---- or a bare "continue" if they queued nothing.
---- @param sm agentic.SessionManager
-function M._fire_auto_continue(sm)
-    M.cancel_retry_timer(sm, false)
-    -- Release the gate before dispatching. It would otherwise defer both
-    -- branches below and the pause would never end.
-    sm._usage_reset_epoch = nil
-
-    if sm.destroyed then
-        return
-    end
-
-    if not sm.session_id then
-        -- Nothing is lost: whatever the user typed during the pause is still
-        -- tagged and visible in the input buffer, and drains at the next
-        -- benign gate-clear edge.
-        Logger.notify(
-            "No active session for auto-continue.",
-            vim.log.levels.WARN
+    if limit.attempt > UsageLimit.MAX_ATTEMPTS then
+        sm.message_writer:write_error_action(
+            string.format(
+                "Auto-continue gave up after %d attempts.",
+                UsageLimit.MAX_ATTEMPTS
+            )
         )
+        -- One the limit turned away was queued again.
+        sm:_withdraw_auto_continue()
         return
     end
-
-    -- Whatever the user left held IS the continuation. A bare "continue" only
-    -- when they left nothing — sending one in front of a held prompt would put
-    -- an unasked-for turn ahead of theirs. The turn started here reaches its
-    -- own Stop, where the next drain runs; draining again now would fire a
-    -- second concurrent send_prompt.
-    if not sm:_dispatch_deferred_prompts() then
-        sm:_handle_input_submit("continue")
+    -- Queued text is already the continuation, and a draft is the user's next
+    -- prompt: a turn sent ahead of it changes its context.
+    local input = sm.widget:panel_buf("input") --[[@as integer]]
+    local typing = vim.api.nvim_get_current_buf() == input
+        and BufHelpers.in_insert_mode()
+    if typing or not BufHelpers.is_buffer_blank(input) then
+        return
     end
+    sm._continue_mark = sm:_queue_input("continue")
 end
 
 --- How many consecutive transient failures are retried before the error

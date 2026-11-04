@@ -135,7 +135,7 @@ end. The two approaches that can actually recover:
 
 - `vim.cmd.redraw()` anywhere (ruled out by `<C-l>` not helping;
   history above shows this path has been tried and reverted).
-- Calling `reset_turn_state()` in the auto-continue timer callback
+- Calling `reset_turn_state()` on the usage-limit lift
   (speculative workaround, does not touch the stalled bridge
   generator).
 - Restarting just the ACPClient subscriber or re-subscribing the

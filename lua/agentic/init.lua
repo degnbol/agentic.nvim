@@ -185,9 +185,8 @@ end
 ---       require("agentic").send_prompt("Explain the last error")
 ---   end)
 ---
---- The prompt is held and sent later if the session cannot take it yet, with
---- the reason written to chat. It has no buffer range to tag, so a second call
---- before the first is sent replaces it.
+--- If the session cannot take the prompt yet, it is added at the end of the
+--- input as a queued region.
 --- @param text string
 function Agentic.send_prompt(text)
     local session = SessionRegistry.get_or_create()
@@ -195,8 +194,11 @@ function Agentic.send_prompt(text)
         return
     end
     session:on_user_submit()
-    session:_handle_input_submit(text)
-    notify_unless_shown(session, "Sent the prompt to the chat")
+    if session:_handle_input_submit(text) then
+        notify_unless_shown(session, "Sent the prompt to the chat")
+    else
+        notify_unless_shown(session, "Queued the prompt in the input")
+    end
 end
 
 --- Operatorfunc callback for sending a motion or line to the chat context.

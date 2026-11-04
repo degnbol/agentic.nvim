@@ -16,6 +16,7 @@ local Logger = require("agentic.utils.logger")
 local MiniTest = require("mini.test")
 local SessionManager = require("agentic.session_manager")
 local Subagents = require("agentic.subagents")
+local UsageLimit = require("agentic.acp.usage_limit")
 
 --- @param mode_id string
 --- @return agentic.acp.CurrentModeUpdate
@@ -329,10 +330,8 @@ describe("agentic.SessionManager", function()
         end)
 
         it("clears _title_user_set on session reset (/new, /clear)", function()
-            local Recovery = require("agentic.session_recovery")
             local SlashCommands = require("agentic.acp.slash_commands")
             local stubs = {
-                spy.stub(Recovery, "cancel_retry_timer"),
                 spy.stub(SlashCommands, "setCommands"),
             }
 
@@ -372,10 +371,8 @@ describe("agentic.SessionManager", function()
         it(
             "resets is_generating and stops indicators on reset mid-turn",
             function()
-                local Recovery = require("agentic.session_recovery")
                 local SlashCommands = require("agentic.acp.slash_commands")
                 local stubs = {
-                    spy.stub(Recovery, "cancel_retry_timer"),
                     spy.stub(SlashCommands, "setCommands"),
                 }
 
@@ -431,7 +428,6 @@ describe("agentic.SessionManager", function()
     end)
 
     describe("_reset_conversation", function()
-        local Recovery = require("agentic.session_recovery")
         local SlashCommands = require("agentic.acp.slash_commands")
         local noop = function() end
 
@@ -440,7 +436,6 @@ describe("agentic.SessionManager", function()
 
         before_each(function()
             stubs = {
-                spy.stub(Recovery, "cancel_retry_timer"),
                 spy.stub(SlashCommands, "setCommands"),
             }
         end)
@@ -635,21 +630,19 @@ describe("agentic.SessionManager", function()
         -- /new is exempt from the deferral gate precisely so it stays
         -- reachable to unwedge one. A load that never completes would
         -- otherwise defer every submit into the fresh session.
-        it("opens every gate on session reset (/new, /clear)", function()
-            local Recovery = require("agentic.session_recovery")
+        it("opens every session gate on reset (/new, /clear)", function()
             local SlashCommands = require("agentic.acp.slash_commands")
             local stubs = {
-                spy.stub(Recovery, "cancel_retry_timer"),
                 spy.stub(SlashCommands, "setCommands"),
             }
+            local limit = UsageLimit:new(function() end)
+            limit.resets_at = os.time() + 3600
 
             local session = {
                 session_id = nil, -- skip the cancel/clear-content block
-                agent = { state = "ready" },
+                agent = { state = "ready", usage_limit = limit },
                 _loading = true,
                 _prompt_pending = 0,
-                _usage_reset_epoch = os.time() + 3600,
-                _pending_bufferless_prompt = "stranded",
                 permission_manager = {
                     clear = function() end,
                 },
@@ -675,10 +668,10 @@ describe("agentic.SessionManager", function()
             session:_cancel_session()
 
             assert.is_false(session._loading)
-            assert.is_nil(session._usage_reset_epoch)
-            assert.is_nil(session._pending_bufferless_prompt)
             -- Only the fresh session's own readiness is left to wait on.
             assert.equal("not_ready", session:_submit_defer_reason("hello"))
+            -- The usage limit is the provider account's.
+            assert.is_true(limit:is_held())
 
             for _, s in ipairs(stubs) do
                 s:revert()
@@ -759,14 +752,14 @@ describe("agentic.SessionManager", function()
                 clear_chat = SessionManager.clear_chat,
                 _output_tails = {},
                 _stop_output_tails = SessionManager._stop_output_tails,
-                _cancel_retry_timer = noop,
+                _withdraw_auto_continue = noop,
                 _do_load_acp_session = SessionManager._do_load_acp_session,
                 _apply_session_options = SessionManager._apply_session_options,
                 _reapply_model = SessionManager._reapply_model,
                 announce_model_loaded = SessionManager.announce_model_loaded,
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _prompt_pending = 0,
-                _dispatch_deferred_prompts = noop,
+                _drain_queue = noop,
                 _refresh_name = noop,
                 _cancel_session = SessionManager._cancel_session,
                 _reset_conversation = SessionManager._reset_conversation,
@@ -1000,6 +993,7 @@ describe("agentic.SessionManager", function()
             local session = make_load_session()
             session._prompt_pending = 0
             session.agent.state = "ready"
+            session.agent.usage_limit = UsageLimit:new(function() end)
             session._submit_defer_reason = SessionManager._submit_defer_reason
 
             session:_do_load_acp_session("test-session-id", "/tmp")
@@ -1100,7 +1094,7 @@ describe("agentic.SessionManager", function()
         it("drains once on load success and never on failure", function()
             local drains = 0
             local session = make_load_session()
-            session._dispatch_deferred_prompts = function()
+            session._drain_queue = function()
                 drains = drains + 1
             end
 
@@ -1111,7 +1105,7 @@ describe("agentic.SessionManager", function()
             local notify_stub = spy.stub(Logger, "notify")
             local failed = make_load_session()
             failed._new_session_after_failed_load = function() end
-            failed._dispatch_deferred_prompts = function()
+            failed._drain_queue = function()
                 drains = drains + 1
             end
 
@@ -2397,16 +2391,18 @@ describe("agentic.SessionManager", function()
             assert.equal("New Provider", write_notice.calls[1][2].title)
         end)
 
-        -- A usage limit is the main reason to switch provider at all. Carrying
-        -- the outgoing provider's reset time over would defer every submit to
-        -- the new one until it elapsed.
-        it("opens the usage gate for the new provider", function()
+        -- A usage limit is the main reason to switch provider at all. The
+        -- outgoing provider's limit would defer every drain to the new one.
+        it("leaves the old provider's usage limit behind", function()
             local AgentInstance = require("agentic.acp.agent_instance")
+            local old_limit = UsageLimit:new(function() end)
+            old_limit.resets_at = os.time() + 3600
             get_instance_stub = spy.stub(AgentInstance, "get_instance")
             get_instance_stub:invokes(function(_provider, on_ready)
                 local agent = {
                     provider_config = { name = "New" },
                     create_session = spy.new(function() end),
+                    usage_limit = UsageLimit:new(function() end),
                 }
                 on_ready(agent)
                 return agent
@@ -2415,10 +2411,10 @@ describe("agentic.SessionManager", function()
             local session = {
                 is_generating = false,
                 session_id = "old-session",
-                _usage_reset_epoch = os.time() + 3600,
                 agent = {
                     cancel_session = spy.new(function() end),
                     provider_config = { name = "Old" },
+                    usage_limit = old_limit,
                 },
                 permission_manager = {
                     cancel_requests = function() end,
@@ -2434,7 +2430,8 @@ describe("agentic.SessionManager", function()
 
             session:switch_provider("new-provider")
 
-            assert.is_nil(session._usage_reset_epoch)
+            assert.is_false(session.agent.usage_limit:holds_drain())
+            assert.is_true(old_limit:is_held())
         end)
 
         it("no-ops soft cancel when session_id is nil", function()
@@ -3487,6 +3484,7 @@ describe("agentic.SessionManager", function()
                     drain_side_records = function()
                         return {}
                     end,
+                    usage_limit = UsageLimit:new(function() end),
                 },
                 message_writer = {
                     write_message = noop,
@@ -3556,7 +3554,6 @@ describe("agentic.SessionManager", function()
                 _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _drain_queue = SessionManager._drain_queue,
-                _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _prompt_pending = 0,
             } --[[@as agentic.SessionManager]])
@@ -3651,7 +3648,6 @@ describe("agentic.SessionManager", function()
                 is_generating = false,
                 _is_first_message = false,
                 destroyed = false,
-                _retry_attempt = 0,
                 _transient_attempt = 0,
                 _session_epoch = 0,
                 agent = {
@@ -3755,10 +3751,10 @@ describe("agentic.SessionManager", function()
                 _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _drain_queue = SessionManager._drain_queue,
-                _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _prompt_pending = 0,
             } --[[@as agentic.SessionManager]])
+            session.agent.usage_limit = UsageLimit:new(function() end)
             -- A running subagent.
             session._subagents._agents.c1 = {
                 open = true,
@@ -4171,31 +4167,39 @@ describe("agentic.SessionManager", function()
             end)
 
             describe("of a relay", function()
-                it("restores nothing without on_refusal", function()
+                it("restores nothing without on_returned", function()
                     local session = refusing_session({ stopReason = "refusal" })
 
-                    assert.is_nil(session:_relay("hi", { force = false }, nil))
+                    assert.is_nil(session:_relay("hi", nil))
 
                     assert.spy(restore_stub).was.called(0)
                 end)
 
-                it("runs on_refusal", function()
+                it("runs on_returned with the refusal", function()
                     local session = refusing_session({ stopReason = "refusal" })
-                    local on_refusal = spy.new(function() end)
+                    local on_returned = spy.new(function() end)
 
-                    session:_relay("hi", { force = false }, on_refusal)
+                    session:_relay("hi", on_returned)
 
-                    assert.spy(on_refusal).was.called(1)
+                    assert.is_true(on_returned:called_with("refusal"))
                 end)
 
-                it("returns the notice of a held relay", function()
+                it("returns the cause of a held relay", function()
                     local session = refusing_session({ stopReason = "refusal" })
                     session._loading = true
 
                     assert.equal(
-                        "Message held — the session is still loading.",
-                        session:_relay("hi", { force = false }, nil)
+                        "the session is still loading",
+                        session:_relay("hi", nil)
                     )
+                end)
+
+                it("sends past a usage limit", function()
+                    local session =
+                        refusing_session({ stopReason = "end_turn" })
+                    session.agent.usage_limit.resets_at = os.time() + 600
+
+                    assert.is_nil(session:_relay("hi", nil))
                 end)
             end)
         end)
@@ -4239,6 +4243,248 @@ describe("agentic.SessionManager", function()
             session:_handle_input_submit("hello")
             assert.spy(login_stub).was.called(1)
             assert.spy(renew_stub).was.called(0)
+        end)
+
+        describe("usage limit", function()
+            local NOTICE = "You've hit your limit · resets 5pm (Europe/London)"
+            local RESET = os.time() + 3600
+            --- @type TestStub
+            local requeue_stub
+            --- @type TestStub
+            local draft_stub
+
+            before_each(function()
+                requeue_stub = spy.stub(Recovery, "requeue_limited_prompt")
+                draft_stub = spy.stub(Recovery, "return_limited_prompt")
+            end)
+
+            after_each(function()
+                requeue_stub:revert()
+                draft_stub:revert()
+            end)
+
+            --- @param text string
+            --- @return agentic.ui.ChatHistory.AgentMessage
+            local function agent_msg(text)
+                return { type = "agent", text = text, provider_name = "Test" }
+            end
+
+            --- A session whose turn adds `replies` to its history, then fails
+            --- on the usage limit, with `reset_epoch` parsed from it.
+            --- @param replies agentic.ui.ChatHistory.Message[]
+            --- @param reset_epoch number|nil
+            --- @return agentic.SessionManager session
+            --- @return agentic.ui.ChatHistory history
+            local function limited_session(replies, reset_epoch)
+                local session = make_session("usage_limit")
+                local history = ChatHistory:new()
+                session.chat_history = history
+                session.message_writer.write_error_message = function()
+                    return "usage_limit", reset_epoch
+                end
+                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                    for _, reply in ipairs(replies) do
+                        history:add_message(reply)
+                    end
+                    cb(nil, { message = "Internal error: " .. NOTICE })
+                end
+                return session, history
+            end
+
+            it(
+                "holds the limit before the renewal and offers to continue",
+                function()
+                    local session =
+                        limited_session({ agent_msg("work") }, RESET)
+                    local held_at_renewal
+                    renew_stub:invokes(function(sm)
+                        held_at_renewal = sm.agent.usage_limit:is_held()
+                    end)
+
+                    session:_handle_input_submit("hello")
+
+                    assert.is_true(held_at_renewal)
+                    assert.equal(RESET, session.agent.usage_limit.resets_at)
+                    assert.is_true(
+                        auto_continue_stub:called_with(
+                            session,
+                            session.agent.usage_limit
+                        )
+                    )
+                    session.agent.usage_limit:stop()
+                end
+            )
+
+            it(
+                "requeues a prompt that got only the notice, before the renewal",
+                function()
+                    local session, history =
+                        limited_session({ agent_msg(NOTICE) }, RESET)
+                    local requeued_at_renewal
+                    renew_stub:invokes(function()
+                        requeued_at_renewal = requeue_stub.call_count
+                    end)
+
+                    session:_handle_input_submit("hello")
+
+                    assert.equal(1, requeued_at_renewal)
+                    assert.equal("hello", requeue_stub.calls[1][2])
+                    assert.same({}, history.messages)
+                    session.agent.usage_limit:stop()
+                end
+            )
+
+            for name, replies in pairs({
+                ["subagent output"] = {
+                    agent_msg(NOTICE),
+                    vim.tbl_extend(
+                        "force",
+                        agent_msg("sub"),
+                        { agent_key = "t1" }
+                    ),
+                },
+                ["a hook record before the notice"] = {
+                    { type = "side_records", records = {} },
+                    agent_msg(NOTICE),
+                },
+                ["a received message"] = {
+                    {
+                        type = "session_message",
+                        message_id = "m",
+                        view = "received",
+                        kind = "message",
+                        text = "hi",
+                    },
+                    agent_msg(NOTICE),
+                },
+                ["no agent row"] = {},
+            }) do
+                it("turns away a prompt followed by " .. name, function()
+                    local session, history = limited_session(replies, RESET)
+
+                    session:_handle_input_submit("hello")
+
+                    assert.equal(1, requeue_stub.call_count)
+                    assert.same({}, history.messages)
+                    session.agent.usage_limit:stop()
+                end)
+            end
+
+            for name, replies in pairs({
+                ["real text before the notice"] = {
+                    agent_msg("…availability." .. NOTICE),
+                },
+                ["a tool call"] = {
+                    { type = "tool_call", tool_call_id = "t", kind = "read" },
+                    agent_msg(NOTICE),
+                },
+                ["a thought"] = {
+                    {
+                        type = "thought",
+                        text = "hmm",
+                        provider_name = "Test",
+                    },
+                    agent_msg(NOTICE),
+                },
+                ["a second prompt"] = {
+                    {
+                        type = "user",
+                        text = "more",
+                        timestamp = 0,
+                        provider_name = "Test",
+                    },
+                },
+            }) do
+                it("keeps a prompt followed by " .. name, function()
+                    local session, history = limited_session(replies, RESET)
+
+                    session:_handle_input_submit("hello")
+
+                    assert.spy(requeue_stub).was.called(0)
+                    assert.spy(restore_stub).was.called(0)
+                    assert.equal(1 + #replies, #history.messages)
+                    session.agent.usage_limit:stop()
+                end)
+            end
+
+            it("returns the prompt as a draft with no reset time", function()
+                local session, history =
+                    limited_session({ agent_msg(NOTICE) }, nil)
+
+                session:_handle_input_submit("hello")
+
+                assert.spy(requeue_stub).was.called(0)
+                assert.spy(restore_stub).was.called(0)
+                assert.spy(draft_stub).was.called(1)
+                assert.same({}, history.messages)
+                assert.is_false(session.agent.usage_limit:holds_drain())
+            end)
+
+            -- Minute precision and clock skew: a lift still comes.
+            it("requeues when the reported reset is already past", function()
+                local session =
+                    limited_session({ agent_msg(NOTICE) }, os.time() - 60)
+
+                session:_handle_input_submit("hello")
+
+                assert.equal(1, requeue_stub.call_count)
+                session.agent.usage_limit:stop()
+            end)
+
+            it("drains the turn's side records before the cut", function()
+                local session, history =
+                    limited_session({ agent_msg(NOTICE) }, RESET)
+                local pending = { type = "side_records", records = {} }
+                session._drain_side_records = function(this)
+                    if pending then
+                        this.chat_history:add_message(pending)
+                        pending = nil
+                    end
+                end
+
+                session:_handle_input_submit("hello")
+
+                assert.equal(1, requeue_stub.call_count)
+                assert.same({}, history.messages)
+                session.agent.usage_limit:stop()
+            end)
+
+            it("clears attempts after a success while not held", function()
+                local session = make_session(nil, nil, {})
+                session.agent.usage_limit.attempt = 2
+                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                    cb({ stopReason = "end_turn" }, nil)
+                end
+
+                session:_handle_input_submit("hello")
+
+                assert.equal(0, session.agent.usage_limit.attempt)
+            end)
+
+            it("keeps attempts after a success while held", function()
+                local session = make_session(nil, nil, {})
+                session.agent.usage_limit.attempt = 2
+                session.agent.usage_limit.resets_at = os.time() + 600
+                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                    cb({ stopReason = "end_turn" }, nil)
+                end
+
+                session:_handle_input_submit("hello")
+
+                assert.equal(2, session.agent.usage_limit.attempt)
+            end)
+
+            it("keeps attempts after another error", function()
+                local session = make_session(nil, {
+                    code = ACPClient.ERROR_CODES.TRANSPORT_ERROR,
+                    message = "disconnected",
+                })
+                session.agent.usage_limit.attempt = 2
+
+                session:_handle_input_submit("hello")
+
+                assert.equal(2, session.agent.usage_limit.attempt)
+            end)
         end)
 
         -- A turn that worked is the only evidence the refreshed credentials
@@ -4692,7 +4938,11 @@ describe("agentic.SessionManager", function()
                 id = 1,
                 _is_first_message = false,
                 _prompt_pending = 0,
-                agent = { state = "ready", provider_config = { name = "Test" } },
+                agent = {
+                    state = "ready",
+                    provider_config = { name = "Test" },
+                    usage_limit = UsageLimit:new(function() end),
+                },
                 message_writer = {
                     write_user_prompt = noop,
                     write_error_action = noop,
@@ -4831,7 +5081,7 @@ describe("agentic.SessionManager", function()
             session.session_id = nil
             assert.is_true(session:_handle_input_submit("/delete"))
 
-            session._usage_reset_epoch = os.time() + 600
+            session.agent.usage_limit.resets_at = os.time() + 600
             assert.is_true(session:_handle_input_submit("/grant root"))
 
             assert.equal(1, new_session_spy.call_count)
@@ -4858,7 +5108,10 @@ describe("agentic.SessionManager", function()
         local function ready_session()
             return {
                 session_id = "s-1",
-                agent = { state = "ready" },
+                agent = {
+                    state = "ready",
+                    usage_limit = UsageLimit:new(function() end),
+                },
                 _prompt_pending = 0,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
             } --[[@as agentic.SessionManager]]
@@ -4888,17 +5141,31 @@ describe("agentic.SessionManager", function()
 
         it("defers until the reported usage reset time", function()
             local session = ready_session()
-            session._usage_reset_epoch = os.time() + 600
+            session.agent.usage_limit.resets_at = os.time() + 600
             assert.equal("usage_limited", session:_submit_defer_reason("hello"))
         end)
 
-        -- Without this, disabling auto_continue_on_usage_limit would wedge
-        -- every submit forever: no turn can complete normally, so a
-        -- clear-on-Stop rule would never fire.
-        it("clears once the reset time has passed", function()
+        -- A lost timer must not hold the gate for ever.
+        it("clears once the reset time has passed with no timer", function()
             local session = ready_session()
-            session._usage_reset_epoch = os.time() - 1
+            session.agent.usage_limit.resets_at = os.time() - 1
             assert.is_nil(session:_submit_defer_reason("hello"))
+        end)
+
+        -- A reset time at or before now would otherwise drain into the limit
+        -- while the timer still waits its backoff.
+        it("defers past resets_at until the timer fires", function()
+            local session = ready_session()
+            session.agent.usage_limit.resets_at = os.time() - 1
+            session.agent.usage_limit.lifts_at = os.time() + 300
+            assert.equal("usage_limited", session:_submit_defer_reason("hello"))
+        end)
+
+        it("names the session's own readiness ahead of the limit", function()
+            local session = ready_session()
+            session.agent.usage_limit.resets_at = os.time() + 600
+            session.session_id = nil
+            assert.equal("not_ready", session:_submit_defer_reason("hello"))
         end)
     end)
 
@@ -4911,7 +5178,10 @@ describe("agentic.SessionManager", function()
             local session = {
                 _session_epoch = 3,
                 _prompt_pending = 2,
-                agent = { state = "ready" },
+                agent = {
+                    state = "ready",
+                    usage_limit = UsageLimit:new(function() end),
+                },
                 session_id = "s-1",
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
@@ -4951,7 +5221,6 @@ describe("agentic.SessionManager", function()
     end)
 
     describe("permission memory", function()
-        local Recovery = require("agentic.session_recovery")
         local SlashCommands = require("agentic.acp.slash_commands")
         local MessageWriter = require("agentic.ui.message_writer")
         local PermissionManager = require("agentic.ui.permission_manager")
@@ -4992,7 +5261,6 @@ describe("agentic.SessionManager", function()
 
         before_each(function()
             stubs = {
-                spy.stub(Recovery, "cancel_retry_timer"),
                 spy.stub(SlashCommands, "setCommands"),
             }
             bufnr = vim.api.nvim_create_buf(false, true)
@@ -5952,10 +6220,13 @@ describe("agentic.SessionManager", function()
         ---        session into the state under test
         --- @return agentic.SessionManager, table
         local function gated(close_gate)
-            local sink = { inner = 0, stopped = 0, actions = {} }
+            local sink = { inner = 0, stopped = 0, actions = {}, queued = {} }
             local session = {
                 session_id = "s-1",
-                agent = { state = "ready" },
+                agent = {
+                    state = "ready",
+                    usage_limit = UsageLimit:new(function() end),
+                },
                 _prompt_pending = 0,
                 message_writer = {
                     write_error_action = function(_self, text)
@@ -5967,6 +6238,9 @@ describe("agentic.SessionManager", function()
                 end,
                 _handle_input_submit_inner = function()
                     sink.inner = sink.inner + 1
+                end,
+                _queue_input = function(_self, text)
+                    table.insert(sink.queued, text)
                 end,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _handle_input_submit = SessionManager._handle_input_submit,
@@ -5981,8 +6255,8 @@ describe("agentic.SessionManager", function()
         end
 
         -- The provider takes a mid-turn prompt as a turn of its own and runs it
-        -- after the current one, so an ordinary submit needs no force to go out
-        -- — and must not cancel what is running to do it.
+        -- after the current one, so an ordinary submit goes out — and must
+        -- not cancel what is running to do it.
         it("sends past a running turn, leaving it alone", function()
             local session, sink = gated(function(sm)
                 sm._prompt_pending = 1
@@ -5994,24 +6268,17 @@ describe("agentic.SessionManager", function()
             assert.equal(1, sink.inner)
         end)
 
-        it("sends past a usage limit only when forced", function()
+        -- The provider, not the plugin's view of the limit, decides.
+        it("sends past a usage limit", function()
             local session, sink = gated(function(sm)
-                sm._usage_reset_epoch = os.time() + 600
+                sm.agent.usage_limit.resets_at = os.time() + 600
             end)
 
-            assert.is_false(session:_handle_input_submit("hi"))
-            assert.equal(0, sink.inner)
-
-            assert.is_true(session:_handle_input_submit("hi", { force = true }))
-
-            assert.equal(0, sink.stopped)
+            assert.is_true(session:_handle_input_submit("hi"))
             assert.equal(1, sink.inner)
         end)
 
-        -- There is no session to send into, so forcing would hand send_prompt
-        -- a nil id and lose the text: ChatWidget treats a dispatch as consumed
-        -- and deletes it from the input buffer.
-        it("still defers when there is no session to send to", function()
+        it("defers when there is no session to send to", function()
             local gates = {
                 not_ready = function(sm)
                     sm.session_id = nil
@@ -6023,20 +6290,15 @@ describe("agentic.SessionManager", function()
             for _, close_gate in pairs(gates) do
                 local session, sink = gated(close_gate)
 
-                assert.is_false(
-                    session:_handle_input_submit("hi", { force = true })
-                )
+                assert.is_false(session:_handle_input_submit("hi"))
 
                 assert.equal(0, sink.inner)
-                assert.equal("hi", session._pending_bufferless_prompt)
             end
         end)
 
-        -- A local command needs no provider round-trip, so it answers under
-        -- every gate, including a usage limit no force was given for.
         it("dispatches a local command under a closed gate", function()
             local session, sink = gated(function(sm)
-                sm._usage_reset_epoch = os.time() + 600
+                sm.session_id = nil
             end)
 
             assert.is_true(session:_handle_input_submit("/context"))
@@ -6044,20 +6306,19 @@ describe("agentic.SessionManager", function()
             assert.equal(1, sink.inner)
         end)
 
-        -- A held prompt with no buffer range has nothing on screen to show for
-        -- it, so the reason has to be said.
-        it("writes why a bufferless prompt was held", function()
+        it("queues a held bufferless prompt in the input, silently", function()
             local session, sink = gated(function(sm)
                 sm.session_id = nil
             end)
 
-            session:_handle_input_submit("hi")
+            session:_handle_input_submit("first")
+            session:_handle_input_submit("second")
 
-            assert.equal(1, #sink.actions)
-            assert.is_true(sink.actions[1]:find("held") ~= nil)
+            assert.same({ "first", "second" }, sink.queued)
+            assert.equal(0, #sink.actions)
         end)
 
-        it("says nothing for a buffer submit, which is tagged", function()
+        it("leaves a held buffer submit for its caller to tag", function()
             local session, sink = gated(function(sm)
                 sm.session_id = nil
             end)
@@ -6065,7 +6326,7 @@ describe("agentic.SessionManager", function()
             session:_handle_input_submit("hi", { from_buffer = true })
 
             assert.equal(0, #sink.actions)
-            assert.is_nil(session._pending_bufferless_prompt)
+            assert.same({}, sink.queued)
         end)
     end)
 
@@ -6118,7 +6379,11 @@ describe("agentic.SessionManager", function()
                 id = 1,
                 _is_first_message = false,
                 _prompt_pending = 0,
-                agent = { state = "ready", provider_config = { name = "Test" } },
+                agent = {
+                    state = "ready",
+                    provider_config = { name = "Test" },
+                    usage_limit = UsageLimit:new(function() end),
+                },
                 message_writer = {
                     write_user_prompt = noop,
                     write_error_action = function(_self, text)
@@ -6489,76 +6754,100 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
-    describe("_dispatch_deferred_prompts", function()
-        -- Regression: sending the retained prompt must not ALSO drain the
-        -- region queue in the same tick — that fires a second concurrent
-        -- send_prompt (the retained prompt's own Stop drains the regions).
-        it("sends the retained prompt without also draining", function()
-            local submit_spy = spy.new(function() end)
-            local drained = false
-            local sm = {
-                _pending_bufferless_prompt = "hi",
-                _submit_defer_reason = function()
-                    return nil
-                end,
-                _handle_input_submit = submit_spy,
-                _drain_queue = function()
-                    drained = true
-                    return true
-                end,
-                _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
+    describe("on_usage_lifted", function()
+        --- @param destroyed boolean
+        --- @return table session, TestSpy drain
+        local function lifted_session(destroyed)
+            local drain = spy.new(function() end)
+            local session = {
+                destroyed = destroyed,
+                _drain_queue = drain,
+                _build_handlers = SessionManager._build_handlers,
             }
+            return session, drain
+        end
 
-            sm:_dispatch_deferred_prompts()
-
-            assert.spy(submit_spy).was.called(1)
-            assert.equal("hi", submit_spy.calls[1][2])
-            assert.is_nil(sm._pending_bufferless_prompt)
-            assert.is_false(drained)
+        it("drains the session's queue", function()
+            local session, drain = lifted_session(false)
+            session:_build_handlers().on_usage_lifted()
+            assert.spy(drain).was.called(1)
         end)
 
-        -- Resubmitting blind would retain it again and append a second
-        -- deferral notice, since write_error_action appends unconditionally.
-        it("leaves a still-gated prompt retained and unannounced", function()
-            local submit_spy = spy.new(function() end)
-            local sm = {
-                _pending_bufferless_prompt = "hi",
-                _submit_defer_reason = function()
-                    return "usage_limited"
-                end,
-                _handle_input_submit = submit_spy,
-                _drain_queue = function()
-                    error("should not drain while the prompt is retained")
-                end,
-                _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
-            }
+        it("does nothing for a destroyed session", function()
+            local session, drain = lifted_session(true)
+            session:_build_handlers().on_usage_lifted()
+            assert.spy(drain).was.called(0)
+        end)
+    end)
 
-            assert.is_false(sm:_dispatch_deferred_prompts())
+    describe("the automatic continue", function()
+        local InputDispatch = require("agentic.ui.input_dispatch")
+        local bufnr
+        --- @type agentic.SessionManager
+        local session
 
-            assert.spy(submit_spy).was.called(0)
-            assert.equal("hi", sm._pending_bufferless_prompt)
+        before_each(function()
+            bufnr = vim.api.nvim_create_buf(false, true)
+            local dispatch = InputDispatch:new(bufnr, function()
+                return true
+            end, function() end)
+            dispatch:attach_untag()
+            session = {
+                widget = {
+                    input_dispatch = dispatch,
+                    panel_buf = function()
+                        return bufnr
+                    end,
+                },
+                message_writer = { write_error_action = function() end },
+                _queue_input = SessionManager._queue_input,
+                _withdraw_auto_continue = SessionManager._withdraw_auto_continue,
+                _truncate_queue = SessionManager._truncate_queue,
+            } --[[@as agentic.SessionManager]]
         end)
 
-        it("drains queued regions when nothing is retained", function()
-            local drained = false
-            local sm = {
-                _pending_bufferless_prompt = nil,
-                _submit_defer_reason = function()
-                    return nil
-                end,
-                _handle_input_submit = function()
-                    error("should not submit with nothing retained")
-                end,
-                _drain_queue = function()
-                    drained = true
-                    return false
-                end,
-                _dispatch_deferred_prompts = SessionManager._dispatch_deferred_prompts,
-            }
+        after_each(function()
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
 
-            sm:_dispatch_deferred_prompts()
+        local function lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
 
-            assert.is_true(drained)
+        it(
+            "withdraws an unedited continue, keeping the user's queue",
+            function()
+                session:_queue_input("mine")
+                session._continue_mark = session:_queue_input("continue")
+
+                session:_withdraw_auto_continue()
+
+                assert.same({ "mine" }, lines())
+                assert.is_nil(session._continue_mark)
+                assert.equal(
+                    1,
+                    session.widget.input_dispatch:queued_block_count()
+                )
+            end
+        )
+
+        it("keeps a continue the user edited", function()
+            session._continue_mark = session:_queue_input("continue")
+            vim.api.nvim_buf_set_lines(bufnr, 0, 1, false, { "continue now" })
+
+            session:_withdraw_auto_continue()
+
+            assert.same({ "continue now" }, lines())
+            assert.is_nil(session._continue_mark)
+        end)
+
+        it("_truncate_queue forgets the mark", function()
+            session._continue_mark = session:_queue_input("continue")
+
+            session:_truncate_queue()
+
+            assert.is_nil(session._continue_mark)
+            assert.same({ "continue" }, lines())
         end)
     end)
 

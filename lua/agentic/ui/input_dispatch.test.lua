@@ -252,7 +252,7 @@ describe("agentic.ui.InputDispatch", function()
                 assert.same({ 1, 1 }, { marks[2][2], marks[2][4].end_row })
             end)
 
-            it("passes force through from the write commands", function()
+            it("submits from the write commands like the submit key", function()
                 set_input({ "line1" })
 
                 local schedule_stub = spy.stub(vim, "schedule")
@@ -265,7 +265,7 @@ describe("agentic.ui.InputDispatch", function()
                 schedule_stub:revert()
 
                 assert.spy(submit_spy).was.called(1)
-                assert.is_true(submit_spy.calls[1][2].force)
+                assert.same({ from_buffer = true }, submit_spy.calls[1][2])
             end)
         end)
 
@@ -358,6 +358,112 @@ describe("agentic.ui.InputDispatch", function()
             assert.same({ { 0, 0 } }, tags())
             assert.spy(submit_spy).was.called(0)
             assert.same({ "one", "two", "three" }, input_lines())
+        end)
+
+        describe("queue_paragraph", function()
+            it(
+                "tags a paragraph added at the end, keeping other tags",
+                function()
+                    set_input({ "queued", "", "draft" })
+                    dispatch:_queue_line_range(0, 0)
+                    vim.api.nvim_win_set_cursor(input_win, { 3, 2 })
+                    vim.cmd("startinsert")
+
+                    local mark = dispatch:queue_paragraph("held\nmore")
+
+                    assert.same(
+                        { "queued", "", "draft", "", "held", "more" },
+                        input_lines()
+                    )
+                    assert.same({ { 0, 0 }, { 4, 5 } }, tags())
+                    assert.is_not_nil(mark)
+                    assert.equal(input_win, vim.api.nvim_get_current_win())
+                    assert.same(
+                        { 3, 2 },
+                        vim.api.nvim_win_get_cursor(input_win)
+                    )
+                    assert.is_true(vim.bo[buf].modified)
+                    vim.cmd("stopinsert")
+                end
+            )
+
+            it("returns nil for text with no lines", function()
+                set_input({ "draft" })
+                assert.is_nil(dispatch:queue_paragraph("\n\n"))
+                assert.same({ "draft" }, input_lines())
+            end)
+
+            it(
+                "puts a first paragraph above the first region, keeping its tag",
+                function()
+                    set_input({ "draft", "", "queued" })
+                    dispatch:_queue_line_range(2, 2)
+
+                    dispatch:queue_paragraph("again", { first = true })
+
+                    assert.same(
+                        { "draft", "", "again", "", "queued" },
+                        input_lines()
+                    )
+                    assert.same({ { 2, 2 }, { 4, 4 } }, tags())
+                end
+            )
+
+            it(
+                "puts a first paragraph on top of an input with only draft",
+                function()
+                    set_input({ "draft" })
+
+                    dispatch:queue_paragraph("again", { first = true })
+
+                    assert.same({ "again", "", "draft" }, input_lines())
+                    assert.same({ { 0, 0 } }, tags())
+                end
+            )
+        end)
+
+        describe("delete_queued_region", function()
+            it("deletes a tagged region and its separator row", function()
+                set_input({ "draft" })
+                local mark = dispatch:queue_paragraph("continue") --[[@as integer]]
+                dispatch:delete_queued_region(mark, "continue")
+                assert.same({ "draft" }, input_lines())
+            end)
+
+            it(
+                "takes the separator below a region that starts the input",
+                function()
+                    local mark = dispatch:queue_paragraph("continue") --[[@as integer]]
+                    dispatch:queue_paragraph("next")
+
+                    dispatch:delete_queued_region(mark, "continue")
+
+                    assert.same({ "next" }, input_lines())
+                    assert.same({ { 0, 0 } }, tags())
+                end
+            )
+
+            it("does nothing once an edit dropped the tag", function()
+                local mark = dispatch:queue_paragraph("continue") --[[@as integer]]
+                vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "continue now" })
+
+                dispatch:delete_queued_region(mark, "continue")
+
+                assert.same({ "continue now" }, input_lines())
+            end)
+
+            it("does nothing when a reused id tags other text", function()
+                local mark = dispatch:queue_paragraph("continue") --[[@as integer]]
+                dispatch:cancel_queue()
+                set_input({ "mine" })
+                local reused = dispatch:_queue_line_range(0, 0)
+                assert.equal(mark, reused)
+
+                dispatch:delete_queued_region(mark, "continue")
+
+                assert.same({ "mine" }, input_lines())
+                assert.same({ { 0, 0 } }, tags())
+            end)
         end)
 
         it("re-queueing an overlapping range replaces, never stacks", function()

@@ -82,10 +82,12 @@ end
 
 --- Cleanup all active instances and processes.
 --- Called automatically on VimLeavePre (covers :q, :qa, :qa!, :cq),
---- SIGTERM, and SIGINT. Each transport is killed with SIGTERM then SIGKILL.
+--- SIGTERM, and SIGINT. Each transport is killed with SIGTERM then SIGKILL,
+--- and each usage-limit timer stops.
 function AgentInstance:cleanup_all()
     for _name, instance in pairs(self._instances) do
         if instance then
+            instance.usage_limit:stop()
             pcall(function()
                 instance:stop()
             end)

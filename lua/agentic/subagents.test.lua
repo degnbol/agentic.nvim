@@ -176,12 +176,12 @@ describe("agentic.Subagents", function()
         end)
     end)
 
-    describe("refusal of a subagent message", function()
+    describe("return of a subagent message", function()
         --- Subagents with a background subagent `c1` whose message input is
-        --- buffer 42, and the `on_refusal` the relay was given.
+        --- buffer 42, and the `on_returned` the relay was given.
         --- @return agentic.Subagents subagents
         --- @return tests.SubagentsHostSpies spies
-        --- @return { on_refusal: fun()|nil } relayed
+        --- @return { on_returned: fun(reason: agentic.ReturnReason)|nil } relayed
         local function make_relaying()
             local history = ChatHistory:new()
             history:add_message({
@@ -204,8 +204,8 @@ describe("agentic.Subagents", function()
                         end,
                     }
                 end,
-                relay = function(_instruction, _opts, on_refusal)
-                    relayed.on_refusal = on_refusal
+                relay = function(_instruction, on_returned)
+                    relayed.on_returned = on_returned
                     return nil
                 end,
             })
@@ -214,23 +214,25 @@ describe("agentic.Subagents", function()
             return subagents, spies, relayed
         end
 
-        it("returns it to the subagent's input", function()
-            local subagents, spies, relayed = make_relaying()
+        it("returns it to the subagent's input, as a draft", function()
+            for _, reason in ipairs({ "refusal", "usage_limit" }) do
+                local subagents, spies, relayed = make_relaying()
 
-            assert.is_true(
-                subagents:_relay_to_agent("c1", "hi", { force = false })
-            )
-            relayed.on_refusal()
+                assert.is_true(subagents:_relay_to_agent("c1", "hi"))
+                relayed.on_returned(reason)
 
-            assert.spy(spies.return_prompt).was.called_with("hi", 42)
+                assert.is_true(
+                    spies.return_prompt:called_with("hi", 42, reason)
+                )
+            end
         end)
 
         it("returns it to the main input once that is gone", function()
             local subagents, spies, relayed = make_relaying()
 
-            subagents:_relay_to_agent("c1", "hi", { force = false })
+            subagents:_relay_to_agent("c1", "hi")
             subagents._inputs.c1 = nil
-            relayed.on_refusal()
+            relayed.on_returned("refusal")
 
             assert.equal(1, spies.return_prompt.call_count)
             assert.equal("hi", spies.return_prompt.calls[1][1])

@@ -20,10 +20,10 @@ describe("agentic.ui.PromptInput", function()
         vim.api.nvim_buf_delete(bufnr, { force = true })
     end)
 
-    it("the map submits unforced and :w forced, once after a rebind", function()
-        local calls = {}
-        local function submit(opts)
-            table.insert(calls, opts.force)
+    it("the map and :w each submit once after a rebind", function()
+        local calls = 0
+        local function submit()
+            calls = calls + 1
         end
         PromptInput.bind_submit(bufnr, submit)
         PromptInput.bind_submit(bufnr, submit)
@@ -33,7 +33,7 @@ describe("agentic.ui.PromptInput", function()
             vim.cmd.write()
         end)
 
-        assert.same({ false, true }, calls)
+        assert.equal(2, calls)
     end)
 
     it("edits no buffer", function()

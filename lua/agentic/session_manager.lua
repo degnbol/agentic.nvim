@@ -106,16 +106,12 @@ end
 --- @field _available_commands? agentic.acp.AvailableCommand[] The provider's last advertised slash commands; nil before the first advertisement
 --- @field _last_prompt? string
 --- @field destroyed boolean Flag set on destroy() to guard async callbacks
---- @field _pending_bufferless_prompt? string Deferred prompt with no buffer range to tag
 --- @field _draining_queue? boolean A queued block is being taken; guards _drain_queue against re-entry
 --- @field _prompt_pending integer Prompt callbacks still outstanding (the in_flight gate)
---- @field _usage_reset_epoch? number Epoch seconds the provider's usage limit lifts at
+--- @field _continue_mark? integer Queued-region tag of the automatic "continue"
 --- @field _loading? boolean A session/load RPC is in flight
 --- @field _replay_hold? agentic.SessionManager.HeldUpdate[] Conversation updates of a session/load replay, held until the load completes
 --- @field _replay_dropped? boolean A held replay was abandoned: its remaining updates are dropped until the load completes or a turn starts
---- @field _retry_timer? uv.uv_timer_t Scheduled auto-continue timer for usage limit errors
---- @field _retry_keymap? {bufnr: number, lhs: string} Active cancel-retry keymap
---- @field _retry_attempt number Consecutive auto-continue attempts (0 = first try)
 --- @field _reauth_live_retry boolean Set when a re-login was answered by keeping the live session, cleared by the next successful turn; a re-login while still set restarts the provider subprocess instead
 --- @field _transient_attempt number Consecutive silent retries of transient server errors (0 = none this chain)
 --- @field _checktime_scheduled boolean Coalesces rapid checktime calls into one deferred check
@@ -305,7 +301,6 @@ function SessionManager:new(provider)
         destroyed = false,
         --- @type string|nil Smart path of the most recently edited .md file (plan candidate)
         _last_edited_md = nil,
-        _retry_attempt = 0,
         _reauth_live_retry = false,
         _transient_attempt = 0,
         _prompt_pending = 0,
@@ -1003,11 +998,14 @@ function SessionManager:_subagents_host()
             self:_drain_subagent_side_records(child_id)
             drop_held(self._held_tool_call_updates, child_id)
         end,
-        relay = function(instruction, opts, on_refusal)
-            return self:_relay(instruction, opts, on_refusal)
+        relay = function(instruction, on_returned)
+            return self:_relay(instruction, on_returned)
         end,
-        return_prompt = function(text, bufnr)
-            Recovery.restore_refused_prompt(
+        return_prompt = function(text, bufnr, reason)
+            local return_prompt = reason == "usage_limit"
+                    and Recovery.return_limited_prompt
+                or Recovery.restore_refused_prompt
+            return_prompt(
                 self,
                 text,
                 { selections = {}, files = {}, diagnostics = {} },
@@ -1421,6 +1419,12 @@ function SessionManager:_build_handlers()
                 self._subagents:close_all({ state = "idle" })
                 -- No command end can arrive any more.
                 self:_stop_output_tails(true)
+            end
+        end,
+
+        on_usage_lifted = function()
+            if not self.destroyed then
+                self:_drain_queue()
             end
         end,
     }
@@ -2602,62 +2606,37 @@ end
 
 --- @alias agentic.SubmitDeferReason "usage_limited"|"in_flight"|"loading"|"not_ready"
 
---- What a held prompt is waiting on, for prompts with no queued region to stand
---- in for them on screen.
----
---- Each names the condition, not a send time: the release edges are a turn that
---- ends normally, a session becoming ready, a load completing and a usage retry
---- firing. A held prompt can outlive its own condition — with
---- `auto_continue_on_usage_limit` off nothing fires when the limit lifts — and
---- go out at the next edge of any kind.
----
---- No entry for `in_flight`: a running turn holds only the automatic drains,
---- which have the queue's own highlight to stand in for them, never a submit.
+--- How a turn returned its prompt to the user: the model refused it, or the
+--- provider's usage limit turned it away before it produced anything.
+--- @alias agentic.ReturnReason "refusal"|"usage_limit"
+
+--- Called when a turn returns its prompt. `held`, for `"usage_limit"`: the
+--- limit still holds and a lift will drain the queue.
+--- @alias agentic.OnReturned fun(reason: agentic.ReturnReason, held: boolean|nil)
+
+--- What a held user prompt waits on, as a phrase, for each reason that holds
+--- one.
 --- @type table<agentic.SubmitDeferReason, string>
 local HOLD_CAUSE = {
-    usage_limited = "usage limit in force",
     loading = "the session is still loading",
     not_ready = "no session yet",
 }
 
---- The notice of a prompt held for each reason.
---- @type table<agentic.SubmitDeferReason, string>
-local DEFER_NOTICE = {}
-for reason, cause in pairs(HOLD_CAUSE) do
-    DEFER_NOTICE[reason] = "Message held — " .. cause .. "."
-end
-
 --- Why `prompt` cannot go out as a turn of its own right now, or nil if it can.
 ---
---- Three of the reasons are about the session's ability to take a prompt at
---- all. `in_flight` is not: the provider accepts a mid-turn prompt and runs it
---- as the next turn, so this reason exists to sequence the automatic drains one
---- block per turn, and `_submit_hold_reason` ignores it.
+--- `loading` and `not_ready` mean the session cannot take a prompt at all.
+--- They come first, so a caller that ignores the other reasons still holds
+--- for them. `in_flight` sequences automatic sends one block per turn.
+--- `usage_limited` holds them until the usage limit's timer fires.
 ---
 --- Local commands are never deferred — they need no provider round-trip, so
 --- they answer mid-turn and before a session exists, which is what makes
 --- `/new` and `/delete` usable to recover a wedged one.
----
---- Ordered most-durable reason first, so the answer names the condition the
---- user waits longest on.
 --- @param prompt string
 --- @return agentic.SubmitDeferReason|nil
 function SessionManager:_submit_defer_reason(prompt)
     if parse_local_command(prompt) then
         return nil
-    end
-    -- The epoch elapsing is itself a clear edge. Without it, disabling
-    -- auto_continue_on_usage_limit would leave every submit deferred forever:
-    -- no turn can complete normally, so a clear-on-Stop rule never fires.
-    if self._usage_reset_epoch and os.time() < self._usage_reset_epoch then
-        return "usage_limited"
-    end
-    -- Not is_generating: stop_generation and _refresh both clear that flag
-    -- while the prompt callback is still pending, so a drain gated on it would
-    -- dispatch into a turn that is still resolving — and the drain is what
-    -- keeps one queued block per turn.
-    if self._prompt_pending > 0 then
-        return "in_flight"
     end
     -- session_id is assigned before the session/load RPC, so the readiness
     -- check below reads clear while a session is still being replayed.
@@ -2666,6 +2645,16 @@ function SessionManager:_submit_defer_reason(prompt)
     end
     if not (self.session_id and self.agent and self.agent.state == "ready") then
         return "not_ready"
+    end
+    if self.agent.usage_limit:holds_drain() then
+        return "usage_limited"
+    end
+    -- Not is_generating: stop_generation and _refresh both clear that flag
+    -- while the prompt callback is still pending, so a drain gated on it would
+    -- dispatch into a turn that is still resolving — and the drain is what
+    -- keeps one queued block per turn.
+    if self._prompt_pending > 0 then
+        return "in_flight"
     end
     return nil
 end
@@ -2684,7 +2673,6 @@ end
 
 --- @class agentic.SessionManager.SubmitOpts
 --- @field from_buffer? boolean The caller owns a buffer range and tags it when the submit defers
---- @field force? boolean Bypass the usage-limit gate
 
 --- Items of the context panels.
 --- @class agentic.SessionManager.PanelContext
@@ -2699,21 +2687,17 @@ end
 --- (claude-agent-acp queues it on `session.turnQueue`), so the text goes out
 --- now and the running turn is the user's to interrupt with `<C-c>`.
 ---
---- A deferred submit that came from the input buffer stays there as a tagged
---- region for the caller to mark; one that did not (`Agentic.send_prompt`,
---- the synthetic "continue") has no range to tag and
---- is retained here instead, last-write-wins. Those have nothing on screen to
---- show they were held, so the reason is written to chat.
+--- A deferred submit stays in the input as a queued region. With
+--- `from_buffer` the caller tags its range, otherwise the text is added at the
+--- end of the input.
 --- @param input_text string
 --- @param opts? agentic.SessionManager.SubmitOpts
 --- @return boolean dispatched
 function SessionManager:_handle_input_submit(input_text, opts)
     opts = opts or {}
-    local reason = self:_submit_hold_reason(input_text, opts.force)
-    if reason then
+    if self:_submit_hold_reason(input_text) then
         if not opts.from_buffer then
-            self._pending_bufferless_prompt = input_text
-            self.message_writer:write_error_action(DEFER_NOTICE[reason])
+            self:_queue_input(input_text)
         end
         return false
     end
@@ -2721,25 +2705,29 @@ function SessionManager:_handle_input_submit(input_text, opts)
     return true
 end
 
---- Why the gate holds back a submit of `prompt`, or nil if it goes out. A
---- turn in flight holds no submit.
+--- Add text to the input as a queued paragraph (see
+--- `InputDispatch:queue_paragraph`), making the input again when it was wiped.
+--- @param text string
+--- @param opts { first?: boolean }|nil
+--- @return integer|nil mark_id
+function SessionManager:_queue_input(text, opts)
+    -- Making the input makes its dispatch.
+    self.widget:panel_buf("input")
+    return self.widget.input_dispatch:queue_paragraph(text, opts)
+end
+
+--- Why the gate holds back a prompt the user sends, or nil if it goes out.
+--- Neither a turn in flight nor the usage limit holds one: the provider runs
+--- a mid-turn prompt as the next turn, and the provider, not the plugin's
+--- view of the limit, decides whether the limit still holds.
 --- @param prompt string
---- @param force boolean|nil Send past a usage limit
 --- @return agentic.SubmitDeferReason|nil
-function SessionManager:_submit_hold_reason(prompt, force)
+function SessionManager:_submit_hold_reason(prompt)
     local reason = self:_submit_defer_reason(prompt)
-    if reason == "in_flight" then
+    if reason == "in_flight" or reason == "usage_limited" then
         return nil
     end
-    -- `force` bypasses waiting for a usage reset, but there is no session to
-    -- send into under the other two — forcing would hand send_prompt a nil
-    -- session id and lose the text, since the caller treats a dispatch as
-    -- consumed.
-    local unsendable = reason == "not_ready" or reason == "loading"
-    if reason and (not force or unsendable) then
-        return reason
-    end
-    return nil
+    return reason
 end
 
 --- Send a prompt to the main agent on the user's behalf, apart from their
@@ -2747,15 +2735,14 @@ end
 --- context, title, history prefix or system info of a user submit, and
 --- clears no idle state, todo panel or user control. A held relay is not kept.
 --- @param instruction string
---- @param opts agentic.ui.PromptInput.SubmitOpts
---- @param on_refusal fun()|nil Called when the turn ends refused
---- @return string|nil held_notice Why the prompt was held; nil when sent
-function SessionManager:_relay(instruction, opts, on_refusal)
-    local reason = self:_submit_hold_reason(instruction, opts.force)
+--- @param on_returned agentic.OnReturned|nil Called when the turn returns the prompt
+--- @return string|nil held_cause Why the prompt was held, as a phrase; nil when sent
+function SessionManager:_relay(instruction, on_returned)
+    local reason = self:_submit_hold_reason(instruction)
     if not reason then
-        self:_send_user_prompt(instruction, {}, {}, on_refusal)
+        self:_send_user_prompt(instruction, {}, {}, on_returned)
     end
-    return reason and DEFER_NOTICE[reason]
+    return reason and HOLD_CAUSE[reason]
 end
 
 --- Supersede the current session generation, so callbacks still in flight for
@@ -2802,26 +2789,16 @@ function SessionManager:stop_generation()
     self.status_indicator:stop()
 end
 
---- Dispatch whatever the gate deferred, now that a blocking condition has
---- cleared benignly. Called at each such edge.
----
---- The retained bufferless prompt goes first, and takes the whole call: its
---- turn reaches its own Stop, where the queue drains. Dispatching both here
---- would fire two concurrent send_prompts.
---- @return boolean dispatched
-function SessionManager:_dispatch_deferred_prompts()
-    local text = self._pending_bufferless_prompt
-    if text then
-        -- Re-check rather than resubmit blind: a closed gate would retain the
-        -- prompt again and announce it a second time, since the deferral
-        -- notice is appended to chat unconditionally.
-        if self:_submit_defer_reason(text) then
-            return false
-        end
-        self._pending_bufferless_prompt = nil
-        return self:_handle_input_submit(text)
+--- Delete the automatic "continue" from the input while it is still queued
+--- and unedited.
+function SessionManager:_withdraw_auto_continue()
+    if self._continue_mark then
+        self.widget.input_dispatch:delete_queued_region(
+            self._continue_mark,
+            "continue"
+        )
+        self._continue_mark = nil
     end
-    return self:_drain_queue()
 end
 
 --- Drop the rest of the queue once the session is deleted: a block queued
@@ -2833,6 +2810,7 @@ function SessionManager:_truncate_queue()
         return
     end
     self.widget.input_dispatch:cancel_queue()
+    self._continue_mark = nil
     self.message_writer:write_error_action(
         string.format(
             "/delete: %d queued block(s) left as draft, unsent.",
@@ -2851,9 +2829,8 @@ end
 --- all remaining text as draft, because text that turned out to be data wants
 --- editing rather than dispatching.
 ---
---- Blocking rather than scheduled: callers act on the verdict this returns
---- (auto-continue invents a bare "continue" when nothing dispatched), which an
---- answer arriving a tick later cannot supply. The wait is not inert — vim
+--- Blocking rather than scheduled: a caller acts on the returned verdict,
+--- which an answer arriving a tick later cannot supply. The wait is not inert — vim
 --- keeps running scheduled callbacks and timers while a dialog is open — so
 --- the drain guards itself against being re-entered across this call.
 --- @param text string
@@ -2878,6 +2855,7 @@ function SessionManager:_confirm_queued_command(text)
         return true
     end
     self.widget.input_dispatch:cancel_queue()
+    self._continue_mark = nil
     self.message_writer:write_error_action(
         string.format(
             "/%s declined — %d queued block(s) left as draft.",
@@ -2890,8 +2868,8 @@ end
 
 --- Dispatch the queue's next block as a new turn.
 ---
---- Re-checks the gate itself, so overlapping conditions (a usage-limit retry
---- armed during a turn that then ended normally) need no per-case guard at any
+--- Re-checks the gate itself, so overlapping conditions (a usage-limit lift
+--- during a turn) need no per-case guard at any
 --- call site. Reads the block before consuming it, so a still-gated drain
 --- leaves it tagged and visible rather than eating it, and dispatches what the
 --- consume actually took — the block read first is only a candidate.
@@ -3108,9 +3086,21 @@ function SessionManager:_handle_input_submit_inner(input_text)
         end
     end
 
-    self:_send_user_prompt(input_text, prompt, extra_lines, function()
-        Recovery.restore_refused_prompt(self, input_text, consumed)
-    end)
+    self:_send_user_prompt(
+        input_text,
+        prompt,
+        extra_lines,
+        function(reason, held)
+            if reason == "refusal" then
+                Recovery.restore_refused_prompt(self, input_text, consumed)
+            elseif held then
+                Recovery.requeue_limited_prompt(self, input_text, consumed)
+            else
+                -- No lift to wait for.
+                Recovery.return_limited_prompt(self, input_text, consumed)
+            end
+        end
+    )
 end
 
 --- Send the user's prompt as a turn: `input_text` after the `prompt` blocks
@@ -3119,12 +3109,12 @@ end
 --- @param input_text string
 --- @param prompt agentic.acp.Content[] Blocks to send ahead of the text. The text block is appended to it
 --- @param extra_lines string[] Display-only lines below the prompt in the chat
---- @param on_refusal fun()|nil Called when the turn ends refused
+--- @param on_returned agentic.OnReturned|nil Called when the turn returns the prompt
 function SessionManager:_send_user_prompt(
     input_text,
     prompt,
     extra_lines,
-    on_refusal
+    on_returned
 )
     table.insert(prompt, {
         type = "text",
@@ -3148,7 +3138,7 @@ function SessionManager:_send_user_prompt(
         session_id = self.session_id,
     })
 
-    self:_dispatch_turn(prompt, on_refusal)
+    self:_dispatch_turn(prompt, user_msg, on_returned)
 end
 
 --- Send a prompt that the user did not author, recording nothing that would
@@ -3170,13 +3160,48 @@ function SessionManager:_send_synthetic_prompt(text)
     self:_dispatch_turn({ { type = "text", text = text } })
 end
 
+--- History rows a turn holds that are not the agent's reply: hook records,
+--- loaded files and skills, and messages received during the turn.
+local NOT_REPLIES = { side_records = true, session_message = true }
+
+--- Whether the agent's reply to `prompt` is only agent messages whose joined
+--- text, trimmed, is part of `text`. Rows in `NOT_REPLIES` are skipped; any
+--- other row (a thought, a tool call, a later prompt) fails. False when
+--- `prompt` is not in `messages`.
+--- @param messages agentic.ui.ChatHistory.Message[]
+--- @param prompt agentic.ui.ChatHistory.Message
+--- @param text string
+--- @return boolean
+local function replied_only_with(messages, prompt, text)
+    local replies = {}
+    for i = #messages, 1, -1 do
+        local msg = messages[i]
+        if msg == prompt then
+            local reply = vim.trim(table.concat(replies))
+            return text:find(reply, 1, true) ~= nil
+        end
+        if msg.type == "agent" then
+            table.insert(replies, 1, msg.text)
+        elseif not NOT_REPLIES[msg.type] then
+            return false
+        end
+    end
+    return false
+end
+
 --- Send an assembled prompt as a turn and own the turn tail: thinking
 --- indicator, per-turn state reset, error dispatch, finalization, attention
 --- notification, hooks and queue drain. Shared by user submits and synthetic
 --- prompts — everything that records user intent happens before this is called.
+---
+--- The turn returns its prompt when the model refuses it (`"refusal"`, after
+--- the refusal is reported), or when the usage limit turns it away before any
+--- reply (`"usage_limit"`). A turned-away prompt and the limit's notice are
+--- removed from the chat history.
 --- @param prompt agentic.acp.Content[]
---- @param on_refusal fun()|nil Called when the turn ends refused, after the refusal is reported
-function SessionManager:_dispatch_turn(prompt, on_refusal)
+--- @param user_msg agentic.ui.ChatHistory.UserMessage|nil The prompt's history entry; nil for a prompt that cannot be returned
+--- @param on_returned agentic.OnReturned|nil Called when the turn returns the prompt
+function SessionManager:_dispatch_turn(prompt, user_msg, on_returned)
     self.status_indicator:start("thinking")
 
     local session_id = self.session_id
@@ -3184,14 +3209,6 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
     -- Capture chat_history before send to avoid race with _cancel_session
     -- replacing self.chat_history while the callback is pending
     local chat_history = self.chat_history
-
-    -- This turn supersedes any pending auto-continue: the user has taken over.
-    -- The gate opens at the reported reset time but the timer fires ~2 min
-    -- later, so without this a turn started in that window is followed by an
-    -- unwanted synthetic "continue". Keep the attempt counter — a repeat limit
-    -- must still back off. No-op when nothing is armed, and _fire_auto_continue
-    -- has already cancelled by the time its own turn reaches here.
-    Recovery.cancel_retry_timer(self, false)
 
     -- What arrives from here on answers this turn, not a replay `_refresh`
     -- abandoned.
@@ -3251,14 +3268,18 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
             and Recovery.should_retry_transient(self, err, session_id)
 
         if not err then
-            self._retry_attempt = 0
+            -- A turn that started before another session's hit says nothing
+            -- about the limit.
+            if not self.agent.usage_limit:is_held() then
+                self.agent.usage_limit:clear_attempts()
+            end
             self._transient_attempt = 0
             self._reauth_live_retry = false
             Recovery.surface_unexpected_response(self, response)
             if type(response) == "table" then
                 turn_usage = response.usage
-                if on_refusal and response.stopReason == "refusal" then
-                    on_refusal()
+                if on_returned and response.stopReason == "refusal" then
+                    on_returned("refusal")
                 end
             end
         elseif not retrying then
@@ -3284,17 +3305,42 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
                 -- so the next prompt can end with no content. It keeps one
                 -- query per ACP session, so a new ACP session gets a fresh
                 -- one. See `.claude/skills/issues/references/chunk-flush.md`.
-                -- Close the gate before the renewal, not after: the renewal's
+                -- Hold before the renewal, not after: the renewal's
                 -- new_session drains when it completes, which would otherwise
                 -- dispatch into a still-limited provider.
-                self._usage_reset_epoch = reset_epoch
+                local limit = self.agent.usage_limit
+                if reset_epoch then
+                    limit:hold(reset_epoch)
+                end
+                -- The turn's own records (its UserPromptSubmit hook) belong
+                -- under its prompt, so the cut below takes them with it.
+                self:_drain_side_records()
+                -- The bridge forwards the limit's notice as an ordinary agent
+                -- message (claude-agent-acp's legacy transcript behaviour, for
+                -- clients that do not advertise session failures), so "no
+                -- reply" means nothing but that notice. Truncated before the
+                -- renewal, so the prompt reaches no history prefix.
+                if
+                    on_returned
+                    and user_msg
+                    and replied_only_with(
+                        chat_history.messages,
+                        user_msg,
+                        err.message or ""
+                    )
+                    and chat_history:truncate_from(user_msg)
+                then
+                    self:_history_changed(chat_history)
+                    on_returned("usage_limit", limit:holds_drain())
+                end
                 Recovery.renew_session(self)
                 if reset_epoch then
-                    Recovery.offer_auto_continue(self, reset_epoch)
+                    Recovery.offer_auto_continue(self, limit)
                 end
-            else
-                self._retry_attempt = 0
             end
+            -- No other error clears the limit's attempts: a client restart
+            -- after a re-login fails sibling sessions' turns with transport
+            -- errors, which say nothing about the limit.
         end
 
         -- Above the history save below, so the corrected statuses are the ones
@@ -3345,7 +3391,7 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
             -- The retry turn reaches its own Stop where the drain runs.
             -- Draining here too would fire a second concurrent send_prompt,
             -- so deferred prompts wait up to MAX_TRANSIENT_RETRIES turns
-            -- (same reasoning as offer_auto_continue's timer callback).
+            -- (one dispatch per Stop).
             Recovery.retry_after_transient_error(self)
         elseif
             err == nil
@@ -3360,7 +3406,7 @@ function SessionManager:_dispatch_turn(prompt, on_refusal)
             -- `max_tokens` and `max_turn_requests` all left the work unfinished,
             -- and launching a follow-up onto a truncated state is wrong.
             -- Deferred prompts stay visible in the input buffer meanwhile.
-            self:_dispatch_deferred_prompts()
+            self:_drain_queue()
         end
     end)
 end
@@ -3384,6 +3430,14 @@ function SessionManager:new_session(opts)
     local preserved_model
     if not history then
         preserved_model = self.config_options:current_model_id()
+        -- The "continue" refers to the conversation that hit the usage limit.
+        -- Scheduled: a `/new` sent from the input runs before its submit
+        -- deletes the sent rows, by number.
+        vim.schedule(function()
+            if not self.destroyed then
+                self:_withdraw_auto_continue()
+            end
+        end)
         self:_cancel_session()
     end
 
@@ -3501,7 +3555,7 @@ function SessionManager:new_session(opts)
             -- After on_created, so the notice follows any history it replays.
             self:_refresh_name()
 
-            self:_dispatch_deferred_prompts()
+            self:_drain_queue()
         end)
     end)
 end
@@ -3694,7 +3748,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
             -- `_reapply_model` switches to the saved model asynchronously,
             -- so a drained turn may run on the provider default rather than
             -- the session's own model.
-            self:_dispatch_deferred_prompts()
+            self:_drain_queue()
         end
     )
 end
@@ -3767,7 +3821,6 @@ function SessionManager:_reset_conversation()
     end
 
     self.session_id = nil
-    Recovery.cancel_retry_timer(self)
     self._transient_attempt = 0
     self.permission_manager:clear()
     self:_set_available_commands({})
@@ -3788,18 +3841,17 @@ function SessionManager:_reset_conversation()
 end
 
 --- Cancel the ACP session on the provider and reset the conversation like
---- `_reset_conversation`. Also clears the usage limit, a held prompt with no
---- buffer range, and the load gate.
+--- `_reset_conversation`. Also clears the load gate.
 function SessionManager:_cancel_session()
     if self.session_id then
         self.agent:cancel_session(self.session_id)
     end
-    self._pending_bufferless_prompt = nil
-    -- Every gate state is per-session, so /new recovers a wedged one. /new is
-    -- exempt from the gate precisely so it stays reachable to do this. The
-    -- in-flight counter is released by _advance_session_epoch instead, which
-    -- also covers the load and re-create paths that never reach here.
-    self._usage_reset_epoch = nil
+    -- Every gate state but the usage limit is per-session, so /new recovers a
+    -- wedged one. /new is exempt from the gate precisely so it stays
+    -- reachable to do this. The usage limit is the provider account's, and
+    -- /new does not clear it. The in-flight counter is released by
+    -- _advance_session_epoch instead, which also covers the load and
+    -- re-create paths that never reach here.
     self._loading = false
     self._replay_hold = nil
     self._replay_dropped = nil
@@ -3807,8 +3859,7 @@ function SessionManager:_cancel_session()
 end
 
 --- Switch to a different ACP provider while preserving chat UI and history.
---- Cancels any auto-continue timer — the outgoing provider's usage limit does
---- not apply to the new one.
+--- The new provider's client carries its own usage limit.
 --- @param provider_name agentic.UserConfig.ProviderName
 function SessionManager:switch_provider(provider_name)
     if self.is_generating then
@@ -3821,12 +3872,6 @@ function SessionManager:switch_provider(provider_name)
 
     local AgentInstance = require("agentic.acp.agent_instance")
 
-    -- Cancel pending auto-continue timer — switching provider renders the
-    -- current provider's usage limit irrelevant, so the gate opens with it. A
-    -- usage limit is the main reason to switch at all, and leaving the epoch
-    -- set would defer every submit to the new provider until it elapsed.
-    Recovery.cancel_retry_timer(self)
-    self._usage_reset_epoch = nil
     self._transient_attempt = 0
 
     -- Save references before get_instance (on_ready may fire synchronously)

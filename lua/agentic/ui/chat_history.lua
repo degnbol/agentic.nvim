@@ -223,6 +223,23 @@ function ChatHistory:add_message(msg)
     self.dirty = true
 end
 
+--- Remove `message` and every message after it, when `message` is in the
+--- main history.
+--- @param message agentic.ui.ChatHistory.Message
+--- @return boolean removed
+function ChatHistory:truncate_from(message)
+    for i, msg in ipairs(self.messages) do
+        if msg == message then
+            for j = #self.messages, i, -1 do
+                self.messages[j] = nil
+            end
+            self.dirty = true
+            return true
+        end
+    end
+    return false
+end
+
 --- Whether the history holds a prompt the user sent.
 --- @return boolean
 function ChatHistory:has_prompt()

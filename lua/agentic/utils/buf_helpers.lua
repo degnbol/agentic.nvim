@@ -225,25 +225,32 @@ function BufHelpers.is_buffer_blank(bufnr)
     return true
 end
 
---- Add lines to the end of a buffer as a paragraph of their own: they replace
---- a buffer with no text, and follow a blank line otherwise. In a buffer with
---- text, the change `on_bytes` reports starts on the row after the last line,
---- so it covers no existing row.
+--- Insert lines in a buffer at `row` as a paragraph of their own: they replace
+--- a buffer with no text, and otherwise a blank line separates them from text
+--- right above or below. In a buffer with text, the change `on_bytes` reports
+--- starts at `row`, so it covers no row above it.
 --- @param bufnr integer
+--- @param row integer 0-indexed row to insert at. The line count appends
 --- @param lines string[]
 --- @return integer first_row 0-indexed row of lines[1]
-function BufHelpers.append_paragraph(bufnr, lines)
+function BufHelpers.insert_paragraph(bufnr, row, lines)
     if BufHelpers.is_buffer_blank(bufnr) then
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
         return 0
     end
-    local first_row = vim.api.nvim_buf_line_count(bufnr)
-    local last = vim.api.nvim_buf_get_lines(bufnr, -2, -1, false)[1]
-    if last:match("%S") then
-        lines = vim.list_extend({ "" }, lines)
-        first_row = first_row + 1
+    local above = row > 0
+        and vim.api.nvim_buf_get_lines(bufnr, row - 1, row, false)[1]
+    local below = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
+    local paragraph = vim.list_slice(lines)
+    local first_row = row
+    if above and above:match("%S") then
+        table.insert(paragraph, 1, "")
+        first_row = row + 1
     end
-    vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, lines)
+    if below and below:match("%S") then
+        table.insert(paragraph, "")
+    end
+    vim.api.nvim_buf_set_lines(bufnr, row, row, false, paragraph)
     return first_row
 end
 
@@ -292,22 +299,6 @@ function BufHelpers.insert_text(lines)
     vim.api.nvim_win_set_cursor(0, { pos[1] + #lines - 1, end_col })
 end
 
---- Add lines to the start of a buffer as a paragraph of their own: they
---- replace a buffer with no text, and precede a blank line otherwise.
---- @param bufnr integer
---- @param lines string[]
-function BufHelpers.prepend_paragraph(bufnr, lines)
-    if BufHelpers.is_buffer_blank(bufnr) then
-        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-        return
-    end
-    local first = vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1]
-    if first:match("%S") then
-        lines = vim.list_extend(vim.list_slice(lines), { "" })
-    end
-    vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, lines)
-end
-
 --- Add text to the start of a draft buffer as a paragraph of its own, then set
 --- the buffer's `modified` to whether it holds text. Leading and trailing empty
 --- lines of the text are dropped. Text with no lines left changes nothing.
@@ -318,7 +309,7 @@ function BufHelpers.prepend_draft(bufnr, text)
     if #lines == 0 then
         return
     end
-    BufHelpers.prepend_paragraph(bufnr, lines)
+    BufHelpers.insert_paragraph(bufnr, 0, lines)
     BufHelpers.sync_modified(bufnr)
 end
 

@@ -186,7 +186,7 @@ describe("BufHelpers", function()
         end)
     end)
 
-    describe("append_paragraph", function()
+    describe("insert_paragraph", function()
         local bufnr
 
         before_each(function()
@@ -202,29 +202,47 @@ describe("BufHelpers", function()
         end
 
         it("replaces an empty buffer", function()
-            assert.equal(0, BufHelpers.append_paragraph(bufnr, { "a", "b" }))
+            assert.equal(0, BufHelpers.insert_paragraph(bufnr, 0, { "a", "b" }))
             assert.same({ "a", "b" }, lines())
         end)
 
         it("replaces a whitespace-only buffer", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { " ", "\t" })
-            assert.equal(0, BufHelpers.append_paragraph(bufnr, { "a" }))
+            assert.equal(0, BufHelpers.insert_paragraph(bufnr, 2, { "a" }))
             assert.same({ "a" }, lines())
         end)
 
         it("puts a blank line after a last line with text", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "x", "y" })
-            assert.equal(3, BufHelpers.append_paragraph(bufnr, { "a" }))
+            assert.equal(3, BufHelpers.insert_paragraph(bufnr, 2, { "a" }))
             assert.same({ "x", "y", "", "a" }, lines())
         end)
 
         it("adds no blank line after a blank last line", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "x", "" })
-            assert.equal(2, BufHelpers.append_paragraph(bufnr, { "a" }))
+            assert.equal(2, BufHelpers.insert_paragraph(bufnr, 2, { "a" }))
             assert.same({ "x", "", "a" }, lines())
         end)
 
-        it("reports a change that starts after the last line", function()
+        it("puts a blank line before a first line with text", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "x", "y" })
+            assert.equal(0, BufHelpers.insert_paragraph(bufnr, 0, { "a" }))
+            assert.same({ "a", "", "x", "y" }, lines())
+        end)
+
+        it("adds no blank line before a blank first line", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "", "x" })
+            BufHelpers.insert_paragraph(bufnr, 0, { "a" })
+            assert.same({ "a", "", "x" }, lines())
+        end)
+
+        it("separates the text on both sides between two paragraphs", function()
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "x", "y" })
+            assert.equal(2, BufHelpers.insert_paragraph(bufnr, 1, { "a" }))
+            assert.same({ "x", "", "a", "", "y" }, lines())
+        end)
+
+        it("reports a change that starts at the row", function()
             vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "x", "y" })
             local start_rows = {}
             vim.api.nvim_buf_attach(bufnr, false, {
@@ -233,7 +251,7 @@ describe("BufHelpers", function()
                 end,
             })
 
-            BufHelpers.append_paragraph(bufnr, { "a" })
+            BufHelpers.insert_paragraph(bufnr, 2, { "a" })
 
             assert.same({ 2 }, start_rows)
         end)
@@ -427,45 +445,6 @@ describe("BufHelpers", function()
             press("lx")
 
             check(lines(), "Gv", { "ac", "Cont" }, { 2, 3 })
-        end)
-    end)
-
-    describe("prepend_paragraph", function()
-        local bufnr
-
-        before_each(function()
-            bufnr = vim.api.nvim_create_buf(false, true)
-        end)
-
-        after_each(function()
-            vim.api.nvim_buf_delete(bufnr, { force = true })
-        end)
-
-        local function lines()
-            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-        end
-
-        it("replaces an empty buffer", function()
-            BufHelpers.prepend_paragraph(bufnr, { "a", "b" })
-            assert.same({ "a", "b" }, lines())
-        end)
-
-        it("replaces a whitespace-only buffer", function()
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { " ", "\t" })
-            BufHelpers.prepend_paragraph(bufnr, { "a" })
-            assert.same({ "a" }, lines())
-        end)
-
-        it("adds no blank line before a blank first line", function()
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "", "x" })
-            BufHelpers.prepend_paragraph(bufnr, { "a" })
-            assert.same({ "a", "", "x" }, lines())
-        end)
-
-        it("puts a blank line before a first line with text", function()
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "x", "y" })
-            BufHelpers.prepend_paragraph(bufnr, { "a" })
-            assert.same({ "a", "", "x", "y" }, lines())
         end)
     end)
 

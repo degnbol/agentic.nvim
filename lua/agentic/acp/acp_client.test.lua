@@ -5,6 +5,7 @@ local assert = require("tests.helpers.assert")
 local Deferred = require("tests.helpers.deferred")
 local spy = require("tests.helpers.spy")
 local ToolCallKinds = require("agentic.acp.tool_call_kinds")
+local UsageLimit = require("agentic.acp.usage_limit")
 
 describe("agentic.acp.ACPClient", function()
     --- @type agentic.acp.ACPClient
@@ -275,6 +276,60 @@ describe("agentic.acp.ACPClient", function()
             end
 
             assert.spy(fail_spy).was.called(0)
+        end)
+    end)
+
+    describe("_broadcast", function()
+        --- @type tests.helpers.Deferred
+        local deferred
+
+        before_each(function()
+            deferred = Deferred.capture()
+        end)
+
+        after_each(function()
+            deferred.revert()
+        end)
+
+        it(
+            "calls the handler on each subscriber that has it, on the main loop",
+            function()
+                local lifted_a = spy.new(function() end)
+                local lifted_b = spy.new(function() end)
+                --- @type agentic.acp.ACPClient
+                local client = setmetatable({
+                    subscribers = {
+                        a = { on_usage_lifted = lifted_a },
+                        b = { on_usage_lifted = lifted_b },
+                        c = {},
+                    },
+                    _children = {},
+                }, { __index = ACPClient })
+
+                client:_broadcast("on_usage_lifted")
+                assert.spy(lifted_a).was.called(0)
+                deferred.drain()
+
+                assert.spy(lifted_a).was.called(1)
+                assert.spy(lifted_b).was.called(1)
+            end
+        )
+    end)
+
+    describe("usage_limit", function()
+        it("gives each client its own limit, whose lift broadcasts", function()
+            local connect_stub = spy.stub(ACPClient, "_connect")
+            local transport_stub = spy.stub(ACPClient, "_setup_transport")
+            local first = ACPClient:new({}, function() end)
+            local second = ACPClient:new({}, function() end)
+            connect_stub:revert()
+            transport_stub:revert()
+            local broadcast = spy.stub(first, "_broadcast")
+
+            first.usage_limit:_lift()
+
+            assert.are_not.equal(first.usage_limit, second.usage_limit)
+            assert.is_true(broadcast:called_with(first, "on_usage_lifted"))
         end)
     end)
 
@@ -920,6 +975,17 @@ describe("agentic.acp.ACPClient", function()
 
             assert.spy(on_disconnect).was.called(1)
             assert.is_nil(client.subscribers.s1)
+        end)
+
+        it("keeps the usage limit", function()
+            local client = connect(nil, function() end)
+            answer(client, 1, { protocolVersion = 1 })
+            local limit = UsageLimit:new(function() end)
+            client.usage_limit = limit
+
+            client:restart(function() end)
+
+            assert.equal(limit, client.usage_limit)
         end)
 
         -- The creator's first start never ran, so it runs on the new

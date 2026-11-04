@@ -6,112 +6,6 @@ local spy = require("tests.helpers.spy")
 local Recovery = require("agentic.session_recovery")
 
 describe("agentic.session_recovery", function()
-    describe("auto-continue after a usage limit", function()
-        --- @type TestSpy
-        local submit_spy
-
-        --- @param dispatched boolean Whether the user left something held,
-        ---        which then supplies the continuation
-        --- @return agentic.SessionManager
-        local function session_with(dispatched)
-            submit_spy = spy.new(function() end)
-            return {
-                session_id = "s1",
-                destroyed = false,
-                _retry_attempt = 1,
-                _usage_reset_epoch = os.time() + 600,
-                _handle_input_submit = submit_spy,
-                _dispatch_deferred_prompts = function()
-                    return dispatched
-                end,
-            } --[[@as agentic.SessionManager]]
-        end
-
-        it("sends 'continue' when nothing was queued", function()
-            local session = session_with(false)
-
-            Recovery._fire_auto_continue(session)
-
-            assert.spy(submit_spy).was.called(1)
-            assert.equal("continue", submit_spy.calls[1][2])
-        end)
-
-        -- Whatever was held IS the continuation, whether that is a tagged
-        -- region or a retained bufferless prompt; an extra "continue" would
-        -- fire a second concurrent turn in front of it.
-        it("sends no 'continue' when something was held", function()
-            local session = session_with(true)
-
-            Recovery._fire_auto_continue(session)
-
-            assert.spy(submit_spy).was.called(0)
-        end)
-
-        -- The gate must open first, or it would defer both branches above and
-        -- the pause would never end.
-        it("releases the usage gate before dispatching", function()
-            local session = session_with(false)
-            local epoch_at_submit
-            session._handle_input_submit = spy.new(function(sm)
-                epoch_at_submit = sm._usage_reset_epoch
-            end)
-
-            Recovery._fire_auto_continue(session)
-
-            assert.is_nil(epoch_at_submit)
-            assert.is_nil(session._usage_reset_epoch)
-        end)
-
-        -- cancel_retry_timer(sm, false) spares the attempt counter. Resetting
-        -- it would stop offer_auto_continue's MAX_RETRIES check from ever
-        -- tripping, retrying every 130s indefinitely.
-        it("keeps the attempt counter so a repeat limit backs off", function()
-            local session = session_with(false)
-
-            Recovery._fire_auto_continue(session)
-
-            assert.equal(1, session._retry_attempt)
-        end)
-
-        it("sends nothing for a destroyed session", function()
-            local session = session_with(false)
-            session.destroyed = true
-
-            Recovery._fire_auto_continue(session)
-
-            assert.spy(submit_spy).was.called(0)
-        end)
-
-        -- renew_session clears session_id and repopulates it from an async
-        -- new_session, so this window is reachable. An unprompted turn must
-        -- not land between the two sessions.
-        it("sends nothing without a session", function()
-            local session = session_with(false)
-            session.session_id = nil
-
-            Recovery._fire_auto_continue(session)
-
-            assert.spy(submit_spy).was.called(0)
-        end)
-
-        it("is not offered when the agent does not auto-continue", function()
-            local write_spy = spy.new(function() end)
-            local session = session_with(false)
-            session._retry_attempt = 0
-            session.agent = {
-                auto_continue_on_usage_limit = function()
-                    return false
-                end,
-            }
-            session.message_writer = { write_error_action = write_spy }
-
-            Recovery.offer_auto_continue(session, os.time() + 600)
-
-            assert.spy(write_spy).was.called(0)
-            assert.equal(0, session._retry_attempt)
-        end)
-    end)
-
     describe("resolve_auth_method", function()
         local TERMINAL = { id = "term", name = "T", type = "terminal" }
         local AGENT = { id = "key", name = "K" }
@@ -845,8 +739,10 @@ describe("agentic.session_recovery", function()
         end)
     end)
 
-    describe("restore_refused_prompt", function()
+    describe("prompts put back in the input", function()
         local ChatWidget = require("agentic.ui.chat_widget")
+        local SessionManager = require("agentic.session_manager")
+        local UsageLimit = require("agentic.acp.usage_limit")
         local Config = require("agentic.config")
         local MiniTest = require("mini.test")
         local original_key
@@ -909,6 +805,13 @@ describe("agentic.session_recovery", function()
                         table.insert(sink.actions, text)
                     end,
                 },
+                agent = {
+                    auto_continue_on_usage_limit = function()
+                        return sink.auto_continue ~= false
+                    end,
+                },
+                _queue_input = SessionManager._queue_input,
+                _withdraw_auto_continue = SessionManager._withdraw_auto_continue,
             }
             return session, --[[@as agentic.SessionManager]]
                 sink
@@ -921,71 +824,291 @@ describe("agentic.session_recovery", function()
             return vim.api.nvim_buf_get_lines(input, 0, -1, false)
         end
 
-        it("returns the text with its context", function()
-            local session, sink = make_session({}, {})
+        --- Queued regions of the session's input as `{ start_row, end_row }`
+        --- pairs in buffer order.
+        --- @param session agentic.SessionManager
+        --- @return integer[][]
+        local function tags(session)
+            local ns = vim.api.nvim_create_namespace("agentic_queued_region")
+            local marks = vim.api.nvim_buf_get_extmarks(
+                session.widget.buf_nrs.input,
+                ns,
+                0,
+                -1,
+                { details = true }
+            )
+            return vim.tbl_map(function(m)
+                return { m[2], m[4].end_row }
+            end, marks)
+        end
 
-            Recovery.restore_refused_prompt(session, "refused", {
-                selections = { { lines = { "x" } } },
-                files = { "/a.lua" },
-                diagnostics = { { message = "d" } },
-            })
+        describe("requeue_limited_prompt", function()
+            it(
+                "puts the text above the queue, tagged, with its context",
+                function()
+                    local session, sink = make_session(
+                        { "draft", "", "queued" },
+                        { { 2, 2 } }
+                    )
 
-            assert.same({ "refused" }, input_lines(session))
-            assert.is_true(vim.bo[session.widget.buf_nrs.input].modified)
-            assert.same({ { lines = { "x" } } }, sink.selections)
-            assert.same({ "/a.lua" }, sink.files)
-            assert.same({ { message = "d" } }, sink.diagnostics)
+                    Recovery.requeue_limited_prompt(session, "limited", {
+                        selections = {},
+                        files = { "/a.lua" },
+                        diagnostics = {},
+                    })
+
+                    assert.same(
+                        { "draft", "", "limited", "", "queued" },
+                        input_lines(session)
+                    )
+                    assert.same({ { 2, 2 }, { 4, 4 } }, tags(session))
+                    assert.same({ "/a.lua" }, sink.files)
+                    assert.same({}, sink.actions)
+                end
+            )
+
+            it("leaves no room for an automatic continue", function()
+                local session = make_session({}, {})
+                local limit = UsageLimit:new(function() end)
+                limit.lifts_at = os.time() + 600
+
+                Recovery.requeue_limited_prompt(session, "limited", NO_CONTEXT)
+                Recovery.offer_auto_continue(session, limit)
+
+                assert.same({ "limited" }, input_lines(session))
+                assert.is_nil(session._continue_mark)
+            end)
         end)
 
-        it("leaves the queue as draft below the text", function()
-            local session, sink = make_session(
-                { "one", "", "two", "draft" },
-                { { 0, 0 }, { 2, 2 } }
-            )
-            session._pending_bufferless_prompt = "held"
+        describe("return_limited_prompt", function()
+            it("drafts the text on top, keeping the queue tagged", function()
+                local session, sink = make_session({ "queued" }, { { 0, 0 } })
 
-            Recovery.restore_refused_prompt(session, "refused", NO_CONTEXT)
+                Recovery.return_limited_prompt(session, "limited", {
+                    selections = {},
+                    files = { "/a.lua" },
+                    diagnostics = {},
+                })
 
-            assert.same(
-                { "refused", "", "held", "", "one", "", "two", "draft" },
-                input_lines(session)
-            )
-            assert.equal(0, session.widget.input_dispatch:queued_block_count())
-            assert.is_nil(session._pending_bufferless_prompt)
-            assert.same({
-                "Prompt returned to the input. Switch model with [<M>] to send it again.",
-                "3 held or queued prompt(s) left as draft.",
-            }, sink.actions)
+                assert.same({ "limited", "", "queued" }, input_lines(session))
+                assert.same({ { 2, 2 } }, tags(session))
+                assert.same({ "/a.lua" }, sink.files)
+                assert.same({}, sink.actions)
+            end)
         end)
 
-        it("puts the text in the input it is given", function()
-            local session = make_session({}, {})
-            local other = vim.api.nvim_create_buf(false, true)
-            MiniTest.finally(function()
-                vim.api.nvim_buf_delete(other, { force = true })
+        describe("offer_auto_continue", function()
+            --- @param attempt integer
+            --- @return agentic.acp.UsageLimit
+            local function limit_at(attempt)
+                local limit = UsageLimit:new(function() end)
+                limit.attempt = attempt
+                -- Reads as 10m through a second boundary.
+                limit.lifts_at = os.time() + 630
+                return limit
+            end
+
+            it(
+                "queues continue in a blank input and says when it sends",
+                function()
+                    local session, sink = make_session({}, {})
+
+                    Recovery.offer_auto_continue(session, limit_at(1))
+
+                    assert.same({ "continue" }, input_lines(session))
+                    assert.same({ { 0, 0 } }, tags(session))
+                    assert.is_not_nil(session._continue_mark)
+                    assert.same(
+                        { "Usage limit: queued prompts send in 10m." },
+                        sink.actions
+                    )
+                end
+            )
+
+            it("names a repeat attempt", function()
+                local session, sink = make_session({}, {})
+
+                Recovery.offer_auto_continue(session, limit_at(2))
+
+                assert.same({
+                    "Usage limit: queued prompts send in 10m (attempt 2/3).",
+                }, sink.actions)
             end)
 
-            Recovery.restore_refused_prompt(
-                session,
-                "refused",
-                NO_CONTEXT,
-                other
-            )
+            it("queues nothing with draft or queued text", function()
+                for _, setup in ipairs({
+                    { { "draft" }, {} },
+                    { { "queued" }, { { 0, 0 } } },
+                }) do
+                    local session = make_session(setup[1], setup[2])
 
-            assert.same(
-                { "refused" },
-                vim.api.nvim_buf_get_lines(other, 0, -1, false)
-            )
-            assert.same({ "" }, input_lines(session))
+                    Recovery.offer_auto_continue(session, limit_at(1))
+
+                    assert.same(setup[1], input_lines(session))
+                    assert.is_nil(session._continue_mark)
+                end
+            end)
+
+            it("queues nothing while the input is typed in", function()
+                local session = make_session({}, {})
+                local input = session.widget.buf_nrs.input
+                local in_insert = spy.stub(
+                    require("agentic.utils.buf_helpers"),
+                    "in_insert_mode"
+                )
+                in_insert:returns(true)
+                local current = spy.stub(vim.api, "nvim_get_current_buf")
+                current:returns(input)
+                MiniTest.finally(function()
+                    in_insert:revert()
+                    current:revert()
+                end)
+
+                Recovery.offer_auto_continue(session, limit_at(1))
+
+                assert.is_nil(session._continue_mark)
+            end)
+
+            it("queues nothing, with no attempt count, when off", function()
+                local session, sink = make_session({}, {})
+                sink.auto_continue = false
+
+                Recovery.offer_auto_continue(session, limit_at(2))
+
+                assert.same({ "" }, input_lines(session))
+                assert.same(
+                    { "Usage limit: queued prompts send in 10m." },
+                    sink.actions
+                )
+            end)
+
+            it("gives up after MAX_ATTEMPTS", function()
+                local session, sink = make_session({}, {})
+
+                Recovery.offer_auto_continue(
+                    session,
+                    limit_at(UsageLimit.MAX_ATTEMPTS + 1)
+                )
+
+                assert.same({ "" }, input_lines(session))
+                assert.equal(
+                    "Auto-continue gave up after 3 attempts.",
+                    sink.actions[2]
+                )
+            end)
+
+            -- The automatic "continue" drains as a prompt; the limit can
+            -- turn it away again.
+            it("withdraws a turned-away continue on giving up", function()
+                local session = make_session({ "mine" }, { { 0, 0 } })
+                session._continue_mark = 1
+                Recovery.requeue_limited_prompt(session, "continue", NO_CONTEXT)
+                assert.same({ "continue", "", "mine" }, input_lines(session))
+
+                Recovery.offer_auto_continue(
+                    session,
+                    limit_at(UsageLimit.MAX_ATTEMPTS + 1)
+                )
+
+                assert.same({ "mine" }, input_lines(session))
+                assert.is_nil(session._continue_mark)
+            end)
+
+            it("keeps focus and mode", function()
+                local session = make_session({}, {})
+                local win = vim.api.nvim_get_current_win()
+                local mode = vim.api.nvim_get_mode().mode
+
+                Recovery.offer_auto_continue(session, limit_at(1))
+
+                assert.equal(win, vim.api.nvim_get_current_win())
+                assert.equal(mode, vim.api.nvim_get_mode().mode)
+            end)
         end)
 
-        it("names no key when switching models has none", function()
-            Config.keymaps.widget.switch_model = ""
-            local session, sink = make_session({}, {})
+        describe("restore_refused_prompt", function()
+            it("returns the text with its context", function()
+                local session, sink = make_session({}, {})
 
-            Recovery.restore_refused_prompt(session, "refused", NO_CONTEXT)
+                Recovery.restore_refused_prompt(session, "refused", {
+                    selections = { { lines = { "x" } } },
+                    files = { "/a.lua" },
+                    diagnostics = { { message = "d" } },
+                })
 
-            assert.same({ "Prompt returned to the input." }, sink.actions)
+                assert.same({ "refused" }, input_lines(session))
+                assert.is_true(vim.bo[session.widget.buf_nrs.input].modified)
+                assert.same({ { lines = { "x" } } }, sink.selections)
+                assert.same({ "/a.lua" }, sink.files)
+                assert.same({ { message = "d" } }, sink.diagnostics)
+            end)
+
+            it("leaves the queue as draft below the text", function()
+                local session, sink = make_session(
+                    { "one", "", "two", "draft" },
+                    { { 0, 0 }, { 2, 2 } }
+                )
+                session._continue_mark = 1
+
+                Recovery.restore_refused_prompt(session, "refused", NO_CONTEXT)
+
+                assert.same(
+                    { "refused", "", "one", "", "two", "draft" },
+                    input_lines(session)
+                )
+                assert.equal(
+                    0,
+                    session.widget.input_dispatch:queued_block_count()
+                )
+                assert.is_nil(session._continue_mark)
+                assert.same({
+                    "Prompt returned to the input. Switch model with [<M>] to send it again.",
+                    "2 queued prompt(s) left as draft.",
+                }, sink.actions)
+            end)
+
+            it("counts a held bufferless prompt as queued", function()
+                local session, sink = make_session({}, {})
+                session:_queue_input("held")
+
+                Recovery.restore_refused_prompt(session, "refused", NO_CONTEXT)
+
+                assert.same({ "refused", "", "held" }, input_lines(session))
+                assert.equal(
+                    "1 queued prompt(s) left as draft.",
+                    sink.actions[2]
+                )
+            end)
+
+            it("puts the text in the input it is given", function()
+                local session = make_session({}, {})
+                local other = vim.api.nvim_create_buf(false, true)
+                MiniTest.finally(function()
+                    vim.api.nvim_buf_delete(other, { force = true })
+                end)
+
+                Recovery.restore_refused_prompt(
+                    session,
+                    "refused",
+                    NO_CONTEXT,
+                    other
+                )
+
+                assert.same(
+                    { "refused" },
+                    vim.api.nvim_buf_get_lines(other, 0, -1, false)
+                )
+                assert.same({ "" }, input_lines(session))
+            end)
+
+            it("names no key when switching models has none", function()
+                Config.keymaps.widget.switch_model = ""
+                local session, sink = make_session({}, {})
+
+                Recovery.restore_refused_prompt(session, "refused", NO_CONTEXT)
+
+                assert.same({ "Prompt returned to the input." }, sink.actions)
+            end)
         end)
     end)
 end)

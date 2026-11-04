@@ -8,6 +8,7 @@ local PermissionRules = require("agentic.utils.permission_rules")
 local SkillPath = require("agentic.utils.skill_path")
 local ToolCallKinds = require("agentic.acp.tool_call_kinds")
 local transport_module = require("agentic.acp.acp_transport")
+local UsageLimit = require("agentic.acp.usage_limit")
 
 --[[
 CRITICAL: Type annotations in this file are essential for Lua Language Server support.
@@ -32,6 +33,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field on_tool_call fun(tool_call: agentic.ui.MessageWriter.ToolCallBlock, source_session_id: string|nil): nil
 --- @field on_tool_call_update fun(tool_call: agentic.ui.MessageWriter.ToolCallBase, source_session_id: string|nil): nil
 --- @field on_disconnect? fun(): nil The provider process died or failed
+--- @field on_usage_lifted? fun(): nil The provider account's usage limit lifted
 
 --- @class agentic.acp.ACPProviderConfig
 --- @field name? string Provider name
@@ -66,6 +68,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 
 --- @class agentic.acp.ACPClient : agentic.acp.ACPClientData
 --- @field provider_name agentic.UserConfig.ProviderName Config key of the provider this client runs
+--- @field usage_limit agentic.acp.UsageLimit The provider account's usage limit. A restart keeps it
 --- @field _on_ready fun(client: agentic.acp.ACPClient) Ready callback passed to `new`, run again when a dropped connection reconnects
 --- @field _connection integer Number of connections started. Callbacks of an earlier connection are ignored
 --- @field _was_ready? boolean Whether any connection has reached `ready`
@@ -138,10 +141,19 @@ function ACPClient:new(config, on_ready)
     client._session_roots = {}
     client._tool_call_kinds = ToolCallKinds:new()
     client._notified_output = {}
+    client:_setup_usage_limit()
 
     client:_setup_transport()
     client:_connect(on_ready)
     return client
+end
+
+--- Give the client its provider account's usage limit, whose lift calls
+--- every subscriber's `on_usage_lifted`.
+function ACPClient:_setup_usage_limit()
+    self.usage_limit = UsageLimit:new(function()
+        self:_broadcast("on_usage_lifted")
+    end)
 end
 
 --- @param session_id string
@@ -499,13 +511,21 @@ function ACPClient:_set_state(state)
         -- A fresh subprocess probes its identity asynchronously, so an
         -- identity must not outlive the subprocess that reported it.
         self.auth_status = nil
-        for session_id in pairs(self.subscribers) do
-            self:__with_subscriber(session_id, function(subscriber)
-                if subscriber.on_disconnect then
-                    subscriber.on_disconnect()
-                end
-            end)
-        end
+        self:_broadcast("on_disconnect")
+    end
+end
+
+--- Call the handler `handler_name` of every subscriber that has it, each on
+--- the main loop.
+--- @param handler_name "on_disconnect"|"on_usage_lifted"
+function ACPClient:_broadcast(handler_name)
+    for session_id in pairs(self.subscribers) do
+        self:__with_subscriber(session_id, function(subscriber)
+            local handler = subscriber[handler_name]
+            if handler then
+                handler()
+            end
+        end)
     end
 end
 

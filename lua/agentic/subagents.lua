@@ -33,8 +33,8 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field write_chat_row fun(row: agentic.ui.ChatHistory.SessionMessage) Write a row to the main chat and add it to the history
 --- @field write fun() Write the session file (`:w`)
 --- @field end_side_records fun(child_id: string) Apply the tool call fields a subagent's side records give, and drop those held for calls it never reported
---- @field relay fun(instruction: string, opts: agentic.ui.PromptInput.SubmitOpts, on_refusal: fun()|nil): string|nil Send a prompt on the user's behalf; when held, returns the notice to show
---- @field return_prompt fun(text: string, bufnr: integer|nil) Give a refused message back, at the top of `bufnr` or of the session's input
+--- @field relay fun(instruction: string, on_returned: agentic.OnReturned|nil): string|nil Send a prompt on the user's behalf; when held, returns the cause, as a phrase
+--- @field return_prompt fun(text: string, bufnr: integer|nil, reason: agentic.ReturnReason) Give a returned message back, at the top of `bufnr` or of the session's input
 
 --- The subagents of one session: their blocks in the chat, transcripts,
 --- message inputs, session messages, and which subagent owns each tool call.
@@ -953,8 +953,8 @@ function Subagents:_open_input(child_id)
         subagent.label,
         self._widget,
         {
-            on_submit = function(text, opts)
-                return self:_relay_to_agent(child_id, text, opts)
+            on_submit = function(text)
+                return self:_relay_to_agent(child_id, text)
             end,
             setup_buf = function(bufnr)
                 self._host.setup_buf(bufnr, nil)
@@ -1059,13 +1059,13 @@ end
 --- Ask the main agent to pass `text` to a subagent, through the provider's
 --- message instruction. A finished agent resumes. Notifies for an agent that
 --- blocks its spawner, a provider that gives no instruction, or a message the
---- session holds. A refused message goes back to the top of the agent's input,
---- or of the session's input once the agent's is gone.
+--- session holds. A message refused or turned away by the usage limit goes
+--- back to the top of the agent's input, or of the session's input once the
+--- agent's is gone.
 --- @param child_id string
 --- @param text string
---- @param opts agentic.ui.PromptInput.SubmitOpts
 --- @return boolean sent
-function Subagents:_relay_to_agent(child_id, text, opts)
+function Subagents:_relay_to_agent(child_id, text)
     if not text:find("%S") then
         return false
     end
@@ -1081,14 +1081,17 @@ function Subagents:_relay_to_agent(child_id, text, opts)
         )
         return false
     end
-    local notice = self._host.relay(instruction, opts, function()
+    local held = self._host.relay(instruction, function(reason)
         local input = self._inputs[child_id]
-        self._host.return_prompt(text, input and input.bufnr)
+        self._host.return_prompt(text, input and input.bufnr, reason)
     end)
-    if notice then
-        Logger.notify(notice, vim.log.levels.WARN)
+    if held then
+        Logger.notify(
+            string.format("Subagent %s not messaged — %s.", label, held),
+            vim.log.levels.WARN
+        )
     end
-    return not notice
+    return not held
 end
 
 return Subagents

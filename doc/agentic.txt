@@ -169,8 +169,11 @@ All options with defaults are in `lua/agentic/config_default.lua`.
 
                                 *agentic-config-auto_continue_on_usage_limit*
 `auto_continue_on_usage_limit` boolean (default: true)
-    When the provider reports a usage limit with a reset time, schedule
-    a timer to send "continue" automatically.
+    When a turn stops on a usage limit with a reset time and the input is
+    empty, queue `continue` in the input. Delete it to not continue. Queued
+    prompts send when the limit lifts whatever this is set to. The limit
+    holds every session on that provider, not sessions on other providers,
+    and `/new` does not clear it. See |agentic-queue|.
 
 ------------------------------------------------------------------------------
 4.2 WINDOWS                                           *agentic-config-windows*
@@ -378,9 +381,8 @@ All options with defaults are in `lua/agentic/config_default.lua`.
         Register to copy the sent text into before a partial send deletes
         it from the input buffer. Nil writes no register.
     `write_submit`                   boolean (default: true)
-        `:w` in the input buffer submits it, also during a usage limit. The
-        input is 'modified' while it holds text. When false the input is a
-        plain buffer.
+        `:w` in the input buffer submits it. The input is 'modified' while
+        it holds text. When false the input is a plain buffer.
 
 ------------------------------------------------------------------------------
 4.9 MISCELLANEOUS                                        *agentic-config-misc*
@@ -478,9 +480,9 @@ agentic.open({opts})
 
                                                        *agentic.send_prompt()*
 agentic.send_prompt({text})
-    Send {text} as a prompt to the active session. The prompt is held and
-    sent later if the session cannot take it yet; a second call before the
-    first is sent replaces it.
+    Send {text} as a prompt to the active session. If the session cannot
+    take it yet, it is added at the end of the input as a queued region
+    (|agentic-queue|).
 
                                                      *agentic.add_selection()*
 agentic.add_selection()
@@ -1060,7 +1062,8 @@ session cannot take yet is tagged the same way, as is every block of one that
 has not dispatched.
 
 The queue dispatches one block in buffer order at each turn that ends
-normally, and one when a session becomes ready. A turn stopped with `<C-c>`,
+normally, one when a session becomes ready, and one when a provider's usage
+limit lifts. A turn stopped with `<C-c>`,
 or ended early by the agent, leaves the rest tagged; a refused turn leaves
 them as draft. Editing a region (any change to it, or entering insert mode
 with the cursor inside it) drops it back to ordinary draft.
@@ -1068,6 +1071,11 @@ with the cursor inside it) drops it back to ordinary draft.
 When the agent refuses a prompt, the prompt goes back to the top of the input
 it was sent from, and its context goes back in the context panels. The refused
 message stays in the agent's conversation.
+
+A submit always goes to the provider, also during a usage limit. When the
+limit turns it away before the agent writes anything, it goes back into the
+input as the first queued region, with its context, and sends when the limit
+lifts.
 
 `/new`, `/clear` and `/delete` ask for confirmation when they dispatch from
 the queue rather than as a submit's first block. Declining leaves every

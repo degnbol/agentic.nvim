@@ -757,6 +757,43 @@ describe("ChatHistory", function()
         end)
     end)
 
+    describe("truncate_from", function()
+        --- @return agentic.ui.ChatHistory.UserMessage
+        local function user(text)
+            return {
+                type = "user",
+                text = text,
+                timestamp = 0,
+                provider_name = "p",
+            }
+        end
+
+        it("removes the message and all after it", function()
+            local history = ChatHistory:new()
+            local first, second = user("a"), user("b")
+            history:add_message(first)
+            history:add_message(second)
+            history:add_message({
+                type = "agent",
+                text = "x",
+                provider_name = "p",
+            })
+            history.dirty = false
+
+            assert.is_true(history:truncate_from(second))
+            assert.same({ first }, history.messages)
+            assert.is_true(history.dirty)
+        end)
+
+        it("returns false for a message not in the history", function()
+            local history = ChatHistory:new()
+            history:add_message(user("a"))
+
+            assert.is_false(history:truncate_from(user("a")))
+            assert.equal(1, #history.messages)
+        end)
+    end)
+
     describe("has_prompt", function()
         it("is false for a history of side records only", function()
             local history = ChatHistory:new()

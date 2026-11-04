@@ -304,19 +304,20 @@ vim.api.nvim_buf_set_lines(_G.bufnr, 0, -1, false, { "look in lib/" })
         end)
     end
 
-    it(":w sends past a usage limit; the submit map does not", function()
+    it("the submit map and :w both send past a usage limit", function()
         child.lua([[
 _G.spawn("c1")
-_G.s._usage_reset_epoch = os.time() + 3600
+_G.s.agent.usage_limit.resets_at = os.time() + 3600
 _G.bufnr = _G.input("c1").bufnr
-vim.api.nvim_buf_set_lines(_G.bufnr, 0, -1, false, { "held" })
+vim.api.nvim_buf_set_lines(_G.bufnr, 0, -1, false, { "first" })
 _G.press(_G.bufnr, "<F5>")
 _G.after_map = #_G.sent
+vim.api.nvim_buf_set_lines(_G.bufnr, 0, -1, false, { "second" })
 vim.api.nvim_buf_call(_G.bufnr, function() vim.cmd.write() end)
 ]])
 
-        assert.equal(0, child.lua_get("_G.after_map"))
-        assert.equal(1, child.lua_get("#_G.sent"))
+        assert.equal(1, child.lua_get("_G.after_map"))
+        assert.equal(2, child.lua_get("#_G.sent"))
     end)
 
     it(
@@ -328,7 +329,7 @@ _G.s.agent.state = "disconnected"
 _G.bufnr = _G.input("c1").bufnr
 vim.api.nvim_buf_set_lines(_G.bufnr, 0, -1, false, { "first" })
 _G.press(_G.bufnr, "<F5>")
-_G.s._subagents:_relay_to_agent("c1", "second", { force = false })
+_G.s._subagents:_relay_to_agent("c1", "second")
 ]])
 
             assert.equal(0, child.lua_get("#_G.sent"))
@@ -336,9 +337,6 @@ _G.s._subagents:_relay_to_agent("c1", "second", { force = false })
             assert.is_true(child.lua_get("vim.bo[_G.bufnr].modified"))
             assert.truthy(
                 child.lua_get("_G.notices[1]"):find("no session yet", 1, true)
-            )
-            assert.is_true(
-                child.lua_get("_G.s._pending_bufferless_prompt == nil")
             )
         end
     )
@@ -356,7 +354,7 @@ _G.s._prompt_pending = 1
 _G.s._is_first_message = true
 _G.s._history_to_send = require("agentic.ui.chat_history"):new()
 _G.s._history_to_send.messages = { { type = "user", text = "earlier" } }
-_G.s._subagents:_relay_to_agent("c1", "hi", { force = false })
+_G.s._subagents:_relay_to_agent("c1", "hi")
 ]])
 
             assert.equal(1, child.lua_get("#_G.sent"))
