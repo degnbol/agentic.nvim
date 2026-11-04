@@ -256,18 +256,18 @@ function Budget.pace(window, now)
     )
 end
 
---- A fraction in eighths, rounded up and clamped to 0-8.
+--- A fraction in eighths, rounded to the nearest and clamped to 0-8.
 --- @param fraction number
 --- @return integer
 local function eighths(fraction)
-    return math.min(math.max(math.ceil(fraction * 8), 0), 8)
+    return math.min(math.max(math.floor(fraction * 8 + 0.5), 0), 8)
 end
 
 --- The pie glyph for a fraction: empty at 0, else one of 8 slices.
 --- @param fraction number
 --- @return string glyph
 function Budget.pie(fraction)
-    return Glyphs.PIE[1 + eighths(fraction)]
+    return Glyphs.PIE[1 + math.max(eighths(fraction), fraction > 0 and 1 or 0)]
 end
 
 --- The bar glyph for a fraction: 1 to 8 eighths high, the lowest for 0 too.

@@ -87,6 +87,11 @@ describe("agentic.Budget", function()
             assert.equal(Glyphs.PIE[5], Budget.pie(0.5))
         end)
 
+        it("rounds to the nearest slice", function()
+            assert.equal(Glyphs.PIE[5], Budget.pie(0.51))
+            assert.equal(Glyphs.PIE[6], Budget.pie(0.57))
+        end)
+
         it("is full at 1 and above", function()
             assert.equal(Glyphs.PIE[9], Budget.pie(1))
             assert.equal(Glyphs.PIE[9], Budget.pie(1.3))
@@ -94,13 +99,18 @@ describe("agentic.Budget", function()
     end)
 
     describe("bar", function()
-        it("is lowest at 0 and up to an eighth", function()
+        it("is lowest at 0 and up to 3/16", function()
             assert.equal(Glyphs.BAR[1], Budget.bar(0))
             assert.equal(Glyphs.BAR[1], Budget.bar(0.1))
         end)
 
         it("is half high at 0.5", function()
             assert.equal(Glyphs.BAR[4], Budget.bar(0.5))
+        end)
+
+        it("rounds to the nearest eighth", function()
+            assert.equal(Glyphs.BAR[4], Budget.bar(0.51))
+            assert.equal(Glyphs.BAR[5], Budget.bar(0.57))
         end)
 
         it("is full at 1 and above", function()
@@ -179,7 +189,7 @@ describe("agentic.Budget", function()
                 "5h "
                     .. Glyphs.PIE[3]
                     .. "  %#AgenticBudgetWarning#"
-                    .. Glyphs.BAR[8]
+                    .. Glyphs.BAR[7]
                     .. "%*",
                 Budget.statusline({ now = NOW })
             )
