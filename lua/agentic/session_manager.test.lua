@@ -5401,6 +5401,15 @@ describe("agentic.SessionManager", function()
             assert.equal("zsh", session.chat_history.messages[1].shell)
         end)
 
+        it("takes a call that reports no status as pending", function()
+            session:_on_tool_call({
+                tool_call_id = "tc-1",
+                kind = "execute",
+                argument = "ls",
+            } --[[@as agentic.ui.MessageWriter.ToolCallBlock]])
+            assert.equal("pending", session.chat_history.messages[1].status)
+        end)
+
         it("records the fields an update adds in history", function()
             tool_call("tc-1")
             session:_on_tool_call_update({

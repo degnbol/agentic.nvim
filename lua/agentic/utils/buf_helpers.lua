@@ -336,6 +336,29 @@ function BufHelpers.trailing_blank_rows(bufnr, max)
     return count
 end
 
+--- Make a buffer end in exactly one empty row: the blank (whitespace-only)
+--- rows that end it become one `""`, and a last row with text gets one after
+--- it. A buffer already ending in one `""` is not written, so the marks on
+--- that row stay. A blank buffer becomes one `""`.
+--- @param bufnr integer
+function BufHelpers.end_with_one_blank(bufnr)
+    local line_count = vim.api.nvim_buf_line_count(bufnr)
+    local first_blank = line_count
+    while
+        first_blank > 0
+        and not vim.api
+            .nvim_buf_get_lines(bufnr, first_blank - 1, first_blank, false)[1]
+            :match("%S")
+    do
+        first_blank = first_blank - 1
+    end
+    local last = vim.api.nvim_buf_get_lines(bufnr, -2, -1, false)[1]
+    if first_blank == line_count - 1 and last == "" then
+        return
+    end
+    vim.api.nvim_buf_set_lines(bufnr, first_blank, -1, false, { "" })
+end
+
 function BufHelpers.feed_ESC_key()
     vim.api.nvim_feedkeys(
         vim.api.nvim_replace_termcodes("<Esc>", true, false, true),

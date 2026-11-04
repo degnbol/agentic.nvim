@@ -201,11 +201,6 @@ local function close_fence(lines)
     end
 end
 
---- @class agentic.ui.MessageWriter.ErrorBlock
---- @field heading_id integer NS_ERROR extmark on the block's `## Error` row — the anchor its rail is re-stamped from. Doubles as the heading's own highlight, so the block costs no mark of its own.
---- @field rail_ids integer[] NS_DECORATIONS marks of the block's `│`/`╰─` rail, freed and re-stamped whole each time the block grows.
---- @field line_count integer Buffer line count the block last ended at. A different count means something else has been written since, so the block is closed and the next action starts on its own.
-
 --- @class agentic.ui.MessageWriter
 --- @field bufnr integer
 --- @field tool_call_blocks table<string, agentic.ui.MessageWriter.ToolCallBlock>
@@ -236,7 +231,7 @@ end
 --- @field _prompt_anchor? agentic.ui.MessageWriter.Placed What was placed beneath the last prompt
 --- @field _last_compaction_id? string Tool call id of the last compaction's block
 --- @field _end_rows? agentic.ui.MessageWriter.Placed The row group last appended at the end of the buffer, which the next appended row joins while nothing has been written after it
---- @field _error_block? agentic.ui.MessageWriter.ErrorBlock The `## Error` region still open at the end of the buffer, which `write_error_action` extends. Not per-turn state: the line-count check on `ErrorBlock` is what closes it, and it closes a block against a mid-turn write too, which a turn-boundary reset would miss.
+--- @field _error_responses? agentic.ui.MessageWriter.Placed The response rows under the last error, which a new response joins while they end the buffer. Cleared at a turn end or a refresh; any other write leaves it set but stops the next response joining.
 local MessageWriter = {}
 MessageWriter.__index = MessageWriter
 
@@ -254,9 +249,9 @@ MessageWriter.NS_USER_ACTIONS =
 local NS_ANCHORS = vim.api.nvim_create_namespace("agentic_anchors")
 
 --- Forget everything written to the buffer, for a buffer whose text is gone
---- or about to be rewritten whole: the tool call trackers, the anchors, any
---- error region left open, the notice ids, the pending fold ops, the per-turn
---- state, and every extmark in the buffer.
+--- or about to be rewritten whole: the tool call trackers, the anchors, the
+--- notice ids, the pending fold ops, the per-turn state, and every extmark in
+--- the buffer.
 ---
 --- Emptying or reloading a buffer collapses extmarks onto row 0 rather than
 --- deleting them, so a tracker or mark surviving its text resolves to the top
@@ -269,7 +264,6 @@ function MessageWriter:reset()
     self._prompt_anchor = nil
     self._last_compaction_id = nil
     self._end_rows = nil
-    self._error_block = nil
     self._pending_fold_ops = {}
     self._fold_states = {}
     self._notices = {}
@@ -796,6 +790,24 @@ function MessageWriter:reset_turn_state()
     self:_abandon_prose_run(self.bufnr)
     self._thought_run = nil
     self:_clear_prose_pin()
+    self:_close_error_responses()
+end
+
+--- Close the last error's response group so no later response joins it, and
+--- delete its anchor mark.
+--- @private
+function MessageWriter:_close_error_responses()
+    local group = self._error_responses
+    self._error_responses = nil
+    if group and group.mark_id then
+        -- The mark may already be gone with its buffer or namespace.
+        pcall(
+            vim.api.nvim_buf_del_extmark,
+            self.bufnr,
+            NS_ANCHORS,
+            group.mark_id
+        )
+    end
 end
 
 --- Run `fn` on the buffer made modifiable, as an `_own_change`.
@@ -832,15 +844,16 @@ function MessageWriter:_own_edit(fn)
     return result
 end
 
---- Writes a full message to the chat buffer and append two blank lines after.
---- Prose lines are hard-wrapped at `wrap_width`; code blocks are untouched.
+--- Write a full message to the chat buffer as its own block, after ending an
+--- open prose run, with one blank row after it. Prose lines are hard-wrapped
+--- at `wrap_width`; code blocks are untouched.
 --- @param update agentic.acp.SessionUpdateMessage
 function MessageWriter:write_message(update)
     local text = update.content
         and update.content.type == "text"
         and update.content.text --[[@as string]]
 
-    if not text or text == "" then
+    if not text or not text:match("%S") then
         return
     end
 
@@ -849,12 +862,23 @@ function MessageWriter:write_message(update)
     self:flush_thought_run()
 
     local lines = vim.split(text, "\n", { plain = true })
+    -- The blank above is the one the previous block left, and the one below
+    -- is appended here.
+    while not lines[1]:match("%S") do
+        table.remove(lines, 1)
+    end
+    while not lines[#lines]:match("%S") do
+        lines[#lines] = nil
+    end
     close_fence(lines)
     local wrapped, table_row_ends = self:_wrap_prose(lines)
 
     self:_schedule_follow()
 
     self:_own_edit(function(bufnr)
+        -- Mid-run, the message would otherwise land inside the run, and the
+        -- run's later reflow would span its rows.
+        self:_end_prose_run(bufnr)
         self:_append_lines(wrapped)
         self:_append_lines({ "" })
         -- After the append: on an empty buffer `_append_lines` replaces row
@@ -1119,7 +1143,8 @@ function MessageWriter:_extend_prose_region(bufnr)
 end
 
 --- End the prose run at the end of the buffer: reflow what is left of it,
---- bracket it, and release the run.
+--- bracket it, and release the run. Leaves a non-blank buffer ending in one
+--- blank row.
 ---
 --- The one way a run ends. Every writer that interrupts prose calls this rather
 --- than the flushing reflow directly, so a run cannot be released without being
@@ -1136,6 +1161,7 @@ function MessageWriter:_end_prose_run(bufnr)
     if run_start then
         render_prose_region(bufnr, run_start)
     end
+    BufHelpers.end_with_one_blank(bufnr)
 end
 
 --- The lines of a collapsed region: the body inside a `markdown-fold` fence
@@ -1271,14 +1297,16 @@ function MessageWriter:_shift_prose_rows_below(row, delta)
     self._prose_anchor_line = shifted(self._prose_anchor_line)
 end
 
---- What has been placed beneath an anchor (a tool call, the last prompt, or
---- the row group the buffer ends with) since it was written.
+--- What has been placed beneath an anchor (a tool call, a compaction, the
+--- last prompt, the last error, or the row group the buffer ends with) since
+--- it was written.
 --- @class agentic.ui.MessageWriter.Placed
---- @field mark_id? integer NS_ANCHORS mark on the last row placed beneath the anchor, its trailing blank excluded. For the last prompt, on the prompt's last row until something is placed; absent under a tool call until then.
+--- @field mark_id? integer NS_ANCHORS mark on the last row placed beneath the anchor, its trailing blank excluded. For the last prompt or the last error, on its last row until something is placed; absent under a tool call until then.
 --- @field last_kind? agentic.ui.MessageWriter.PlacedKind What was placed last; nil while nothing is
+--- @field first_row_joins? boolean A first row placed here joins the anchor's last row, with no blank between
 
 --- @alias agentic.ui.MessageWriter.PlacedKind
---- | "row" one line, which joins the rows placed right before it
+--- | "row" one row of a group, written as one or more lines that join the rows before it
 --- | "region" a block of lines, set off by blanks
 
 --- @param bufnr integer
@@ -1286,6 +1314,25 @@ end
 --- @return integer|nil row 0-indexed, nil when the mark is gone
 local function anchor_mark_row(bufnr, mark_id)
     return vim.api.nvim_buf_get_extmark_by_id(bufnr, NS_ANCHORS, mark_id, {})[1]
+end
+
+--- The last row placed under an anchor, when the buffer ends right after it
+--- with one `""`.
+--- @param bufnr integer
+--- @param placed agentic.ui.MessageWriter.Placed|nil
+--- @return integer|nil last_row 0-indexed; nil when `placed` has no mark, the mark is gone, or anything else follows it
+local function ends_buffer(bufnr, placed)
+    local last_row = placed
+        and placed.mark_id
+        and anchor_mark_row(bufnr, placed.mark_id)
+    if
+        not last_row
+        or last_row + 2 ~= vim.api.nvim_buf_line_count(bufnr)
+        or vim.api.nvim_buf_get_lines(bufnr, -2, -1, false)[1] ~= ""
+    then
+        return nil
+    end
+    return last_row
 end
 
 --- What is placed beneath `anchor`, and the row content placed there next
@@ -1302,7 +1349,7 @@ function MessageWriter:_resolve_anchor(anchor)
         or nil
     local tracker = id and self.tool_call_blocks[id]
     if tracker then
-        placed = tracker.placed or {}
+        placed = tracker.placed or { first_row_joins = true }
         if placed.mark_id then
             last_row = anchor_mark_row(self.bufnr, placed.mark_id)
         elseif tracker.extmark_id then
@@ -1341,12 +1388,11 @@ end
 --- Insert lines below `last_row`, the last row of what is placed there, and
 --- record them as placed last.
 ---
---- A row after a row, or a first row under a tool call or compaction, joins
---- it, above any trailing blank. Anything else goes after that blank,
---- followed by a blank of its own.
---- Either blank may be missing: a prose chunk writes into the buffer's last
---- row, so prose that followed `last_row` at the end of the buffer starts on
---- it. A missing blank is put back, which keeps the prose its own paragraph.
+--- A joining row (a row after a row, or a first row where
+--- `placed.first_row_joins` is set) goes directly after `last_row`; anything
+--- else goes after a blank of its own. Either way the content goes above the
+--- trailing blank, so that row and its marks stay after it. A missing
+--- trailing blank is put back.
 ---
 --- No `###` section break: what is placed at an anchor belongs to it, so the
 --- breadcrumb keeps naming the tool call or compaction above. The section
@@ -1374,28 +1420,19 @@ function MessageWriter:_insert_after(placed, last_row, lines, kind)
         false
     )[1] == ""
 
-    -- Only a tool call's `Placed` lacks a mark while nothing is under it; the
-    -- prompt anchor and the end row group always have one.
-    local first_under_call = placed.mark_id == nil
-    local insert_row, prefix, suffix
-    if kind == "row" and (placed.last_kind == "row" or first_under_call) then
-        insert_row = last_row + 1
-        prefix = {}
-        suffix = separated and {} or { "" }
-    else
-        insert_row = separated and last_row + 2 or last_row + 1
-        prefix = separated and {} or { "" }
-        suffix = { "" }
-    end
+    local joins = kind == "row"
+        and (
+            placed.last_kind == "row"
+            or (placed.last_kind == nil and placed.first_row_joins)
+        )
+    local insert_row = last_row + 1
+    local prefix = joins and {} or { "" }
+    local suffix = separated and {} or { "" }
 
     local inserted = vim.list_extend(vim.list_extend({}, prefix), lines)
     vim.list_extend(inserted, suffix)
     vim.api.nvim_buf_set_lines(bufnr, insert_row, insert_row, false, inserted)
-    -- From the row after `last_row` rather than the insert row: a prose run
-    -- whose first chunk appended to the blank there records that blank as
-    -- the run's start. Left where it is, the run would read as beginning
-    -- inside what was just put below it.
-    self:_shift_prose_rows_below(last_row + 1, #inserted)
+    self:_shift_prose_rows_below(insert_row, #inserted)
 
     local first_row = insert_row + #prefix
     placed.mark_id = vim.api.nvim_buf_set_extmark(
@@ -1610,15 +1647,9 @@ end
 --- @return integer row_index 0-indexed row the text went on
 function MessageWriter:_append_row(row)
     local bufnr = self.bufnr
-    local line_count = vim.api.nvim_buf_line_count(bufnr)
     local group = self._end_rows
-    local group_end = group and anchor_mark_row(bufnr, group.mark_id)
-    if
-        group
-        and group_end
-        and group_end + 2 == line_count
-        and vim.api.nvim_buf_get_lines(bufnr, -2, -1, false)[1] == ""
-    then
+    local group_end = ends_buffer(bufnr, group)
+    if group and group_end then
         return self:_insert_after(group, group_end, { row }, "row")
     end
 
@@ -1935,9 +1966,9 @@ local function drop_repeated_prose(bufnr, run_start, text)
         return false
     end
 
-    -- The rows the run opened on — a blank, or the empty `###` that closed the
-    -- section of the block above — introduce nothing once the only paragraph
-    -- they led is gone, so they go with it.
+    -- The rows the run opened on (the empty `###` that closed the section of
+    -- the block above) introduce nothing once the only paragraph they led is
+    -- gone, so they go with it.
     local leads_run = table
         .concat(vim.list_slice(rows, 1, first - 1), "")
         :match("^[#%s]*$") ~= nil
@@ -1977,9 +2008,8 @@ end
 --- NS_USER_ACTIONS, unlike a prompt's or a notice's: `[[`/`]]` walks what the
 --- user did, and an error is not that.
 ---
---- The block stays open — `write_error_action` extends it with whatever the
---- classification leads to (a send time, a login offer), so the error and the
---- plugin's response to it read as one region.
+--- Opens a response group directly under the region, outside its rail, and
+--- closes any earlier error's group.
 --- @param err agentic.acp.ACPError
 --- @return string|nil error_type Error class for caller to dispatch on (errorKind-first)
 --- @return number|nil reset_epoch Epoch seconds when usage resets (for usage_limit errors)
@@ -2029,7 +2059,7 @@ function MessageWriter:write_error_message(err)
         end
 
         -- Highlight "Error" portion of "## Error" (after "## ")
-        local heading_id = vim.api.nvim_buf_set_extmark(
+        vim.api.nvim_buf_set_extmark(
             bufnr,
             NS_ERROR,
             start_row,
@@ -2052,90 +2082,66 @@ function MessageWriter:write_error_message(err)
                 sign_hl_group = Theme.HL_GROUPS.ERROR_HEADING,
             }
         )
-        local rail_ids = render_region_rail(bufnr, start_row, end_row)
+        render_region_rail(bufnr, start_row, end_row)
 
         self:_append_lines({ "" })
 
-        self._error_block = {
-            heading_id = heading_id,
-            rail_ids = rail_ids,
-            line_count = vim.api.nvim_buf_line_count(bufnr),
+        self:_close_error_responses()
+        self._error_responses = {
+            mark_id = vim.api.nvim_buf_set_extmark(
+                bufnr,
+                NS_ANCHORS,
+                end_row,
+                0,
+                {}
+            ),
+            first_row_joins = true,
         }
     end)
 
     return error_type, reset_epoch
 end
 
---- Grow the open error block down to the end of the buffer, re-stamping its rail
---- so the `╰─` sits on the row the block now ends on.
+--- Write a line about an error, in one of two styles, after ending an open
+--- prose run.
 ---
---- Re-stamped whole rather than repaired at the corner (the cadence
---- `_extend_prose_region` needs): an error block gains a row at a time, at most
---- a handful of times, so there is no streaming cost to amortise.
---- @param bufnr integer
---- @private
-function MessageWriter:_extend_error_block(bufnr)
-    local block = self._error_block
-    if not block then
-        return
-    end
-    local heading_row = vim.api.nvim_buf_get_extmark_by_id(
-        bufnr,
-        NS_ERROR,
-        block.heading_id,
-        {}
-    )[1]
-    if not heading_row then
-        self._error_block = nil
-        return
-    end
-
-    Renderer.clear_decoration_extmarks(bufnr, block.rail_ids)
-    block.rail_ids = render_region_rail(
-        bufnr,
-        heading_row,
-        vim.api.nvim_buf_line_count(bufnr) - 1
-    )
-    block.line_count = vim.api.nvim_buf_line_count(bufnr)
-end
-
---- Write a line in the error style, joined to the error region above it when it
---- directly follows one.
----
---- Two populations of caller. What an error led to — when queued prompts
---- send, a login offer — lands under the error that prompted it and
---- belongs in its region. Standalone plugin notices (a rejected
---- `/grant` scope, a truncated queue) reach the same styling with no error
---- above them, and get no region.
----
---- Which one it is comes from the buffer no longer ending where the block did,
---- rather than from a boundary call in every other writer: cheaper, and it
---- cannot be forgotten by the next writer added. It also closes the block
---- against a write that lands mid-turn, which a turn-boundary reset would miss.
+--- While the last error is the last thing written in its turn, the line is a
+--- response to it (when queued prompts send, a login offer) and goes dimmed,
+--- with no sign, directly under the error and any responses already there.
+--- Otherwise it is a standalone notice (a rejected `/grant` scope, a
+--- truncated queue): its own block, in the error style, with no region.
 --- @param text string The action hint text (e.g. "Run /login to re-authenticate.")
 function MessageWriter:write_error_action(text)
+    self:flush_thought_run()
+    self:_release_prose_pin()
     self:_schedule_follow()
 
     local lines = self:_wrap_prose({ text })
 
     self:_own_edit(function(bufnr)
-        local block = self._error_block
-        if block and block.line_count ~= vim.api.nvim_buf_line_count(bufnr) then
-            self._error_block = nil
+        -- Mid-run, the line would otherwise land inside the run, and the
+        -- run's later reflow would span its rows.
+        self:_end_prose_run(bufnr)
+
+        local group = self._error_responses
+        local last_row = ends_buffer(bufnr, group)
+        if group and last_row then
+            local first_row = self:_insert_after(group, last_row, lines, "row")
+            Renderer.set_dim_range(bufnr, first_row, first_row + #lines - 1)
+            return
         end
 
+        self:_close_error_responses()
         self:_append_lines(lines)
         self:_append_lines({ "" })
 
         local end_row = vim.api.nvim_buf_line_count(bufnr) - 2
         highlight_error_body(bufnr, end_row - #lines + 1, end_row)
-
-        self:_extend_error_block(bufnr)
     end)
 end
 
---- Close out a turn: reset all per-turn state, end the prose run that closes
---- the turn, and append a trailing blank line.
+--- Close out a turn: reset per-turn state, end the prose run, and leave one
+--- trailing blank row.
 function MessageWriter:finalize_turn()
     -- A turn ending mid-thought (a cancel, most often) still owes the reader
     -- the thinking it did. The flush ends the prose run before it, so a turn
@@ -2147,13 +2153,11 @@ function MessageWriter:finalize_turn()
     -- subsequent turns (the "stuck 1 message behind" family of bugs).
     self._pending_section_break = false
     self:_release_prose_pin()
+    self:_close_error_responses()
     self:_schedule_follow()
 
     self:_own_edit(function(bufnr)
-        -- Before the trailing blank: that row carries the turn-usage footer and
-        -- belongs to no region.
         self:_end_prose_run(bufnr)
-        self:_append_lines({ "" })
     end)
 end
 
@@ -2214,8 +2218,7 @@ function MessageWriter:tool_call_row(tool_call_id)
     return block and (self:_block_rows(block))
 end
 
---- Stamp the per-turn token-usage footer on the trailing blank line that
---- `finalize_turn` just appended: dim, right-aligned virt_text like
+--- Stamp the per-turn token-usage footer on the buffer's last row: dim, right-aligned virt_text like
 --- `1.2k in · 0.4k out`. No-ops on missing or all-zero usage (stalls, cancels,
 --- and silent upstream auth failures emit zeros — a "0" would mislead).
 --- @param usage { inputTokens?: number, outputTokens?: number }|nil
@@ -2365,33 +2368,34 @@ function MessageWriter:write_message_chunk(update, starts_response)
     end
     self:flush_thought_run()
 
+    -- A new run opens after the one blank row the block before it left, so
+    -- blank lines leading the run would add to it.
+    if not self._prose_run_start_line then
+        text = text:gsub("^%s*\n", "")
+    end
+
     -- Prose that resumes after a tool call must close its section so
     -- treesitter-context stops pinning the tool call's filename while the user
     -- reads the summary. Emit an empty `###` heading (no inline child, so
-    -- context.scm never captures it) ahead of the prose, plus the blank line
-    -- for visual breathing room. Once per prose run — the flag resets after
-    -- the first chunk.
+    -- context.scm never captures it) ahead of the prose, with a blank row
+    -- after it; the run start below gives the blank above. Once per prose run
+    -- — the flag resets after the first chunk.
     if self._pending_section_break then
-        text = "\n###\n\n" .. text
+        text = "###\n\n" .. text
         self._pending_section_break = false
     end
 
     self:_schedule_follow()
 
-    -- Read before the write, which opens a run at its first chunk. A run that
-    -- opens on a blank row needs no break: the writer that ended the previous
-    -- run (a tool call's section close, a thought region, a user prompt) left
-    -- it. `end_runs` leaves the previous run's last row of text instead.
+    -- Read before the write, which opens a run at its first chunk.
     local run_open = self._prose_run_start_line ~= nil
 
     self:_own_edit(function(bufnr)
-        -- Rows rather than leading newlines, so the run starts on its text.
-        if
-            not run_open
-            and not BufHelpers.is_buffer_blank(bufnr)
-            and BufHelpers.trailing_blank_rows(bufnr, 1) == 0
-        then
-            self:_append_lines({ "", "" })
+        -- A new run starts on a row after one blank. Every writer leaves that
+        -- blank; a run abandoned by a refresh does not.
+        if not run_open and not BufHelpers.is_buffer_blank(bufnr) then
+            BufHelpers.end_with_one_blank(bufnr)
+            self:_append_lines({ "" })
         end
 
         local last_line = vim.api.nvim_buf_line_count(bufnr) - 1

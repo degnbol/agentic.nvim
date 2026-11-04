@@ -73,7 +73,7 @@ streaming": it runs the turn boundary below but not the idle signals
 ## Cross-turn state hazards in MessageWriter
 
 MessageWriter carries mutable flags that persist across turns. Any flag set
-during a turn MUST be cleared at the turn boundary (`append_separator`) or on
+during a turn MUST be cleared at the turn boundary (`finalize_turn`) or on
 the next tool call — otherwise it silently corrupts all subsequent turns.
 
 Known hazards (and their reset points):
@@ -81,11 +81,12 @@ Known hazards (and their reset points):
 | Flag | Set when | Reset in |
 |------|----------|----------|
 | `_pending_section_break` | Tool call block written | Next `write_message_chunk`, `finalize_turn`, `reset_turn_state` |
-| `_chunk_start_line` | First streamed chunk | `_reflow_chunks(flush_all=true)` via `append_separator` |
+| `_chunk_start_line` | First streamed chunk | `_reflow_chunks(flush_all=true)` via `_end_prose_run` |
+| `_error_responses` | `write_error_message` | `finalize_turn`, `reset_turn_state` |
 
 When adding new per-turn state to MessageWriter, always ensure it resets at the
 turn boundary. The `send_prompt` response callback (which calls
-`append_separator`) runs inside `vim.schedule` from `_handle_message` — do not
+`finalize_turn`) runs inside `vim.schedule` from `_handle_message` — do not
 add another `vim.schedule` wrapper or the cleanup races with the next turn.
 
 ## Header state and external UI plugins

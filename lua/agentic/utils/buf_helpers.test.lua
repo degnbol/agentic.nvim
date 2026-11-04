@@ -186,6 +186,46 @@ describe("BufHelpers", function()
         end)
     end)
 
+    describe("end_with_one_blank", function()
+        local bufnr
+
+        before_each(function()
+            bufnr = vim.api.nvim_create_buf(false, true)
+        end)
+
+        after_each(function()
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        --- @param lines string[]
+        --- @return string[]
+        local function ended(lines)
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            BufHelpers.end_with_one_blank(bufnr)
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        it("appends a blank after a text row", function()
+            assert.same({ "a", "" }, ended({ "a" }))
+        end)
+
+        it("keeps one blank", function()
+            assert.same({ "a", "" }, ended({ "a", "" }))
+        end)
+
+        it("collapses three blanks to one", function()
+            assert.same({ "a", "" }, ended({ "a", "", "", "" }))
+        end)
+
+        it("empties whitespace-only rows", function()
+            assert.same({ "a", "" }, ended({ "a", "  ", "\t" }))
+        end)
+
+        it("empties a blank buffer to one row", function()
+            assert.same({ "" }, ended({ "", " " }))
+        end)
+    end)
+
     describe("insert_paragraph", function()
         local bufnr
 

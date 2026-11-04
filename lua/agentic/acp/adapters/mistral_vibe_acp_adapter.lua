@@ -32,7 +32,7 @@ function MistralVibeACPAdapter:__build_tool_call_message(update)
     local message = {
         tool_call_id = update.toolCallId,
         kind = update.kind == "other" and "execute" or update.kind,
-        status = update.status or "pending",
+        status = update.status,
         argument = update.title,
         body = self:extract_content_body(update),
     }

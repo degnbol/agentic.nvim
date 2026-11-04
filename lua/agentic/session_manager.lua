@@ -1585,6 +1585,9 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
         self._held_tool_call_updates[id] = nil
         tool_call = vim.tbl_extend("force", tool_call, held.update) --[[@as agentic.ui.MessageWriter.ToolCallBlock]]
     end
+    -- ACP leaves `status` optional on a new call, defaulting to pending
+    -- (https://agentclientprotocol.com/protocol/v2/tool-calls#status).
+    tool_call.status = tool_call.status or "pending"
     tool_call = CanonicalToolCall.normalise(tool_call, tool_call.kind)
     tool_call.decided_by = self.permission_manager:take_deciders(id)
     local view = self:_view_for(id)

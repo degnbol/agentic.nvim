@@ -86,10 +86,11 @@ which would dim it.
 
 An error is a region too: `## Error` under `Glyphs.ERROR`, the wrapped body
 `ErrorReport.format` builds (the provider's words, then any class hint), and a
-rail that `write_error_action` re-stamps as the
-countdown or login offer that follows joins the block. Its identity sign is in
-`NS_DECORATIONS`, not `NS_USER_ACTIONS` — `[[`/`]]` walks user actions. See
-`write_error_message` and `_extend_error_block`.
+rail over heading and body. Its identity sign is in
+`NS_DECORATIONS`, not `NS_USER_ACTIONS` — `[[`/`]]` walks user actions. What
+the client does about the error (a send time, a login offer) goes in dimmed
+rows directly under the rail. See `write_error_message` and
+`write_error_action`.
 
 Prose is the exception with no identity to announce: a run of it opens on a
 plain `╭─` instead, on its first row of text — never on the empty `###`

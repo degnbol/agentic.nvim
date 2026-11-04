@@ -127,6 +127,26 @@ describe("agentic.ui.MessageWriter", function()
         return out
     end
 
+    --- 0-indexed rows the dim extmarks cover, `{ start, end }` each, `end`
+    --- exclusive.
+    --- @return table[]
+    local function dim_ranges()
+        local marks = vim.api.nvim_buf_get_extmarks(
+            bufnr,
+            Renderer.NS_DECORATIONS,
+            0,
+            -1,
+            { details = true }
+        )
+        local out = {}
+        for _, mark in ipairs(marks) do
+            if mark[4].hl_group == "AgenticDimmedBlock" then
+                table.insert(out, { mark[2], mark[4].end_row })
+            end
+        end
+        return out
+    end
+
     --- 1-indexed row whose decoration sign is `glyph`, i.e. the opening row of
     --- the region that glyph identifies.
     --- @param glyph string
@@ -566,7 +586,7 @@ describe("agentic.ui.MessageWriter", function()
             function()
                 writer:write_notice({ glyph = GLYPH, title = "repo" })
 
-                assert.same({ "## repo", "", "" }, buffer_lines())
+                assert.same({ "## repo", "" }, buffer_lines())
                 assert.same(
                     { { 0, GLYPH .. " ", Theme.HL_GROUPS.GLYPH_USER } },
                     action_marks()
@@ -585,7 +605,6 @@ describe("agentic.ui.MessageWriter", function()
                 "## 72.4k / 200k · 36%",
                 "- Cost: $0.0412 USD",
                 "",
-                "",
             }, buffer_lines())
 
             -- The body row closes the notice's region; the trailing blank is a
@@ -603,7 +622,7 @@ describe("agentic.ui.MessageWriter", function()
                     fold_body = {},
                 })
 
-                assert.same({ "## t", "path", "", "" }, buffer_lines())
+                assert.same({ "## t", "path", "" }, buffer_lines())
                 assert.same({ { 1, "╰─" } }, rail())
                 assert.same({}, writer._pending_fold_ops)
             end)
@@ -619,7 +638,7 @@ describe("agentic.ui.MessageWriter", function()
                 -- The fence outruns the backticks in the body, so the body's
                 -- opener cannot swallow what follows.
                 assert.same(
-                    { "## t", "````markdown-fold", "```lua", "````", "", "" },
+                    { "## t", "````markdown-fold", "```lua", "````", "" },
                     buffer_lines()
                 )
                 assert.same({}, writer._pending_fold_ops)
@@ -642,7 +661,6 @@ describe("agentic.ui.MessageWriter", function()
                     "one",
                     "two",
                     "```",
-                    "",
                     "",
                 }, buffer_lines())
                 assert.equal(1, #writer._pending_fold_ops)
@@ -690,7 +708,7 @@ describe("agentic.ui.MessageWriter", function()
 
             writer:write_notice({ glyph = GLYPH, title = title })
 
-            assert.same({ "## " .. title, "", "" }, buffer_lines())
+            assert.same({ "## " .. title, "" }, buffer_lines())
             assert.same(
                 { { 0, GLYPH .. " ", Theme.HL_GROUPS.GLYPH_USER } },
                 action_marks()
@@ -706,7 +724,10 @@ describe("agentic.ui.MessageWriter", function()
                 mid_turn = true,
             })
 
-            assert.equal("## repo", buffer_lines()[2])
+            assert.same(
+                { "streaming prose", "", "## repo" },
+                vim.list_slice(buffer_lines(), 1, 3)
+            )
             -- The heading closed the section itself, so resumed prose gets no
             -- `###` boundary line.
             writer:write_message_chunk(make_message_update("resumed prose"))
@@ -719,7 +740,7 @@ describe("agentic.ui.MessageWriter", function()
 
             writer:write_notice({ glyph = GLYPH, title = "repo" })
 
-            assert.equal("## repo", buffer_lines()[2])
+            assert.same({ "prior prose", "", "## repo", "" }, buffer_lines())
             assert.is_false(writer._pending_section_break)
         end)
 
@@ -781,24 +802,6 @@ describe("agentic.ui.MessageWriter", function()
             return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
         end
 
-        --- 0-indexed rows the dim extmarks cover, `{ start, end }` each.
-        local function dim_ranges()
-            local marks = vim.api.nvim_buf_get_extmarks(
-                bufnr,
-                Renderer.NS_DECORATIONS,
-                0,
-                -1,
-                { details = true }
-            )
-            local out = {}
-            for _, mark in ipairs(marks) do
-                if mark[4].hl_group == "AgenticDimmedBlock" then
-                    table.insert(out, { mark[2], mark[4].end_row })
-                end
-            end
-            return out
-        end
-
         it("writes nothing until the run ends", function()
             writer:write_message_chunk(make_thought_update("half a thought"))
 
@@ -817,6 +820,7 @@ describe("agentic.ui.MessageWriter", function()
                 "first thought",
                 "second thought",
                 "```",
+                "",
                 "the answer",
             }, buffer_lines())
             -- The glyph opens on the first body row — the row a closed fold
@@ -1565,7 +1569,6 @@ describe("agentic.ui.MessageWriter", function()
                     "",
                     "second para",
                     "",
-                    "",
                 }, buffer_lines())
                 assert_one_sign_per_row()
             end
@@ -1589,7 +1592,6 @@ describe("agentic.ui.MessageWriter", function()
                 "first para",
                 "",
                 "second para",
-                "",
                 "",
             }, lines_after_footer())
             assert_one_sign_per_row()
@@ -4771,8 +4773,10 @@ describe("agentic.ui.MessageWriter", function()
                 })
 
                 local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-                assert.equal("Running the tests now.", lines[1])
-                assert.equal("## Error", lines[2])
+                assert.same(
+                    { "Running the tests now.", "", "## Error" },
+                    vim.list_slice(lines, 1, 3)
+                )
             end)
 
             it("keeps the paragraphs above the duplicated one", function()
@@ -4811,9 +4815,10 @@ describe("agentic.ui.MessageWriter", function()
             schedule_stub:revert()
         end)
 
-        it("appends action text with ERROR_BODY highlight", function()
-            local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
+        local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
+        local NS_ANCHORS = vim.api.nvim_create_namespace("agentic_anchors")
 
+        it("appends action text with ERROR_BODY highlight", function()
             -- Pre-fill buffer so action appends
             vim.api.nvim_buf_set_lines(
                 bufnr,
@@ -4867,17 +4872,167 @@ describe("agentic.ui.MessageWriter", function()
             return by_row
         end
 
-        it("extends the rail of the error it follows", function()
-            writer:write_error_message({ code = 1, message = "out of credit" })
-            writer:write_error_action("Auto-continuing in 3h 7m.")
+        --- 0-indexed rows carrying an ERROR_BODY highlight.
+        --- @return integer[]
+        local function error_body_rows()
+            local marks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                NS_ERROR,
+                0,
+                -1,
+                { details = true }
+            )
+            local rows = {}
+            for _, mark in ipairs(marks) do
+                if mark[4].hl_group == "AgenticErrorBody" then
+                    table.insert(rows, mark[2])
+                end
+            end
+            return rows
+        end
 
-            -- ## Error / out of credit / (blank) / Auto-continuing / (blank)
+        local function buffer_lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        local ERROR = { code = 1, message = "out of credit" }
+        local ACTION = "Auto-continuing in 3h 7m."
+
+        it("puts a response directly under the error, dimmed", function()
+            writer:write_error_message(ERROR)
+            writer:write_error_action(ACTION)
+
+            assert.same(
+                { "## Error", "out of credit", ACTION, "" },
+                buffer_lines()
+            )
             local by_row = signs_by_row()
             assert.equal(Glyphs.ERROR .. " ", by_row[0])
-            assert.equal("│ ", by_row[1])
-            assert.equal("│ ", by_row[2])
-            assert.equal("╰─", by_row[3])
-            assert.is_nil(by_row[4])
+            assert.equal("╰─", by_row[1])
+            assert.is_nil(by_row[2])
+            assert.same({ { 2, 3 } }, dim_ranges())
+            assert.same({ 1 }, error_body_rows())
+        end)
+
+        it("joins after a row is placed above the error", function()
+            writer:write_user_prompt("ask")
+            writer:write_error_message(ERROR)
+            writer:write_loaded_file({ path = "/r/a.md", after_prompt = true })
+            writer:write_error_action(ACTION)
+
+            local lines = buffer_lines()
+            assert.same(
+                { "## Error", "out of credit", ACTION, "" },
+                vim.list_slice(lines, #lines - 3)
+            )
+            assert.same({ { #lines - 2, #lines - 1 } }, dim_ranges())
+        end)
+
+        it("flushes buffered thinking above a standalone action", function()
+            writer:write_message_chunk(make_thought_update("a\nb"))
+            writer:write_error_action(ACTION)
+
+            local lines = buffer_lines()
+            assert.same(
+                { "```", "", ACTION, "" },
+                vim.list_slice(lines, #lines - 3)
+            )
+        end)
+
+        it("keeps several responses contiguous and in order", function()
+            Config.windows.wrap_width = 30
+            writer:write_error_message(ERROR)
+            writer:write_error_action(
+                "Prompt returned to the input. Edit and send it again."
+            )
+            writer:write_error_action("1 queued prompt left as draft.")
+
+            local lines = buffer_lines()
+            assert.equal("out of credit", lines[2])
+            assert.equal("1 queued prompt left as draft.", lines[#lines - 1])
+            assert.equal("", lines[#lines])
+            for i = 3, #lines - 1 do
+                assert.is_true(lines[i] ~= "")
+            end
+            assert.same(
+                { { 2, #lines - 2 }, { #lines - 2, #lines - 1 } },
+                dim_ranges()
+            )
+        end)
+
+        --- Assert `ACTION` stands alone at the end: after one blank, in the
+        --- error style, with no sign and no dim.
+        local function assert_standalone()
+            local lines = buffer_lines()
+            assert.same({ "", ACTION, "" }, vim.list_slice(lines, #lines - 2))
+            local action_row = #lines - 2
+            assert.is_nil(signs_by_row()[action_row])
+            assert.is_true(vim.tbl_contains(error_body_rows(), action_row))
+            for _, range in ipairs(dim_ranges()) do
+                assert.is_true(range[2] <= action_row)
+            end
+        end
+
+        it("stands alone after the turn ends", function()
+            writer:write_error_message(ERROR)
+            writer:finalize_turn()
+            writer:write_error_action(ACTION)
+
+            assert.same(
+                { "## Error", "out of credit", "", ACTION, "" },
+                buffer_lines()
+            )
+            assert_standalone()
+            assert.same(
+                {},
+                vim.api.nvim_buf_get_extmarks(bufnr, NS_ANCHORS, 0, -1, {})
+            )
+        end)
+
+        it("stands alone after a refresh", function()
+            writer:write_error_message(ERROR)
+            writer:reset_turn_state()
+            writer:write_error_action(ACTION)
+
+            assert_standalone()
+        end)
+
+        it("stands alone after prose", function()
+            writer:write_error_message(ERROR)
+            writer:write_message_chunk(make_message_update("Retrying."))
+            writer:write_error_action(ACTION)
+
+            assert_standalone()
+        end)
+
+        it("stands alone after a tool call", function()
+            writer:write_error_message(ERROR)
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            writer:write_error_action(ACTION)
+
+            assert_standalone()
+        end)
+
+        it("joins only the second of two errors", function()
+            writer:write_error_message(ERROR)
+            writer:write_error_message({ code = 1, message = "again" })
+            writer:write_error_action(ACTION)
+
+            assert.same({
+                "## Error",
+                "out of credit",
+                "",
+                "## Error",
+                "again",
+                ACTION,
+                "",
+            }, buffer_lines())
+            assert.equal(
+                1,
+                #vim.api.nvim_buf_get_extmarks(bufnr, NS_ANCHORS, 0, -1, {})
+            )
         end)
 
         it("stands alone once something else has been written", function()
@@ -4905,6 +5060,225 @@ describe("agentic.ui.MessageWriter", function()
             for _, line in ipairs(lines) do
                 assert.is_true(#line <= Config.windows.wrap_width)
             end
+        end)
+    end)
+
+    describe("block spacing", function()
+        --- @type TestStub
+        local schedule_stub
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+        end)
+
+        after_each(function()
+            schedule_stub:revert()
+        end)
+
+        local function buffer_lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        --- @param text string
+        local function prose(text)
+            writer:write_message_chunk(make_message_update(text))
+        end
+
+        --- Assert exactly one blank row separates 1-indexed `row` from the
+        --- row with text above it.
+        --- @param row integer
+        local function assert_one_blank_above(row)
+            local lines = buffer_lines()
+            assert.equal("", lines[row - 1])
+            assert.is_true(lines[row - 2]:match("%S") ~= nil)
+        end
+
+        it("puts one blank between a prompt and its reply", function()
+            writer:write_user_prompt("ask")
+            prose("Answer.")
+
+            assert.same({ "## ask", "", "Answer." }, buffer_lines())
+        end)
+
+        it("drops the blank lines a reply starts with", function()
+            writer:write_user_prompt("ask")
+            prose("\n\nAnswer.")
+
+            assert.same({ "## ask", "", "Answer." }, buffer_lines())
+        end)
+
+        it("drops the blank lines a message starts with", function()
+            writer:write_user_prompt("ask")
+            writer:write_message(make_message_update("\n\nPara."))
+
+            assert.same({ "## ask", "", "Para.", "" }, buffer_lines())
+        end)
+
+        it("puts one blank between a block and the prose after it", function()
+            local writes = {
+                thinking = function()
+                    writer:write_message_chunk(make_thought_update("a\nb"))
+                end,
+                hook = function()
+                    writer:write_hook_block({ body = { "a", "b" } })
+                end,
+                notice = function()
+                    writer:write_notice({
+                        glyph = "x",
+                        title = "n",
+                        mid_turn = true,
+                    })
+                end,
+            }
+            for _, write in pairs(writes) do
+                writer:reset()
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
+                writer:write_user_prompt("ask")
+                write()
+                prose("Answer.")
+
+                local lines = buffer_lines()
+                assert.equal("Answer.", lines[#lines])
+                assert_one_blank_above(#lines)
+            end
+        end)
+
+        it("puts one blank between prose and a tool call", function()
+            writer:write_user_prompt("ask")
+            prose("Looking.")
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+
+            assert_one_blank_above(writer:tool_call_row("t1") + 1)
+        end)
+
+        it("drops the blank rows prose ends with", function()
+            prose("Looking.\n\n")
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+
+            assert.equal(3, writer:tool_call_row("t1") + 1)
+            assert_one_blank_above(3)
+        end)
+
+        it("sets the section close off by one blank each side", function()
+            writer:write_user_prompt("ask")
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            prose("Answer.")
+
+            local lines = buffer_lines()
+            assert.same(
+                { "", "###", "", "Answer." },
+                vim.list_slice(lines, #lines - 3)
+            )
+            assert_one_blank_above(#lines - 2)
+        end)
+
+        it("puts one blank before the next prompt", function()
+            local turns = {
+                prose = function()
+                    prose("Done.")
+                end,
+                tool_call = function()
+                    writer:write_tool_call_block(
+                        make_tool_call_block("t1", "completed")
+                    )
+                end,
+                thinking = function()
+                    writer:write_message_chunk(make_thought_update("a\nb"))
+                end,
+                hook_row = function()
+                    writer:write_hook_row({ text = "ran" })
+                end,
+                nothing = function() end,
+            }
+            for _, turn in pairs(turns) do
+                writer:reset()
+                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
+                writer:write_user_prompt("ask")
+                turn()
+                writer:finalize_turn()
+                writer:write_user_prompt("next")
+
+                assert_one_blank_above(row_of("## next") --[[@as integer]])
+            end
+        end)
+
+        it("keeps the usage note on the last row", function()
+            local NS_TURN_USAGE =
+                vim.api.nvim_create_namespace("agentic_turn_usage")
+            writer:write_user_prompt("ask")
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            prose("Done.")
+            writer:finalize_turn()
+            writer:set_turn_usage({ inputTokens = 1, outputTokens = 1 })
+
+            local function assert_note_last()
+                local lines = buffer_lines()
+                local marks = vim.api.nvim_buf_get_extmarks(
+                    bufnr,
+                    NS_TURN_USAGE,
+                    0,
+                    -1,
+                    {}
+                )
+                assert.equal(1, #marks)
+                assert.equal(#lines - 1, marks[1][2])
+                assert.same({ "Done.", "" }, vim.list_slice(lines, #lines - 1))
+            end
+
+            assert_note_last()
+            writer:write_hook_block({ tool_call_id = "t1", body = { "a", "b" } })
+            assert_note_last()
+            writer:write_hook_row({ tool_call_id = "t1", text = "ran" })
+            assert_note_last()
+            writer:write_loaded_file({ path = "/r/a.md", after_prompt = true })
+            assert_note_last()
+        end)
+
+        it("ends the prose run at an error action", function()
+            local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
+            prose("One.")
+            writer:write_error_action("Note.")
+            prose("Two.\n\nThree.")
+            writer:finalize_turn()
+
+            assert.same(
+                { "One.", "", "Note.", "", "Two.", "", "Three.", "" },
+                buffer_lines()
+            )
+            local marks =
+                vim.api.nvim_buf_get_extmarks(bufnr, NS_ERROR, 0, -1, {})
+            assert.equal(1, #marks)
+            assert.equal(2, marks[1][2])
+        end)
+
+        it("ends the prose run at a message", function()
+            prose("One.")
+            writer:write_message(make_message_update("**Loaded X**"))
+            prose("Two.")
+            writer:finalize_turn()
+
+            assert.same(
+                { "One.", "", "**Loaded X**", "", "Two.", "" },
+                buffer_lines()
+            )
+        end)
+
+        it("drops the blank lines a message ends with", function()
+            writer:write_message(make_message_update("Para.\n\n"))
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+
+            assert.equal(3, writer:tool_call_row("t1") + 1)
+            assert_one_blank_above(3)
         end)
     end)
 
