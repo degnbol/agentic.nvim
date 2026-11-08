@@ -13,9 +13,13 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 **Session log:**
 1. P3 [`PERF-append-session-log.md`](notes/PERF-append-session-log.md)
 
-**Executed code**
+**Shell parsing** (1 has no prerequisites; the others name theirs)
 1. P1 [`FIX-walk-file-model.md`](notes/FIX-walk-file-model.md)
-2. P2 [`FEAT-executed-code.md`](notes/FEAT-executed-code.md)
+2. P2 [`FIX-heredoc-line-statement.md`](notes/FIX-heredoc-line-statement.md):
+   after 1
+3. P2 [`FEAT-executed-code.md`](notes/FEAT-executed-code.md): after 1
+4. P3 [`feature-file-activity-panel.md`](notes/feature-file-activity-panel.md):
+   after 1
 
 **Tool call rendering**
 1. P2 [`FIX-silent-errors.md`](notes/FIX-silent-errors.md)
@@ -26,9 +30,6 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 **Auto mode**
 1. P2 [`FEAT-auto-mode-integration.md`](notes/FEAT-auto-mode-integration.md)
 2. P1 [`FIX-auto-mode-fix.md`](notes/FIX-auto-mode-fix.md), which extends it
-
-**Peer name:**
-1. P3 [`FEAT-peer-session-name.md`](notes/FEAT-peer-session-name.md)
 
 **No ordering:**
 - P2 [`FIX-deny-gate-flag-cap.md`](notes/FIX-deny-gate-flag-cap.md)
@@ -41,6 +42,14 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 - P3 [`FIX-inline-math-dollar-pairing.md`](notes/FIX-inline-math-dollar-pairing.md)
 - P3 [`FEAT-discovered-skills.md`](notes/FEAT-discovered-skills.md)
 - P3 [`FIX-context-highlight-parser-gate.md`](notes/FIX-context-highlight-parser-gate.md)
+- P3 [`FIX-model-selector-order.md`](notes/FIX-model-selector-order.md)
+- P2 [`feature-stale-read-warning.md`](notes/feature-stale-read-warning.md)
+- P3 [`permission-resolve-known-vars.md`](notes/permission-resolve-known-vars.md)
+- P3 [`permission-always-allow-wording.md`](notes/permission-always-allow-wording.md)
+- P3 [`refactor-acp-kind-normalisation.md`](notes/refactor-acp-kind-normalisation.md)
+- P3 [`feature-diff-line-numbers.md`](notes/feature-diff-line-numbers.md)
+- P3 [`feature-context-threshold-notice.md`](notes/feature-context-threshold-notice.md)
+- P3 [`feature-timing.md`](notes/feature-timing.md)
 
 ## Bugs
 
@@ -48,8 +57,8 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 
 The panel that shows edited files in the current session needs to be toggled off and on again to reveal that some files have been deleted.
 Can we get it to listen for the files it lists to see if they get deleted, and then remove them from the panel?
-The current check runs once per toggle by design:
-[`notes/feature-file-activity-panel.md`](notes/feature-file-activity-panel.md) § "Reversion".
+The current check runs once per toggle by design: `FileActivity:reconcile`
+(`lua/agentic/ui/file_activity.lua`).
 
 ### `<Plug>(agentic-send)` in visual mode adds to context instead of sending
 
@@ -62,10 +71,6 @@ as a prompt) and is correct as written; fix the mapping, not the help.
 ### Rendering
 
 - cursor flickers sometimes when running a command, e.g. running a git push with heavy hooks attached in ~/Documents/xyme-tools/
-
-- **Content-only claude updates are dropped**: see
-  [`notes/feature-file-activity-panel.md`](notes/feature-file-activity-panel.md)
-  § "Prerequisite: an adapter fix this feature depends on".
 
 - **Cancel sweep misses errored turns**: it keys on `stopReason == "cancelled"`,
   so an errored turn strands the same footers. A provider that never answers at
@@ -194,6 +199,11 @@ last character:
 A usage limit without a reset clause renders as a raw error naming the org
 monthly spend limit:
 [`notes/bug-error-classification-structured-errorkind.md`](notes/bug-error-classification-structured-errorkind.md).
+
+### A redirect glued to a glob or brace target auto-approves (P1, security)
+
+`echo a >{a,b}` writes two files with no prompt and no grant:
+[`notes/bug-glob-redirect-as-argument.md`](notes/bug-glob-redirect-as-argument.md).
 
 ### Permission matchers overflow on long commands
 
@@ -350,10 +360,10 @@ screen so we can read it.
   also lets the user terminate stuck procs without dropping to a
   shell.
 
-- **Edited line ranges in the file activity panel**: v1 lists files only.
-  Show the line ranges per file (claude-owned vs other); deferred in
-  [`notes/feature-file-activity-panel.md`](notes/feature-file-activity-panel.md).
-  A quickfix list of edits conflicts with resume's quickfix use.
+- **Edited line ranges in the file activity panel**: the panel lists files
+  only. The ranges are already recorded (`FileActivity.Op.ranges`, persisted);
+  show them per file (claude-owned vs other). A quickfix list of edits
+  conflicts with resume's quickfix use.
 
 - **Persistent undo integration**: opening a file in neovim allows for undo
   via the persistent undo file. Optionally integrate so a user can step
