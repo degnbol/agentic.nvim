@@ -680,24 +680,36 @@ end
 
 -- ── Redirects ────────────────────────────────────────────────────────────────
 
+--- The operator and destination of a `file_redirect`. tree-sitter-zsh parses
+--- words after the target as further `destination` children
+--- (`rm a 2>/dev/null b`), so such a redirect has no single destination.
+--- @param fr TSNode
+--- @return string|nil op
+--- @return TSNode|nil dest nil when the redirect has no destination or more than one
+local function redirect_target(fr)
+    local op, dests = nil, {}
+    for child, field in fr:iter_children() do
+        if field == "destination" then
+            table.insert(dests, child)
+        elseif not child:named() then
+            op = child:type()
+        end
+    end
+    return op, #dests == 1 and dests[1] or nil
+end
+
 --- Whether a `file_redirect` is a safe form: an input redirect (`<file` —
 --- a pure read, never writes/truncates; the read-write `<>` form parses to an
 --- ERROR node and is rejected fail-closed upstream), a write to /dev/null, or a
 --- file descriptor duplication (`2>&1`, `>&2`, `N>&M`). Every other target is a
 --- file write (or an unmodelled redirect) and bails. A substitution in the
---- target (`cat > $(echo out)`, `wc <$(f)`) bails first.
+--- target (`cat > $(echo out)`, `wc <$(f)`) bails first, as do words after the
+--- target (`rm a 2>/dev/null b`).
 --- @param fr TSNode
 --- @param src string
 --- @return boolean
 local function redirect_is_safe(fr, src)
-    local op, dest
-    for child, field in fr:iter_children() do
-        if field == "destination" then
-            dest = child
-        elseif not child:named() then
-            op = child:type()
-        end
-    end
+    local op, dest = redirect_target(fr)
     if not dest or subtree_has_substitution(dest) then
         return false
     end
@@ -720,21 +732,15 @@ end
 --- it against the grant scopes (see permission_manager's `_bash_effects_clear`).
 ---
 --- Returns nil for the forms `redirect_is_safe` already approves (input `<`, fd
---- duplication, `/dev/null`) and for a command/process-substitution destination
---- (`> $(echo f)`). A bare or quoted literal, or a variable target, is returned
---- as a node for the caller to resolve.
+--- duplication, `/dev/null`), for a command/process-substitution destination
+--- (`> $(echo f)`), and for a redirect with words after its target
+--- (`echo a > f b`). A bare or quoted literal, or a variable target, is
+--- returned as a node for the caller to resolve.
 --- @param fr TSNode
 --- @param src string
 --- @return TSNode|nil
 local function redirect_write_dest(fr, src)
-    local op, dest
-    for child, field in fr:iter_children() do
-        if field == "destination" then
-            dest = child
-        elseif not child:named() then
-            op = child:type()
-        end
-    end
+    local op, dest = redirect_target(fr)
     if not dest or subtree_has_substitution(dest) then
         return nil
     end
@@ -852,6 +858,27 @@ local function heredoc_pure_body(hr, src)
         return nil
     end
     return heredoc.text
+end
+
+--- Whether nothing follows a `heredoc_redirect`'s delimiter on its line.
+--- tree-sitter-zsh parses the rest of that line as children of the redirect:
+--- argument words (`sort <<EOF -o f`), file redirects (`cat <<EOF > f`), and
+--- the pipeline or list the statement continues into (`cat <<EOF | sh`).
+--- @param hr TSNode
+--- @return boolean
+local function heredoc_ends_line(hr)
+    for child in hr:iter_children() do
+        local t = child:type()
+        if
+            child:named()
+            and t ~= "heredoc_start"
+            and t ~= "heredoc_body"
+            and t ~= "heredoc_end"
+        then
+            return false
+        end
+    end
+    return true
 end
 
 --- True iff the command node is exactly `cat` with no arguments or env-prefix —
@@ -1877,9 +1904,10 @@ end
 --- stdin: a heredoc on a non-zero fd, or on a compound statement, subshell or
 --- `negated_command`, has no reader.
 ---
---- tree-sitter-zsh parses the words after a file redirect's target as further
---- `destination` children of the `file_redirect` (`rm a 2>/dev/null b` →
---- destinations `/dev/null` and `b`); they go to `words`.
+--- tree-sitter-zsh parses the words after a redirect's target as children of
+--- the redirect: further `destination` children of a `file_redirect`
+--- (`rm a 2>/dev/null b` → destinations `/dev/null` and `b`), `argument`
+--- children of a `heredoc_redirect` (`sort <<EOF -o f`); they go to `words`.
 --- @param root TSNode
 --- @param src string
 --- @return table<string, agentic.utils.ShellParse.NodeIO> io keyed by `node:id()`
@@ -1911,6 +1939,7 @@ local function node_io(root, src)
                         then
                             io.stdin = heredoc_text(r, src)
                         end
+                        vim.list_extend(io.words, r:field("argument"))
                     else
                         table.insert(io.redirects, redirect_record(r, src))
                         vim.list_extend(
@@ -2426,6 +2455,14 @@ function collect(node, src, out, depth, shell, io_of, enclosing)
     if t == "file_redirect" then
         -- The later destinations are words of the command (see `node_io`).
         children = { node:field("destination")[1] }
+    elseif t == "heredoc_redirect" then
+        -- The arguments are words of the command (see `node_io`).
+        children = {}
+        for child, field in node:iter_children() do
+            if child:named() and field ~= "argument" then
+                table.insert(children, child)
+            end
+        end
     end
     --- @type integer[]|nil indices in `out` of the previous pipeline element's records
     local upstream
@@ -2530,6 +2567,7 @@ M.redirect_is_safe = redirect_is_safe
 M.redirect_write_dest = redirect_write_dest
 M.redirect_is_truncate = redirect_is_truncate
 M.heredoc_pure_body = heredoc_pure_body
+M.heredoc_ends_line = heredoc_ends_line
 M.is_bare_cat = is_bare_cat
 M.inner_source = inner_source
 M.script_file_source = script_file_source

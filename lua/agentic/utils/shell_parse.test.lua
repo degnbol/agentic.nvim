@@ -840,6 +840,10 @@ describe("ShellParse.extract_commands", function()
                     record("xargs grep -l 2>/dev/null x", "grep").argv
                 )
                 assert.same({ "c" }, record("a | b 2>/dev/null c", "b").argv)
+                assert.same(
+                    { "-o", "/etc/x" },
+                    record("sort <<'EOF' -o /etc/x\nhi\nEOF", "sort").argv
+                )
             end
         )
 
@@ -847,6 +851,7 @@ describe("ShellParse.extract_commands", function()
             "flattens a substitution in a word after a redirect target once",
             function()
                 assert.same({ "a", "b" }, names("a 2>/dev/null $(b)"))
+                assert.same({ "a", "b" }, names("a <<'EOF' $(b)\nx\nEOF"))
             end
         )
 

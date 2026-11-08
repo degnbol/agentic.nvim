@@ -22,6 +22,7 @@ local redirect_is_safe = ShellParse.redirect_is_safe
 local redirect_write_dest = ShellParse.redirect_write_dest
 local redirect_is_truncate = ShellParse.redirect_is_truncate
 local heredoc_pure_body = ShellParse.heredoc_pure_body
+local heredoc_ends_line = ShellParse.heredoc_ends_line
 local is_bare_cat = ShellParse.is_bare_cat
 local inner_source = ShellParse.inner_source
 local script_file_source = ShellParse.script_file_source
@@ -1355,9 +1356,16 @@ function walk_redirected(node, src, ctx, known)
         elseif child:named() then
             local t = child:type()
             -- A heredoc body with an expansion (`<<EOF` with `$var`/`$(…)`) runs
-            -- it at write time.
+            -- it at write time. The rest of the delimiter's line is code
+            -- this walk never inspects.
             if
-                (t == "heredoc_redirect" and not heredoc_pure_body(child, src))
+                (
+                    t == "heredoc_redirect"
+                    and (
+                        not heredoc_pure_body(child, src)
+                        or not heredoc_ends_line(child)
+                    )
+                )
                 or (t ~= "heredoc_redirect" and t ~= "file_redirect")
             then
                 return false

@@ -503,6 +503,81 @@ describe("PermissionRules", function()
             )
         end)
 
+        -- The grammar hangs the rest of the line after a redirect's target on
+        -- the redirect (words of the command; after a heredoc delimiter also
+        -- redirects, pipes and lists), so the redirect bails.
+        describe("code after a redirect target", function()
+            for _, cmd in ipairs({
+                "echo hi > /etc/x /dev/null",
+                "sort a 2>/dev/null -o /etc/x /dev/null",
+                "echo hi | cat > /etc/x /dev/null",
+                "echo hi >& /tmp/x 2",
+                "cat < a b",
+                "sort <<'EOF' -o /etc/x\nhi\nEOF",
+                "cat <<'EOF' | sh\nrm -rf ~\nEOF",
+                "cat <<'EOF' && python3 -c 1\nhi\nEOF",
+                "cat <<'EOF' > /etc/x\nhi\nEOF",
+                "cat <<'EOF' > $(touch /tmp/pwn)\nhi\nEOF",
+            }) do
+                it("is not read-only: " .. cmd, function()
+                    assert.is_false(PermissionRules.is_read_only(cmd))
+                end)
+            end
+
+            for _, cmd in ipairs({
+                "cat f 2>&1",
+                "rg x 2>/dev/null",
+                "cat <<'EOF'\nhi\nEOF",
+            }) do
+                it("is read-only: " .. cmd, function()
+                    assert.is_true(PermissionRules.is_read_only(cmd))
+                end)
+            end
+
+            for _, cmd in ipairs({
+                "sort a 2>/tmp/x -o /etc/y",
+                "rm /tmp/a 2>/dev/null /tmp/b",
+            }) do
+                it("evaluate bails: " .. cmd, function()
+                    assert.is_false((PermissionRules.evaluate(cmd, config_dir)))
+                end)
+            end
+
+            it("shadows a function with such a redirect", function()
+                assert.is_true(
+                    PermissionRules.should_auto_approve(
+                        "f() { :; } > /dev/null; f",
+                        config_dir
+                    )
+                )
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "f() { :; } > /tmp/x /dev/null; f",
+                        config_dir
+                    )
+                )
+            end)
+
+            it("tallies the redirect as unapproved", function()
+                local cmd = "sort a 2>/dev/null -o /etc/x /dev/null"
+                local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+                assert.equal(1, #ranges)
+                assert.equal(
+                    "2>/dev/null -o /etc/x /dev/null",
+                    cmd:sub(ranges[1][2] + 1, ranges[1][4])
+                )
+            end)
+
+            it("does not reject through the hidden words", function()
+                assert.is_false(
+                    PermissionRules.should_auto_reject(
+                        "rm a 2>/dev/null -rf /",
+                        config_dir
+                    )
+                )
+            end)
+        end)
+
         -- `env` is a launcher, not an effect-neutral wrapper (it can set PATH /
         -- LD_PRELOAD), so it must carry no blanket read-only entry — otherwise it
         -- would launder whatever it launches. `cat *` is allowed; `env cat …`
