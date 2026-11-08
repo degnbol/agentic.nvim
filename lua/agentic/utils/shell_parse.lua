@@ -680,22 +680,69 @@ end
 
 -- ── Redirects ────────────────────────────────────────────────────────────────
 
---- The operator and destination of a `file_redirect`. tree-sitter-zsh parses
---- words after the target as further `destination` children
---- (`rm a 2>/dev/null b`), so such a redirect has no single destination.
---- @param fr TSNode
---- @return string|nil op
---- @return TSNode|nil dest nil when the redirect has no destination or more than one
-local function redirect_target(fr)
-    local op, dests = nil, {}
-    for child, field in fr:iter_children() do
-        if field == "destination" then
+--- Operators that zsh gives a clobber form by a `!` right after them (`>!`).
+local CLOBBERABLE_OPS =
+    { [">"] = true, [">>"] = true, ["&>"] = true, ["&>>"] = true }
+
+--- @class agentic.utils.ShellParse.RedirectOperands
+--- @field op string the operator as zsh reads it, with `!` appended for a clobber form (`>!`, `>>!`, `&>!`, `&>>!`)
+--- @field dests TSNode[] the destinations (a herestring's word), a separate clobber `!` word dropped
+--- @field attached boolean the clobber `!` is the first byte of `dests[1]` (`>!f`)
+
+--- The operator and destinations of a redirect as zsh reads them. The
+--- grammar does not know zsh's clobber forms: it parses the `!` of `>!` as
+--- the first destination, or the first byte of it (`>!f`). A `!` after a
+--- space or quoted (`> !`, `>\!`) is a file name.
+--- @param redirect TSNode a `file_redirect` or `herestring_redirect`
+--- @param src string
+--- @return agentic.utils.ShellParse.RedirectOperands
+local function redirect_operands(redirect, src)
+    --- @type TSNode the grammar requires an operator
+    local op_node
+    --- @type TSNode[]
+    local dests = {}
+    for child, field in redirect:iter_children() do
+        if not child:named() then
+            op_node = child
+        elseif field ~= "descriptor" then
             table.insert(dests, child)
-        elseif not child:named() then
-            op = child:type()
         end
     end
-    return op, #dests == 1 and dests[1] or nil
+    local op = op_node:type()
+    local first = dests[1]
+    if not (first and CLOBBERABLE_OPS[op]) then
+        return { op = op, dests = dests, attached = false }
+    end
+    local _, _, op_end = op_node:end_()
+    local _, _, first_start = first:start()
+    local first_text = vim.treesitter.get_node_text(first, src)
+    if first_start ~= op_end or not vim.startswith(first_text, "!") then
+        return { op = op, dests = dests, attached = false }
+    end
+    local attached = first_text ~= "!"
+    return {
+        op = op .. "!",
+        dests = attached and dests or vim.list_slice(dests, 2),
+        attached = attached,
+    }
+end
+
+--- The operator and destination of a `file_redirect`. tree-sitter-zsh parses
+--- words after the target as further `destination` children
+--- (`rm a 2>/dev/null b`), so such a redirect has no single destination. A
+--- clobber form (`>!`) has none either: zsh reads it as `>|`, bash as a write
+--- to a file named `!`, and the shell is not known.
+--- @param fr TSNode
+--- @param src string
+--- @return string op
+--- @return TSNode|nil dest nil when the redirect has no destination, more than one, or a clobber operator
+local function redirect_target(fr, src)
+    local operands = redirect_operands(fr, src)
+    local op, dests = operands.op, operands.dests
+    if #dests ~= 1 or vim.endswith(op, "!") then
+        return op, nil
+    end
+    return op, dests[1]
 end
 
 --- Whether a `file_redirect` is a safe form: an input redirect (`<file` —
@@ -704,12 +751,12 @@ end
 --- file descriptor duplication (`2>&1`, `>&2`, `N>&M`). Every other target is a
 --- file write (or an unmodelled redirect) and bails. A substitution in the
 --- target (`cat > $(echo out)`, `wc <$(f)`) bails first, as do words after the
---- target (`rm a 2>/dev/null b`).
+--- target (`rm a 2>/dev/null b`) and a clobber form (`>! /dev/null`).
 --- @param fr TSNode
 --- @param src string
 --- @return boolean
 local function redirect_is_safe(fr, src)
-    local op, dest = redirect_target(fr)
+    local op, dest = redirect_target(fr, src)
     if not dest or subtree_has_substitution(dest) then
         return false
     end
@@ -733,14 +780,15 @@ end
 ---
 --- Returns nil for the forms `redirect_is_safe` already approves (input `<`, fd
 --- duplication, `/dev/null`), for a command/process-substitution destination
---- (`> $(echo f)`), and for a redirect with words after its target
---- (`echo a > f b`). A bare or quoted literal, or a variable target, is
---- returned as a node for the caller to resolve.
+--- (`> $(echo f)`), for a redirect with words after its target
+--- (`echo a > f b`), and for a clobber form (`>! f`). A bare or quoted
+--- literal, or a variable target, is returned as a node for the caller to
+--- resolve.
 --- @param fr TSNode
 --- @param src string
 --- @return TSNode|nil
 local function redirect_write_dest(fr, src)
-    local op, dest = redirect_target(fr)
+    local op, dest = redirect_target(fr, src)
     if not dest or subtree_has_substitution(dest) then
         return nil
     end
@@ -776,26 +824,20 @@ local function redirect_is_truncate(fr)
 end
 
 --- @class agentic.utils.ShellParse.Redirect
---- @field op string the operator as written: `>`, `>>`, `>|`, `&>`, `&>>`, `<`, `>&`, `<&`, `<<<` (`>&-` is `>&` with target `-`)
+--- @field op string the operator as zsh reads it: `>`, `>>`, `>|`, `&>`, `&>>`, `>!`, `>>!`, `&>!`, `&>>!`, `<`, `>&`, `<&`, `<<<` (`>&-` is `>&` with target `-`)
 --- @field fd? integer the descriptor before the operator (`2>`), nil when none is written
---- @field target string the destination, literal text where resolvable, the herestring text for `<<<`
+--- @field target string the destination, literal text where resolvable, the herestring text for `<<<`, empty when none is written (`>!`)
 --- @field target_fd boolean the destination is a descriptor (`>&2`, `2>&1`, `2>&-`), not a file (`>& file`)
---- @field dynamic boolean the destination is not a static literal
+--- @field dynamic boolean the destination is not a static literal, or none is written
 
 --- A `file_redirect` or `herestring_redirect` as a record. Only the first
---- `destination` child is the target, later ones are ignored.
+--- destination is the target, later ones are ignored.
 --- @param node TSNode
 --- @param src string
 --- @return agentic.utils.ShellParse.Redirect redirect
 local function redirect_record(node, src)
-    local op, dest
-    for child, field in node:iter_children() do
-        if not child:named() then
-            op = child:type()
-        elseif field ~= "descriptor" then
-            dest = dest or child
-        end
-    end
+    local operands = redirect_operands(node, src)
+    local op, dest = operands.op, operands.dests[1]
     local fd_node = node:field("descriptor")[1]
     --- @type agentic.utils.ShellParse.Redirect
     local redirect = {
@@ -809,7 +851,14 @@ local function redirect_record(node, src)
         redirect.op = op:sub(1, 2)
         return redirect
     end
+    if not dest then
+        redirect.target, redirect.target_fd, redirect.dynamic = "", false, true
+        return redirect
+    end
     redirect.target, redirect.dynamic = word_value(dest, src)
+    if operands.attached then
+        redirect.target = redirect.target:sub(2)
+    end
     redirect.target_fd = (op == ">&" or op == "<&")
         and (dest:type() == "file_descriptor" or dest:type() == "number")
     return redirect
@@ -1944,7 +1993,7 @@ local function node_io(root, src)
                         table.insert(io.redirects, redirect_record(r, src))
                         vim.list_extend(
                             io.words,
-                            vim.list_slice(r:field("destination"), 2)
+                            vim.list_slice(redirect_operands(r, src).dests, 2)
                         )
                     end
                 end
@@ -2225,7 +2274,12 @@ local function collect_command(node, src, out, depth, shell, io_of, enclosing)
                 table.insert(prefix_flatten, child)
             end
             table.insert(redirects, redirect_record(child, src))
-            for _, word in ipairs(vim.list_slice(child:field("destination"), 2)) do
+            local operands = redirect_operands(child, src)
+            if vim.endswith(operands.op, "!") and #operands.dests == 0 then
+                -- `>! f cmd`: the grammar took the target for the command name.
+                return false
+            end
+            for _, word in ipairs(vim.list_slice(operands.dests, 2)) do
                 if not add_arg(word) then
                     return false
                 end
@@ -2454,7 +2508,7 @@ function collect(node, src, out, depth, shell, io_of, enclosing)
     local children = node:named_children()
     if t == "file_redirect" then
         -- The later destinations are words of the command (see `node_io`).
-        children = { node:field("destination")[1] }
+        children = { redirect_operands(node, src).dests[1] }
     elseif t == "heredoc_redirect" then
         -- The arguments are words of the command (see `node_io`).
         children = {}
