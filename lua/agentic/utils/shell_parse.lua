@@ -2501,7 +2501,7 @@ function collect(node, src, out, depth, shell, io_of, enclosing)
 end
 
 --- @class agentic.ShellCommand
---- @field name string unwrapped inner command name, path-stripped
+--- @field name string unwrapped inner command name; a leading system binary directory is stripped (`/usr/bin/ls` → `ls`), any other path is kept (`./x`)
 --- @field flags string[] short clusters split (`-rf` → `-r`,`-f`), long flags whole
 --- @field args string[] positional arguments (literal text where resolvable)
 --- @field argv string[] every token after the name in source order, flags unsplit (literal text where resolvable)
