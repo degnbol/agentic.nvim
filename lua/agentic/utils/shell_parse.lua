@@ -205,9 +205,8 @@ local SUBSTITUTION_TYPES = {
     process_substitution = true,
 }
 
---- Node types that make a command NAME dynamic — the matcher cannot tell which
---- binary actually runs, so a dynamic name bails.
-local DYNAMIC_NAME_TYPES = {
+--- Node types of a word that is one expansion or substitution.
+local EXPANSION_TYPES = {
     command_substitution = true,
     process_substitution = true,
     expansion = true,
@@ -302,7 +301,8 @@ local ANSI_C_ESCAPES = {
 --- octal and `\xHH` hex.
 --- @param text string source text of the string, `$'` and `'` included
 --- @return string|nil word the word the shell delivers; nil when an escape is
----         none of those (`\u`, `\c`)
+---         none of those (`\u`, `\c`), or the word holds a NUL byte (zsh ends
+---         an external command's argument at a NUL, but not a builtin's)
 local function ansi_c_text(text)
     local out = {}
     local i, last = 3, #text - 1
@@ -329,7 +329,11 @@ local function ansi_c_text(text)
             end
         end
     end
-    return table.concat(out)
+    local word = table.concat(out)
+    if word:find("\0", 1, true) then
+        return nil
+    end
+    return word
 end
 
 --- Pattern for the bytes the grammar leaves outside the `string_content`
@@ -386,7 +390,7 @@ end
 --- Strict literal extraction: every byte of the returned string must be
 --- exactly what the shell delivers to the program. Returns nil if any subtree
 --- contains a variable expansion or substitution, or a static string's text
---- cannot be read from its source bytes. Used as the recursive step
+--- cannot be read from its source bytes (`$'\q'`). Used as the recursive step
 --- inside `concatenation` — joining `-ex"$x"c` would otherwise launder a
 --- dynamic flag past the matcher. `glob_pattern` and `brace_expression` keep
 --- their raw text: their backslashes are glob syntax, and the token is dynamic.
@@ -410,6 +414,9 @@ local function pure_literal_token(node, src)
     if t == "raw_string" then
         local txt = vim.treesitter.get_node_text(node, src)
         return (txt:gsub("^'", ""):gsub("'$", ""))
+    end
+    if t == "ansi_c_string" then
+        return ansi_c_text(vim.treesitter.get_node_text(node, src))
     end
     if t == "concatenation" then
         if subtree_has_substitution(node) then
@@ -437,73 +444,11 @@ local function pure_literal_token(node, src)
     return nil
 end
 
---- Extract the token text from one node that appears as a child of a
---- `command` (an argument token) or as the inner of a `command_name`. Returns
---- the joined string, or nil to bail. Lenient for top-level expansion-bearing
---- tokens (`"$f"`, `$bar`) — they're emitted as raw source text, so
---- `ls "$f"` matches a settings.json `Bash(ls *)` glob. Strict
---- (`pure_literal_token`) inside a concatenation, so an expansion glued into a
---- flag (`-ex"$x"c`) cannot be silently joined to a deny-matching literal.
---- @param node TSNode
---- @param src string
---- @return string|nil
-local function literal_token(node, src)
-    local t = node:type()
-    -- Pure-literal types: delegate to the strict path.
-    if
-        t == "word"
-        or t == "number"
-        or t == "glob_pattern"
-        or t == "raw_string"
-        or t == "brace_expression"
-    then
-        return pure_literal_token(node, src)
-    end
-    if t == "string" then
-        -- Substitution-bearing strings are caught at the command level. A
-        -- string composed only of `string_content` yields its delivered text
-        -- (so `"rm"` cannot evade a deny pattern), or nil to bail. A string
-        -- that mixes `string_content` with expansions yields the raw quoted
-        -- text, which settings.json globs match.
-        if is_static_string(node) then
-            return static_string_text(node, src)
-        end
-        return vim.treesitter.get_node_text(node, src)
-    end
-    if t == "concatenation" then
-        local pure = pure_literal_token(node, src)
-        if pure ~= nil then
-            return pure
-        end
-        -- A concatenation gluing an expansion to literals (`$d/x`) has no pure
-        -- form; emit raw text so it splices as one token (flagged dynamic by
-        -- token_is_dynamic). A command-substitution part is rejected upstream.
-        if subtree_has_substitution(node) then
-            return nil
-        end
-        return vim.treesitter.get_node_text(node, src)
-    end
-    if DYNAMIC_NAME_TYPES[t] then
-        -- A bare expansion as an arg (`ls $f`) — emit raw source text so the
-        -- glob layer still sees the original token (`$f`). The structured
-        -- matcher's `extract_option_candidates` will not produce option
-        -- candidates from a `$`-prefixed token. Substitution is already
-        -- rejected at the command level.
-        if t == "command_substitution" or t == "process_substitution" then
-            return nil
-        end
-        return vim.treesitter.get_node_text(node, src)
-    end
-    -- Anything else (heredoc bodies, redirects, unknown future node types):
-    -- fail-closed.
-    return nil
-end
-
 --- Whether an argument token expands at runtime to a value the matcher cannot
 --- see — a variable/arithmetic expansion, an unquoted glob, or a quoted string
---- carrying an expansion. Pure literals (`word`, `number`, `raw_string`, an
---- all-`string_content` string, a literal `concatenation`, `brace_expression`)
---- are static. A `~`-prefixed path is a plain `word` in this grammar and
+--- carrying an expansion. Pure literals (`word`, `number`, `raw_string`,
+--- `ansi_c_string`, an all-`string_content` string, a literal `concatenation`,
+--- `brace_expression`) are static. A `~`-prefixed path is a plain `word` in this grammar and
 --- expands only to a path (never a flag or subcommand), so it stays static.
 --- A `concatenation` bearing an expansion/glob part (`$d/x`, `$d/*.js`) is
 --- dynamic: `literal_token` now emits its raw text, so the same post-expansion
@@ -569,6 +514,69 @@ local function token_is_dynamic(node, arith_static)
     return false
 end
 
+--- Extract the token text from one node that appears as a child of a
+--- `command` (an argument token) or as the inner of a `command_name`. Returns
+--- the joined string, or nil to bail. Lenient for top-level expansion-bearing
+--- tokens (`"$f"`, `$bar`) — they're emitted as raw source text, so
+--- `ls "$f"` matches a settings.json `Bash(ls *)` glob. Strict
+--- (`pure_literal_token`) inside a concatenation, so an expansion glued into a
+--- flag (`-ex"$x"c`) cannot be silently joined to a deny-matching literal.
+--- @param node TSNode
+--- @param src string
+--- @return string|nil
+local function literal_token(node, src)
+    local t = node:type()
+    -- Pure-literal types: delegate to the strict path.
+    if
+        t == "word"
+        or t == "number"
+        or t == "glob_pattern"
+        or t == "raw_string"
+        or t == "ansi_c_string"
+        or t == "brace_expression"
+    then
+        return pure_literal_token(node, src)
+    end
+    if t == "string" then
+        -- Substitution-bearing strings are caught at the command level. A
+        -- string composed only of `string_content` yields its delivered text
+        -- (so `"rm"` cannot evade a deny pattern), or nil to bail. A string
+        -- that mixes `string_content` with expansions yields the raw quoted
+        -- text, which settings.json globs match.
+        if is_static_string(node) then
+            return static_string_text(node, src)
+        end
+        return vim.treesitter.get_node_text(node, src)
+    end
+    if t == "concatenation" then
+        local pure = pure_literal_token(node, src)
+        if pure ~= nil then
+            return pure
+        end
+        -- Raw text only for a dynamic concatenation (`$d/x`), so it splices as
+        -- one token. A static one with no pure form (`-x$'\q'`), or one with a
+        -- substitution, has no delivered text.
+        if subtree_has_substitution(node) or not token_is_dynamic(node) then
+            return nil
+        end
+        return vim.treesitter.get_node_text(node, src)
+    end
+    if EXPANSION_TYPES[t] then
+        -- A bare expansion as an arg (`ls $f`) — emit raw source text so the
+        -- glob layer still sees the original token (`$f`). The structured
+        -- matcher's `extract_option_candidates` will not produce option
+        -- candidates from a `$`-prefixed token. Substitution is already
+        -- rejected at the command level.
+        if t == "command_substitution" or t == "process_substitution" then
+            return nil
+        end
+        return vim.treesitter.get_node_text(node, src)
+    end
+    -- Anything else (heredoc bodies, redirects, unknown future node types):
+    -- fail-closed.
+    return nil
+end
+
 --- The text a word delivers, when it is a static literal.
 --- @param node TSNode
 --- @param src string
@@ -577,12 +585,7 @@ end
 ---         not resolve
 local function word_value(node, src)
     if not token_is_dynamic(node) and not subtree_has_substitution(node) then
-        local text
-        if node:type() == "ansi_c_string" then
-            text = ansi_c_text(vim.treesitter.get_node_text(node, src))
-        else
-            text = pure_literal_token(node, src)
-        end
+        local text = pure_literal_token(node, src)
         if text then
             return text, false
         end
@@ -590,31 +593,38 @@ local function word_value(node, src)
     return vim.treesitter.get_node_text(node, src), true
 end
 
+--- Whether a `command_name` node's word is only known at runtime — a
+--- substitution, expansion, arithmetic, glob, or a `string`/`concatenation`
+--- carrying one (`"$x"`).
+--- @param command_name TSNode
+--- @return boolean
+local function name_is_dynamic(command_name)
+    local inner = command_name:named_child(0)
+    return inner ~= nil
+        and (token_is_dynamic(inner) or subtree_has_substitution(inner))
+end
+
 --- Extract the literal command name from a `command_name` node, normalising
 --- quotes so `"rm"` and `'rm'` resolve to `rm` (a quoted name must not evade a
---- deny pattern). Returns nil for a dynamic name — a substitution,
---- expansion, arithmetic, glob, or a `string`/`concatenation` carrying one
---- (`"$x"`). A literal
---- concatenation in command-name position (e.g. `gr"e"p`) joins to its
---- concatenated text via `literal_token`.
+--- deny pattern). A literal concatenation in command-name position (e.g.
+--- `gr"e"p`) joins to its concatenated text via `literal_token`.
 --- @param command_name TSNode
 --- @param src string
---- @return string|nil
+--- @return string|nil name nil when the name is missing, dynamic (`$x`,
+---         `"$x"`), or static with text that does not resolve (`$'\q'`)
 local function command_name_text(command_name, src)
     local inner = command_name:named_child(0)
-    if not inner then
-        return nil
-    end
     -- A dynamic name is nil, not the raw `$VAR` text `literal_token` hands
     -- back for a bare expansion, so no consumer mistakes it for a name.
-    if DYNAMIC_NAME_TYPES[inner:type()] or token_is_dynamic(inner) then
+    if not inner or name_is_dynamic(command_name) then
         return nil
     end
     return literal_token(inner, src)
 end
 
 --- The name of a `command` node as written (path kept). Nil when the node
---- has no name or the name is dynamic (see `command_name_text`).
+--- has no name, the name is dynamic (`$x`), or its text does not resolve
+--- (`$'\q'`).
 --- @param node TSNode `command` node
 --- @param src string source of `node`
 --- @return string|nil name
@@ -2211,8 +2221,7 @@ local function collect_command(node, src, out, depth, shell, io_of, enclosing)
     if not name_node then
         return false
     end
-    local name = command_name_text(name_node, src)
-    if not name then
+    if name_is_dynamic(name_node) then
         -- A dynamic name is no evidence of any particular command: no record,
         -- but the substitutions in its name and arguments still run.
         return collect_each(
@@ -2224,6 +2233,10 @@ local function collect_command(node, src, out, depth, shell, io_of, enclosing)
             io_of,
             enclosing
         )
+    end
+    local name = command_name_text(name_node, src)
+    if not name then
+        return false
     end
     local cmd_name = strip_command_path(name)
     args, arg_nodes, args_dynamic =

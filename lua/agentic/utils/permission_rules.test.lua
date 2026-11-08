@@ -5221,17 +5221,42 @@ describe("PermissionRules", function()
         end)
         after_each(remove_written)
 
-        for _, cmd in ipairs({ "rg x", "ls | wc -l", "cat f 2>&1" }) do
+        for _, cmd in ipairs({
+            "rg x",
+            "ls | wc -l",
+            "cat f 2>&1",
+            [[grep $'\t' f]],
+            "ls -l$((1))",
+        }) do
             it("is true for " .. cmd, function()
                 assert.is_true(PermissionRules.is_read_only(cmd))
             end)
         end
 
-        for _, cmd in ipairs({ "git add x", "rg x > f", "", "if then fi (" }) do
+        for _, cmd in ipairs({
+            "git add x",
+            "rg x > f",
+            "",
+            "if then fi (",
+            [[find . -del$'ete']],
+            [[find . -$'delete']],
+            [[sort a --$'output'=/tmp/zz b]],
+            [[find . -delete$'\0']],
+            [[find . -delete$'\x00']],
+        }) do
             it("is false for '" .. cmd .. "'", function()
                 assert.is_false(PermissionRules.is_read_only(cmd))
             end)
         end
+
+        it("prompts for a $'…' escape it cannot decode", function()
+            local cmd = [[find . -del$'\q']]
+            assert.is_false(PermissionRules.is_read_only(cmd))
+            assert.same(
+                { false },
+                { PermissionRules.should_auto_reject(cmd, config_dir) }
+            )
+        end)
 
         it("ignores a settings.json allow", function()
             stub_settings({ allow = { "Bash(mytool *)" } })

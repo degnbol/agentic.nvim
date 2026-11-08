@@ -163,6 +163,7 @@ dynamic or mixed keeps its quotes, because its text is never literal-matched
 | Pure literal `"rm"` (`string_content` only) | `rm` (stripped) | A concrete literal must not evade a literal gate by keeping quotes. |
 | Pure literal with escapes `"a\$" "a\"b" "a\qb"` | `a$` `a"b` `a\qb` | Read from the source between the quotes, unescaped as zsh does in double quotes (`\$ \` \" \\` lose the backslash, `\<newline>` goes, other backslashes stay). `"a$"` keeps the `$` the grammar leaves outside any child. |
 | Unquoted word `\-exec` | `-exec` | `\x` is `x`, `\<newline>` goes: an escaped flag meets the same gate as the plain one. |
+| ANSI-C `$'a\tb'` | `a<TAB>b` (decoded) | Decoded as zsh does (`ansi_c_text`), so `-del$'ete'` meets the `-delete` gate. An escape it does not know (`\u`, `\q`) or a NUL byte fails the token, also inside a word (`-x$'\q'`), so the command prompts. |
 | Byte-adjacent nodes `--include=*.{ts,tsx}` (word + `glob_pattern`, no `concatenation`) | `--include=*.{ts,tsx}` (raw, dynamic) | One shell word, one token (`join_adjacent_args`). The grammar splits a word only at a glob or brace part, so the joined token is dynamic. |
 | Mixed `"pre$f"` (`string_content` + expansion) | `"pre$f"` (raw, quoted) | Dynamic — text isn't literal-matched; raw text preserves glob matching. `literal_token`'s mixed branch. |
 | Pure substitution `"$(ls)"` (quoted, single child, no literal) | `$(ls)` (inner, no quotes) | Its own branch (the quoted-command-substitution case); no literal part to preserve. |

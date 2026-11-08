@@ -129,6 +129,51 @@ describe("ShellParse.extract_commands", function()
         end)
     end)
 
+    describe("$'…' is decoded in every position", function()
+        it("delivers a bare $'…' argument decoded and static", function()
+            local recs = ShellParse.extract_commands([[echo $'a\tb' $'é']])
+            assert.same({ "a\tb", "é" }, recs[1].argv)
+            assert.same({ false, false }, recs[1].argv_dynamic)
+        end)
+
+        it("decodes a $'…' part of a concatenation", function()
+            local recs = ShellParse.extract_commands([[rm -del$'ete']])
+            assert.same({ "-delete" }, recs[1].argv)
+            assert.same({ false }, recs[1].argv_dynamic)
+        end)
+
+        it("decodes a $'…' command name", function()
+            assert.same({ "rm" }, names([[$'rm' -rf x]]))
+            assert.same({ "rm" }, names([[r$'m' -rf x]]))
+            assert.same({ "rm" }, names([[zsh -c r$'m -rf x']]))
+        end)
+
+        it("decodes a $'…' redirect target and assignment value", function()
+            local rec =
+                ShellParse.extract_commands([[a=$'x\ty' cmd > $'/tmp/x']])[1]
+            assert.same({ value = "x\ty", dynamic = false }, rec.assignments.a)
+            assert.equal("/tmp/x", rec.redirects[1].target)
+            assert.is_false(rec.redirects[1].dynamic)
+        end)
+
+        it("fails on a NUL byte or an unknown escape", function()
+            for _, src in ipairs({
+                [[echo $'a\0b']],
+                [[echo $'a\x00b']],
+                [[echo $'a\400b']],
+                [[rm -x$'\q']],
+                [[$'\q' -rf x]],
+            }) do
+                assert.equal(nil, ShellParse.extract_commands(src))
+            end
+        end)
+
+        it("marks an undecodable redirect target dynamic", function()
+            local rec = ShellParse.extract_commands([[cmd > $'\q']])[1]
+            assert.is_true(rec.redirects[1].dynamic)
+        end)
+    end)
+
     describe("the headline false positive", function()
         it("does not see rm inside a quoted git commit message", function()
             -- the `rm -f` text is string content, not a command
