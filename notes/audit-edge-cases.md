@@ -81,7 +81,7 @@ Questions for the user:
 | 2.15 | MW:2255-2277 | live tail wrap while streaming | cosmetic | reach | long line past the edge until the paragraph ends | 23 | 5d9f244 |
 | 2.16 | TCR:1087-1112, 1610-1628, `search_ansi` plumbing | search-body ANSI path, "kept for future-proofing" | cosmetic | dead today | none | ~35 | 0915482 spec |
 | 2.17 | TCR:816-835 | unwrap a pre-fenced execute body (adapter already strips it) | cosmetic | rare | double fence | 11 | 02326e5 spec |
-| 2.18 | MW:2203-2218 | uppercase splice heuristic (space between run-together messages) | cosmetic | rare (no `messageId`) | messages run together; can misfire on `e.g.X` | 16 | 7847d59 obs |
+| 2.18 | MW:2203-2218 | uppercase splice heuristic (space between run-together messages) (removed) | cosmetic | rare (no `messageId`) | messages run together; can misfire on `e.g.X` | 16 | 7847d59 obs |
 | 2.19 | MW:1037-1052, 1072-1076, 920; TCR:1364 | one-line bodies get no fence | cosmetic | reach | probably none (fences concealed) | 8 | 58bc192, 4c94fb4 |
 | 2.20 | MW:2841-2851 | merge differing bodies with a `---` divider | data | ? | later body replaces earlier | 10 | 0774466 up |
 | 2.21 | MW:2000-2004 | skip an all-zero usage footer | cosmetic | reach | dim `0 in · 0 out` | 5 | 0cef2a3 |

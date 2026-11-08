@@ -4225,65 +4225,19 @@ describe("agentic.ui.MessageWriter", function()
         )
     end)
 
-    describe("message boundary space insertion", function()
-        it("inserts space when uppercase follows non-whitespace", function()
-            writer:write_message_chunk(
-                make_message_update("Compacting completed.")
-            )
-            writer:write_message_chunk(
-                make_message_update("Now continuing the work.")
-            )
-
-            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-            local last_content = lines[#lines] ~= "" and lines[#lines]
-                or lines[#lines - 1]
-            assert.truthy(
-                last_content:find("completed%. Now"),
-                "Expected space between chunks, got: " .. last_content
-            )
-        end)
-
-        it("does not insert space when chunk starts with whitespace", function()
-            writer:write_message_chunk(make_message_update("Hello"))
-            writer:write_message_chunk(make_message_update(" World"))
+    describe("message chunk joining", function()
+        it("appends each chunk exactly as received", function()
+            writer:write_message_chunk(make_message_update("Java"))
+            writer:write_message_chunk(make_message_update("Script is"))
 
             local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
             local last = lines[#lines] ~= "" and lines[#lines]
                 or lines[#lines - 1]
             assert.truthy(
-                last:find("Hello World"),
-                "Should not double-space: " .. last
+                last:find("JavaScript is"),
+                "Chunks should join verbatim: " .. last
             )
         end)
-
-        it("does not insert space when chunk starts lowercase", function()
-            writer:write_message_chunk(make_message_update("use `"))
-            writer:write_message_chunk(make_message_update("vim.api"))
-
-            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-            local last = lines[#lines] ~= "" and lines[#lines]
-                or lines[#lines - 1]
-            assert.truthy(
-                last:find("`vim%.api"),
-                "Should not insert space before lowercase: " .. last
-            )
-        end)
-
-        it(
-            "does not insert space inside abbreviations streamed as separate chunks",
-            function()
-                writer:write_message_chunk(make_message_update("the C"))
-                writer:write_message_chunk(make_message_update("WD is"))
-
-                local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-                local last = lines[#lines] ~= "" and lines[#lines]
-                    or lines[#lines - 1]
-                assert.truthy(
-                    last:find("CWD"),
-                    "Should not split abbreviation: " .. last
-                )
-            end
-        )
     end)
 
     describe("collapsed extmark handling", function()
