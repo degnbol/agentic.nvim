@@ -377,6 +377,7 @@ describe("ShellParse.extract_commands", function()
                 "zsh script.zsh",
                 "find . -name x",
                 "uv pip list",
+                "timeout 5",
                 "ls -l",
             }) do
                 assert.equal(nil, ShellParse.extract_commands(src)[1].opaque)
@@ -537,6 +538,437 @@ describe("ShellParse.extract_commands", function()
 
         it("gives a cd record the cwd before it runs", function()
             assert.equal(nil, record("cd /x", "cd").cwd)
+        end)
+    end)
+
+    describe("redirects", function()
+        --- The record named `name` in the extraction of `src`.
+        --- @param src string
+        --- @param name string
+        --- @return agentic.ShellCommand
+        local function record(src, name)
+            for _, r in ipairs(ShellParse.extract_commands(src) or {}) do
+                if r.name == name then
+                    return r
+                end
+            end
+            error("no record " .. name .. " in " .. src)
+        end
+
+        --- @param op string
+        --- @param fd integer|nil
+        --- @param target string
+        --- @return agentic.utils.ShellParse.Redirect
+        local function file(op, fd, target)
+            return {
+                op = op,
+                fd = fd,
+                target = target,
+                target_fd = false,
+                dynamic = false,
+            }
+        end
+
+        it("records each operator, with and without an fd", function()
+            for _, op in ipairs({ ">", ">>", ">|", "&>", "&>>", "<", ">&" }) do
+                assert.same(
+                    { file(op, nil, "f") },
+                    record("a " .. op .. " f", "a").redirects
+                )
+            end
+            for _, op in ipairs({ ">", ">>", ">|", "<" }) do
+                assert.same(
+                    { file(op, 3, "f") },
+                    record("a 3" .. op .. " f", "a").redirects
+                )
+            end
+        end)
+
+        it("tells a descriptor target from a file target", function()
+            assert.same({
+                {
+                    op = ">&",
+                    target = "2",
+                    target_fd = true,
+                    dynamic = false,
+                },
+            }, record("a >&2", "a").redirects)
+            assert.same({
+                {
+                    op = ">&",
+                    fd = 2,
+                    target = "1",
+                    target_fd = true,
+                    dynamic = false,
+                },
+            }, record("a 2>&1", "a").redirects)
+            assert.same({
+                {
+                    op = "<&",
+                    fd = 3,
+                    target = "0",
+                    target_fd = true,
+                    dynamic = false,
+                },
+            }, record("a 3<&0", "a").redirects)
+            assert.same({
+                {
+                    op = ">&",
+                    fd = 2,
+                    target = "-",
+                    target_fd = true,
+                    dynamic = false,
+                },
+            }, record("a 2>&-", "a").redirects)
+            assert.same(
+                { file(">&", nil, "f") },
+                record("a >& f", "a").redirects
+            )
+        end)
+
+        it("keeps the shell's order", function()
+            assert.same({
+                file(">", nil, "f"),
+                {
+                    op = ">&",
+                    fd = 2,
+                    target = "1",
+                    target_fd = true,
+                    dynamic = false,
+                },
+            }, record("a > f 2>&1", "a").redirects)
+        end)
+
+        it("records a herestring with its text", function()
+            assert.same({
+                {
+                    op = "<<<",
+                    target = "hi x",
+                    target_fd = false,
+                    dynamic = false,
+                },
+            }, record('a <<< "hi x"', "a").redirects)
+            assert.same({
+                {
+                    op = "<<<",
+                    fd = 3,
+                    target = "x",
+                    target_fd = false,
+                    dynamic = false,
+                },
+            }, record("a 3<<< x", "a").redirects)
+        end)
+
+        it("leaves heredocs out", function()
+            assert.equal(nil, record("a <<EOF\nx\nEOF", "a").redirects)
+        end)
+
+        it("marks a dynamic target", function()
+            assert.same({
+                {
+                    op = ">",
+                    target = "$f",
+                    target_fd = false,
+                    dynamic = true,
+                },
+            }, record("a > $f", "a").redirects)
+            assert.same({
+                {
+                    op = ">",
+                    target = '"$d/x"',
+                    target_fd = false,
+                    dynamic = true,
+                },
+            }, record('a > "$d/x"', "a").redirects)
+            assert.same({
+                {
+                    op = ">&",
+                    target = "$fd",
+                    target_fd = false,
+                    dynamic = true,
+                },
+            }, record("a >& $fd", "a").redirects)
+        end)
+
+        it("delivers a quoted static target unquoted", function()
+            assert.same(
+                { file(">", nil, "a b") },
+                record("a > 'a b'", "a").redirects
+            )
+        end)
+
+        it("does not read a quoted > as a redirect", function()
+            assert.equal(nil, record('echo "2>/dev/null"', "echo").redirects)
+        end)
+
+        it(
+            "applies a list's or pipeline's redirect to its last command",
+            function()
+                for _, src in ipairs({
+                    "a | b > f",
+                    "a && b > f",
+                    "! a | b > f",
+                }) do
+                    assert.equal(nil, record(src, "a").redirects)
+                    assert.same(
+                        { file(">", nil, "f") },
+                        record(src, "b").redirects
+                    )
+                end
+            end
+        )
+
+        it(
+            "applies a compound statement's redirect to every command inside",
+            function()
+                for _, src in ipairs({
+                    "{ a; b; } > f",
+                    "(a; b) > f",
+                    "for x in 1; do a; b; done > f",
+                    "if a; then b; fi > f",
+                    "while a; do b; done > f",
+                }) do
+                    assert.same(
+                        { file(">", nil, "f") },
+                        record(src, "a").redirects
+                    )
+                    assert.same(
+                        { file(">", nil, "f") },
+                        record(src, "b").redirects
+                    )
+                end
+            end
+        )
+
+        it("puts the enclosing redirects first", function()
+            assert.same(
+                { file(">", nil, "f"), file(">", 2, "e") },
+                record("{ a 2> e; } > f", "a").redirects
+            )
+        end)
+
+        it(
+            "does not apply a command's redirect to its substitutions",
+            function()
+                assert.equal(nil, record("echo $(a) > f", "a").redirects)
+            end
+        )
+
+        it("carries a launcher's redirects to the command it runs", function()
+            for _, src in ipairs({
+                "timeout 9 nvim x 2>/dev/null",
+                "zsh -c 'nvim x' 2>/dev/null",
+                "script -q /dev/null nvim x 2>/dev/null",
+            }) do
+                assert.same(
+                    { file(">", 2, "/dev/null") },
+                    record(src, "nvim").redirects
+                )
+            end
+            assert.same(
+                { file(">", 2, "/dev/null"), file(">", nil, "f") },
+                record("timeout 9 zsh -c 'nvim > f' 2>/dev/null", "nvim").redirects
+            )
+            assert.same(
+                { file(">", 2, "/dev/null") },
+                record("find . -exec rm {} \\; 2>/dev/null", "rm").redirects
+            )
+        end)
+
+        it(
+            "gives the words after a redirect target back to the command",
+            function()
+                local rec = record("rm a.lua 2>/dev/null b.lua", "rm")
+                assert.same({ "a.lua", "b.lua" }, rec.argv)
+                assert.same({ "a.lua", "b.lua" }, rec.args)
+                assert.same({ file(">", 2, "/dev/null") }, rec.redirects)
+                rec = record("rm -f a 2>/dev/null -r b > f c", "rm")
+                assert.same({ "-f", "a", "-r", "b", "c" }, rec.argv)
+                assert.same({ "-f", "-r" }, rec.flags)
+                assert.same({ "a", "b", "c" }, rec.args)
+                assert.same(
+                    { "a", "b" },
+                    record("timeout 5 rm a 2>/dev/null b", "rm").argv
+                )
+                assert.same(
+                    { "-l", "x", "$__xargs_stdin" },
+                    record("xargs grep -l 2>/dev/null x", "grep").argv
+                )
+                assert.same({ "c" }, record("a | b 2>/dev/null c", "b").argv)
+            end
+        )
+
+        it(
+            "flattens a substitution in a word after a redirect target once",
+            function()
+                assert.same({ "a", "b" }, names("a 2>/dev/null $(b)"))
+            end
+        )
+
+        it(
+            "does not unwrap a launcher whose inner starts after a redirect",
+            function()
+                for _, src in ipairs({
+                    "timeout 2>/dev/null 5 rm a",
+                    "nice 2>/dev/null -n 5 rm a",
+                }) do
+                    local recs = ShellParse.extract_commands(src)
+                    assert.equal(1, #recs)
+                    assert.equal(true, recs[1].opaque)
+                end
+            end
+        )
+
+        it("flattens a launcher's prefix substitutions", function()
+            for _, src in ipairs({
+                "> $(rm -rf x) timeout 5 ls",
+                "X=$(rm -rf x) timeout 5 ls",
+            }) do
+                assert.same({ "ls", "rm" }, names(src))
+            end
+        end)
+
+        it(
+            "returns nil for words after a compound statement's redirect",
+            function()
+                assert.equal(nil, ShellParse.extract_commands("{ a; } > f x"))
+            end
+        )
+
+        it("records a redirect before the command name first", function()
+            local rec = record("> f cmd x", "cmd")
+            assert.same({ "x" }, rec.argv)
+            assert.same({ file(">", nil, "f") }, rec.redirects)
+            assert.same(
+                { file(">", nil, "f"), file(">", nil, "g") },
+                record("> f cmd > g", "cmd").redirects
+            )
+        end)
+
+        it("leaves redirects nil when there are none", function()
+            assert.equal(nil, record("a x", "a").redirects)
+        end)
+    end)
+
+    describe("assignments", function()
+        --- The prefix assignments of the record named `name` in `src`.
+        --- @param src string
+        --- @param name string
+        --- @return table<string, agentic.utils.ShellParse.Assignment>|nil
+        local function assignments(src, name)
+            for _, r in ipairs(ShellParse.extract_commands(src) or {}) do
+                if r.name == name then
+                    return r.assignments
+                end
+            end
+            error("no record " .. name .. " in " .. src)
+        end
+
+        it("records static values unquoted", function()
+            assert.same(
+                { IFS = { value = "\t", dynamic = false } },
+                assignments("IFS=$'\\t' read x", "read")
+            )
+            assert.same({
+                A = { value = "a b", dynamic = false },
+                B = { value = "c", dynamic = false },
+                C = { value = "", dynamic = false },
+            }, assignments([[A="a b" B='c' C="" cmd]], "cmd"))
+        end)
+
+        it("decodes $'…' escapes", function()
+            assert.same(
+                { A = { value = "a\n\27A\0011'", dynamic = false } },
+                assignments([[A=$'a\n\e\x41\0011\'' cmd]], "cmd")
+            )
+        end)
+
+        it("marks dynamic values", function()
+            assert.same({
+                A = { value = "$x", dynamic = true },
+                B = { value = '"$(y)"', dynamic = true },
+                C = { value = "x", dynamic = true },
+                D = { value = [[$'\q']], dynamic = true },
+            }, assignments(
+                [[A=$x B="$(y)" C+=x D=$'\q' cmd]],
+                "cmd"
+            ))
+        end)
+
+        it(
+            "carries a launcher's prefix assignments and env operands",
+            function()
+                assert.same(
+                    { FOO = { value = "1", dynamic = false } },
+                    assignments("FOO=1 timeout 5 cmd", "cmd")
+                )
+                assert.same(
+                    { IFS = { value = "x", dynamic = false } },
+                    assignments("env IFS=x read", "read")
+                )
+                assert.same(
+                    { IFS = { value = '"$x"', dynamic = true } },
+                    assignments('env -i IFS="$x" read', "read")
+                )
+                assert.same({
+                    A = { value = "1", dynamic = false },
+                    B = { value = "2", dynamic = false },
+                }, assignments("A=1 env B=2 cmd", "cmd"))
+                assert.same(
+                    { A = { value = "2", dynamic = false } },
+                    assignments("env A=1 zsh -c 'A=2 cmd'", "cmd")
+                )
+                assert.same(
+                    { C = { value = "d=x", dynamic = false } },
+                    assignments("env -C d=x C=d=x cmd", "cmd")
+                )
+            end
+        )
+
+        it(
+            "does not apply a command's assignments to its substitutions",
+            function()
+                assert.equal(nil, assignments("A=1 echo $(b)", "b"))
+            end
+        )
+
+        it("leaves assignments nil when there are none", function()
+            assert.equal(nil, assignments("a x", "a"))
+        end)
+    end)
+
+    describe("script", function()
+        it("unwraps BSD script's command after the transcript file", function()
+            local recs =
+                ShellParse.extract_commands("script -q /dev/null nvim x")
+            assert.same({ "nvim x" }, render(recs))
+            assert.same({ "script" }, recs[1].via)
+        end)
+
+        it("unwraps util-linux script's -c command", function()
+            for _, src in ipairs({
+                "script -c 'nvim x' /dev/null",
+                "script -q --command 'nvim x' log",
+                "script -qc 'nvim x' log",
+            }) do
+                local recs = ShellParse.extract_commands(src)
+                assert.same({ "nvim x" }, render(recs))
+                assert.same({ "script" }, recs[1].via)
+            end
+        end)
+
+        it("is a plain record without a command", function()
+            for _, src in ipairs({ "script", "script -q log", "script -p log" }) do
+                local recs = ShellParse.extract_commands(src)
+                assert.same({ "script" }, names(src))
+                assert.equal(nil, recs[1].opaque)
+            end
+        end)
+
+        it("is opaque when its command does not resolve", function()
+            for _, src in ipairs({ 'script -c "$x"', "script -t 0 log nvim" }) do
+                assert.equal(true, ShellParse.extract_commands(src)[1].opaque)
+            end
         end)
     end)
 

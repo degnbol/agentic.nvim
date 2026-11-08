@@ -281,6 +281,57 @@ local function unescape_double_quoted(text)
     )
 end
 
+--- Single-character escapes of a `$'…'` string (zshmisc(1) QUOTING).
+local ANSI_C_ESCAPES = {
+    a = "\a",
+    b = "\b",
+    e = "\27",
+    E = "\27",
+    f = "\f",
+    n = "\n",
+    r = "\r",
+    t = "\t",
+    v = "\v",
+    ["\\"] = "\\",
+    ["'"] = "'",
+    ['"'] = '"',
+    ["?"] = "?",
+}
+
+--- Quote removal for a `$'…'` string: the single-character escapes, `\NNN`
+--- octal and `\xHH` hex.
+--- @param text string source text of the string, `$'` and `'` included
+--- @return string|nil word the word the shell delivers; nil when an escape is
+---         none of those (`\u`, `\c`)
+local function ansi_c_text(text)
+    local out = {}
+    local i, last = 3, #text - 1
+    while i <= last do
+        local c = text:sub(i, i)
+        if c ~= "\\" then
+            table.insert(out, c)
+            i = i + 1
+        else
+            local escape = ANSI_C_ESCAPES[text:sub(i + 1, i + 1)]
+            local octal = text:match("^[0-7][0-7]?[0-7]?", i + 1)
+            local hex = text:match("^x(%x%x?)", i + 1)
+            if escape then
+                table.insert(out, escape)
+                i = i + 2
+            elseif octal then
+                table.insert(out, string.char(tonumber(octal, 8) % 256))
+                i = i + 1 + #octal
+            elseif hex then
+                table.insert(out, string.char(tonumber(hex, 16)))
+                i = i + 2 + #hex
+            else
+                return nil
+            end
+        end
+    end
+    return table.concat(out)
+end
+
 --- Pattern for the bytes the grammar leaves outside the `string_content`
 --- children of a static double-quoted string: the `$` before a closing quote
 --- (`"a$"`) and the newline between the lines of a multi-line string.
@@ -518,6 +569,27 @@ local function token_is_dynamic(node, arith_static)
     return false
 end
 
+--- The text a word delivers, when it is a static literal.
+--- @param node TSNode
+--- @param src string
+--- @return string text the delivered text, or the source text when `dynamic`
+--- @return boolean dynamic the word is not a static literal, or its text does
+---         not resolve
+local function word_value(node, src)
+    if not token_is_dynamic(node) and not subtree_has_substitution(node) then
+        local text
+        if node:type() == "ansi_c_string" then
+            text = ansi_c_text(vim.treesitter.get_node_text(node, src))
+        else
+            text = pure_literal_token(node, src)
+        end
+        if text then
+            return text, false
+        end
+    end
+    return vim.treesitter.get_node_text(node, src), true
+end
+
 --- Extract the literal command name from a `command_name` node, normalising
 --- quotes so `"rm"` and `'rm'` resolve to `rm` (a quoted name must not evade a
 --- deny pattern). Returns nil for a dynamic name — a substitution,
@@ -687,6 +759,46 @@ local function redirect_is_truncate(fr)
     return false
 end
 
+--- @class agentic.utils.ShellParse.Redirect
+--- @field op string the operator as written: `>`, `>>`, `>|`, `&>`, `&>>`, `<`, `>&`, `<&`, `<<<` (`>&-` is `>&` with target `-`)
+--- @field fd? integer the descriptor before the operator (`2>`), nil when none is written
+--- @field target string the destination, literal text where resolvable, the herestring text for `<<<`
+--- @field target_fd boolean the destination is a descriptor (`>&2`, `2>&1`, `2>&-`), not a file (`>& file`)
+--- @field dynamic boolean the destination is not a static literal
+
+--- A `file_redirect` or `herestring_redirect` as a record. Only the first
+--- `destination` child is the target, later ones are ignored.
+--- @param node TSNode
+--- @param src string
+--- @return agentic.utils.ShellParse.Redirect redirect
+local function redirect_record(node, src)
+    local op, dest
+    for child, field in node:iter_children() do
+        if not child:named() then
+            op = child:type()
+        elseif field ~= "descriptor" then
+            dest = dest or child
+        end
+    end
+    local fd_node = node:field("descriptor")[1]
+    --- @type agentic.utils.ShellParse.Redirect
+    local redirect = {
+        op = op,
+        fd = fd_node and tonumber(vim.treesitter.get_node_text(fd_node, src)),
+        target = "-",
+        target_fd = true,
+        dynamic = false,
+    }
+    if op == ">&-" or op == "<&-" then
+        redirect.op = op:sub(1, 2)
+        return redirect
+    end
+    redirect.target, redirect.dynamic = word_value(dest, src)
+    redirect.target_fd = (op == ">&" or op == "<&")
+        and (dest:type() == "file_descriptor" or dest:type() == "number")
+    return redirect
+end
+
 --- @class agentic.utils.ShellParse.Heredoc
 --- @field text string the body as written, expansions unexpanded
 --- @field dynamic boolean the body contains an expansion
@@ -749,6 +861,33 @@ local function is_bare_cat(cmd, src)
     end
     return vim.fs.basename(vim.treesitter.get_node_text(name_node, src))
         == "cat"
+end
+
+-- ── Prefix assignments ───────────────────────────────────────────────────────
+
+--- @class agentic.utils.ShellParse.Assignment
+--- @field value string the value, unquoted when static, as written when `dynamic`
+--- @field dynamic boolean the value is not a static literal, or appends (`+=`) to one not known
+
+--- A `variable_assignment` as a record.
+--- @param va TSNode
+--- @param src string
+--- @return string name the name as written, subscript included
+--- @return agentic.utils.ShellParse.Assignment assignment
+local function assignment_record(va, src)
+    local name = vim.treesitter.get_node_text(va:field("name")[1], src)
+    local value_node = va:field("value")[1]
+    --- @type agentic.utils.ShellParse.Assignment
+    local assignment = { value = "", dynamic = false }
+    if value_node then
+        assignment.value, assignment.dynamic = word_value(value_node, src)
+    end
+    for child in va:iter_children() do
+        if child:type() == "+=" then
+            assignment.dynamic = true
+        end
+    end
+    return name, assignment
 end
 
 -- ── Builtin bindings ─────────────────────────────────────────────────────────
@@ -915,6 +1054,14 @@ end
 --- @field subcommand? string require this literal first positional (uv's `run`); options are consumed both before and after it, and a non-match falls through to the leaf matchers (so `uv pip`/`uv lock` keep their own allow rules)
 --- @field writes? boolean the wrapper itself has a recoverable side effect of its own (uv's env sync may install). Reported back from `inner_source` so the decision walk gates recursion to the safe_write tier — a read-only inner must not launder the command into a read-only one.
 --- @field assignments? boolean `NAME=value` operands may follow the options (env's), skipped like options
+--- @field code_opts? string[] options whose value is shell code (`script -c`), unwrapped like a `zsh -c` body. A short one may also end a cluster of `flag_opts` (`-qc`).
+
+--- Where a launcher's inner command is among its arguments (the words after
+--- its name).
+--- @class agentic.utils.ShellParse.WrapperOperands
+--- @field i_inner integer argument index of the inner command's first word, or of the shell code when `code`. Past the end when there is no inner command.
+--- @field code boolean the word at `i_inner` is the value of a `code_opts` option
+--- @field i_assignments integer[] argument indices of the `NAME=value` operands
 
 --- Exec-wrappers: effect-neutral prefixes whose sole job is to launch the
 --- following command. Excluding a write option / requiring a positional makes
@@ -1079,6 +1226,54 @@ local VISIBLE_WRAPPERS = vim.tbl_extend("force", EXEC_WRAPPERS, {
     builtin = {},
     noglob = {},
     nocorrect = {},
+    -- BSD `[-adeFkpqr] [-T fmt] [file [command …]]`, util-linux
+    -- `[options] [-c command] [file]`. `-t` stops the skip: BSD's takes a
+    -- value, util-linux's an optional attached one.
+    script = {
+        value_opts = {
+            "-T",
+            "-B",
+            "-I",
+            "-O",
+            "-E",
+            "-m",
+            "-o",
+            "--log-io",
+            "--log-in",
+            "--log-out",
+            "--log-timing",
+            "--logging-format",
+            "--output-limit",
+            "--echo",
+        },
+        flag_opts = {
+            "-a",
+            "-d",
+            "-e",
+            "-F",
+            "-f",
+            "-k",
+            "-p",
+            "-q",
+            "-r",
+            "--append",
+            "--return",
+            "--flush",
+            "--force",
+            "--quiet",
+        },
+        attached = {
+            "^%-%-log%-io=",
+            "^%-%-log%-in=",
+            "^%-%-log%-out=",
+            "^%-%-log%-timing=",
+            "^%-%-logging%-format=",
+            "^%-%-output%-limit=",
+            "^%-%-echo=",
+        },
+        code_opts = { "-c", "--command" },
+        positionals = 1, -- the transcript file
+    },
     uv = vim.tbl_extend("force", EXEC_WRAPPERS.uv, {
         value_opts = {
             "--with",
@@ -1109,8 +1304,8 @@ local VISIBLE_WRAPPERS = vim.tbl_extend("force", EXEC_WRAPPERS, {
     }),
 })
 
---- Consume an exec-wrapper's own operands per its spec and return the 1-based
---- index into `args` where the inner command begins, or nil to bail.
+--- Consume an exec-wrapper's own operands per its spec and locate the inner
+--- command, or nil to bail.
 ---
 --- Soundness rests on bailing on any unrecognised option: an unknown option
 --- might consume a value we don't know to skip, mis-slicing the inner. The
@@ -1122,15 +1317,38 @@ local VISIBLE_WRAPPERS = vim.tbl_extend("force", EXEC_WRAPPERS, {
 --- positionally; the inner is re-parsed, so a dynamic inner name still bails.
 --- @param args string[] quote-stripped arg tokens after the wrapper name
 --- @param spec agentic.utils.ShellParse.WrapperSpec
---- @return integer|nil inner_idx
+--- @return agentic.utils.ShellParse.WrapperOperands|nil operands
 local function skip_wrapper_operands(args, spec)
+    --- Whether `opt` is a `code_opts` option, alone or ending a cluster of
+    --- `flag_opts` (`-qc`).
+    local function is_code_option(opt)
+        if not spec.code_opts then
+            return false
+        end
+        if vim.list_contains(spec.code_opts, opt) then
+            return true
+        end
+        local cluster, letter = opt:match("^%-(%a+)(%a)$")
+        return cluster ~= nil
+            and vim.list_contains(spec.code_opts, "-" .. letter)
+            and vim.iter(vim.split(cluster, "")):all(function(c)
+                return vim.list_contains(spec.flag_opts or {}, "-" .. c)
+            end)
+    end
+
     --- Consume leading option tokens from index `i` per `spec`, returning the
     --- next index, or nil on an unrecognised option (the fail-closed bail).
+    --- @param i integer
+    --- @return integer|nil i
+    --- @return boolean|nil code the options end at a code option, so `i` is
+    ---         its value
     local function consume_options(i)
         while args[i] and args[i]:sub(1, 1) == "-" do
             local opt = args[i]
             if opt == "--" then
                 return i + 1 -- end of options
+            elseif is_code_option(opt) then
+                return i + 1, true
             elseif
                 spec.value_opts and vim.tbl_contains(spec.value_opts, opt)
             then
@@ -1151,20 +1369,27 @@ local function skip_wrapper_operands(args, spec)
         return i
     end
 
-    local i = consume_options(1)
-    if i and spec.subcommand then
+    local i, code = consume_options(1)
+    if i and not code and spec.subcommand then
         if args[i] ~= spec.subcommand then
             return nil -- not the launcher subcommand → fall through to leaf
         end
-        i = consume_options(i + 1)
+        i, code = consume_options(i + 1)
     end
     if not i then
         return nil
     end
+    --- @type agentic.utils.ShellParse.WrapperOperands
+    local operands = { i_inner = i, code = code or false, i_assignments = {} }
+    if code then
+        return operands
+    end
     while spec.assignments and args[i] and args[i]:match("^[%a_][%w_]*=") do
+        table.insert(operands.i_assignments, i)
         i = i + 1
     end
-    return i + (spec.positionals or 0)
+    operands.i_inner = i + (spec.positionals or 0)
+    return operands
 end
 
 --- Grammar of a command that runs an action command per match. Unlike an
@@ -1453,19 +1678,40 @@ end
 
 --- @alias agentic.utils.ShellParse.Origin [integer, integer]
 
+--- The shell code in word `i`, quote-stripped.
+--- @param i integer
+--- @param args string[] quote-stripped arg tokens
+--- @param arg_nodes TSNode[] parallel to `args`
+--- @param args_dynamic boolean[] parallel to `args`
+--- @return string|nil code nil when the word is missing or dynamic
+--- @return agentic.utils.ShellParse.Origin|nil origin source position of the
+---         code's first byte. Only a single-quoted word (`raw_string`) has
+---         one: any other quoting (double, `$'...'`, concatenation) processes
+---         the code, so its bytes do not map 1:1 to the source.
+local function code_word(i, args, arg_nodes, args_dynamic)
+    if args[i] == nil or args_dynamic[i] then
+        return nil, nil
+    end
+    if arg_nodes[i]:type() ~= "raw_string" then
+        return args[i], nil
+    end
+    local sr, sc = arg_nodes[i]:range()
+    return args[i], { sr, sc + 1 }
+end
+
 --- Resolve the inner command to recurse into for a transparent prefix — an
 --- inline shell `-c '<body>'` or an exec-wrapper (`timeout`/`time`/`stdbuf`).
 --- Returns nil to fall through to the leaf matchers (not a shell or
---- wrapper, missing/dynamic body, malformed operands, empty inner).
+--- wrapper, missing/dynamic body, malformed operands, empty inner, an inner
+--- that starts past `node`'s end).
 ---
---- The `-c` body comes quote-stripped from `args` (a `-c` may be the trailing
---- letter of a short-flag cluster like `-lc`, still consuming the next word). A
---- single-quoted body (`raw_string`) is byte-identical to its source content, so
---- it gets an origin (content start) and tally ranges map 1:1; any other quoting
---- (double, `$'...'`, concatenation) processes the body and stays nil-origin. The
---- wrapper inner is a raw substring of `src` (quotes/escapes intact)
---- from the inner node's start to the wrapper command node's end, with the inner
---- node's `(row, col)` as origin for translating tally ranges.
+--- The `-c` body, and a wrapper's `code_opts` value, is the quote-stripped
+--- word, with an origin only when it is single-quoted (a `-c` may be the
+--- trailing letter of a short-flag cluster like `-lc`, still consuming the
+--- next word). The wrapper inner is a raw substring
+--- of `src` (quotes/escapes intact) from the inner node's start to the wrapper
+--- command node's end, then `trailing`, with the inner node's `(row, col)` as
+--- origin for translating tally ranges.
 --- @param cmd_name string command name, already path-stripped
 --- @param node TSNode the `command` node
 --- @param args string[] quote-stripped arg tokens
@@ -1474,6 +1720,8 @@ end
 --- @param src string
 --- @param wrappers table<string, agentic.utils.ShellParse.WrapperSpec>|nil
 ---        exec-wrapper specs, default `EXEC_WRAPPERS`
+--- @param trailing string|nil source of the words of the command that lie
+---        past `node`'s end, each with a leading space
 --- @return string|nil inner
 --- @return agentic.utils.ShellParse.Origin|nil origin
 --- @return boolean writes whether the prefix has a recoverable side effect of its
@@ -1486,30 +1734,15 @@ local function inner_source(
     arg_nodes,
     args_dynamic,
     src,
-    wrappers
+    wrappers,
+    trailing
 )
     if SHELL_C_COMMANDS[cmd_name] then
         for i, arg in ipairs(args) do
             if arg:match("^%-[a-zA-Z]*c$") then
-                local body = args[i + 1]
-                if body ~= nil and not args_dynamic[i + 1] then
-                    -- A single-quoted body (`raw_string`) is byte-identical to
-                    -- its source content with no escape/expansion processing, so
-                    -- its coordinates map 1:1 — origin is the content start (one
-                    -- column past the opening quote). Any other quoting (double,
-                    -- $'...', concatenation) processes the body, so it has no
-                    -- faithful mapping and stays coarse (nil origin → whole-leaf
-                    -- highlight).
-                    local body_node = arg_nodes[i + 1]
-                    --- @type agentic.utils.ShellParse.Origin|nil
-                    local origin = nil
-                    if body_node:type() == "raw_string" then
-                        local sr, sc = body_node:range()
-                        origin = { sr, sc + 1 }
-                    end
-                    return body, origin, false
-                end
-                return nil, nil, false -- missing or dynamic body
+                local body, origin =
+                    code_word(i + 1, args, arg_nodes, args_dynamic)
+                return body, origin, false
             end
         end
         return nil, nil, false
@@ -1519,17 +1752,26 @@ local function inner_source(
     if not spec then
         return nil, nil, false
     end
-    local inner_idx = skip_wrapper_operands(args, spec)
-    if not inner_idx then
+    local operands = skip_wrapper_operands(args, spec)
+    if not operands then
         return nil, nil, false
     end
-    local inner_node = arg_nodes[inner_idx]
+    if operands.code then
+        local code, origin =
+            code_word(operands.i_inner, args, arg_nodes, args_dynamic)
+        return code, origin, spec.writes or false
+    end
+    local inner_node = arg_nodes[operands.i_inner]
     if not inner_node then
         return nil, nil, false -- empty inner
     end
     local sr, sc, inner_start_byte = inner_node:range(true)
     local _, _, _, _, _, node_end_byte = node:range(true)
+    if inner_start_byte >= node_end_byte then
+        return nil, nil, false -- inner starts in `trailing`
+    end
     local inner = src:sub(inner_start_byte + 1, node_end_byte)
+        .. (trailing or "")
     if cmd_name == "xargs" then
         -- Model the runtime stdin items as a dynamic token (see EXEC_WRAPPERS).
         -- The obscure name avoids resolving against an earlier sequence binding.
@@ -1613,21 +1855,29 @@ end
 --- @class agentic.utils.ShellParse.Shell
 --- @field cwd? string|false current directory: nil = the caller's cwd, false = unknown
 
---- Map each `command` that reads a heredoc on stdin to that heredoc. Only the
---- last simple command of a redirected statement reads it. A heredoc on a
---- non-zero fd, or on a statement ending in anything but a command (compound
---- statement, subshell, `negated_command`), has no reader.
+--- What a statement's redirects give one node of it.
+--- @class agentic.utils.ShellParse.NodeIO
+--- @field stdin? agentic.utils.ShellParse.Heredoc the heredoc a `command` reads on stdin
+--- @field redirects? agentic.utils.ShellParse.Redirect[] the file redirects and herestrings applied to the node, in order
+--- @field words? TSNode[] words of the node's command that the grammar put on its redirects
+
+--- Map each node a redirected statement's redirects apply to, to what they
+--- give it. The grammar hangs them on the whole list or pipeline, but the shell
+--- applies them to its last element. Only a simple command reads a heredoc on
+--- stdin: a heredoc on a non-zero fd, or on a compound statement, subshell or
+--- `negated_command`, has no reader.
+---
+--- tree-sitter-zsh parses the words after a file redirect's target as further
+--- `destination` children of the `file_redirect` (`rm a 2>/dev/null b` →
+--- destinations `/dev/null` and `b`); they go to `words`.
 --- @param root TSNode
 --- @param src string
---- @return table<string, agentic.utils.ShellParse.Heredoc> heredocs keyed by the
----         reading command's `node:id()`
-local function heredoc_targets(root, src)
-    --- @type table<string, agentic.utils.ShellParse.Heredoc>
-    local targets = {}
+--- @return table<string, agentic.utils.ShellParse.NodeIO> io keyed by `node:id()`
+local function node_io(root, src)
+    --- @type table<string, agentic.utils.ShellParse.NodeIO>
+    local io_of = {}
     local function visit(node)
         if node:type() == "redirected_statement" then
-            -- The grammar hangs the heredoc on the whole list or pipeline, but
-            -- the shell feeds it to the last command.
             local target = node:field("body")[1]
             while
                 target
@@ -1635,19 +1885,31 @@ local function heredoc_targets(root, src)
             do
                 target = target:named_child(target:named_child_count() - 1)
             end
-            if target and target:type() == "command" then
-                for _, hr in ipairs(node:field("redirect")) do
-                    local fd = hr:field("descriptor")[1]
-                    if
-                        hr:type() == "heredoc_redirect"
-                        and (
-                            not fd
-                            or vim.treesitter.get_node_text(fd, src) == "0"
+            if target then
+                --- @type agentic.utils.ShellParse.NodeIO
+                local io = { redirects = {}, words = {} }
+                for _, r in ipairs(node:field("redirect")) do
+                    local fd = r:field("descriptor")[1]
+                    if r:type() == "heredoc_redirect" then
+                        if
+                            target:type() == "command"
+                            and (
+                                not fd
+                                or vim.treesitter.get_node_text(fd, src)
+                                    == "0"
+                            )
+                        then
+                            io.stdin = heredoc_text(r, src)
+                        end
+                    else
+                        table.insert(io.redirects, redirect_record(r, src))
+                        vim.list_extend(
+                            io.words,
+                            vim.list_slice(r:field("destination"), 2)
                         )
-                    then
-                        targets[target:id()] = heredoc_text(hr, src)
                     end
                 end
+                io_of[target:id()] = io
             end
         end
         for child in node:iter_children() do
@@ -1655,7 +1917,7 @@ local function heredoc_targets(root, src)
         end
     end
     visit(root)
-    return targets
+    return io_of
 end
 
 --- The directory a shell is in after `cd` with the given operands. No `..`
@@ -1733,8 +1995,8 @@ local SAME_SHELL_PREFIXES = {
 
 --- Whether a command that was not unwrapped still runs code given in its
 --- arguments: an `eval`, a shell with `-c`, an action option of an
---- `ACTION_HOSTS` command, or a launcher in `VISIBLE_WRAPPERS` whose operands
---- did not resolve.
+--- `ACTION_HOSTS` command, or a launcher in `VISIBLE_WRAPPERS` unless its
+--- operands resolve to no inner command.
 --- @param cmd_name string
 --- @param args string[] quote-stripped arg tokens
 --- @return boolean
@@ -1756,14 +2018,23 @@ local function names_unseen_command(cmd_name, args)
         end)
     end
     local spec = VISIBLE_WRAPPERS[cmd_name]
-    if not spec then
+    if
+        not spec
+        or (spec.subcommand and not vim.list_contains(args, spec.subcommand))
+    then
         return false
     end
-    return not spec.subcommand or vim.list_contains(args, spec.subcommand)
+    local operands = skip_wrapper_operands(args, spec)
+    return not operands or operands.code or args[operands.i_inner] ~= nil
 end
 
+--- What a command inherits from the statements and launchers enclosing it.
+--- @class agentic.utils.ShellParse.Enclosing
+--- @field redirects agentic.utils.ShellParse.Redirect[] in the order the shell applies them, outermost first
+--- @field assignments table<string, agentic.utils.ShellParse.Assignment> the prefix assignments and `env` operands of the launchers
+
 --- Forward declaration — `collect` and `collect_command` are mutually recursive.
---- @type fun(node: TSNode, src: string, out: agentic.ShellCommand[], depth: integer, shell: agentic.utils.ShellParse.Shell, stdin_of: table<string, agentic.utils.ShellParse.Heredoc>): boolean
+--- @type fun(node: TSNode, src: string, out: agentic.ShellCommand[], depth: integer, shell: agentic.utils.ShellParse.Shell, io_of: table<string, agentic.utils.ShellParse.NodeIO>, enclosing: agentic.utils.ShellParse.Enclosing): boolean
 local collect
 
 --- `collect` over each node in turn, stopping at the first failure.
@@ -1772,11 +2043,12 @@ local collect
 --- @param out agentic.ShellCommand[]
 --- @param depth integer
 --- @param shell agentic.utils.ShellParse.Shell
---- @param stdin_of table<string, agentic.utils.ShellParse.Heredoc>
+--- @param io_of table<string, agentic.utils.ShellParse.NodeIO>
+--- @param enclosing agentic.utils.ShellParse.Enclosing
 --- @return boolean ok
-local function collect_each(nodes, src, out, depth, shell, stdin_of)
+local function collect_each(nodes, src, out, depth, shell, io_of, enclosing)
     for _, node in ipairs(nodes) do
-        if not collect(node, src, out, depth, shell, stdin_of) then
+        if not collect(node, src, out, depth, shell, io_of, enclosing) then
             return false
         end
     end
@@ -1792,9 +2064,18 @@ end
 --- @param shell agentic.utils.ShellParse.Shell state of the shell running `inner`
 --- @param stdin agentic.utils.ShellParse.Heredoc|nil heredoc the inner reads
 ---        on stdin when it is a single command
+--- @param enclosing agentic.utils.ShellParse.Enclosing what `inner` inherits
 --- @return boolean ok false also when `depth` is at the nesting cap or
 ---         `inner` does not parse
-local function collect_unwrapped(inner, launcher, out, depth, shell, stdin)
+local function collect_unwrapped(
+    inner,
+    launcher,
+    out,
+    depth,
+    shell,
+    stdin,
+    enclosing
+)
     if depth >= NESTED_MAX_DEPTH then
         return false
     end
@@ -1802,7 +2083,7 @@ local function collect_unwrapped(inner, launcher, out, depth, shell, stdin)
     if not root then
         return false
     end
-    local inner_stdin_of = heredoc_targets(root, inner)
+    local inner_io_of = node_io(root, inner)
     local inner_cmd = root:named_child(0)
     if
         stdin
@@ -1810,10 +2091,12 @@ local function collect_unwrapped(inner, launcher, out, depth, shell, stdin)
         and inner_cmd
         and inner_cmd:type() == "command"
     then
-        inner_stdin_of[inner_cmd:id()] = stdin
+        inner_io_of[inner_cmd:id()] = inner_io_of[inner_cmd:id()] or {}
+        inner_io_of[inner_cmd:id()].stdin = stdin
     end
     local first = #out + 1
-    local ok = collect(root, inner, out, depth + 1, shell, inner_stdin_of)
+    local ok =
+        collect(root, inner, out, depth + 1, shell, inner_io_of, enclosing)
     for i = first, #out do
         table.insert(out[i].via, 1, launcher)
     end
@@ -1822,19 +2105,24 @@ end
 
 --- Process a `command` node: resolve its name, unwrap transparent prefixes
 --- (exec-wrapper / inline `-c` body) by re-parsing the inner, else emit an
---- `agentic.ShellCommand` record. Substitutions in arguments or in an
---- env-prefix value are flattened by recursing `collect` over them, so a live
---- `git commit -m "$(rm -rf /)"` yields both `git` and the inner `rm`.
+--- `agentic.ShellCommand` record. Substitutions in arguments, in an
+--- env-prefix value or in a redirect are flattened by recursing `collect` over
+--- them, so a live `git commit -m "$(rm -rf /)"` yields both `git` and the
+--- inner `rm`. They inherit `enclosing` only: the command's own redirects and
+--- assignments do not apply to them. An unwrapped launcher's argument
+--- substitutions are walked inside its inner, with what the inner inherits.
 --- @param node TSNode
 --- @param src string
 --- @param out agentic.ShellCommand[]
 --- @param depth integer
 --- @param shell agentic.utils.ShellParse.Shell state of the shell running
 ---        `node`, updated in place by `cd`, `pushd` and `popd`
---- @param stdin_of table<string, agentic.utils.ShellParse.Heredoc> the
----        heredoc each `command` in `src` reads on stdin, keyed by `node:id()`
+--- @param io_of table<string, agentic.utils.ShellParse.NodeIO> what the
+---        statements' redirects in `src` give each node, keyed by `node:id()`
+--- @param enclosing agentic.utils.ShellParse.Enclosing
 --- @return boolean ok
-local function collect_command(node, src, out, depth, shell, stdin_of)
+local function collect_command(node, src, out, depth, shell, io_of, enclosing)
+    local io = io_of[node:id()] or {}
     local name_node
     --- @type string[]
     local args = {}
@@ -1842,12 +2130,42 @@ local function collect_command(node, src, out, depth, shell, stdin_of)
     local arg_nodes = {}
     --- @type boolean[]
     local args_dynamic = {}
-    -- Substitution-bearing subtrees (bare `$(...)` args, embedded `"$(…)"`,
-    -- env-prefix values). Flattened *after* this command's own record so inner
-    -- commands follow the outer one in extraction order.
+    -- Substitution-bearing subtrees: the env-prefix values and redirects
+    -- before the name, which an unwrapped inner does not contain, then the
+    -- arguments (bare `$(...)`, embedded `"$(…)"`). Flattened *after* this
+    -- command's own record so inner commands follow the outer one in
+    -- extraction order.
+    --- @type TSNode[]
+    local prefix_flatten = {}
     --- @type TSNode[]
     local to_flatten = {}
-    for child in node:iter_children() do
+    local redirects = vim.list_slice(enclosing.redirects)
+    local assignments = vim.tbl_extend("force", {}, enclosing.assignments)
+
+    --- Append an argument word.
+    --- @param word TSNode
+    --- @return boolean ok false when the word has no token text
+    local function add_arg(word)
+        if subtree_has_substitution(word) then
+            -- A substitution (`$(…)`, `"$(…)"`, concatenation): opaque dynamic
+            -- token; inner flattens separately.
+            table.insert(to_flatten, word)
+            table.insert(args, vim.treesitter.get_node_text(word, src))
+            table.insert(arg_nodes, word)
+            table.insert(args_dynamic, true)
+            return true
+        end
+        local tok = literal_token(word, src)
+        if tok == nil then
+            return false
+        end
+        table.insert(args, tok)
+        table.insert(arg_nodes, word)
+        table.insert(args_dynamic, token_is_dynamic(word))
+        return true
+    end
+
+    for child, field in node:iter_children() do
         local t = child:type()
         if t == "command_name" then
             name_node = child
@@ -1855,33 +2173,39 @@ local function collect_command(node, src, out, depth, shell, stdin_of)
             -- Env prefix (`FOO=bar cmd`): not a command, but its value may carry
             -- a live substitution.
             if subtree_has_substitution(child) then
-                table.insert(to_flatten, child)
+                table.insert(prefix_flatten, child)
             end
-        elseif t == "command_substitution" then
-            -- Bare `$(...)` arg: its captured output is an opaque dynamic token
-            -- in the outer command; its inner commands flatten separately.
-            table.insert(to_flatten, child)
-            table.insert(args, vim.treesitter.get_node_text(child, src))
-            table.insert(arg_nodes, child)
-            table.insert(args_dynamic, true)
-        elseif child:named() and t ~= "comment" then
+            local name, assignment = assignment_record(child, src)
+            assignments[name] = assignment
+        elseif
+            field == "redirect"
+            and (t == "file_redirect" or t == "herestring_redirect")
+        then
+            -- A redirect before the name (`> f cmd`).
             if subtree_has_substitution(child) then
-                -- Embedded substitution (`"$(…)"`, concatenation): opaque
-                -- dynamic token; inner flattens separately.
-                table.insert(to_flatten, child)
-                table.insert(args, vim.treesitter.get_node_text(child, src))
-                table.insert(arg_nodes, child)
-                table.insert(args_dynamic, true)
-            else
-                local tok = literal_token(child, src)
-                if tok == nil then
+                table.insert(prefix_flatten, child)
+            end
+            table.insert(redirects, redirect_record(child, src))
+            for _, word in ipairs(vim.list_slice(child:field("destination"), 2)) do
+                if not add_arg(word) then
                     return false
                 end
-                table.insert(args, tok)
-                table.insert(arg_nodes, child)
-                table.insert(args_dynamic, token_is_dynamic(child))
+            end
+        elseif child:named() and t ~= "comment" then
+            if not add_arg(child) then
+                return false
             end
         end
+    end
+    vim.list_extend(redirects, io.redirects or {})
+    -- Words past the node's end, which an unwrapped inner must get back.
+    --- @type string[]
+    local trailing = {}
+    for _, word in ipairs(io.words or {}) do
+        if not add_arg(word) then
+            return false
+        end
+        table.insert(trailing, " " .. vim.treesitter.get_node_text(word, src))
     end
 
     if not name_node then
@@ -1891,8 +2215,15 @@ local function collect_command(node, src, out, depth, shell, stdin_of)
     if not name then
         -- A dynamic name is no evidence of any particular command: no record,
         -- but the substitutions in its name and arguments still run.
-        table.insert(to_flatten, 1, name_node)
-        return collect_each(to_flatten, src, out, depth, shell, stdin_of)
+        return collect_each(
+            vim.list_extend({ name_node, unpack(prefix_flatten) }, to_flatten),
+            src,
+            out,
+            depth,
+            shell,
+            io_of,
+            enclosing
+        )
     end
     local cmd_name = strip_command_path(name)
     args, arg_nodes, args_dynamic =
@@ -1914,10 +2245,21 @@ local function collect_command(node, src, out, depth, shell, stdin_of)
             arg_nodes,
             args_dynamic,
             src,
-            VISIBLE_WRAPPERS
+            VISIBLE_WRAPPERS,
+            table.concat(trailing)
         )
     end
+    --- @type agentic.utils.ShellParse.Enclosing
+    local inherited = { redirects = redirects, assignments = assignments }
     if inner and inner ~= "" then
+        local spec = VISIBLE_WRAPPERS[cmd_name]
+        local operands = spec
+            and spec.assignments
+            and skip_wrapper_operands(args, spec)
+        for _, i in ipairs(operands and operands.i_assignments or {}) do
+            local var, value = args[i]:match("^([^=]*)=(.*)$")
+            assignments[var] = { value = value, dynamic = args_dynamic[i] }
+        end
         -- Most inners run in a process of their own, so their `cd` does not
         -- leak out. The wrapper's stdin reaches the inner, except xargs' (read
         -- as its argument list).
@@ -1927,10 +2269,17 @@ local function collect_command(node, src, out, depth, shell, stdin_of)
             out,
             depth,
             SAME_SHELL_PREFIXES[cmd_name] and shell or { cwd = shell.cwd },
-            not SHELL_C_COMMANDS[cmd_name]
-                    and cmd_name ~= "xargs"
-                    and stdin_of[node:id()]
-                or nil
+            not SHELL_C_COMMANDS[cmd_name] and cmd_name ~= "xargs" and io.stdin
+                or nil,
+            inherited
+        ) and collect_each(
+            prefix_flatten,
+            src,
+            out,
+            depth,
+            shell,
+            io_of,
+            enclosing
         )
     end
 
@@ -1947,7 +2296,9 @@ local function collect_command(node, src, out, depth, shell, stdin_of)
         args = {},
         argv = args,
         argv_dynamic = args_dynamic,
-        stdin = stdin_of[node:id()],
+        stdin = io.stdin,
+        redirects = #redirects > 0 and redirects or nil,
+        assignments = next(assignments) and assignments or nil,
         cwd = shell.cwd,
         via = {},
         opaque = names_unseen_command(cmd_name, args) or nil,
@@ -1965,12 +2316,23 @@ local function collect_command(node, src, out, depth, shell, stdin_of)
             out,
             depth,
             { cwd = not actions.foreign_cwd and shell.cwd },
-            nil
+            nil,
+            inherited
         )
     then
         return false
     end
-    if not collect_each(to_flatten, src, out, depth, shell, stdin_of) then
+    if
+        not collect_each(
+            vim.list_extend(prefix_flatten, to_flatten),
+            src,
+            out,
+            depth,
+            shell,
+            io_of,
+            enclosing
+        )
+    then
         return false
     end
 
@@ -2017,30 +2379,60 @@ end
 --- @param shell agentic.utils.ShellParse.Shell state of the shell running
 ---        `node`, updated in place by its directory changes outside child
 ---        shells
---- @param stdin_of table<string, agentic.utils.ShellParse.Heredoc> the
----        heredoc each `command` in `src` reads on stdin, keyed by `node:id()`
+--- @param io_of table<string, agentic.utils.ShellParse.NodeIO> what the
+---        statements' redirects in `src` give each node, keyed by `node:id()`
+--- @param enclosing agentic.utils.ShellParse.Enclosing what `node` inherits
 --- @return boolean ok
-function collect(node, src, out, depth, shell, stdin_of)
+function collect(node, src, out, depth, shell, io_of, enclosing)
     local t = node:type()
     if t == "command" then
-        return collect_command(node, src, out, depth, shell, stdin_of)
+        return collect_command(node, src, out, depth, shell, io_of, enclosing)
     end
     if CHILD_SHELL_TYPES[t] then
         shell = { cwd = shell.cwd }
+    end
+    local io = io_of[node:id()]
+    if io then
+        -- Words after a compound statement's redirect: zsh rejects the line.
+        if io.words and #io.words > 0 then
+            return false
+        end
+        enclosing = {
+            redirects = vim.list_extend(
+                vim.list_slice(enclosing.redirects),
+                io.redirects or {}
+            ),
+            assignments = enclosing.assignments,
+        }
     end
     -- Every other node (containers, pipelines, control flow, redirected
     -- statements, assignments, substitutions): recurse named children. A
     -- redirect target / env prefix does not hide a command, so we never bail
     -- here — only `collect_command` decides safety.
+    local children = node:named_children()
+    if t == "file_redirect" then
+        -- The later destinations are words of the command (see `node_io`).
+        children = { node:field("destination")[1] }
+    end
     --- @type integer[]|nil indices in `out` of the previous pipeline element's records
     local upstream
-    for _, child in ipairs(node:named_children()) do
+    for _, child in ipairs(children) do
         if child:type() ~= "comment" then
             local child_shell = runs_in_child_shell(node, child)
                     and { cwd = shell.cwd }
                 or shell
             local first = #out + 1
-            if not collect(child, src, out, depth, child_shell, stdin_of) then
+            if
+                not collect(
+                    child,
+                    src,
+                    out,
+                    depth,
+                    child_shell,
+                    io_of,
+                    enclosing
+                )
+            then
                 return false
             end
             if t == "pipeline" then
@@ -2065,6 +2457,8 @@ end
 --- @field argv string[] every token after the name in source order, flags unsplit (literal text where resolvable)
 --- @field argv_dynamic boolean[] parallel to `argv`: true where the token is not a static literal (expansion, substitution, xargs' stand-in `$__xargs_stdin`, an action's path `$__exec_path`)
 --- @field stdin? agentic.utils.ShellParse.Heredoc the heredoc this command reads on stdin
+--- @field redirects? agentic.utils.ShellParse.Redirect[] every file redirect and herestring the shell applies to this command, in the order it applies them: those of the compound statements and launchers enclosing it, outermost first, then its own. A list or pipeline's redirect applies to its last command. Heredocs are in `stdin`. nil when none.
+--- @field assignments? table<string, agentic.utils.ShellParse.Assignment> the prefix assignments in effect for this command (`IFS=$'\t' read` → `IFS`), its launchers' prefix assignments and `env` operands included. nil when none.
 --- @field cwd? string|false the directory this command starts in, after earlier `cd`s in the same shell. Not normalised, and relative to the caller's cwd when relative. nil = no `cd` yet, false = unknown. A `cd` in a branch or loop counts as if it always ran.
 --- @field opaque? true the command runs code from its arguments that extraction could not unwrap (`eval "$x"`, `sudo -i …`, `zsh -c "$x"`), so `argv` holds commands no record shows
 --- @field via string[] the launchers, `-c` shells and static `eval`s this command was unwrapped from, outermost first (`timeout 5 uv run x` → `{ "timeout", "uv" }`)
@@ -2094,7 +2488,17 @@ function M.extract_commands(src)
     end
     --- @type agentic.ShellCommand[]
     local out = {}
-    if not collect(root, src, out, 0, {}, heredoc_targets(root, src)) then
+    if
+        not collect(
+            root,
+            src,
+            out,
+            0,
+            {},
+            node_io(root, src),
+            { redirects = {}, assignments = {} }
+        )
+    then
         return nil
     end
     return out
