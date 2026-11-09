@@ -586,7 +586,7 @@ end
 SessionManager.TAGFUNC = "v:lua.require'agentic.session_manager'.tagfunc"
 
 --- 'tagfunc' (`:h tag-function`) that runs the `_tagfunc` of the session
---- owning the current buffer. `vim.NIL` (a standard lookup) when no session
+--- owning the current buffer. Falls back to `vim.lsp.tagfunc` when no session
 --- owns it.
 --- @param pattern string
 --- @param flags string
@@ -594,7 +594,7 @@ SessionManager.TAGFUNC = "v:lua.require'agentic.session_manager'.tagfunc"
 function SessionManager.tagfunc(pattern, flags)
     local owner = SessionRegistry.owner_of_buf(vim.api.nvim_get_current_buf())
     if not owner then
-        return vim.NIL
+        return vim.lsp.tagfunc(pattern, flags)
     end
     return owner:_tagfunc(pattern, flags)
 end
@@ -604,7 +604,7 @@ end
 --- buffer's, and each background job id a tag at the head of the job's block.
 --- With the `c` flag (`CTRL-]`) the tag is the message whose row holds the
 --- cursor, else the job the tool call block there stops, instead of
---- `pattern`. `vim.NIL` (a standard lookup) when nothing matches.
+--- `pattern`. Falls back to `vim.lsp.tagfunc` when nothing matches.
 --- @param pattern string
 --- @param flags string
 --- @return { name: string, filename: string, cmd: string }[]|vim.NIL
@@ -627,7 +627,7 @@ function SessionManager:_tagfunc(pattern, flags)
         end
     end
     if not name then
-        return vim.NIL
+        return vim.lsp.tagfunc(pattern, flags)
     end
     local tags = {}
     --- @type agentic.ui.MessageWriter|nil
@@ -668,7 +668,7 @@ function SessionManager:_tagfunc(pattern, flags)
         -- following would move.
         first_other:hand_next_window_to_user()
     end
-    return #tags > 0 and tags or vim.NIL
+    return #tags > 0 and tags or vim.lsp.tagfunc(pattern, flags)
 end
 
 --- The writers of the buffers that can hold a row of a message: the chat's,

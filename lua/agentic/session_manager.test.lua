@@ -4908,6 +4908,52 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("_tagfunc", function()
+        --- @type TestStub
+        local lsp_tagfunc_stub
+        local lsp_tags = { { name = "f", filename = "/a.lua", cmd = "1" } }
+
+        before_each(function()
+            lsp_tagfunc_stub = spy.stub(vim.lsp, "tagfunc")
+            lsp_tagfunc_stub:returns(lsp_tags)
+        end)
+
+        after_each(function()
+            lsp_tagfunc_stub:revert()
+        end)
+
+        it(
+            "falls back to vim.lsp.tagfunc with no message or job at the cursor",
+            function()
+                local session = setmetatable({
+                    _writer_of_buf = function()
+                        return nil
+                    end,
+                }, { __index = SessionManager }) --[[@as agentic.SessionManager]]
+
+                assert.same(lsp_tags, session:_tagfunc("f", "c"))
+                assert.is_true(lsp_tagfunc_stub:called_with("f", "c"))
+            end
+        )
+
+        it(
+            "falls back to vim.lsp.tagfunc when no message or job has the tag",
+            function()
+                local session = setmetatable({
+                    _writers_of_message = function()
+                        return {}
+                    end,
+                    _background_job_record = function()
+                        return nil
+                    end,
+                }, { __index = SessionManager }) --[[@as agentic.SessionManager]]
+
+                assert.same(lsp_tags, session:_tagfunc("f", ""))
+                assert.is_true(lsp_tagfunc_stub:called_with("f", ""))
+            end
+        )
+    end)
+
     describe("on_permission_request hook", function()
         --- @type TestStub
         local schedule_stub
