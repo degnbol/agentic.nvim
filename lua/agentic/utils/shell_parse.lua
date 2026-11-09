@@ -1099,10 +1099,11 @@ end
 
 -- ── Transparent prefixes (exec-wrappers, inline `-c`) ────────────────────────
 
---- Shell command names whose `-c <body>` runs an inline script. When the body
---- is a pure literal it is already present verbatim in `rawInput.command` (no
---- file read, no TOCTOU window), so it is re-parsed and walked recursively
---- instead of firing the unconditional `c`-flag ask.
+--- Shells whose `-c <body>` runs an inline script and whose first operand
+--- names a script file they run. When the body is a pure literal it is
+--- already present verbatim in `rawInput.command` (no file read, no TOCTOU
+--- window), so it is re-parsed and walked recursively instead of firing the
+--- unconditional `c`-flag ask.
 local SHELL_C_COMMANDS = { zsh = true, bash = true, sh = true, dash = true }
 
 --- Recursion-depth cap for nested transparent prefixes — inline `-c` bodies
@@ -1138,7 +1139,6 @@ end
 --- @field attached? string[] Lua patterns for self-contained forms — attached short value (`-oL`), `--long=value`, bare numeric (`-5`)
 --- @field positionals? integer count of fixed positional operands before the inner command (timeout's `DURATION` = 1); skipped by count, not inspected
 --- @field subcommand? string require this literal first positional (uv's `run`); options are consumed both before and after it, and a non-match falls through to the leaf matchers (so `uv pip`/`uv lock` keep their own allow rules)
---- @field writes? boolean the wrapper itself has a recoverable side effect of its own (uv's env sync may install). Reported back from `inner_source` so the decision walk gates recursion to the safe_write tier — a read-only inner must not launder the command into a read-only one.
 --- @field assignments? boolean `NAME=value` operands may follow the options (env's), skipped like options
 --- @field code_opts? string[] options whose value is shell code (`script -c`), unwrapped like a `zsh -c` body. A short one may also end a cluster of `flag_opts` (`-qc`).
 
@@ -1169,17 +1169,8 @@ end
 --- allow, so a gated inner (`xargs sort` → `-o`) prompts while read-only inners
 --- still approve.
 ---
---- `uv run COMMAND` is included because a *bare* `uv run` adds no arbitrary-code
---- danger over running COMMAND directly — COMMAND is then judged on its own allow
---- rules. It is not effect-neutral like timeout/stdbuf, though: it first syncs the
---- project env, which may install the repo's already-declared deps. That sync is a
---- recoverable write, so `writes = true` marks it `safe_write`-tier — the decision
---- walk only recurses at the safe_write tier, never laundering a read-only inner into a
---- read-only command. Transparency is further gated to the bare form: the empty
---- option lists make `skip_wrapper_operands` bail on *any* dash token, so the
---- code-injecting options (`--with PKG`, `-s`/`--script`, `--with-requirements`,
---- which fetch arbitrary packages from the open PyPI index) bail to a prompt.
---- `uvx`/`uv tool run` are excluded outright: they fetch an arbitrary package.
+--- `uv run COMMAND` is not here: it runs `.venv/bin/COMMAND` first, a file in
+--- the tree, so COMMAND's own rules do not judge what runs.
 --- @type table<string, agentic.utils.ShellParse.WrapperSpec>
 local EXEC_WRAPPERS = {
     -- [OPTION]... DURATION COMMAND
@@ -1204,9 +1195,6 @@ local EXEC_WRAPPERS = {
     -- COMMAND — bare only, so `-p`/`-v`/`-V` bail. It runs the external
     -- COMMAND (not a function or builtin) with the same PATH.
     command = {},
-    -- run COMMAND — bare only (no option lists → any dash token bails); env
-    -- sync is a recoverable write, so it needs the safe_write level (`writes`).
-    uv = { subcommand = "run", writes = true },
     -- [OPTION]... COMMAND [ARGS]... — inner classified on its own merits; the
     -- runtime stdin items are modelled by a dynamic token appended in
     -- `inner_source`. Common flags only; mis-slice fails closed (see docstring).
@@ -1360,7 +1348,8 @@ local VISIBLE_WRAPPERS = vim.tbl_extend("force", EXEC_WRAPPERS, {
         code_opts = { "-c", "--command" },
         positionals = 1, -- the transcript file
     },
-    uv = vim.tbl_extend("force", EXEC_WRAPPERS.uv, {
+    uv = {
+        subcommand = "run",
         value_opts = {
             "--with",
             "-w",
@@ -1387,7 +1376,7 @@ local VISIBLE_WRAPPERS = vim.tbl_extend("force", EXEC_WRAPPERS, {
             "^%-%-with%-requirements=",
             "^%-%-with%-editable=",
         },
-    }),
+    },
 })
 
 --- Consume an exec-wrapper's own operands per its spec and locate the inner
@@ -1814,9 +1803,6 @@ end
 ---        past `node`'s end, each with a leading space
 --- @return string|nil inner
 --- @return agentic.utils.ShellParse.Origin|nil origin
---- @return boolean writes whether the prefix has a recoverable side effect of its
----         own (the wrapper's `writes` flag); false for shells (`-c` bodies are
----         vetted command-by-command in the recursion).
 local function inner_source(
     cmd_name,
     node,
@@ -1832,33 +1818,33 @@ local function inner_source(
             if arg:match("^%-[a-zA-Z]*c$") then
                 local body, origin =
                     code_word(i + 1, args, arg_nodes, args_dynamic)
-                return body, origin, false
+                return body, origin
             end
         end
-        return nil, nil, false
+        return nil
     end
 
     local spec = (wrappers or EXEC_WRAPPERS)[cmd_name]
     if not spec then
-        return nil, nil, false
+        return nil
     end
     local operands = skip_wrapper_operands(args, spec)
     if not operands then
-        return nil, nil, false
+        return nil
     end
     if operands.code then
         local code, origin =
             code_word(operands.i_inner, args, arg_nodes, args_dynamic)
-        return code, origin, spec.writes or false
+        return code, origin
     end
     local inner_node = arg_nodes[operands.i_inner]
     if not inner_node then
-        return nil, nil, false -- empty inner
+        return nil -- empty inner
     end
     local sr, sc, inner_start_byte = inner_node:range(true)
     local _, _, _, _, _, node_end_byte = node:range(true)
     if inner_start_byte >= node_end_byte then
-        return nil, nil, false -- inner starts in `trailing`
+        return nil -- inner starts in `trailing`
     end
     local inner = src:sub(inner_start_byte + 1, node_end_byte)
         .. (trailing or "")
@@ -1867,7 +1853,7 @@ local function inner_source(
         -- The obscure name avoids resolving against an earlier sequence binding.
         inner = inner .. " $__xargs_stdin"
     end
-    return inner, { sr, sc }, spec.writes or false
+    return inner, { sr, sc }
 end
 
 --- Resolve a path token to a canonical absolute path, so two spellings of one
@@ -1919,24 +1905,27 @@ function M.delivered_path(text, node, src)
     return text
 end
 
---- The script operand of the two non-`-c` forms that run a file's contents:
---- `zsh|bash|sh|dash <file>` and `source|. <file>`, as written.
----
---- nil for: any other command; a missing, dynamic, or option-leading first arg
---- (a shell flag / `--`, or the `-c` that `inner_source` already owns); and for
---- `source`/`.` an operand without a slash (a bare name searches `$path`, which
---- is not knowable from the token).
+--- The script file operand, as written, of `<shell> <file>` (a shell in
+--- `SHELL_C_COMMANDS`) or `source|. <file>`.
 --- @param cmd_name string path-stripped command name
 --- @param args string[] quote-stripped arg tokens
---- @param args_dynamic boolean[]
---- @return string|nil operand
+--- @param args_dynamic boolean[] parallel to `args`
+--- @return string|nil operand nil for any other command, a missing, dynamic
+---         or option first argument (`-…`, and a shell's `+…`), and a
+---         `source`/`.` operand without a slash (a bare name searches
+---         `$path`)
 local function script_file_source(cmd_name, args, args_dynamic)
     local is_source = cmd_name == "source" or cmd_name == "."
     if not (SHELL_C_COMMANDS[cmd_name] or is_source) then
         return nil
     end
     local arg = args[1]
-    if arg == nil or args_dynamic[1] or arg:sub(1, 1) == "-" then
+    if
+        arg == nil
+        or args_dynamic[1]
+        or arg:sub(1, 1) == "-"
+        or (not is_source and arg:sub(1, 1) == "+")
+    then
         return nil
     end
     if is_source and not arg:find("/", 1, true) then
@@ -3164,6 +3153,7 @@ M.heredoc_ends_line = heredoc_ends_line
 M.is_bare_cat = is_bare_cat
 M.inner_source = inner_source
 M.script_file_source = script_file_source
+M.SHELL_C_COMMANDS = SHELL_C_COMMANDS
 M.resolve_against_cwd = resolve_against_cwd
 M.cwds_union = cwds_union
 M.unknown_cwds = unknown_cwds

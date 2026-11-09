@@ -185,20 +185,18 @@ handling.
    hard dependency.
 2. **Walk** reject-by-default. Bail on dynamic command names and code-taking
    builtins (`eval`, and `source`/`.` whose operand does not resolve; a
-   resolved script is walked, § Script files). A **transparent prefix** is not a leaf:
+   resolved script is walked, § Executed code). A **transparent prefix** is not a leaf:
    `inner_source` slices out its inner command and re-walks that on its own
    merits (mis-slice fails closed → prompt). These are a fixed allowlist — a
    shell `-c <body>` (`zsh`/`bash`/`sh`/`dash`) and the exec-wrappers `timeout`,
-   `time`, `stdbuf`, `uv run`, `xargs`, bare `command`. `xargs` additionally
+   `time`, `stdbuf`, `xargs`, bare `command`. `xargs` additionally
    appends a trailing dynamic stdin token, so a gated inner (`xargs sort` → `-o`) prompts while
    read-only inners approve. The actions of `find -exec` and `fd -x`
    (`ShellParse.host_actions`) are re-walked like a transparent prefix's
    inner, with each placeholder word a dynamic path token, and the host leaf
    is checked without the action words. An action that does not resolve
    stays in the host leaf, where its `ask` gate prompts.
-   `extract_commands` also unwraps `uv run` with its
-   code-injecting options (it reports what runs); the permission walk does
-   not. Anonymous separators
+   `extract_commands` also unwraps `uv run` (it reports what runs). Anonymous separators
    (`|`, `&&`, `;`, `&`, newline) and comments are skipped. Loops
    (`for`, `while`, `until`) recurse: every body command must itself approve,
    and a `for` list item is a literal, glob, or a bare `command_substitution`
@@ -280,25 +278,27 @@ handling.
 6. **Resolve** the allow list per `Config.permissions.auto_approve_tier` and
 7. **compose** per leaf: SKILL.md § "Composition per leaf".
 
-## Script files
+## Executed code
 
-A file a shell runs (`zsh|bash|sh|dash file`) or sources (`source`/`.`, the
-operand holding a slash) is read and walked like a `-c` body, nested up to
-`NESTED_MAX_DEPTH`. A sourced file with a sibling `.zwc` prompts (zsh runs
-the bytecode).
+A reader (`ExecutedCode.READERS`: a shell's script, `source`/`.`, `make`,
+`just`) turns a leaf into the commands it runs, each walked like a `-c` body
+up to `NESTED_MAX_DEPTH`; a declining reader leaves the leaf to the matchers.
+A `runs` item withholds a structured allow while a config file may load code
+(`ExecutedCode.runs_code`), under the taint, or under an unknown cwd. A user
+allow on the leaf skips both.
 
 - **Which file.** `ShellParse.command_cwds` gives every node the set of
   directories it may run in, from the start directory the claude provider's
   PreToolUse hook reports (`PermissionManager:bash_cwd`; unknown for other
-  providers). A relative operand is read once per member, and prompts under
-  an unknown set. A quoted `~` is a directory `~`.
+  providers). A reader runs once per member, or once with no directory
+  under an unknown set. A quoted `~` is a directory `~`.
 - **Which bytes.** A heredoc write earlier in the command (`cat > f <<'EOF'`)
-  wins over the disk. Once something that may change files has run
-  (`ctx.taint`: a write, or a leaf not classed `read_only`), no script is
+  wins over the disk; `just`, which parses the disk itself, then declines. Once something that may change files has run
+  (`ctx.taint`: a write, or a leaf not classed `read_only`), no file is
   read from disk. Statements that may run after a write the walk reaches
   later — loop iterations, pipeline elements, a background statement —
-  are walked again with the taint set. A function body reads no script.
-- `is_read_only` reads no script.
+  are walked again with the taint set. A function body and `is_read_only`
+  read no code.
 
 ## Command-source fallback
 

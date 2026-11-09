@@ -31,7 +31,7 @@ For the claude provider, a PreToolUse hook (`permission_hook.lua`, matcher
 `Bash|Write|Edit`) also runs `decide` before the SDK's check. Its `deny`
 always holds; its `allow` can still fall through to the SDK (`claude` skill
 `references/hooks.md` § permissionDecision is not always final). It also
-reports the directory each Bash call starts in (§ Script files in
+reports the directory each Bash call starts in (§ Executed code in
 `references/parsing.md`).
 
 Without the hook, our `deny` is a backstop on the escalation surface only: a
@@ -109,8 +109,8 @@ one that mutates disk or executes arbitrary code as its normal action is
 - **Redirects classified structurally** — `> /dev/null` and `2>&1` are safe,
   a write to a literal path is a write effect that must clear the grant
   scopes, any other file redirect bails, whether or not the command succeeds.
-- **A script is judged as the file the shell opens**, from every directory
-  the command may be in (§ Script files).
+- **Code a command reads is judged as the command would read it** (script,
+  makefile, justfile), from every directory the command may be in (§ Executed code).
 - **One name predicate for every binding** — `ShellParse.is_safe_var_name`.
 - **Dynamic tokens wildcard deny/ask, never allow** (§ Token expansion).
 - **Over-approximation is sound for deny/ask**; allow holds in every parse,
@@ -128,7 +128,7 @@ session allow-always leaves count at every level.
 Deny additionally **short-circuits to a rejection**:
 `PermissionRules.should_auto_reject` runs before `evaluate` and rejects the
 whole command with no prompt when any leaf in the command text matches a
-concrete deny gate; a leaf inside a script file prompts instead. Ask only withholds approval.
+concrete deny gate; a leaf inside code a command reads prompts instead. Ask only withholds approval.
 
 #### Known limitations (uncatchable — fall through to a prompt)
 

@@ -822,38 +822,10 @@ describe("PermissionRules", function()
             return PermissionRules.should_auto_approve(cmd, config_dir, cwd)
         end
 
-        describe("uv run wrapper (safe_write tier)", function()
-            it(
-                "approves a bare `uv run <checker>` at the safe_write tier",
-                function()
-                    assert.is_true(
-                        approves_at(
-                            "safe_write",
-                            "uv run basedpyright probe.py"
-                        )
-                    )
-                end
-            )
-
-            it(
-                "prompts the same command at the read_only tier (env sync writes)",
-                function()
-                    assert.is_false(
-                        approves_at("read_only", "uv run basedpyright probe.py")
-                    )
-                end
-            )
-
-            it("prompts when the inner command is not approved", function()
-                assert.is_false(approves_at("safe_write", "uv run rm -rf /"))
-            end)
-
-            it("prompts when a code-injecting option is present", function()
+        describe("uv", function()
+            it("prompts on `uv run`, which may run a tree file", function()
                 assert.is_false(
-                    approves_at(
-                        "safe_write",
-                        "uv run --with=evil basedpyright probe.py"
-                    )
+                    approves_at("safe_write", "uv run basedpyright probe.py")
                 )
             end)
 
@@ -890,13 +862,18 @@ describe("PermissionRules", function()
                 "treats a cache/file writer as safe_write, not read-only",
                 function()
                     -- mypy writes .mypy_cache by default; formatters rewrite files.
+                    local cwd = vim.fn.tempname()
+                    vim.fn.mkdir(cwd, "p")
+                    MiniTest.finally(function()
+                        vim.fs.rm(cwd, { recursive = true })
+                    end)
                     for _, cmd in ipairs({
                         "mypy src.py",
                         "stylua init.lua",
                         "ruff format src.py",
                     }) do
-                        assert.is_true(approves_at("safe_write", cmd))
-                        assert.is_false(approves_at("read_only", cmd))
+                        assert.is_true(approves_at("safe_write", cmd, cwd))
+                        assert.is_false(approves_at("read_only", cmd, cwd))
                     end
                 end
             )
@@ -4897,14 +4874,14 @@ describe("PermissionRules", function()
         end)
 
         it(
-            "tally: an unsafe body washes the whole leaf, not rememberable",
+            "tally: an unsafe body washes the whole leaf, which stays rememberable",
             function()
                 local path = script("make build\n")
                 local ranges, leaves, complete =
                     PermissionRules.tally_unapproved("zsh " .. path, config_dir)
                 assert.equal(1, #ranges)
-                assert.equal(0, #leaves)
-                assert.is_false(complete)
+                assert.same({ "zsh " .. path }, leaves)
+                assert.is_true(complete)
             end
         )
     end)
@@ -5292,6 +5269,153 @@ describe("PermissionRules", function()
                 0,
                 #PermissionRules.tally_unapproved(cmd, config_dir, good)
             )
+        end)
+    end)
+
+    describe("code a command reads", function()
+        --- @type string
+        local dir
+
+        before_each(function()
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = true
+            Config.permissions.auto_approve_tier = "safe_write"
+            stub_settings(nil)
+            dir = vim.fn.resolve(vim.fn.tempname())
+            vim.fn.mkdir(dir .. "/.cargo", "p")
+        end)
+        after_each(function()
+            vim.fs.rm(dir, { recursive = true })
+        end)
+
+        --- Whether the walk of `cmd` from `cwd` is structurally approvable.
+        --- @param cmd string
+        --- @param cwd string|nil
+        --- @return boolean
+        local function walks(cmd, cwd)
+            return (PermissionRules.evaluate(cmd, config_dir, cwd))
+        end
+
+        it("approves make when every recipe line approves", function()
+            write_file(dir .. "/Makefile", "lint:\n\tls\n\techo ok\n")
+            assert.is_true(walks("make lint", dir))
+            assert.is_true(walks("make", dir))
+            write_file(dir .. "/Makefile", "lint:\n\tls\n\trm -r build\n")
+            assert.is_false(walks("make lint", dir))
+        end)
+
+        it(
+            "prompts on a makefile it cannot read and on make options",
+            function()
+                write_file(
+                    dir .. "/Makefile",
+                    "X := $(shell ls)\nlint:\n\tls\n"
+                )
+                assert.is_false(walks("make lint", dir))
+                write_file(dir .. "/Makefile", "lint:\n\tls\n")
+                assert.is_false(walks("make SHELL=./evil.sh lint", dir))
+                assert.is_false(walks("make -f other.mk lint", dir))
+                assert.is_false(walks("make lint", nil))
+            end
+        )
+
+        it("reads a makefile written earlier in the command", function()
+            write_file(dir .. "/Makefile", "lint:\n\tls\n")
+            local cmd =
+                "cat > Makefile <<'EOF'\nlint:\n\trm -r x\nEOF\nmake lint"
+            assert.is_false(walks(cmd, dir))
+            -- GNUmakefile wins over Makefile, and its bytes are unknown.
+            assert.is_false(walks("cat x.mk > GNUmakefile; make lint", dir))
+        end)
+
+        it("prompts on make with no command to judge", function()
+            write_file(dir .. "/Makefile", ".PHONY: all\nall:\n")
+            assert.is_false(walks("make all", dir))
+        end)
+
+        it("reads no script after a shell's + option", function()
+            write_file(dir .. "/+o", "ls\n")
+            write_file(dir .. "/run.sh", "ls\n")
+            assert.is_false(walks("zsh +o nomatch run.sh", dir))
+        end)
+
+        it("reads a justfile only while the disk is trusted", function()
+            if vim.fn.executable("just") == 0 then
+                MiniTest.skip("just is not installed")
+            end
+            write_file(dir .. "/justfile", "lint:\n    ls\n")
+            assert.is_true(walks("just lint", dir))
+            assert.is_false(walks("echo x > /tmp/f; just lint", dir))
+            local cmd =
+                "cat > justfile <<'EOF'\nlint:\n    echo ok\nEOF\njust lint"
+            assert.is_false(walks(cmd, dir))
+        end)
+
+        it("lets a user allow on the leaf approve unread code", function()
+            write_file(dir .. "/Makefile", "lint:\n\trm -r build\n")
+            write_file(dir .. "/run.sh", "rm -r build\n")
+            stub_settings({ allow = { "Bash(make *)", "Bash(zsh run.sh)" } })
+            assert.is_true(walks("make lint", dir))
+            assert.is_true(walks("zsh run.sh", dir))
+            local ok = PermissionRules.evaluate(
+                "make lint",
+                config_dir,
+                dir,
+                { PermissionRules.literal_pattern("make lint") }
+            )
+            assert.is_true(ok)
+        end)
+
+        it("keeps a leaf with unapproved code rememberable", function()
+            write_file(dir .. "/Makefile", "lint:\n\trm -r build\n")
+            local ranges, leaves, complete =
+                PermissionRules.tally_unapproved("make lint", config_dir, dir)
+            assert.equal(1, #ranges)
+            assert.same({ "make lint" }, leaves)
+            assert.is_true(complete)
+        end)
+
+        it(
+            "withholds a structured allow while a config may load code",
+            function()
+                assert.is_true(walks("cargo fmt", dir))
+                write_file(dir .. "/.cargo/config.toml", "[build]\njobs = 2\n")
+                assert.is_true(walks("cargo fmt", dir))
+                write_file(
+                    dir .. "/.cargo/config.toml",
+                    "[build]\nrustc-wrapper = './w'\n"
+                )
+                assert.is_false(walks("cargo fmt", dir))
+                assert.is_false(walks("cargo metadata", dir))
+                local ranges, leaves = PermissionRules.tally_unapproved(
+                    "cargo fmt",
+                    config_dir,
+                    dir
+                )
+                assert.equal(1, #ranges)
+                assert.same({ "cargo fmt" }, leaves)
+            end
+        )
+
+        it("withholds it after a write or under an unknown cwd", function()
+            assert.is_false(walks("echo x > /tmp/f; cargo fmt", dir))
+            assert.is_false(walks("cargo fmt", nil))
+        end)
+
+        it("finds a config in a parent directory", function()
+            vim.fn.mkdir(dir .. "/sub", "p")
+            write_file(dir .. "/prettier.config.js", "")
+            assert.is_false(walks("prettier --check .", dir .. "/sub"))
+            assert.is_false(walks("prettierd --check .", dir .. "/sub"))
+        end)
+
+        it("lets a user allow approve despite a config", function()
+            write_file(
+                dir .. "/.cargo/config.toml",
+                "[build]\nrustc-wrapper = './w'\n"
+            )
+            stub_settings({ allow = { "Bash(cargo fmt)" } })
+            assert.is_true(walks("cargo fmt", dir))
         end)
     end)
 
