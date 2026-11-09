@@ -3147,6 +3147,131 @@ function M.extract_commands(src)
     return out
 end
 
+-- ── File effects ─────────────────────────────────────────────────────────────
+
+--- The operands of an `rm`, and whether it deletes directories. A word
+--- starting with `-` is an option unless it is a lone `-` or follows `--`.
+--- A long option may be any prefix of its name, as GNU getopt accepts.
+--- @param argv string[] the words after `rm`
+--- @param argv_dynamic boolean[] parallel to `argv`: true where the word is not a static literal
+--- @return { path: string, dynamic: boolean }[] operands `dynamic` copied from `argv_dynamic`
+--- @return boolean recursive -r/-R/-d or a long-form prefix of recursive/dir
+function M.rm_operands(argv, argv_dynamic)
+    local operands = {}
+    local recursive = false
+    local end_of_options = false
+    for i, word in ipairs(argv) do
+        if word == "--" and not end_of_options then
+            end_of_options = true
+        elseif end_of_options or word:sub(1, 1) ~= "-" or word == "-" then
+            table.insert(
+                operands,
+                { path = word, dynamic = argv_dynamic[i] == true }
+            )
+        else
+            local long = word:match("^%-%-(.+)$")
+            if long then
+                recursive = recursive
+                    or vim.startswith("recursive", long)
+                    or vim.startswith("dir", long)
+            elseif word:find("[rRd]") then
+                recursive = true
+            end
+        end
+    end
+    return operands, recursive
+end
+
+--- Redirect operators that write their target file.
+local WRITE_REDIRECT_OPS = {
+    [">"] = true,
+    [">>"] = true,
+    [">|"] = true,
+    ["&>"] = true,
+    ["&>>"] = true,
+    [">!"] = true,
+    [">>!"] = true,
+    ["&>!"] = true,
+    ["&>>!"] = true,
+    [">&"] = true,
+}
+
+--- The absolute directory a command starts in.
+--- @param cwd string|false|nil the directory after earlier `cd`s, relative to `start_cwd` when relative. nil = no `cd`, false = unknown.
+--- @param start_cwd string|nil absolute directory the whole command starts in
+--- @return string|nil dir nil when unknown
+local function command_dir(cwd, start_cwd)
+    if cwd == false then
+        return nil
+    end
+    if cwd == nil then
+        return start_cwd
+    end
+    if cwd:sub(1, 1) == "/" then
+        return cwd
+    end
+    return start_cwd and vim.fs.joinpath(start_cwd, cwd)
+end
+
+--- @class agentic.utils.ShellParse.FileEffect
+--- @field kind "write"|"delete" A redirect write, or an `rm` operand
+--- @field path string Literal target path
+
+--- The files a shell command line writes through a redirect or deletes with
+--- `rm`, as far as its text names them. Each path is resolved against the
+--- directory its command starts in, as `resolve_against_cwd` does, so two
+--- spellings of one file give one effect. A path that does not resolve is
+--- dropped, as are paths under `/dev/`.
+--- @param src string shell command line
+--- @param start_cwd string|nil absolute directory the command starts in. nil = unknown.
+--- @return agentic.utils.ShellParse.FileEffect[] effects one per path, the last effect on it, in source order of that effect. {} when what runs is unknown.
+function M.file_effects(src, start_cwd)
+    --- @type agentic.utils.ShellParse.FileEffect[]
+    local effects = {}
+
+    --- @param kind "write"|"delete"
+    --- @param path string as written
+    --- @param dir string|nil
+    local function add(kind, path, dir)
+        local resolved = resolve_against_cwd(path, dir)
+        if resolved and not vim.startswith(resolved, "/dev/") then
+            table.insert(effects, { kind = kind, path = resolved })
+        end
+    end
+
+    for _, rec in ipairs(M.extract_commands(src) or {}) do
+        local dir = command_dir(rec.cwd, start_cwd)
+        for _, r in ipairs(rec.redirects or {}) do
+            if
+                WRITE_REDIRECT_OPS[r.op]
+                and not r.target_fd
+                and not r.dynamic
+            then
+                add("write", r.target, dir)
+            end
+        end
+        if rec.name == "rm" and not rec.opaque then
+            for _, operand in ipairs(M.rm_operands(rec.argv, rec.argv_dynamic)) do
+                if not operand.dynamic then
+                    add("delete", operand.path, dir)
+                end
+            end
+        end
+    end
+
+    --- @type agentic.utils.ShellParse.FileEffect[]
+    local last_per_path = {}
+    local seen = {}
+    for i = #effects, 1, -1 do
+        local e = effects[i]
+        if not seen[e.path] then
+            seen[e.path] = true
+            table.insert(last_per_path, 1, e)
+        end
+    end
+    return last_per_path
+end
+
 -- ── Shared primitives consumed by permission_rules.walk / tally_walk ─────────
 
 M.strip_command_path = strip_command_path

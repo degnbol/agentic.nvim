@@ -38,18 +38,21 @@ local UNSEEN_MARKER = "●"
 --- unseen marker are all derived, so nothing mutates an op after it lands.
 --- @class agentic.ui.FileActivity.Op
 --- @field seq integer Monotonic within the session; ordering and unseen-ness key on it
---- @field tool_call_id string Idempotency key, and provenance for locating the call in the chat
+--- @field tool_call_id string With `path`, the idempotency key; also provenance for locating the call in the chat
 --- @field path string Absolute and canonicalised (see FileSystem.canonical_path)
 --- @field op agentic.ui.FileActivity.OpClass
 --- @field dest_path? string Destination of a move; no surveyed provider reports one
 --- @field ranges? agentic.ui.MessageWriter.HunkRange[] Changed line ranges, when the provider reported them
+--- @field source? "parsed" Read from a shell command's text; absent when the tool reported the change
 
 --- One path's ops collapsed for display.
 --- @class agentic.ui.FileActivity.Row
 --- @field path string
 --- @field op agentic.ui.FileActivity.OpClass Class of the newest op on this path
+--- @field first_op agentic.ui.FileActivity.OpClass Class of the oldest op on this path
 --- @field seq integer Highest seq across this path's ops
 --- @field ranges agentic.ui.MessageWriter.HunkRange[] Union of every op's ranges, in record order
+--- @field parsed boolean Every op on this path has `source == "parsed"`
 
 --- Persisted form. `last_viewed_seq` travels with the ops so the unseen marker
 --- survives a resume, which is the killed-and-came-back case the panel is for.
@@ -61,7 +64,7 @@ local UNSEEN_MARKER = "●"
 --- per path in a manually toggled panel.
 --- @class agentic.ui.FileActivity
 --- @field _ops agentic.ui.FileActivity.Op[] Append-only, ascending in seq
---- @field _recorded table<string, boolean> tool_call_ids already appended
+--- @field _recorded table<string, boolean> `op_key`s of the ops already appended
 --- @field _next_seq integer
 --- @field _last_viewed_seq integer Highest seq the user has seen; bumped when the panel closes
 --- @field _reverted table<string, boolean> Paths the last reconcile found back at their HEAD content
@@ -134,25 +137,38 @@ local function location_rank(path, project_root, scratch)
     return 2
 end
 
---- Record a file operation. Idempotent in `op.tool_call_id`: a provider may
---- repeat a completion (hook retry cycles), and `session/load` replays every
---- tool call into the same handlers on top of the log read from the session file.
---- @param op { tool_call_id: string, path: string, op: agentic.ui.FileActivity.OpClass, dest_path?: string, ranges?: agentic.ui.MessageWriter.HunkRange[] }
---- @return boolean recorded False when this tool call was already in the log
+--- The key that identifies one tool call's op on one path.
+--- @param tool_call_id string
+--- @param path string canonical
+--- @return string
+local function op_key(tool_call_id, path)
+    return tool_call_id .. "\0" .. path
+end
+
+--- Record a file operation. Idempotent in the pair of `op.tool_call_id` and
+--- the canonical `op.path`: a provider may repeat a completion (hook retry
+--- cycles), and `session/load` replays every tool call into the same handlers
+--- on top of the log read from the session file. One tool call may record
+--- several paths.
+--- @param op { tool_call_id: string, path: string, op: agentic.ui.FileActivity.OpClass, dest_path?: string, ranges?: agentic.ui.MessageWriter.HunkRange[], source?: "parsed" }
+--- @return boolean recorded False when this tool call and path were already in the log
 function FileActivity:record(op)
-    if self._recorded[op.tool_call_id] then
+    local path = FileSystem.canonical_path(op.path)
+    local key = op_key(op.tool_call_id, path)
+    if self._recorded[key] then
         return false
     end
-    self._recorded[op.tool_call_id] = true
+    self._recorded[key] = true
 
     --- @type agentic.ui.FileActivity.Op
     local entry = {
         seq = self._next_seq,
         tool_call_id = op.tool_call_id,
-        path = FileSystem.canonical_path(op.path),
+        path = path,
         op = op.op,
         dest_path = op.dest_path,
         ranges = op.ranges,
+        source = op.source,
     }
     self._next_seq = self._next_seq + 1
     table.insert(self._ops, entry)
@@ -177,12 +193,20 @@ function FileActivity:_all_rows(include_reverted)
     for _, op in ipairs(self._ops) do
         local row = by_path[op.path]
         if not row then
-            row = { path = op.path, op = op.op, seq = op.seq, ranges = {} }
+            row = {
+                path = op.path,
+                op = op.op,
+                first_op = op.op,
+                seq = op.seq,
+                ranges = {},
+                parsed = true,
+            }
             by_path[op.path] = row
         elseif op.seq > row.seq then
             row.op = op.op
             row.seq = op.seq
         end
+        row.parsed = row.parsed and op.source == "parsed"
         for _, range in ipairs(op.ranges or {}) do
             table.insert(row.ranges, range)
         end
@@ -258,18 +282,43 @@ function FileActivity:mark_viewed()
     self:render()
 end
 
+--- Whether a row's change is no longer on disk.
+---
+--- A deletion is undone when the file exists again, unless git reports a
+--- tracked file as changed. While the file is gone it stays a change, except
+--- when the path's first op created it: then there is no net change.
+---
+--- Any other change is undone when git does not report it AND either the file
+--- has vanished or it is tracked, i.e. something else can vouch for its
+--- content. That covers an undone edit, a created file deleted again, and a
+--- commit of the agent's work. It deliberately leaves an untracked file that
+--- still exists: nothing can say what it should contain, so the row stays
+--- rather than being dropped on a guess.
+--- @param row agentic.ui.FileActivity.Row
+--- @param git_root string|nil nil outside a repository
+--- @param dirty table<string, boolean> paths git reports as changed; empty outside a repository
+--- @return boolean
+local function is_reverted(row, git_root, dirty)
+    local exists = vim.uv.fs_stat(row.path) ~= nil
+    if row.op == "delete" then
+        if not exists then
+            return row.first_op == "create"
+        end
+        return not git_root
+            or not dirty[row.path]
+            or not GitFiles.is_tracked(row.path, git_root)
+    end
+    if not git_root then
+        return not exists
+    end
+    return not dirty[row.path]
+        and (not exists or GitFiles.is_tracked(row.path, git_root))
+end
+
 --- Re-check whether each recorded change is still on disk, then re-render.
 --- Computed on demand rather than at edit time so the cost is paid once per
---- panel open instead of once per tool call, and so a change the user undid —
---- or committed — stops being advertised.
----
---- A path is no longer a change when git does not report it AND either it has
---- vanished or it is tracked, i.e. something else can vouch for its content.
---- That covers an undone edit, a created file deleted again, and a commit of the
---- agent's work. It deliberately leaves an untracked file that still exists,
---- outside a repository or inside one: nothing can say what it should contain,
---- so the row stays rather than being dropped on a guess. A tracked deletion
---- stays too — git reports it, and a deletion is a change.
+--- panel open instead of once per tool call, and so a change the user undid
+--- or committed stops being advertised.
 --- @param callback fun()|nil Invoked after the refreshed rows are rendered
 function FileActivity:reconcile(callback)
     --- @type agentic.ui.FileActivity.Row[]
@@ -288,16 +337,22 @@ function FileActivity:reconcile(callback)
         end
     end
 
-    local git_root = vim.fs.root(vim.uv.cwd() or 0, ".git")
-    if not git_root then
+    --- @param git_root string|nil
+    --- @param dirty table<string, boolean>
+    local function finish_with(git_root, dirty)
         --- @type table<string, boolean>
         local reverted = {}
         for _, row in ipairs(mutations) do
-            if not vim.uv.fs_stat(row.path) then
+            if is_reverted(row, git_root, dirty) then
                 reverted[row.path] = true
             end
         end
         finish(reverted)
+    end
+
+    local git_root = vim.fs.root(vim.uv.cwd() or 0, ".git")
+    if not git_root then
+        finish_with(nil, {})
         return
     end
 
@@ -313,21 +368,7 @@ function FileActivity:reconcile(callback)
             finish({})
             return
         end
-
-        --- @type table<string, boolean>
-        local reverted = {}
-        for _, row in ipairs(mutations) do
-            if
-                not dirty[row.path]
-                and (
-                    not vim.uv.fs_stat(row.path)
-                    or GitFiles.is_tracked(row.path, git_root)
-                )
-            then
-                reverted[row.path] = true
-            end
-        end
-        finish(reverted)
+        finish_with(git_root, dirty)
     end)
 end
 
@@ -369,8 +410,8 @@ end
 ---
 --- Stored ops keep their original seq so `last_viewed_seq` still means what it
 --- did when it was written; ops recorded before the load are re-numbered above
---- them, and dropped when the stored log already has their tool call. Ops
---- recorded after it are dropped the same way (see `record`).
+--- them, and dropped when the stored log already has their tool call and
+--- path. Ops recorded after it are dropped the same way (see `record`).
 --- @param data agentic.ui.FileActivity.Data|nil
 function FileActivity:load(data)
     if not data then
@@ -388,17 +429,18 @@ function FileActivity:load(data)
         if
             op.tool_call_id
             and op.path
-            and not self._recorded[op.tool_call_id]
+            and not self._recorded[op_key(op.tool_call_id, op.path)]
         then
-            self._recorded[op.tool_call_id] = true
+            self._recorded[op_key(op.tool_call_id, op.path)] = true
             self._next_seq = math.max(self._next_seq, (op.seq or 0) + 1)
             table.insert(self._ops, op)
         end
     end
 
     for _, op in ipairs(recorded_before_load) do
-        if not self._recorded[op.tool_call_id] then
-            self._recorded[op.tool_call_id] = true
+        local key = op_key(op.tool_call_id, op.path)
+        if not self._recorded[key] then
+            self._recorded[key] = true
             op.seq = self._next_seq
             self._next_seq = self._next_seq + 1
             table.insert(self._ops, op)
@@ -456,6 +498,12 @@ function FileActivity:render()
                 end_col = #(OP_MARKER[row.op] or "~"),
                 hl_group = OP_HL[row.op] or OP_HL.edit,
             })
+            if row.parsed then
+                vim.api.nvim_buf_set_extmark(bufnr, NS_ACTIVITY, index - 1, 0, {
+                    virt_text = { { "shell", Theme.HL_GROUPS.ACTIVITY_SOURCE } },
+                    virt_text_pos = "eol",
+                })
+            end
             if row.seq > self._last_viewed_seq then
                 vim.api.nvim_buf_set_extmark(bufnr, NS_ACTIVITY, index - 1, 0, {
                     sign_text = UNSEEN_MARKER,
