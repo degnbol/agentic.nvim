@@ -909,25 +909,157 @@ local function heredoc_pure_body(hr, src)
     return heredoc.text
 end
 
---- Whether nothing follows a `heredoc_redirect`'s delimiter on its line.
---- tree-sitter-zsh parses the rest of that line as children of the redirect:
---- argument words (`sort <<EOF -o f`), file redirects (`cat <<EOF > f`), and
---- the pipeline or list the statement continues into (`cat <<EOF | sh`).
+--- The `heredoc_body` of a `heredoc_redirect`, nil when it has none.
 --- @param hr TSNode
---- @return boolean
-local function heredoc_ends_line(hr)
-    for child in hr:iter_children() do
+--- @return TSNode|nil
+local function heredoc_body(hr)
+    return (
+        vim.iter(hr:iter_children()):find(function(child)
+            return child:type() == "heredoc_body"
+        end)
+    )
+end
+
+--- The elements of a chain of statements joined by one operator. The grammar
+--- nests a chain as `list`s in a `list`, or `pipeline`s in a `pipeline`.
+--- @param node TSNode a `list` or `pipeline`
+--- @param op string the operator every link must be
+--- @return TSNode[]|nil elements nil when a link is another operator, a
+---         pipeline element is a `list`, or the chain holds a comment
+local function chain_elements(node, op)
+    --- @type TSNode[]
+    local elements = {}
+    for child in node:iter_children() do
         local t = child:type()
-        if
-            child:named()
-            and t ~= "heredoc_start"
-            and t ~= "heredoc_body"
-            and t ~= "heredoc_end"
-        then
-            return false
+        if not child:named() then
+            if t ~= op then
+                return nil
+            end
+        elseif t == node:type() then
+            local inner = chain_elements(child, op)
+            if not inner then
+                return nil
+            end
+            vim.list_extend(elements, inner)
+        elseif t == "comment" or (op == "|" and t == "list") then
+            return nil
+        else
+            table.insert(elements, child)
         end
     end
-    return true
+    return elements
+end
+
+--- Node types a pipeline does not run as one element: zsh binds `&&`, `||`
+--- and `!` looser than `|`.
+local LOOSER_THAN_PIPE = { list = true, negated_command = true }
+
+--- @class agentic.utils.ShellParse.RedirectedParts
+--- @field body? TSNode the statement's `body`, nil for a bare redirect (`> f`)
+--- @field redirects TSNode[] redirects applied to `body`, in source order, with the file and herestring redirects on a heredoc's line after that heredoc
+--- @field words TSNode[] words of `body`'s last command the grammar put on redirects: a file redirect's destinations after the first, a heredoc's `argument` children
+--- @field rest TSNode[] statements the line continues into after a heredoc, in order: the elements of the `&&`/`||` chain or the pipeline
+--- @field rest_op? "&&"|"||"|"|" operator joining `body` and every `rest` element, nil when `rest` is empty
+
+--- A `redirected_statement` as zsh reads it. tree-sitter-zsh parses the rest
+--- of a heredoc's line as children of the `heredoc_redirect`: words
+--- (`sort <<EOF -o f`), redirects (`cat <<EOF > f`), and the chain or
+--- pipeline the line continues into (`cat <<EOF && a`, `cat <<EOF | a`),
+--- nested to the right. zsh groups that line from the left, as if the
+--- heredoc were not there.
+--- @param node TSNode `redirected_statement`
+--- @param src string
+--- @return agentic.utils.ShellParse.RedirectedParts|nil parts nil when the
+---         tree may group the line differently from zsh: mixed operators, `|&`,
+---         a pipeline after a `list` or `!` body, a chain reaching past the
+---         heredoc's line, or an unknown child
+local function redirected_parts(node, src)
+    --- @type agentic.utils.ShellParse.RedirectedParts
+    local parts = {
+        body = node:field("body")[1],
+        redirects = {},
+        words = {},
+        rest = {},
+    }
+    --- @param fr TSNode `file_redirect`
+    local function add_file_redirect(fr)
+        table.insert(parts.redirects, fr)
+        vim.list_extend(
+            parts.words,
+            vim.list_slice(redirect_operands(fr, src).dests, 2)
+        )
+    end
+    --- Read the rest of a heredoc's line into `parts`.
+    --- @param hr TSNode `heredoc_redirect`
+    --- @return boolean modelled
+    local function add_heredoc_line(hr)
+        local start_row = hr:start()
+        local op
+        for child, field in hr:iter_children() do
+            local t = child:type()
+            if field == "operator" then
+                op = t
+            elseif
+                not child:named()
+                or field == "descriptor"
+                or t == "heredoc_start"
+                or t == "heredoc_body"
+                or t == "heredoc_end"
+            then
+                -- The heredoc itself.
+            elseif field == "argument" then
+                table.insert(parts.words, child)
+            elseif t == "file_redirect" then
+                add_file_redirect(child)
+            elseif t == "herestring_redirect" then
+                table.insert(parts.redirects, child)
+            elseif field == "right" or t == "pipeline" then
+                -- zsh reads the lines after the heredoc's as its body, the
+                -- grammar as more of the chain.
+                local _, _, end_row = child:range()
+                if
+                    end_row ~= start_row
+                    or #parts.rest > 0
+                    or field == "right" and not op
+                then
+                    return false
+                end
+                -- `&& a | b` is a `right: pipeline`, one element of the chain.
+                local chain_type = field == "right" and "list" or "pipeline"
+                parts.rest_op = field == "right" and op or "|"
+                --- @type TSNode[]|nil
+                local chain = { child }
+                if t == chain_type then
+                    chain = chain_elements(child, parts.rest_op)
+                end
+                if
+                    not chain
+                    or parts.rest_op == "|"
+                        and parts.body
+                        and LOOSER_THAN_PIPE[parts.body:type()]
+                then
+                    return false
+                end
+                parts.rest = chain
+            else
+                return false
+            end
+        end
+        return true
+    end
+
+    for _, r in ipairs(node:field("redirect")) do
+        local t = r:type()
+        if t == "file_redirect" then
+            add_file_redirect(r)
+        else
+            table.insert(parts.redirects, r)
+        end
+        if t == "heredoc_redirect" and not add_heredoc_line(r) then
+            return nil
+        end
+    end
+    return parts
 end
 
 --- True iff the command node is exactly `cat` with no arguments or env-prefix —
@@ -1976,14 +2108,13 @@ end
 --- @field redirects? agentic.utils.ShellParse.Redirect[] the file redirects and herestrings applied to the node, in order
 --- @field words? TSNode[] words of the node's command that the grammar put on its redirects
 
---- The node a redirected statement's redirects apply to. The grammar hangs
---- them on the whole list or pipeline, but the shell applies them to its last
---- element.
---- @param stmt TSNode `redirected_statement`
+--- The node the redirects on a redirected statement's `body` apply to. The
+--- grammar hangs them on the whole list or pipeline, but the shell applies
+--- them to its last element.
+--- @param body TSNode|nil
 --- @return TSNode|nil
-local function redirects_target(stmt)
-    --- @type TSNode|nil
-    local target = stmt:field("body")[1]
+local function redirects_target(body)
+    local target = body
     while target and (target:type() == "list" or target:type() == "pipeline") do
         target = target:named_child(target:named_child_count() - 1)
     end
@@ -1991,14 +2122,11 @@ local function redirects_target(stmt)
 end
 
 --- Map each node a redirected statement's redirects apply to, to what they
---- give it. Only a simple command reads a heredoc on
---- stdin: a heredoc on a non-zero fd, or on a compound statement, subshell or
---- `negated_command`, has no reader.
----
---- tree-sitter-zsh parses the words after a redirect's target as children of
---- the redirect: further `destination` children of a `file_redirect`
---- (`rm a 2>/dev/null b` → destinations `/dev/null` and `b`), `argument`
---- children of a `heredoc_redirect` (`sort <<EOF -o f`); they go to `words`.
+--- give it, including the words and redirects on a heredoc's line. A
+--- statement whose line the tree may group differently from zsh gives
+--- nothing. Only a simple command reads a heredoc on stdin: a heredoc on a
+--- non-zero fd, or on a compound statement, subshell or `negated_command`,
+--- has no reader.
 --- @param root TSNode
 --- @param src string
 --- @return table<string, agentic.utils.ShellParse.NodeIO> io keyed by `node:id()`
@@ -2006,35 +2134,24 @@ local function node_io(root, src)
     --- @type table<string, agentic.utils.ShellParse.NodeIO>
     local io_of = {}
     local function visit(node)
-        if node:type() == "redirected_statement" then
-            local target = redirects_target(node)
-            if target then
-                --- @type agentic.utils.ShellParse.NodeIO
-                local io = { redirects = {}, words = {} }
-                for _, r in ipairs(node:field("redirect")) do
-                    local fd = r:field("descriptor")[1]
-                    if r:type() == "heredoc_redirect" then
-                        if
-                            target:type() == "command"
-                            and (
-                                not fd
-                                or vim.treesitter.get_node_text(fd, src)
-                                    == "0"
-                            )
-                        then
-                            io.stdin = heredoc_text(r, src)
-                        end
-                        vim.list_extend(io.words, r:field("argument"))
-                    else
-                        table.insert(io.redirects, redirect_record(r, src))
-                        vim.list_extend(
-                            io.words,
-                            vim.list_slice(redirect_operands(r, src).dests, 2)
-                        )
-                    end
+        local parts = node:type() == "redirected_statement"
+            and redirected_parts(node, src)
+        local target = parts and redirects_target(parts.body)
+        if parts and target then
+            --- @type agentic.utils.ShellParse.NodeIO
+            local io = { redirects = {}, words = parts.words }
+            for _, r in ipairs(parts.redirects) do
+                local fd = r:field("descriptor")[1]
+                if r:type() ~= "heredoc_redirect" then
+                    table.insert(io.redirects, redirect_record(r, src))
+                elseif
+                    target:type() == "command"
+                    and (not fd or vim.treesitter.get_node_text(fd, src) == "0")
+                then
+                    io.stdin = heredoc_text(r, src)
                 end
-                io_of[target:id()] = io
             end
+            io_of[target:id()] = io
         end
         for child in node:iter_children() do
             visit(child)
@@ -2614,14 +2731,118 @@ function M.is_background(node)
         or false
 end
 
---- Whether `child` of `parent` runs in a child shell of its own: a background
---- statement, or (in zsh) any pipeline element but the last.
---- @param parent TSNode
---- @param child TSNode
---- @return boolean
-local function runs_in_child_shell(parent, child)
-    return M.is_background(child)
-        or parent:type() == "pipeline" and child:next_named_sibling() ~= nil
+--- `collect` over the elements of a pipeline, each a group of nodes. In zsh
+--- every element but the last runs in a child shell. Each record of an
+--- element reads the records of the element before on stdin.
+--- @param elements TSNode[][]
+--- @param src string
+--- @param out agentic.ShellCommand[]
+--- @param depth integer
+--- @param shell agentic.utils.ShellParse.Shell
+--- @param io_of table<string, agentic.utils.ShellParse.NodeIO>
+--- @param enclosing agentic.utils.ShellParse.Enclosing
+--- @return boolean ok
+local function collect_pipeline(
+    elements,
+    src,
+    out,
+    depth,
+    shell,
+    io_of,
+    enclosing
+)
+    --- @type integer[]|nil indices in `out` of the previous element's records
+    local upstream
+    for i, element in ipairs(elements) do
+        local first = #out + 1
+        local element_shell = i < #elements and { cwd = shell.cwd } or shell
+        if
+            not collect_each(
+                element,
+                src,
+                out,
+                depth,
+                element_shell,
+                io_of,
+                enclosing
+            )
+        then
+            return false
+        end
+        -- An inner pipeline has already set its own downstream elements.
+        for j = first, #out do
+            out[j].pipe_from = out[j].pipe_from or upstream
+        end
+        upstream = {}
+        for j = first, #out do
+            table.insert(upstream, j)
+        end
+    end
+    return true
+end
+
+--- `collect` for a `redirected_statement`: the body, the substitutions in its
+--- redirects, then the rest of a heredoc's line, as a pipeline after `|`.
+--- A heredoc's own words and redirects reach the body's command through
+--- `io_of`.
+--- @param node TSNode `redirected_statement`
+--- @param src string
+--- @param out agentic.ShellCommand[]
+--- @param depth integer
+--- @param shell agentic.utils.ShellParse.Shell
+--- @param io_of table<string, agentic.utils.ShellParse.NodeIO>
+--- @param enclosing agentic.utils.ShellParse.Enclosing
+--- @return boolean ok false also when the tree may group the heredoc's line
+---         differently from zsh
+local function collect_redirected(
+    node,
+    src,
+    out,
+    depth,
+    shell,
+    io_of,
+    enclosing
+)
+    local parts = redirected_parts(node, src)
+    if not parts then
+        return false
+    end
+    --- @type TSNode[]
+    local statement = { parts.body }
+    for _, r in ipairs(parts.redirects) do
+        --- @type TSNode|nil
+        local expanded = r
+        if r:type() == "heredoc_redirect" then
+            expanded = heredoc_body(r)
+        end
+        if expanded then
+            table.insert(statement, expanded)
+        end
+    end
+    if parts.rest_op == "|" then
+        local elements = { statement }
+        for _, element in ipairs(parts.rest) do
+            table.insert(elements, { element })
+        end
+        return collect_pipeline(
+            elements,
+            src,
+            out,
+            depth,
+            shell,
+            io_of,
+            enclosing
+        )
+    end
+    return collect_each(
+        vim.list_extend(statement, parts.rest),
+        src,
+        out,
+        depth,
+        shell,
+        io_of,
+        enclosing
+    )
 end
 
 --- @param node TSNode
@@ -2657,54 +2878,48 @@ function collect(node, src, out, depth, shell, io_of, enclosing)
             assignments = enclosing.assignments,
         }
     end
-    -- Every other node (containers, pipelines, control flow, redirected
-    -- statements, assignments, substitutions): recurse named children. A
-    -- redirect target / env prefix does not hide a command, so we never bail
-    -- here — only `collect_command` decides safety.
-    local children = node:named_children()
+    if t == "redirected_statement" then
+        return collect_redirected(
+            node,
+            src,
+            out,
+            depth,
+            shell,
+            io_of,
+            enclosing
+        )
+    end
+    -- Every other node (containers, pipelines, control flow, assignments,
+    -- substitutions): recurse named children. A redirect target / env prefix
+    -- does not hide a command, so we never bail here. Only `collect_command`
+    -- decides safety.
+    local children = vim.tbl_filter(function(child)
+        return child:type() ~= "comment"
+    end, node:named_children())
+    if t == "pipeline" then
+        return collect_pipeline(
+            vim.tbl_map(function(child)
+                return { child }
+            end, children),
+            src,
+            out,
+            depth,
+            shell,
+            io_of,
+            enclosing
+        )
+    end
     if t == "file_redirect" then
         -- The later destinations are words of the command (see `node_io`).
         children = { redirect_operands(node, src).dests[1] }
-    elseif t == "heredoc_redirect" then
-        -- The arguments are words of the command (see `node_io`).
-        children = {}
-        for child, field in node:iter_children() do
-            if child:named() and field ~= "argument" then
-                table.insert(children, child)
-            end
-        end
     end
-    --- @type integer[]|nil indices in `out` of the previous pipeline element's records
-    local upstream
     for _, child in ipairs(children) do
-        if child:type() ~= "comment" then
-            local child_shell = runs_in_child_shell(node, child)
-                    and { cwd = shell.cwd }
-                or shell
-            local first = #out + 1
-            if
-                not collect(
-                    child,
-                    src,
-                    out,
-                    depth,
-                    child_shell,
-                    io_of,
-                    enclosing
-                )
-            then
-                return false
-            end
-            if t == "pipeline" then
-                -- An inner pipeline has already set its own downstream elements.
-                for i = first, #out do
-                    out[i].pipe_from = out[i].pipe_from or upstream
-                end
-                upstream = {}
-                for i = first, #out do
-                    table.insert(upstream, i)
-                end
-            end
+        local child_shell = M.is_background(child) and { cwd = shell.cwd }
+            or shell
+        if
+            not collect(child, src, out, depth, child_shell, io_of, enclosing)
+        then
+            return false
         end
     end
     return true
@@ -2810,7 +3025,11 @@ end
 --- substitution, a background statement and every pipeline element but the
 --- last start from the set before them and change nothing after them; the
 --- last element's sets are joined with the set before, as bash and sh run it
---- in a subshell too. A quoted or escaped `~` operand is a directory `~`.
+--- in a subshell too. The rest of a heredoc's line runs after the
+--- statement's body, joined to it by the line's `&&`, `||` or `|`. A
+--- redirected statement whose line the tree may group differently from zsh
+--- leaves an unknown set. A quoted or escaped `~`
+--- operand is a directory `~`.
 ---
 --- `source file` / `. file` leaves the set `source_cwds` gives for it, or
 --- an unknown set without one.
@@ -3028,6 +3247,64 @@ function M.command_cwds(root, src, start, source_cwds)
         return after
     end
 
+    --- @param elements TSNode[] the elements of a pipeline
+    --- @param before agentic.utils.ShellParse.Cwds
+    --- @return agentic.utils.ShellParse.Cwds success
+    --- @return agentic.utils.ShellParse.Cwds failure
+    local function flow_pipeline(elements, before)
+        for i = 1, #elements - 1 do
+            flow(elements[i], before)
+        end
+        -- zsh runs the last element in the current shell; bash and sh run it
+        -- in a subshell.
+        local s, f = flow(elements[#elements], before)
+        return cwds_union(before, s), cwds_union(before, f)
+    end
+
+    --- @param node TSNode `redirected_statement`
+    --- @param before agentic.utils.ShellParse.Cwds
+    --- @return agentic.utils.ShellParse.Cwds success
+    --- @return agentic.utils.ShellParse.Cwds failure
+    local function flow_redirected(node, before)
+        local parts = redirected_parts(node, src)
+        if not parts then
+            return unknown_cwds(), unknown_cwds()
+        end
+        for _, r in ipairs(parts.redirects) do
+            --- @type TSNode|nil
+            local expanded = r
+            if r:type() == "heredoc_redirect" then
+                expanded = heredoc_body(r)
+            end
+            if expanded then
+                flow_substitutions(expanded, before)
+            end
+        end
+        local s, f = before, before
+        if parts.rest_op == "|" then
+            s, f = flow_pipeline(
+                vim.list_extend({ parts.body }, parts.rest),
+                before
+            )
+        else
+            if parts.body then
+                s, f = flow(parts.body, before)
+            end
+            for _, element in ipairs(parts.rest) do
+                if parts.rest_op == "&&" then
+                    local es, ef = flow(element, s)
+                    s, f = es, cwds_union(f, ef)
+                else
+                    local es, ef = flow(element, f)
+                    s, f = cwds_union(s, es), ef
+                end
+            end
+        end
+        local target = redirects_target(parts.body)
+        cwd_of[node:id()] = target and cwd_of[target:id()] or before
+        return s, f
+    end
+
     flow = function(node, before)
         cwd_of[node:id()] = before
         local t = node:type()
@@ -3047,31 +3324,16 @@ function M.command_cwds(root, src, start, source_cwds)
             flow_children(children_of(node), before)
             return before, before
         elseif t == "pipeline" then
-            --- @type TSNode[]
-            local elements = vim.iter(node:named_children())
-                :filter(function(child)
-                    return child:type() ~= "comment"
-                end)
-                :totable()
-            for i = 1, #elements - 1 do
-                flow(elements[i], before)
-            end
-            -- zsh runs the last element in the current shell; bash and sh
-            -- run it in a subshell.
-            local s, f = flow(elements[#elements], before)
-            return cwds_union(before, s), cwds_union(before, f)
+            return flow_pipeline(
+                vim.iter(node:named_children())
+                    :filter(function(child)
+                        return child:type() ~= "comment"
+                    end)
+                    :totable(),
+                before
+            )
         elseif t == "redirected_statement" then
-            local s, f = before, before
-            for child, field in node:iter_children() do
-                if field == "body" then
-                    s, f = flow(child, before)
-                elseif child:named() then
-                    flow_substitutions(child, before)
-                end
-            end
-            local target = redirects_target(node)
-            cwd_of[node:id()] = target and cwd_of[target:id()] or before
-            return s, f
+            return flow_redirected(node, before)
         elseif t == "if_statement" then
             local after = flow_if(node, before)
             return after, after
@@ -3285,7 +3547,8 @@ M.redirect_is_safe = redirect_is_safe
 M.redirect_write_dest = redirect_write_dest
 M.redirect_is_truncate = redirect_is_truncate
 M.heredoc_pure_body = heredoc_pure_body
-M.heredoc_ends_line = heredoc_ends_line
+M.redirected_parts = redirected_parts
+M.heredoc_body = heredoc_body
 M.is_bare_cat = is_bare_cat
 M.inner_source = inner_source
 M.script_file_source = script_file_source
