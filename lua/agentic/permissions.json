@@ -434,7 +434,15 @@
       { "positionals": ["generate-lockfile"] },
       { "positionals": ["update"] }
     ],
-    "ask": [{ "options": ["config", "Z"] }]
+    "ask": [{ "options": ["config", "Z"] }],
+    "runs": [
+      { "path": "rust-toolchain", "format": "toml", "up": true, "keys": ["toolchain.path"] },
+      { "path": "rust-toolchain.toml", "format": "toml", "up": true, "keys": ["toolchain.path"] },
+      { "path": ".cargo/config", "format": "toml", "up": true,
+        "except_keys": ["build.jobs", "build.target", "build.target-dir", "term.*", "net.offline", "net.retry"] },
+      { "path": ".cargo/config.toml", "format": "toml", "up": true,
+        "except_keys": ["build.jobs", "build.target", "build.target-dir", "term.*", "net.offline", "net.retry"] }
+    ]
   },
 
   "conda": {
@@ -499,8 +507,7 @@
       { "positionals": ["pip", "list"] },
       { "positionals": ["pip", "search"] },
       { "positionals": ["pip", "show"] }
-    ],
-    "safe_write": [{ "positionals": ["lock"] }]
+    ]
   },
 
   "luarocks": { "read_only": [{ "positionals": ["search"] }] },
@@ -515,26 +522,58 @@
   },
   "mypy": {
     "safe_write": [{}],
-    "ask":        [{ "options": ["install-types", "python-executable", "config-file"] }]
+    "ask":        [{ "options": ["install-types", "python-executable", "config-file"] }],
+    "runs": [
+      { "path": "mypy.ini", "format": "ini", "up": true,
+        "keys": ["mypy.plugins", "mypy.python_executable", "mypy.install_types"] },
+      { "path": ".mypy.ini", "format": "ini", "up": true,
+        "keys": ["mypy.plugins", "mypy.python_executable", "mypy.install_types"] },
+      { "path": "setup.cfg", "format": "ini", "up": true,
+        "keys": ["mypy.plugins", "mypy.python_executable", "mypy.install_types"] },
+      { "path": "pyproject.toml", "format": "toml", "up": true,
+        "keys": ["tool.mypy.plugins", "tool.mypy.python_executable", "tool.mypy.install_types"] }
+    ]
   },
   "shellcheck": { "read_only": [{}] },
 
   "luacheck":             { "read_only": [{}] },
+  "lua-language-server": {
+    "read_only": [{}],
+    "runs": [
+      { "path": ".luarc.json", "format": "json", "anchor": "operand", "keys": ["runtime.plugin", "Lua.runtime.plugin"] },
+      { "path": ".luarc.jsonc", "format": "json", "anchor": "operand", "keys": ["runtime.plugin", "Lua.runtime.plugin"] }
+    ]
+  },
   "bash-language-server": { "read_only": [{}] },
   "harper-ls":            { "read_only": [{}] },
   "texlab":               { "read_only": [{}] },
   "chktex":               { "read_only": [{}] },
   "pylint": {
     "read_only": [{}],
-    "ask":       [{ "options": ["init-hook", "load-plugins", "rcfile"] }]
+    "ask":       [{ "options": ["init-hook", "load-plugins", "rcfile"] }],
+    "runs": [
+      { "path": "pylintrc", "up": true, "format": "ini", "keys": ["*.init-hook", "*.load-plugins"] },
+      { "path": ".pylintrc", "up": true, "format": "ini", "keys": ["*.init-hook", "*.load-plugins"] },
+      { "path": "setup.cfg", "up": true, "format": "ini", "keys": ["*.init-hook", "*.load-plugins"] },
+      { "path": "tox.ini", "up": true, "format": "ini", "keys": ["*.init-hook", "*.load-plugins"] },
+      { "path": "pyproject.toml", "up": true, "format": "toml",
+        "keys": ["tool.pylint.*.init-hook", "tool.pylint.*.load-plugins"] }
+    ]
   },
-  "flake8":               { "read_only": [{}] },
+  "flake8": {
+    "read_only": [{}],
+    "runs": [
+      { "path": ".flake8", "up": true, "format": "ini", "keys": ["flake8:local-plugins"] },
+      { "path": "setup.cfg", "up": true, "format": "ini", "keys": ["flake8:local-plugins"] },
+      { "path": "tox.ini", "up": true, "format": "ini", "keys": ["flake8:local-plugins"] }
+    ]
+  },
   "bandit":               { "read_only": [{}] },
   "yamllint":             { "read_only": [{}] },
   "vale":                 { "read_only": [{}] },
   "hadolint":             { "read_only": [{}] },
   "actionlint":           { "read_only": [{}] },
-  "lintr":                { "read_only": [{}] },
+  "lintr":                { "read_only": [{}], "runs": [{ "path": ".lintr", "up": true }] },
 
   "markdownlint": {
     "read_only": [{}],
@@ -588,26 +627,60 @@
   },
   "prettier": {
     "read_only": [{}],
-    "ask":       [{ "options": ["w", "write"] }]
+    "ask":       [{ "options": ["w", "write"] }],
+    "runs": [
+      { "path": "prettier.config.*", "up": true },
+      { "path": ".prettierrc.{js,cjs,mjs,ts,cts,mts,yaml,yml,json5}", "up": true },
+      { "path": ".prettierrc.toml", "up": true, "format": "toml", "keys": ["plugins"] },
+      { "path": ".prettierrc", "up": true, "format": "json", "keys": ["plugins"] },
+      { "path": ".prettierrc.json", "up": true, "format": "json", "keys": ["plugins"] },
+      { "path": "package.json", "up": true, "format": "json", "keys": ["prettier"] }
+    ]
   },
   "prettierd": {
     "read_only": [{}],
-    "ask":       [{ "options": ["w", "write"] }]
+    "ask":       [{ "options": ["w", "write"] }],
+    "runs": [
+      { "path": "prettier.config.*", "up": true },
+      { "path": ".prettierrc.{js,cjs,mjs,ts,cts,mts,yaml,yml,json5}", "up": true },
+      { "path": ".prettierrc.toml", "up": true, "format": "toml", "keys": ["plugins"] },
+      { "path": ".prettierrc", "up": true, "format": "json", "keys": ["plugins"] },
+      { "path": ".prettierrc.json", "up": true, "format": "json", "keys": ["plugins"] },
+      { "path": "package.json", "up": true, "format": "json", "keys": ["prettier"] }
+    ]
   },
   "eslint": {
     "read_only": [{}],
-    "ask":       [{ "options": ["fix"] }]
+    "ask":       [{ "options": ["fix"] }],
+    "runs": [
+      { "path": "eslint.config.*", "up": true },
+      { "path": ".eslintrc", "up": true },
+      { "path": ".eslintrc.*", "up": true },
+      { "path": "package.json", "up": true, "format": "json", "keys": ["eslintConfig"] }
+    ]
   },
   "eslint_d": {
     "read_only": [{}],
-    "ask":       [{ "options": ["fix"] }]
+    "ask":       [{ "options": ["fix"] }],
+    "runs": [
+      { "path": "eslint.config.*", "up": true },
+      { "path": ".eslintrc", "up": true },
+      { "path": ".eslintrc.*", "up": true },
+      { "path": "package.json", "up": true, "format": "json", "keys": ["eslintConfig"] }
+    ]
   },
   "biome": {
     "read_only": [{}],
     "ask":       [{ "options": ["write", "fix", "apply", "apply-unsafe"] }]
   },
 
-  "rustfmt":  { "safe_write": [{}] },
+  "rustfmt": {
+    "safe_write": [{}],
+    "runs": [
+      { "path": "rust-toolchain", "format": "toml", "up": true, "keys": ["toolchain.path"] },
+      { "path": "rust-toolchain.toml", "format": "toml", "up": true, "keys": ["toolchain.path"] }
+    ]
+  },
   "black":    { "safe_write": [{}] },
   "isort":    { "safe_write": [{}] },
   "yamlfmt":  { "safe_write": [{}] },

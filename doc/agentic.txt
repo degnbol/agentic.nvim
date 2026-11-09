@@ -882,12 +882,14 @@ Leaves inside command and process substitution (`$(...)`, backticks,
 `<(...)`), loops, conditionals, subshells and functions are matched too.
 A missing parser, a parse error, a file-writing redirect outside a grant
 (|agentic-permissions-grant|; `/dev/null` and fd duplication such as `2>&1`
-are not file-writing), a dynamic command name, `eval`, or a script file that
-is not read prompts.
+are not file-writing), a dynamic command name, `eval`, or a `source` or `.`
+whose file is dynamic or holds no `/` prompts.
 
-A script a shell runs or sources from a file (`zsh run.sh`, `source ./x.sh`)
-is read and its leaves are matched, once for every directory the command may
-be in at that point.
+The commands that a script (`zsh run.sh`, `source ./x.sh`), a makefile
+(`make lint`) or a justfile (`just lint`) runs are read and matched, once for
+every directory the command may be in at that point. A file that is not read
+leaves the leaf matched as written. A leaf that a settings.json `allow` or
+"Allow always" matches is not read.
 
 Each remaining leaf is stripped of a `stdbuf` wrapper and a system
 binary-dir prefix, then checked against two layers:
@@ -930,9 +932,33 @@ A token is a letter (`-x`, also inside a cluster) or a long name
 the first positional, a literal first positional (`config`) is after it,
 and `"*"` is every scope. A missing hint only adds prompts; a wrong hint
 can auto-approve a write.
+
+A command's optional `runs` field lists config files that make it load code.
+While an item matches, after an earlier part of the command may have changed
+files, or when the command's directory is unknown, the command's `read_only`
+and `safe_write` gates do not approve; a settings.json `allow` or "Allow
+always" still does. Each item has these fields:
+
+    `path`          Glob relative to the anchor directory, matched ignoring
+                    case; glob syntax only in the last segment.
+    `anchor`        `"cwd"` (default) or `"operand"`: the argument that is
+                    a directory. Unless exactly one argument is and none is
+                    dynamic, the item matches.
+    `up`            boolean (default: false). Also each parent directory.
+    `format`        `"toml"` | `"ini"` | `"json"`. Required with `keys` or
+                    `except_keys`. INI keys are lowercase.
+    `keys`          Dotted key paths, `*` matching one segment. The item
+                    matches a file holding a key at or below one of them.
+    `except_keys`   Dotted key paths, as `keys`. The item matches a file
+                    holding a key outside all of them.
+
+An item with neither `keys` nor `except_keys` matches when the file exists. A
+file that does not parse as `format`, or is larger than 64 KB, matches.
+
 `permissions.structured` is deep-merged over the bundled defaults: a kind-array
 replaces the bundled array of that kind, kinds you omit stay bundled, `arity`
-merges per scope and field, and `vim.NIL` disables the bundled entry. >lua
+merges per scope and field, `runs` adds to the bundled items, and `vim.NIL`
+disables the bundled entry. >lua
     require("agentic").setup({
         permissions = {
             structured = {
@@ -945,6 +971,13 @@ merges per scope and field, and `vim.NIL` disables the bundled entry. >lua
                 -- `-o` takes a value, `-n` takes none.
                 foo = {
                     arity = { ["*"] = { takers = { "-o" }, booleans = { "-n" } } },
+                },
+                -- Withhold `bar` approval while `bar.toml` sets `plugins`.
+                bar = {
+                    read_only = { {} },
+                    runs = {
+                        { path = "bar.toml", format = "toml", keys = { "plugins" } },
+                    },
                 },
             },
         },

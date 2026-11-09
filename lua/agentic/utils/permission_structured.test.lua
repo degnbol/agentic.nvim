@@ -1712,6 +1712,43 @@ describe("PermissionStructured", function()
             )
         end)
 
+        it("unions user runs items with the bundled ones", function()
+            Config.permissions.use_plugin_defaults = true
+            local item = { path = "x.toml", format = "toml", keys = { "a" } }
+            Config.permissions.structured = { cargo = { runs = { item } } }
+            local runs = PermissionStructured.get_entries().cargo.runs or {}
+            assert.is_true(#runs > 1)
+            assert.same(item, runs[#runs])
+            Config.permissions.structured = { foo = { runs = { item } } }
+            assert.same({ item }, PermissionStructured.get_entries().foo.runs)
+        end)
+
+        it("drops a malformed runs item with a warning", function()
+            local notify = spy.stub(Logger, "notify")
+            MiniTest.finally(function()
+                notify:revert()
+            end)
+            Config.permissions.use_plugin_defaults = false
+            --- @type table
+            local malformed_runs = {
+                foo = {
+                    runs = {
+                        { path = ".rc" },
+                        { path = "*/rc" },
+                        { path = "rc", keys = { "a" } },
+                        { path = "rc", format = "yaml" },
+                        { path = "rc", extra = true },
+                    },
+                },
+            }
+            Config.permissions.structured = malformed_runs
+            assert.same(
+                { { path = ".rc" } },
+                PermissionStructured.get_entries().foo.runs
+            )
+            assert.equal(4, notify.call_count)
+        end)
+
         it("keeps arity tokens literal and drops other shapes", function()
             local notify = spy.stub(Logger, "notify")
             MiniTest.finally(function()

@@ -355,6 +355,26 @@ function FileSystem.is_file(path)
     return stat ~= nil and stat.type == "file"
 end
 
+--- The bytes of a regular file of at most `max_bytes`. A fifo or device is
+--- not read, as reading it may block or never end.
+--- @param path string
+--- @param max_bytes integer
+--- @return string|nil bytes nil for a larger file, any other file type, or
+---         when a stat or read fails
+function FileSystem.read_regular_file(path, max_bytes)
+    local st = vim.uv.fs_stat(path)
+    if not st or st.type ~= "file" or st.size > max_bytes then
+        return nil
+    end
+    local fd = vim.uv.fs_open(path, "r", 438)
+    if not fd then
+        return nil
+    end
+    local data = vim.uv.fs_read(fd, st.size, 0)
+    vim.uv.fs_close(fd)
+    return data --[[@as string|nil]]
+end
+
 --- Absolute path with symlinked directory components resolved, usable as a
 --- map key that identifies a file by identity rather than by spelling.
 ---

@@ -83,6 +83,23 @@ local M = {}
 --- @field ask?        agentic.PermGate[]
 --- @field deny?       agentic.PermGate[]
 --- @field arity?      agentic.PermArity
+--- @field runs?       agentic.PermRunsItem[] -- config files that make the
+---        command load code. One that matches withholds the allow gates.
+
+--- A config file that may make a command load code. It matches when it
+--- exists and holds a key path under one of `keys`, or one under none of
+--- `except_keys`. With neither, existing is enough. A file the format cannot
+--- read matches.
+--- @class agentic.PermRunsItem
+--- @field path string glob relative to the anchor. Only its last segment may
+---        hold glob syntax.
+--- @field format? agentic.ConfigFormat required with `keys`/`except_keys`
+--- @field anchor? "cwd"|"operand" `operand`: the one non-option argument
+---        that is a directory. With none, several, or a dynamic word, the
+---        item matches. Default `cwd`.
+--- @field up? boolean also every parent of the anchor
+--- @field keys? string[] dotted key paths, `*` matching one segment
+--- @field except_keys? string[] dotted key paths, `*` matching one segment
 
 --- Arity hints of one scope, as literal tokens (`-C`, `--file`; a short
 --- letter is written `-x` and also applies inside a cluster, so it asserts
@@ -1357,6 +1374,68 @@ local function string_list(value)
     return nil
 end
 
+--- Keys a `runs` item may have.
+local RUNS_ITEM_KEYS = {
+    path = true,
+    format = true,
+    anchor = true,
+    up = true,
+    keys = true,
+    except_keys = true,
+}
+
+--- Values of a `runs` item's enumerated fields.
+local RUNS_FORMATS = { toml = true, ini = true, json = true }
+local RUNS_ANCHORS = { cwd = true, operand = true }
+
+--- Whether `path` is a relative glob with glob syntax in its last segment
+--- only.
+--- @param path any
+--- @return boolean
+local function is_runs_path(path)
+    return type(path) == "string"
+        and path ~= ""
+        and path:sub(1, 1) ~= "/"
+        and not (path:match("^(.*)/") or ""):find("[*?%[{]")
+end
+
+--- Copy of a `runs` item.
+--- @param item any
+--- @return agentic.PermRunsItem|nil item nil unless `item` is valid per
+---         `agentic.PermRunsItem`
+local function normalise_runs_item(item)
+    if type(item) ~= "table" then
+        return nil
+    end
+    for key in pairs(item) do
+        if not RUNS_ITEM_KEYS[key] then
+            return nil
+        end
+    end
+    local keys = item.keys and string_list(item.keys)
+    local except_keys = item.except_keys and string_list(item.except_keys)
+    local valid = is_runs_path(item.path)
+        and (item.format == nil or RUNS_FORMATS[item.format])
+        and (item.anchor == nil or RUNS_ANCHORS[item.anchor])
+        and (item.up == nil or type(item.up) == "boolean")
+        and (item.keys == nil or keys)
+        and (item.except_keys == nil or except_keys)
+        and (item.format ~= nil or not (keys or except_keys))
+    if not valid then
+        return nil
+    end
+    --- @type agentic.PermRunsItem
+    local copy = {
+        path = item.path,
+        format = item.format,
+        anchor = item.anchor,
+        up = item.up,
+        keys = keys or nil,
+        except_keys = except_keys or nil,
+    }
+    return copy
+end
+
 --- Copy of an `option_values` condition with dashless options.
 --- @param cond any
 --- @return agentic.PermOptionValues|nil cond nil unless `options` and
@@ -1536,12 +1615,37 @@ local function normalise_arity(arity, cmd)
     return out
 end
 
+--- The valid items of a `runs` value, warning about each other element.
+--- @param runs any one item or a list of items
+--- @param cmd string command whose entry holds the list, for the warning
+--- @return agentic.PermRunsItem[] items
+local function normalise_runs(runs, cmd)
+    local items = {}
+    for _, item in ipairs(is_list(runs) and runs or { runs }) do
+        local copy = normalise_runs_item(item)
+        if copy then
+            table.insert(items, copy)
+        else
+            Logger.notify(
+                "Structured permission runs of "
+                    .. cmd
+                    .. ": ignoring malformed item "
+                    .. vim.inspect(item),
+                vim.log.levels.WARN,
+                { title = "Agentic" }
+            )
+        end
+    end
+    return items
+end
+
 --- Deep-copy a cmd-keyed structured-entries table, normalising every option
 --- string to the dashless form. A `vim.NIL` value (the user's "disable a
 --- bundled cmd" marker) is preserved so it survives the merge in
 --- `get_entries`. `arity` is dropped on `"*"`: an unknown
---- command's arity is unknowable. The output is owned by the caller (safe to
---- mutate) so this caches the normalised view rather than mutating the input.
+--- command's arity is unknowable. Each `runs` keeps its valid items. The
+--- output is owned by the caller (safe to mutate) so this caches the
+--- normalised view rather than mutating the input.
 --- @param entries any
 --- @return agentic.StructuredEntries
 local function normalise_structured_entries(entries)
@@ -1575,6 +1679,9 @@ local function normalise_structured_entries(entries)
                 if cmd ~= "*" then
                     copy.arity = normalise_arity(entry.arity, cmd)
                 end
+                if entry.runs ~= nil then
+                    copy.runs = normalise_runs(entry.runs, cmd)
+                end
                 out[cmd] = copy
             end
         end
@@ -1586,8 +1693,9 @@ end
 --- permissions.json plus any user additions in `Config.permissions.structured`.
 --- The two layers merge via `vim.tbl_deep_extend("force", bundled, user)`: a
 --- user kind-array replaces the bundled array of that kind, other kinds and
---- `arity` lists the user omits stay bundled, and a `vim.NIL` value disables
---- the bundled cmd entirely (stripped before return).
+--- `arity` lists the user omits stay bundled, `runs` is the union of both
+--- lists, and a `vim.NIL` value disables the bundled cmd entirely (stripped
+--- before return).
 --- Re-reads the bundled file when its mtime or `use_plugin_defaults`
 --- changes; user additions are recompiled when the table reference changes.
 --- The same table is returned until either layer changes.
@@ -1630,6 +1738,15 @@ function M.get_entries()
         cached_entries = {}
         for cmd, entry in pairs(merged) do
             if entry ~= vim.NIL then
+                local bundled = cached_bundled_entries[cmd]
+                local user = cached_user_entries[cmd]
+                if type(bundled) == "table" and type(user) == "table" then
+                    -- A union: the merge above replaces one list with the other.
+                    entry.runs = vim.list_extend(
+                        vim.list_extend({}, bundled.runs or {}),
+                        user.runs or {}
+                    )
+                end
                 cached_entries[cmd] = entry
             end
         end
