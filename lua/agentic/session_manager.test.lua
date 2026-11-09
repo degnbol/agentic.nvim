@@ -2550,6 +2550,7 @@ describe("agentic.SessionManager", function()
                     remove_request_by_tool_call_id = function() end,
                     finalize_edit_range = function() end,
                     drop_pending_edit = function() end,
+                    drop_bash_cwd = spy.new(function() end),
                     has_edit_range = function()
                         return true
                     end,
@@ -2603,6 +2604,24 @@ describe("agentic.SessionManager", function()
         after_each(function()
             checktime_stub:revert()
             schedule_stub:revert()
+        end)
+
+        it("drops a call's bash cwd once the call ends", function()
+            for _, case in ipairs({
+                { status = "in_progress", calls = 0 },
+                { status = "completed", calls = 1 },
+                { status = "failed", calls = 1 },
+            }) do
+                local session = make_session({
+                    ["tc-1"] = { kind = "execute", status = "in_progress" },
+                })
+                SessionManager._on_tool_call_update(
+                    session,
+                    { tool_call_id = "tc-1", status = case.status }
+                )
+                local drop = session.permission_manager.drop_bash_cwd --[[@as TestSpy]]
+                assert.spy(drop).was.called(case.calls)
+            end
         end)
 
         it("calls checktime for each file-mutating kind", function()

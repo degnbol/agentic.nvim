@@ -184,7 +184,8 @@ handling.
    `zsh_parse.lua`) → prompt. The zsh parser is a
    hard dependency.
 2. **Walk** reject-by-default. Bail on dynamic command names and code-taking
-   builtins (`eval`/`source`/`.`). A **transparent prefix** is not a leaf:
+   builtins (`eval`, and `source`/`.` whose operand does not resolve; a
+   resolved script is walked, § Script files). A **transparent prefix** is not a leaf:
    `inner_source` slices out its inner command and re-walks that on its own
    merits (mis-slice fails closed → prompt). These are a fixed allowlist — a
    shell `-c <body>` (`zsh`/`bash`/`sh`/`dash`) and the exec-wrappers `timeout`,
@@ -258,8 +259,9 @@ handling.
    process substitution outside argument position, case value/pattern, a quoted
    `"$(…)"` for-list item, and redirect target (`cat > $(echo f)`).
 3. **Classify** redirects and env-prefixes structurally. `> /dev/null` and
-   FD duplication (`2>&1`) are safe; any other file redirect bails. An env
-   prefix whose name fails `is_safe_var_name` bails.
+   FD duplication (`2>&1`) are safe; a write to a literal path is a write
+   effect (cleared in `_bash_effects_clear`); any other file redirect bails.
+   An env prefix whose name fails `is_safe_var_name` bails.
 4. **Extract** each safe leaf — the command name and quote-stripped arg
    tokens, minus redirects and env-prefixes. The leaf goes to the glob
    matcher as a joined string; the tokenised form (`{cmd_name, args}`)
@@ -277,6 +279,26 @@ handling.
      Recompiled on table-reference change.
 6. **Resolve** the allow list per `Config.permissions.auto_approve_tier` and
 7. **compose** per leaf: SKILL.md § "Composition per leaf".
+
+## Script files
+
+A file a shell runs (`zsh|bash|sh|dash file`) or sources (`source`/`.`, the
+operand holding a slash) is read and walked like a `-c` body, nested up to
+`NESTED_MAX_DEPTH`. A sourced file with a sibling `.zwc` prompts (zsh runs
+the bytecode).
+
+- **Which file.** `ShellParse.command_cwds` gives every node the set of
+  directories it may run in, from the start directory the claude provider's
+  PreToolUse hook reports (`PermissionManager:bash_cwd`; unknown for other
+  providers). A relative operand is read once per member, and prompts under
+  an unknown set. A quoted `~` is a directory `~`.
+- **Which bytes.** A heredoc write earlier in the command (`cat > f <<'EOF'`)
+  wins over the disk. Once something that may change files has run
+  (`ctx.taint`: a write, or a leaf not classed `read_only`), no script is
+  read from disk. Statements that may run after a write the walk reaches
+  later — loop iterations, pipeline elements, a background statement —
+  are walked again with the taint set. A function body reads no script.
+- `is_read_only` reads no script.
 
 ## Command-source fallback
 

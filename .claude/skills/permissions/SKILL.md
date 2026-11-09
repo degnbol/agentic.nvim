@@ -21,16 +21,22 @@ The ACP provider's SDK runs its own permission check first — settings.json
 allow/deny/ask, the claude provider's `allowed_tools` (`--allowedTools`),
 working-directory membership, path safety. Only if that
 returns `ask` does the SDK call `canUseTool`, which the bridge translates
-into `session/request_permission` over ACP. The plugin is **strictly
-downstream**: we can't override what the SDK silently approves or denies,
-only decide how to handle what it escalates as `ask`. Every layer below
-reduces prompt fatigue inside that escalation surface; the one exception
-that *grants* new authorisation is `/grant`, which compensates with
-git-recoverability gates.
+into `session/request_permission` over ACP. On that path the plugin is
+downstream: it decides only what the SDK escalates as `ask`. Every layer
+below reduces prompt fatigue inside that escalation surface; the one
+exception that *grants* new authorisation is `/grant`, which compensates
+with git-recoverability gates.
 
-So our `deny` is a backstop on the escalation surface only: a command the SDK
-auto-approves never reaches us. An unconditional block needs a settings.json
-`deny` rule. ACP has no method to read or write persistent SDK rules, so the
+For the claude provider, a PreToolUse hook (`permission_hook.lua`, matcher
+`Bash|Write|Edit`) also runs `decide` before the SDK's check. Its `deny`
+always holds; its `allow` can still fall through to the SDK (`claude` skill
+`references/hooks.md` § permissionDecision is not always final). It also
+reports the directory each Bash call starts in (§ Script files in
+`references/parsing.md`).
+
+Without the hook, our `deny` is a backstop on the escalation surface only: a
+command the SDK auto-approves never reaches us. An unconditional block needs
+a settings.json `deny` rule. ACP has no method to read or write persistent SDK rules, so the
 user edits `~/.claude/settings.json` for those.
 
 State is per-session: it clears when the session ends or a saved session
@@ -101,7 +107,10 @@ one that mutates disk or executes arbitrary code as its normal action is
   each inner command must approve on its own (§ Pipeline).
 - **No call to an unsafe function**, in any scope or order (§ Pipeline).
 - **Redirects classified structurally** — `> /dev/null` and `2>&1` are safe,
-  any other file redirect bails, whether or not the command succeeds.
+  a write to a literal path is a write effect that must clear the grant
+  scopes, any other file redirect bails, whether or not the command succeeds.
+- **A script is judged as the file the shell opens**, from every directory
+  the command may be in (§ Script files).
 - **One name predicate for every binding** — `ShellParse.is_safe_var_name`.
 - **Dynamic tokens wildcard deny/ask, never allow** (§ Token expansion).
 - **Over-approximation is sound for deny/ask**; allow holds in every parse,
@@ -118,8 +127,8 @@ session allow-always leaves count at every level.
 
 Deny additionally **short-circuits to a rejection**:
 `PermissionRules.should_auto_reject` runs before `evaluate` and rejects the
-whole command with no prompt when any executed leaf matches a concrete deny
-gate. Ask only withholds approval.
+whole command with no prompt when any leaf in the command text matches a
+concrete deny gate; a leaf inside a script file prompts instead. Ask only withholds approval.
 
 #### Known limitations (uncatchable — fall through to a prompt)
 
@@ -161,8 +170,7 @@ resolve against the session's ACP cwd in `GrantCommand.resolve_input`.
 Two mutation producers feed one policy: ACP file tool calls (`_check_grant`)
 and Bash effects — redirect writes and plain `rm` operands that
 `PermissionRules.evaluate` pins to literal paths (`_bash_effects_clear`).
-Bash effects clear only for absolute paths: the Bash tool's cwd persists
-across calls and moves with an in-command `cd`.
+Bash effects clear only for absolute paths (`_bash_effects_clear`).
 
 **Membership is necessary but not sufficient** — safety properties on top:
 

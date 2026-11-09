@@ -47,6 +47,7 @@ local PERMISSION_KIND_PRIORITY = {
 --- @field companion_bufs? fun(anchor: integer): integer[] Buffers besides the session's own that also get the option keys of a request whose tool call is in `anchor`
 --- @field on_decided? fun(tool_call_id: string, deciders: agentic.PermissionDecider[]) Called on a later event loop tick after deciders are recorded for a tool call
 --- @field _deciders table<string, agentic.PermissionDecider[]> Recorded deciders not yet taken, keyed by tool call id
+--- @field _bash_cwds table<string, string> Directory each Bash call starts in, keyed by tool call id
 --- @field _hidden boolean Whether the current request waits with its float hidden
 --- @field _always_cache table<string, "allow"|"reject"> Client-side cache for allow_always/reject_always decisions
 --- @field _execute_leaf_allow table<string, boolean> Session-remembered execute leaves vouched for via allow_always
@@ -86,6 +87,7 @@ function PermissionManager:new(
         _edit_records = {},
         _pending_edits = {},
         _deciders = {},
+        _bash_cwds = {},
     }, self)
 
     return instance
@@ -353,9 +355,10 @@ end
 --- @param kind string|nil ACP tool kind
 --- @param tool_call agentic.acp.ToolCall
 --- @param diff { old?: string[], new?: string[], all?: boolean }|nil Edit diff for the grant check
+--- @param cwd string|nil Directory a Bash command starts in; nil when unknown
 --- @return "allow"|"deny"|nil verdict
 --- @return agentic.PermissionDecider[]|nil deciders What decided the verdict, in display order; nil when there is no verdict
-function PermissionManager:decide(kind, tool_call, diff)
+function PermissionManager:decide(kind, tool_call, diff, cwd)
     local kind_lc = AcpKind.normalise(kind)
 
     local command = tool_call.rawInput and tool_call.rawInput.command
@@ -385,6 +388,7 @@ function PermissionManager:decide(kind, tool_call, diff)
         local ok, effects, sources = PermissionRules.evaluate(
             command,
             self._get_config_dir(),
+            cwd,
             self:_remembered_leaf_patterns()
         )
         if ok and self:_bash_effects_clear(effects) then
@@ -451,7 +455,8 @@ function PermissionManager:_try_auto_approve(request, callback)
     end
 
     local diff = tracker and tracker.diff
-    local verdict, deciders = self:decide(kind, tool_call, diff)
+    local verdict, deciders =
+        self:decide(kind, tool_call, diff, self:bash_cwd(tool_call.toolCallId))
     local handled = false
     if verdict == "allow" then
         handled = auto_approve(request, callback, "ladder verdict: allow")
@@ -498,6 +503,25 @@ end
 --- Forget the deciders held for every tool call.
 function PermissionManager:drop_deciders()
     self._deciders = {}
+end
+
+--- Hold the directory a Bash call starts in, replacing any already held.
+--- @param tool_call_id string
+--- @param cwd string absolute
+function PermissionManager:record_bash_cwd(tool_call_id, cwd)
+    self._bash_cwds[tool_call_id] = cwd
+end
+
+--- @param tool_call_id string
+--- @return string|nil cwd The directory held for a Bash call
+function PermissionManager:bash_cwd(tool_call_id)
+    return self._bash_cwds[tool_call_id]
+end
+
+--- Forget the directory held for a Bash call.
+--- @param tool_call_id string
+function PermissionManager:drop_bash_cwd(tool_call_id)
+    self._bash_cwds[tool_call_id] = nil
 end
 
 --- Read the file path from a tool call's rawInput. Different ACP providers
@@ -582,9 +606,8 @@ end
 --- against the active grant scopes. Empty effects → trivially clear (a
 --- command with no concrete writes auto-approves on structural grounds
 --- alone). Otherwise every effect path must be absolute and granted in both
---- its literal and resolved form. A relative path never clears: the Bash tool
---- keeps its cwd between calls and an in-command `cd` moves it, so the file it
---- names is unknown.
+--- its literal and resolved form. A relative path never clears: an effect
+--- holds its path as written, without the directories it may resolve in.
 ---
 --- Each effect must pass `GrantSafety.safe_for_kind`, except a delete of
 --- scratch (`GrantSafety.is_scratch`): it clears only when an earlier write
@@ -1022,7 +1045,8 @@ function PermissionManager:_apply_unapproved_highlight(request)
             bufnr,
             NS_PERMISSION_HIGHLIGHT,
             tracker,
-            self._get_config_dir()
+            self._get_config_dir(),
+            self:bash_cwd(tool_call.toolCallId)
         )
     end
 end
@@ -1082,7 +1106,8 @@ function PermissionManager:_complete_request(option_id)
             if command then
                 local _, leaves, complete = PermissionRules.tally_unapproved(
                     command,
-                    self._get_config_dir()
+                    self._get_config_dir(),
+                    self:bash_cwd(current.toolCallId)
                 )
                 for _, leaf in ipairs(leaves) do
                     self._execute_leaf_allow[leaf] = true
@@ -1171,6 +1196,7 @@ function PermissionManager:clear()
     self._edit_records = {}
     self._pending_edits = {}
     self:drop_deciders()
+    self._bash_cwds = {}
     self:clear_grant_scopes()
 end
 

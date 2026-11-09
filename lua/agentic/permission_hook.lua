@@ -49,7 +49,10 @@ end
 --- Fail-open: any decode error, unknown tool, missing session, or `decide`
 --- error returns "" (empty) — the caller emits no permissionDecision and the
 --- call falls through to the classifier. Never returns a spurious verdict.
---- @param b64 string base64-encoded JSON hook input; fields read: `{session_id, tool_name, tool_input, tool_use_id}`
+--- Records the shell cwd of every Bash call for its tool use id, whatever
+--- the verdict: the hook runs before `canUseTool`, whose request carries no
+--- cwd.
+--- @param b64 string base64-encoded JSON hook input; fields read: `{session_id, tool_name, tool_input, tool_use_id, cwd}`
 --- @return string verdict "allow" | "deny" | "" (undecided / fall-through)
 function M.evaluate(b64)
     local ok, verdict = pcall(function()
@@ -77,10 +80,17 @@ function M.evaluate(b64)
             rawInput = tool_input --[[@as agentic.acp.RawInput]],
         }
         local diff = kind == "edit" and build_edit_diff(tool_input) or nil
+        local cwd = type(payload.cwd) == "string" and payload.cwd or nil
+        local tool_use_id = type(payload.tool_use_id) == "string"
+                and payload.tool_use_id
+            or nil
+        if tool == "Bash" and cwd and tool_use_id then
+            pm:record_bash_cwd(tool_use_id, cwd)
+        end
 
-        local decision, deciders = pm:decide(kind, tool_call, diff)
-        if deciders and type(payload.tool_use_id) == "string" then
-            pm:record_deciders(payload.tool_use_id, deciders)
+        local decision, deciders = pm:decide(kind, tool_call, diff, cwd)
+        if deciders and tool_use_id then
+            pm:record_deciders(tool_use_id, deciders)
         end
         Logger.debug_to_file(
             "permission_hook:",

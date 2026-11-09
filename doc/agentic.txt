@@ -882,8 +882,12 @@ Leaves inside command and process substitution (`$(...)`, backticks,
 `<(...)`), loops, conditionals, subshells and functions are matched too.
 A missing parser, a parse error, a file-writing redirect outside a grant
 (|agentic-permissions-grant|; `/dev/null` and fd duplication such as `2>&1`
-are not file-writing), a dynamic command name, or a code-taking builtin
-(`eval`, `source`, `.`) prompts.
+are not file-writing), a dynamic command name, `eval`, or a script file that
+is not read prompts.
+
+A script a shell runs or sources from a file (`zsh run.sh`, `source ./x.sh`)
+is read and its leaves are matched, once for every directory the command may
+be in at that point.
 
 Each remaining leaf is stripped of a `stdbuf` wrapper and a system
 binary-dir prefix, then checked against two layers:

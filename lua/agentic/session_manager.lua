@@ -2147,6 +2147,10 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         self.permission_manager:finalize_edit_range(id)
     end
 
+    if has_ended(tool_call_update.status) then
+        self.permission_manager:drop_bash_cwd(id)
+    end
+
     -- Reload buffers when file-mutating tool calls complete.
     -- Debounce: rapid tool_call_update completions (e.g. hook retry cycles)
     -- coalesce into a single deferred checktime() to avoid cascading

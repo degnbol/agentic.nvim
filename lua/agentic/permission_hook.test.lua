@@ -197,4 +197,46 @@ describe("agentic.permission_hook", function()
             assert.same({}, pm._deciders)
         end)
     end)
+
+    describe("bash cwd", function()
+        local PermissionManager = require("agentic.ui.permission_manager")
+        local pm
+        local decided_cwd
+
+        before_each(function()
+            decided_cwd = nil
+            pm = setmetatable({
+                _bash_cwds = {},
+                decide = function(_, _, _, _, cwd)
+                    decided_cwd = cwd
+                    return nil
+                end,
+            }, { __index = PermissionManager })
+            SessionRegistry.session_for_acp_id = function(_)
+                return { permission_manager = pm }
+            end
+        end)
+
+        --- @param tool_name string
+        local function evaluate(tool_name)
+            PermissionHook.evaluate(encode({
+                session_id = "s1",
+                tool_name = tool_name,
+                tool_input = { command = "ls", file_path = "/tmp/f" },
+                tool_use_id = "toolu_1",
+                cwd = "/work",
+            }))
+        end
+
+        it("records a Bash call's cwd, whatever the verdict", function()
+            evaluate("Bash")
+            assert.equal("/work", pm:bash_cwd("toolu_1"))
+            assert.equal("/work", decided_cwd)
+        end)
+
+        it("records no cwd for another tool", function()
+            evaluate("Edit")
+            assert.is_nil(pm:bash_cwd("toolu_1"))
+        end)
+    end)
 end)

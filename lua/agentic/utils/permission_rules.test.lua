@@ -789,13 +789,14 @@ describe("PermissionRules", function()
         --- Resolve auto-approval of `cmd` against the plugin defaults at `tier`.
         --- @param tier agentic.PermAutoApproveTier
         --- @param cmd string
+        --- @param cwd string|nil directory `cmd` starts in
         --- @return boolean
-        local function approves_at(tier, cmd)
+        local function approves_at(tier, cmd, cwd)
             Config.permissions.use_plugin_defaults = true
             Config.permissions.use_claude_settings = false
             Config.permissions.auto_approve_tier = tier
             PermissionRules.invalidate_cache()
-            return PermissionRules.should_auto_approve(cmd, config_dir)
+            return PermissionRules.should_auto_approve(cmd, config_dir, cwd)
         end
 
         describe("uv run wrapper (safe_write tier)", function()
@@ -1024,23 +1025,21 @@ describe("PermissionRules", function()
                 end
                 f:write("ls\n")
                 f:close()
-                local cwd = vim.fn.getcwd()
-                vim.fn.chdir(dir)
                 MiniTest.finally(function()
-                    vim.fn.chdir(cwd)
                     vim.fs.rm(dir, { recursive = true })
                 end)
                 assert.is_true(
-                    approves_at("read_only", "find . -exec sh x.sh \\;")
+                    approves_at("read_only", "find . -exec sh x.sh \\;", dir)
                 )
                 assert.is_false(
-                    approves_at("read_only", "find . -execdir sh x.sh \\;")
+                    approves_at("read_only", "find . -execdir sh x.sh \\;", dir)
                 )
                 assert.equal(
                     1,
                     #PermissionRules.tally_unapproved(
                         "find . -execdir sh x.sh \\;",
-                        config_dir
+                        config_dir,
+                        dir
                     )
                 )
             end)
@@ -1119,6 +1118,7 @@ describe("PermissionRules", function()
                     PermissionRules.should_auto_approve(
                         "make test x",
                         config_dir,
+                        nil,
                         { PermissionRules.literal_pattern("make test x") }
                     )
                 )
@@ -4423,6 +4423,7 @@ describe("PermissionRules", function()
             return PermissionRules.should_auto_approve(
                 cmd,
                 config_dir,
+                nil,
                 extra_allow
             )
         end
@@ -4759,7 +4760,7 @@ describe("PermissionRules", function()
 
         it("recurses a sourced helper transitively", function()
             local helper = script("ls /tmp\n")
-            local main = script("ls /tmp\nsource " .. helper .. "\n")
+            local main = script("source " .. helper .. "\nls /tmp\n")
             assert.is_true(
                 PermissionRules.should_auto_approve("zsh " .. main, config_dir)
             )
@@ -5091,6 +5092,186 @@ describe("PermissionRules", function()
         end)
     end)
 
+    describe("script read from every possible cwd", function()
+        --- @type string
+        local base, good, evil
+
+        before_each(function()
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.use_claude_settings = false
+            Config.permissions.auto_approve_tier = "safe_write"
+            PermissionRules.invalidate_cache()
+            base = vim.fn.resolve(vim.fn.tempname())
+            good, evil = base .. "/good", base .. "/evil"
+            vim.fn.mkdir(good .. "/sub", "p")
+            vim.fn.mkdir(evil, "p")
+        end)
+        after_each(function()
+            vim.fs.rm(base, { recursive = true })
+        end)
+
+        --- Write the `run.sh` of `good` and `evil`.
+        --- @param good_body string
+        --- @param evil_body string
+        local function bodies(good_body, evil_body)
+            write_file(good .. "/run.sh", good_body)
+            write_file(evil .. "/run.sh", evil_body)
+        end
+
+        --- Whether the walk of `cmd` from `cwd` is structurally approvable.
+        --- @param cmd string
+        --- @param cwd string|nil
+        --- @return boolean
+        local function walks(cmd, cwd)
+            return (PermissionRules.evaluate(cmd, config_dir, cwd))
+        end
+
+        it("reads the script a cd enters", function()
+            bodies("ls\n", "make build\n")
+            assert.is_false(walks("cd " .. evil .. " && zsh run.sh", good))
+            bodies("make build\n", "ls\n")
+            assert.is_true(walks("cd " .. evil .. " && zsh run.sh", good))
+        end)
+
+        it("reads the script from both sides of `;` and `||`", function()
+            for _, cmd in ipairs({
+                "cd " .. evil .. "; zsh run.sh",
+                "cd " .. evil .. " && false || zsh run.sh",
+            }) do
+                bodies("ls\n", "ls\n")
+                assert.is_true(walks(cmd, good))
+                bodies("ls\n", "make build\n")
+                assert.is_false(walks(cmd, good))
+                bodies("make build\n", "ls\n")
+                assert.is_false(walks(cmd, good))
+            end
+        end)
+
+        it("prompts when the cwd is unknown", function()
+            bodies("ls\n", "ls\n")
+            write_file(good .. "/sub/run.sh", "ls\n")
+            for _, cmd in ipairs({
+                'cd "$d" && zsh run.sh',
+                "cd sub && zsh run.sh",
+            }) do
+                assert.is_false(walks(cmd, good))
+            end
+            assert.is_false(walks("zsh run.sh", nil))
+            assert.is_true(walks("cd ./sub && zsh run.sh", good))
+            assert.is_true(walks("zsh " .. good .. "/run.sh", nil))
+            assert.is_true(walks("cd " .. evil .. " && zsh run.sh", nil))
+        end)
+
+        it("reads an action's script from the host's cwd only", function()
+            bodies("ls\n", "ls\n")
+            assert.is_true(walks("find . -exec zsh ./run.sh \\;", good))
+            assert.is_false(walks("find . -execdir zsh run.sh \\;", good))
+            assert.is_false(walks("find . -exec zsh ./run.sh \\;", nil))
+        end)
+
+        it("prompts on a script after a command that may write", function()
+            bodies("ls\n", "ls\n")
+            assert.is_true(walks("cargo fmt", good))
+            for _, cmd in ipairs({
+                "echo x > /tmp/f; zsh run.sh",
+                "cargo fmt && zsh run.sh",
+                "for f in $(ls); do zsh run.sh; cargo fmt; done",
+                "while true; do zsh run.sh; cargo fmt; done",
+            }) do
+                assert.is_false(walks(cmd, good))
+            end
+            assert.is_true(walks("zsh run.sh; cargo fmt", good))
+        end)
+
+        it("follows the cwd a sourced file leaves", function()
+            write_file(good .. "/a.sh", "cd " .. evil .. "\n")
+            bodies("ls\n", "make build\n")
+            assert.is_false(walks("source ./a.sh && zsh run.sh", good))
+            bodies("ls\n", "ls\n")
+            assert.is_true(walks("source ./a.sh && zsh run.sh", good))
+        end)
+
+        it("prompts when a sourced file is rewritten before it runs", function()
+            write_file(good .. "/a.sh", "ls\n")
+            bodies("ls\n", "make build\n")
+            local cmd = ("cat > a.sh <<'EOF'\ncd %s\nEOF\n"):format(evil)
+                .. "cat > run.sh <<'EOF'\nls\nEOF\n"
+                .. "source ./a.sh; zsh run.sh"
+            assert.is_false(walks(cmd, good))
+        end)
+
+        it("does not read a script inside a function body", function()
+            bodies("ls\n", "ls\n")
+            assert.is_false(walks("f() { zsh ./run.sh; }; f", good))
+        end)
+
+        it("keys a written script by every cwd it may land in", function()
+            bodies("make build\n", "make build\n")
+            local write = "cat > run.sh <<'EOF'\nls\nEOF\nzsh run.sh"
+            assert.is_true(walks(write, evil))
+            assert.is_false(walks(("cd %s; %s"):format(good, write), evil))
+        end)
+
+        it("prompts on a script that runs beside a write", function()
+            bodies("ls\n", "ls\n")
+            for _, cmd in ipairs({
+                "zsh run.sh | cargo fmt",
+                "zsh run.sh & cargo fmt",
+                "zsh run.sh >> run.sh",
+                "zsh run.sh > " .. good .. "/run.sh",
+            }) do
+                assert.is_false(walks(cmd, good))
+            end
+            assert.is_true(walks("zsh run.sh > /tmp/out", good))
+        end)
+
+        it("reads a quoted ~ path as written", function()
+            local rel = "agentic-test-" .. vim.fn.rand()
+            local home_p = vim.env.HOME .. "/" .. rel
+            write_file(home_p, "ls\n")
+            MiniTest.finally(function()
+                os.remove(home_p)
+            end)
+            vim.fn.mkdir(good .. "/~", "p")
+            write_file(good .. "/~/" .. rel, "make build\n")
+            assert.is_true(walks("zsh ~/" .. rel, good))
+            assert.is_false(walks(("zsh '~/%s'"):format(rel), good))
+        end)
+
+        it("pipes into bash without carrying its cd", function()
+            bodies("make build\n", "ls\n")
+            assert.is_false(
+                walks(
+                    ("bash -c 'true | cd %s && bash run.sh'"):format(evil),
+                    good
+                )
+            )
+        end)
+
+        it("prompts on a script after a write to a ~name path", function()
+            bodies("ls\n", "ls\n")
+            local cmd = "echo x > ~nobody/x; zsh run.sh"
+            assert.is_false(walks(cmd, good))
+            assert.is_not_nil(
+                PermissionRules.tally_unapproved(cmd, config_dir, good)
+            )
+        end)
+
+        it("tallies the script a cd enters", function()
+            bodies("ls\n", "make build\n")
+            local cmd = "cd " .. evil .. " && zsh run.sh"
+            assert.equal(
+                1,
+                #PermissionRules.tally_unapproved(cmd, config_dir, good)
+            )
+            bodies("make build\n", "ls\n")
+            assert.equal(
+                0,
+                #PermissionRules.tally_unapproved(cmd, config_dir, good)
+            )
+        end)
+    end)
+
     describe("backtick substitution hidden from the parse tree", function()
         it("never auto-approves", function()
             local approved = {}
@@ -5220,7 +5401,7 @@ describe("PermissionRules", function()
         --- @return string[]
         local function sources_of(command, extra_allow)
             local _, _, sources =
-                PermissionRules.evaluate(command, config_dir, extra_allow)
+                PermissionRules.evaluate(command, config_dir, nil, extra_allow)
             local names = vim.tbl_keys(sources)
             table.sort(names)
             return names

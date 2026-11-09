@@ -26,7 +26,10 @@ local heredoc_ends_line = ShellParse.heredoc_ends_line
 local is_bare_cat = ShellParse.is_bare_cat
 local inner_source = ShellParse.inner_source
 local script_file_source = ShellParse.script_file_source
+local script_paths = ShellParse.script_paths
 local resolve_against_cwd = ShellParse.resolve_against_cwd
+local cwds_union = ShellParse.cwds_union
+local unknown_cwds = ShellParse.unknown_cwds
 local CONTAINER_TYPES = ShellParse.CONTAINER_TYPES
 local SUBSTITUTION_TYPES = ShellParse.SUBSTITUTION_TYPES
 local SUBSTITUTION_INNER_STATEMENT_TYPES =
@@ -44,7 +47,7 @@ M.strip_command_path = ShellParse.strip_command_path
 --- @param cmd_name string path-stripped command name
 --- @param args string[] delivered words, dynamic ones as raw text
 --- @param args_dynamic boolean[] parallel to `args`: true for a runtime-expanding word
---- @param script_path string|nil resolved file of a script execution
+--- @param script_path string|nil script operand of a script execution, as written
 --- @return boolean
 local function refuses_builtin(cmd_name, args, args_dynamic, script_path)
     if
@@ -284,7 +287,22 @@ local function parsed_actions(cmd_name, args, args_dynamic, depth)
     return actions, root
 end
 
---- @alias agentic.utils.PermissionRules.WalkCtx { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], sources: table<agentic.utils.PermissionRules.Source, true>, deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve_tier: agentic.PermAutoApproveTier, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed, read_scripts: boolean }
+--- Whether a command that runs before a point may have changed files. Every
+--- copy of a walk context shares one, so a nested walk sets it for the rest of
+--- the command.
+--- @alias agentic.utils.PermissionRules.Taint { set: boolean }
+
+--- @alias agentic.utils.PermissionRules.Sourced table<string, string|false> bytes read from each resolved sourced file, false when unreadable
+
+--- @alias agentic.utils.PermissionRules.WalkCtx { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], sources: table<agentic.utils.PermissionRules.Source, true>, deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, auto_approve_tier: agentic.PermAutoApproveTier, depth: integer, effects: agentic.utils.PermissionRules.Effect[], written: table<string, string|false>, for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed, read_scripts: boolean, cwd_of: table<string, agentic.utils.ShellParse.Cwds>, taint: agentic.utils.PermissionRules.Taint, sourced: agentic.utils.PermissionRules.Sourced }
+
+--- The cwds `node` runs in, unknown when `ctx.cwd_of` has none for it.
+--- @param ctx agentic.utils.PermissionRules.WalkCtx|agentic.utils.PermissionRules.TallyCtx
+--- @param node TSNode
+--- @return agentic.utils.ShellParse.Cwds
+local function cwds_at(ctx, node)
+    return ctx.cwd_of[node:id()] or unknown_cwds()
+end
 
 --- Run `walk_once` until a run adds no name to the shadowed set, or a run
 --- reports its result final. A run judges each call against the names shadowed
@@ -860,6 +878,35 @@ function extract_args(node, src, ctx, known, inner_check)
     return args, arg_nodes, args_dynamic
 end
 
+--- The script operand of a command (`ShellParse.script_file_source`), as the
+--- path the shell opens (`ShellParse.delivered_path`).
+--- @param cmd_name string path-stripped command name
+--- @param args string[] delivered words after the name
+--- @param arg_nodes TSNode[] parallel to `args`
+--- @param args_dynamic boolean[] parallel to `args`
+--- @param src string
+--- @return string|nil operand
+local function script_operand(cmd_name, args, arg_nodes, args_dynamic, src)
+    local operand = script_file_source(cmd_name, args, args_dynamic)
+    return operand and ShellParse.delivered_path(operand, arg_nodes[1], src)
+end
+
+--- Whether the structured rules class a leaf `read_only`.
+--- @param entries agentic.StructuredEntries
+--- @param cmd_name string path-stripped command name
+--- @param args string[]
+--- @param args_dynamic boolean[] parallel to `args`
+--- @return boolean
+local function classifies_read_only(entries, cmd_name, args, args_dynamic)
+    return next(entries) ~= nil
+        and PermissionStructured.classify_leaf(entries, {
+                cmd_name = cmd_name,
+                args = args,
+                args_dynamic = args_dynamic,
+            }).read_only
+            == true
+end
+
 --- A command's name and delivered args joined by single spaces.
 --- @param name string
 --- @param args string[]
@@ -925,7 +972,8 @@ local function redirect_writes(node, src, known)
                 local kname = dest and known and resolved_var_name(dest, src)
                 local target = kname and known and known[kname] or nil
                 if dest and target == nil and not token_is_dynamic(dest) then
-                    target = literal_token(dest, src)
+                    local text = literal_token(dest, src)
+                    target = text and ShellParse.delivered_path(text, dest, src)
                 end
                 if target then
                     table.insert(paths, target)
@@ -951,31 +999,122 @@ local function redirect_writes(node, src, known)
     return paths, content, resolved
 end
 
---- Record writes to `paths` in `written`, keyed by the path resolved
---- against the cwd: `content` for a first write to a key; `false` for a
---- second write or nil content.
---- @param written table<string, string|false> cwd-resolved path → bytes, false = unknown
+--- Record writes to `paths` in `written`, keyed by the resolved path:
+--- `content` for a first write to a key; `false` for a second write or nil
+--- content. A relative path under more than one possible cwd marks every
+--- candidate key `false`; under unknown cwds it has no key, nor does a
+--- `~name` path.
+--- @param written table<string, string|false> resolved path → bytes, false = unknown
 --- @param paths string[]
 --- @param content string|nil
-local function record_writes(written, paths, content)
+--- @param cwds agentic.utils.ShellParse.Cwds where the writes happen
+local function record_writes(written, paths, content, cwds)
     for _, path in ipairs(paths) do
-        local key = resolve_against_cwd(path)
-        written[key] = written[key] == nil and (content or false) or false
+        --- @type (string|nil)[]
+        local keys = {}
+        if path:match("^[/~]") then
+            keys = { resolve_against_cwd(path) }
+        elseif not cwds.unknown then
+            keys = vim.tbl_map(function(dir)
+                return resolve_against_cwd(path, dir)
+            end, cwds.dirs)
+        end
+        for _, key in ipairs(keys) do
+            written[key] = #keys == 1
+                    and written[key] == nil
+                    and (content or false)
+                or false
+        end
     end
 end
 
---- The bytes the script at `path` holds when the command runs it: a write
---- earlier in the same command wins over disk. Nil when that write's bytes
---- are unknown, or the disk file is not readable (see `read_script`).
---- @param path string resolved script path
---- @param written table<string, string|false>
---- @return string|nil body
-local function script_body(path, written)
-    local body = written[path]
-    if body == nil then
-        return read_script(path)
+--- A function giving the cwds after sourcing a file, from the bytes on disk:
+--- unknown for an unreadable or unparsable file, or past the nesting cap. A
+--- sourced file may `return` early, so every set inside it counts, not only
+--- its exit.
+--- @param sourced agentic.utils.PermissionRules.Sourced filled with each body read
+--- @param depth integer nesting depth of the tree that sources the file
+--- @return fun(operand: string, before: agentic.utils.ShellParse.Cwds): agentic.utils.ShellParse.Cwds
+local function sourced_cwds(sourced, depth)
+    return function(operand, before)
+        local paths = depth < NESTED_MAX_DEPTH
+            and script_paths("source", operand, before)
+        if not paths then
+            return unknown_cwds()
+        end
+        local after = { dirs = {}, unknown = false }
+        for _, p in ipairs(paths) do
+            local body = read_script(p.path)
+            sourced[p.path] = body or false
+            local root = body and parse_zsh_untrusted(body)
+            if not root then
+                return unknown_cwds()
+            end
+            local cwd_of, exit = ShellParse.command_cwds(
+                root,
+                body --[[@as string]],
+                p.start,
+                sourced_cwds(sourced, depth + 1)
+            )
+            after = cwds_union(after, exit)
+            for _, cwds in pairs(cwd_of) do
+                after = cwds_union(after, cwds)
+            end
+        end
+        return after
     end
-    return body or nil
+end
+
+--- The cwds of each node of a tree, reading a sourced file only when
+--- `read_scripts` is set.
+--- @param root TSNode
+--- @param src string
+--- @param start agentic.utils.ShellParse.Cwds where the tree starts
+--- @param ctx { sourced: agentic.utils.PermissionRules.Sourced, read_scripts: boolean } of the walk
+--- @param depth integer nesting depth of `root`
+--- @return table<string, agentic.utils.ShellParse.Cwds> cwd_of keyed by `node:id()`
+local function tree_cwds(root, src, start, ctx, depth)
+    return (
+        ShellParse.command_cwds(
+            root,
+            src,
+            start,
+            ctx.read_scripts and sourced_cwds(ctx.sourced, depth) or nil
+        )
+    )
+end
+
+--- The bytes a script operand runs, one body per file it may name. A write
+--- earlier in the same command wins over disk; once `ctx.taint` is set, only
+--- such a write's bytes count. A sourced body must match its bytes in
+--- `ctx.sourced` when held there, as the cwds after it came from them.
+--- @param cmd_name string path-stripped command name
+--- @param operand string as written
+--- @param ctx agentic.utils.PermissionRules.WalkCtx|agentic.utils.PermissionRules.TallyCtx
+--- @param node TSNode the command running the script
+--- @return { src: string, start: agentic.utils.ShellParse.Cwds }[]|false bodies
+---         false when a file is unknown or unreadable,
+---         a write's bytes are unknown, or a sourced body changed
+local function file_bodies(cmd_name, operand, ctx, node)
+    local paths = script_paths(cmd_name, operand, cwds_at(ctx, node))
+    if not paths then
+        return false
+    end
+    local is_source = cmd_name == "source" or cmd_name == "."
+    local bodies = {}
+    for _, p in ipairs(paths) do
+        --- @type string|false|nil
+        local src = ctx.written[p.path]
+        if src == nil and not ctx.taint.set then
+            src = read_script(p.path)
+        end
+        local read = is_source and ctx.sourced[p.path]
+        if not src or (type(read) == "string" and read ~= src) then
+            return false
+        end
+        table.insert(bodies, { src = src, start = p.start })
+    end
+    return bodies
 end
 
 --- Walk a `command`: validate the name and each argument by position
@@ -998,7 +1137,7 @@ end
 local function walk_command(node, src, ctx, known, funcs)
     local args, arg_nodes, args_dynamic =
         extract_args(node, src, ctx, known, walk_substitution_inner)
-    if not (args and args_dynamic) then
+    if not (args and arg_nodes and args_dynamic) then
         return false
     end
 
@@ -1007,11 +1146,12 @@ local function walk_command(node, src, ctx, known, funcs)
         return false
     end
     local cmd_name = M.strip_command_path(name)
-    -- A non-`-c` script execution (`zsh file.sh`, `source ./file.sh`) resolves
-    -- to a literal path; the recursion below reads + walks it. This lifts
-    -- `source`/`.` out of the unconditional code-taking bail only when the file
-    -- resolves (`eval`, and an unresolved `source`, still bail).
-    local script_path = script_file_source(cmd_name, args, args_dynamic)
+    -- A non-`-c` script execution (`zsh file.sh`, `source ./file.sh`) has a
+    -- literal operand; the recursion below reads + walks the file it names.
+    -- This lifts `source`/`.` out of the unconditional code-taking bail only
+    -- when the file resolves (`eval`, and an unresolved `source`, still bail).
+    local script_path =
+        script_operand(cmd_name, args, arg_nodes, args_dynamic, src)
     if
         refuses_builtin(
             cmd_name,
@@ -1088,6 +1228,7 @@ local function walk_command(node, src, ctx, known, funcs)
             for _, p in ipairs(operands) do
                 table.insert(ctx.effects, { kind = "delete", path = p })
             end
+            ctx.taint.set = true
             return true
         end
     end
@@ -1100,6 +1241,7 @@ local function walk_command(node, src, ctx, known, funcs)
     if funcs and funcs[name] then
         for source in pairs(funcs[name]) do
             ctx.sources[source] = true
+            ctx.taint.set = ctx.taint.set or source ~= "read_only"
         end
         return true
     end
@@ -1122,11 +1264,19 @@ local function walk_command(node, src, ctx, known, funcs)
         if not root then
             return false
         end
+        ctx.taint.set = ctx.taint.set or writes
         return walk(
             root,
             inner,
             vim.tbl_extend("force", ctx, {
                 depth = ctx.depth + 1,
+                cwd_of = tree_cwds(
+                    root,
+                    inner,
+                    cwds_at(ctx, node),
+                    ctx,
+                    ctx.depth + 1
+                ),
             })
         )
     end
@@ -1147,6 +1297,14 @@ local function walk_command(node, src, ctx, known, funcs)
                 vim.tbl_extend("force", ctx, {
                     depth = ctx.depth + 1,
                     read_scripts = ctx.read_scripts and not actions.foreign_cwd,
+                    cwd_of = tree_cwds(
+                        actions_root,
+                        actions.inner,
+                        actions.foreign_cwd and unknown_cwds()
+                            or cwds_at(ctx, node),
+                        ctx,
+                        ctx.depth + 1
+                    ),
                 })
             )
             or (actions.foreign_cwd and #ctx.effects > n_effects)
@@ -1169,23 +1327,36 @@ local function walk_command(node, src, ctx, known, funcs)
     if script_path and ctx.depth < NESTED_MAX_DEPTH then
         -- The SDK applies nothing before approval, so a path written earlier in
         -- this command holds stale-or-absent bytes on disk.
-        local body = script_body(script_path, ctx.written)
-        if not body then
+        local bodies = file_bodies(cmd_name, script_path, ctx, node)
+        if not bodies then
             return false
         end
-        -- Untrusted on-disk (or reconstructed) content: parse under the
-        -- subprocess termination guard so a grammar hang can't freeze the editor.
-        local root = parse_zsh_untrusted(body)
-        if not root then
-            return false
+        for _, body in ipairs(bodies) do
+            -- Untrusted on-disk (or reconstructed) content: parse under the
+            -- subprocess termination guard so a grammar hang can't freeze the
+            -- editor.
+            local root = parse_zsh_untrusted(body.src)
+            if
+                not root
+                or not walk(
+                    root,
+                    body.src,
+                    vim.tbl_extend("force", ctx, {
+                        depth = ctx.depth + 1,
+                        cwd_of = tree_cwds(
+                            root,
+                            body.src,
+                            body.start,
+                            ctx,
+                            ctx.depth + 1
+                        ),
+                    })
+                )
+            then
+                return false
+            end
         end
-        return walk(
-            root,
-            body,
-            vim.tbl_extend("force", ctx, {
-                depth = ctx.depth + 1,
-            })
-        )
+        return true
     end
 
     --- @type agentic.PermDecision
@@ -1218,6 +1389,16 @@ local function walk_command(node, src, ctx, known, funcs)
     end
     if source then
         ctx.sources[source] = true
+        ctx.taint.set = ctx.taint.set
+            or not (
+                allow_kind == "read_only"
+                or classifies_read_only(
+                    ctx.structured_entries,
+                    cmd_name,
+                    args,
+                    args_dynamic
+                )
+            )
     end
     return source ~= nil
 end
@@ -1260,13 +1441,16 @@ local function walk_function_definition(node, src, ctx, funcs)
     -- effects list. A body that emits effects (e.g. an `rm`) cannot be vetted at
     -- definition time — the policy layer that clears effects only sees the outer
     -- command — so such a body is treated as unsafe and the name is not recorded.
+    -- The body runs at a call, after any write in the command, so it reads
+    -- no script from disk.
     local body_effects = {}
     local body_sources = {}
-    local body_ctx = vim.tbl_extend(
-        "force",
-        ctx,
-        { effects = body_effects, written = {}, sources = body_sources }
-    )
+    local body_ctx = vim.tbl_extend("force", ctx, {
+        effects = body_effects,
+        written = {},
+        sources = body_sources,
+        taint = { set = true },
+    })
     local clean = body ~= nil
         and redirects_safe(node, src)
         and walk(body, src, body_ctx)
@@ -1282,6 +1466,31 @@ local function walk_function_definition(node, src, ctx, funcs)
     return true
 end
 
+--- Walk statements that may run after a write the walk reaches later: loop
+--- iterations, pipeline elements, a background statement and the ones after
+--- it. When the walk sets `ctx.taint`, walk them again with the taint set
+--- from the start.
+--- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @param walk_once fun(): boolean walks the statements once
+--- @return boolean
+local function walk_unordered(ctx, walk_once)
+    local tainted = ctx.taint.set
+    return walk_once() and (tainted or not ctx.taint.set or walk_once())
+end
+
+--- Whether a sequence holds a background statement.
+--- @param node TSNode
+--- @return boolean
+local function has_background(node)
+    return vim.iter(node:iter_children()):any(function(child)
+        return child:named() and ShellParse.is_background(child)
+    end)
+end
+
+--- Forward declaration — `walk_sequence` wraps it.
+--- @type fun(node: TSNode, src: string, ctx: agentic.utils.PermissionRules.WalkCtx, seed: table<string, string>|nil): boolean
+local walk_statements
+
 --- Walk a straight-line statement sequence (`program`, `list`, an `if`/`elif`/
 --- `else` body, a `do_group`, or a brace group / function body
 --- `compound_statement`), threading the constant environment and the
@@ -1296,12 +1505,31 @@ end
 --- unrolls its body once per literal value by calling this with `{ [loopvar] =
 --- value }`. `update_known` still runs per body statement, so a body that rebinds
 --- the loop var drops the seed exactly as its rebinding rules dictate.
+---
+--- A sequence with a background statement is walked as `walk_unordered`: the
+--- background statement runs beside the statements after it.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
 --- @param seed table<string, string>|nil
 --- @return boolean
 local function walk_sequence(node, src, ctx, seed)
+    local function walk_once()
+        return walk_statements(node, src, ctx, seed)
+    end
+    if has_background(node) then
+        return walk_unordered(ctx, walk_once)
+    end
+    return walk_once()
+end
+
+--- `walk_sequence` once, in statement order.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @param seed table<string, string>|nil
+--- @return boolean
+function walk_statements(node, src, ctx, seed)
     --- @type table<string, string>
     local known = seed and vim.tbl_extend("force", {}, seed) or {}
     --- @type table<string, table<agentic.utils.PermissionRules.Source, true>>
@@ -1335,19 +1563,23 @@ end
 --- and every redirect must be a safe form. A herestring (and any non-file,
 --- non-heredoc redirect) is unmodelled and bails.
 ---
---- Two side-channels feed the downstream script-file walk (`walk_command`):
---- every concrete file write emits a `ctx.effects` entry (cleared against the
---- grant scopes by the policy layer), and `ctx.written` maps each written path
---- (cwd-resolved) to the bytes the file will hold — reconstructed content for a
---- `cat > f.sh <<'EOF' … EOF` heredoc, else `false` (taint) for a write whose
---- output is not statically known. A later `zsh f.sh` consults that map instead
---- of judging stale disk bytes.
+--- Mutates `ctx`: every concrete file write emits a `ctx.effects` entry and
+--- sets `ctx.taint`, and `ctx.written` maps each written path, resolved
+--- against its possible cwds, to the bytes the file will hold: reconstructed
+--- content for a `cat > f.sh <<'EOF' … EOF` heredoc, else `false` for a write
+--- whose output is not statically known. `ctx.written` is set before the body
+--- is walked, as the shell opens the files before the body runs.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.WalkCtx
 --- @param known table<string, string>|nil constant environment of the enclosing sequence
 --- @return boolean
 function walk_redirected(node, src, ctx, known)
+    local paths, content, resolved = redirect_writes(node, src, known)
+    if not resolved then
+        return false
+    end
+    record_writes(ctx.written, paths, content, cwds_at(ctx, node))
     for child, field in node:iter_children() do
         if field == "body" then
             if not walk(child, src, ctx) then
@@ -1373,14 +1605,10 @@ function walk_redirected(node, src, ctx, known)
         end
     end
 
-    local paths, content, resolved = redirect_writes(node, src, known)
-    if not resolved then
-        return false
-    end
     for _, path in ipairs(paths) do
         table.insert(ctx.effects, { kind = "write", path = path })
     end
-    record_writes(ctx.written, paths, content)
+    ctx.taint.set = ctx.taint.set or #paths > 0
     return true
 end
 
@@ -1556,7 +1784,9 @@ local function walk_for(node, src, ctx)
             return false
         end
     end
-    return walk(body, src, ctx)
+    return walk_unordered(ctx, function()
+        return walk(body, src, ctx)
+    end)
 end
 
 --- Walk a `while_statement` (covers `while` and `until` — both parse to the
@@ -1583,10 +1813,9 @@ local function walk_while(node, src, ctx)
     if not cond or not body then
         return false
     end
-    if not walk(cond, src, ctx) then
-        return false
-    end
-    return walk(body, src, ctx)
+    return walk_unordered(ctx, function()
+        return walk(cond, src, ctx) and walk(body, src, ctx)
+    end)
 end
 
 --- Walk a `case_statement`: the matched value and every `case_item` pattern
@@ -1657,15 +1886,22 @@ function walk(node, src, ctx)
         -- `pipeline` / `variable_assignments` — the non-sequence containers (the
         -- sequence types overlap CONTAINER_TYPES but are caught above). Iterate
         -- named children only; anonymous separators (`;`, `&&`, `|`, `&`,
-        -- newline) and `comment` nodes carry no executable content.
-        for child in node:iter_children() do
-            if child:named() and child:type() ~= "comment" then
-                if not walk(child, src, ctx) then
-                    return false
+        -- newline) and `comment` nodes carry no executable content. Pipeline
+        -- elements run side by side.
+        local function walk_once()
+            for child in node:iter_children() do
+                if child:named() and child:type() ~= "comment" then
+                    if not walk(child, src, ctx) then
+                        return false
+                    end
                 end
             end
+            return true
         end
-        return true
+        if t == "pipeline" then
+            return walk_unordered(ctx, walk_once)
+        end
+        return walk_once()
     elseif t == "command" then
         return walk_command(node, src, ctx)
     elseif t == "redirected_statement" then
@@ -1704,7 +1940,7 @@ end
 -- decision, so a `safe_write` like `git add` never lights up even at the
 -- read_only tier.
 
---- @alias agentic.utils.PermissionRules.TallyCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[], written: table<string, string|false>, for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed, read_scripts: boolean }
+--- @alias agentic.utils.PermissionRules.TallyCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[], written: table<string, string|false>, for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed, read_scripts: boolean, cwd_of: table<string, agentic.utils.ShellParse.Cwds>, taint: agentic.utils.PermissionRules.Taint, sourced: agentic.utils.PermissionRules.Sourced }
 
 --- Forward declaration — the tally handlers are mutually recursive, and
 --- `command_known_safe` recurses through `tally_walk` for inline `-c` bodies.
@@ -1853,18 +2089,23 @@ local function command_known_safe(node, src, ctx, known, funcs)
             return substitution_inner_collect(subst, s, c, subst_ranges)
         end
     )
-    if not (args and args_dynamic) then
+    -- Any leaf but a `read_only` one, safe or not, sets the taint: the
+    -- prompt runs it all once approved.
+    if not (args and arg_nodes and args_dynamic) then
+        ctx.taint.set = true
         return false
     end
 
     local name = ShellParse.command_name(node, src)
     if not name then
+        ctx.taint.set = true
         return false
     end
     local cmd_name = M.strip_command_path(name)
     -- Mirror of walk_command: a non-`-c` script execution lifts source/. out of
     -- the code-taking bail when the file resolves; the recursion below tallies it.
-    local script_path = script_file_source(cmd_name, args, args_dynamic)
+    local script_path =
+        script_operand(cmd_name, args, arg_nodes, args_dynamic, src)
     if
         refuses_builtin(
             cmd_name,
@@ -1873,6 +2114,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
             script_path
         ) or ctx.shadowed[name]
     then
+        ctx.taint.set = true
         return false
     end
 
@@ -1882,25 +2124,29 @@ local function command_known_safe(node, src, ctx, known, funcs)
         M.matches_any_pattern(leaf, ctx.deny)
         or M.matches_any_pattern(leaf, ctx.ask)
     then
+        ctx.taint.set = true
         return false
     end
 
     -- a call to a function recorded earlier in this sequence is known-safe
     -- (mirrors walk_command — body vetted at definition time for any args).
     if funcs and funcs[name] then
+        ctx.taint.set = true
         return true
     end
 
     -- Transparent prefix: known-safe iff the inner tallies clean. A wrapper or
     -- single-quoted `-c` body pinpoints its unapproved sub-ranges; other `-c`
     -- quoting has no faithful mapping (nil origin) and stays coarse.
-    local inner, origin =
+    local inner, origin, writes =
         inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
     if inner and ctx.depth < NESTED_MAX_DEPTH then
         local root = parse_zsh(inner)
         if not root then
+            ctx.taint.set = true
             return false
         end
+        ctx.taint.set = ctx.taint.set or writes
         --- @type agentic.utils.PermissionRules.Range[]
         local body_ranges = {}
         tally_walk(
@@ -1912,6 +2158,13 @@ local function command_known_safe(node, src, ctx, known, funcs)
             vim.tbl_extend("force", ctx, {
                 depth = ctx.depth + 1,
                 leaves = {},
+                cwd_of = tree_cwds(
+                    root,
+                    inner,
+                    cwds_at(ctx, node),
+                    ctx,
+                    ctx.depth + 1
+                ),
             }),
             body_ranges
         )
@@ -1939,6 +2192,13 @@ local function command_known_safe(node, src, ctx, known, funcs)
                 depth = ctx.depth + 1,
                 leaves = {},
                 read_scripts = ctx.read_scripts and not actions.foreign_cwd,
+                cwd_of = tree_cwds(
+                    actions_root,
+                    actions.inner,
+                    actions.foreign_cwd and unknown_cwds() or cwds_at(ctx, node),
+                    ctx,
+                    ctx.depth + 1
+                ),
             }),
             body_ranges
         )
@@ -1948,35 +2208,47 @@ local function command_known_safe(node, src, ctx, known, funcs)
         args, args_dynamic = actions.args, actions.args_dynamic
     end
 
-    -- Non-`-c` script execution: tally the body it runs. Clean → known-safe. A
-    -- file body has no representation in the chat buffer (no origin to anchor
-    -- ranges to), so an unsafe body washes the whole leaf and is not
-    -- rememberable (no leaf return).
+    -- Non-`-c` script execution: tally the bodies it may run. Clean →
+    -- known-safe. A file body has no representation in the chat buffer (no
+    -- origin to anchor ranges to), so an unsafe body washes the whole leaf and
+    -- is not rememberable (no leaf return).
     if script_path and not ctx.read_scripts then
+        ctx.taint.set = true
         return false
     end
     if script_path and ctx.depth < NESTED_MAX_DEPTH then
-        local body = script_body(script_path, ctx.written)
-        if not body then
-            return false
-        end
-        -- Untrusted on-disk content: parse under the subprocess termination
-        -- guard so a grammar hang can't freeze the editor.
-        local root = parse_zsh_untrusted(body)
-        if not root then
+        local bodies = file_bodies(cmd_name, script_path, ctx, node)
+        if not bodies then
+            ctx.taint.set = true
             return false
         end
         --- @type agentic.utils.PermissionRules.Range[]
         local body_ranges = {}
-        tally_walk(
-            root,
-            body,
-            vim.tbl_extend("force", ctx, {
-                depth = ctx.depth + 1,
-                leaves = {},
-            }),
-            body_ranges
-        )
+        for _, body in ipairs(bodies) do
+            -- Untrusted on-disk content: parse under the subprocess termination
+            -- guard so a grammar hang can't freeze the editor.
+            local root = parse_zsh_untrusted(body.src)
+            if not root then
+                ctx.taint.set = true
+                return false
+            end
+            tally_walk(
+                root,
+                body.src,
+                vim.tbl_extend("force", ctx, {
+                    depth = ctx.depth + 1,
+                    leaves = {},
+                    cwd_of = tree_cwds(
+                        root,
+                        body.src,
+                        body.start,
+                        ctx,
+                        ctx.depth + 1
+                    ),
+                }),
+                body_ranges
+            )
+        end
         return #body_ranges == 0
     end
 
@@ -1989,10 +2261,13 @@ local function command_known_safe(node, src, ctx, known, funcs)
             args = args,
             args_dynamic = args_dynamic,
         })
+        ctx.taint.set = ctx.taint.set or not c.read_only
         if c.deny or c.ask then
             return false
         end
         struct_safe = c.read_only or c.safe_write
+    else
+        ctx.taint.set = true
     end
 
     local safe = glob_safe or struct_safe
@@ -2048,7 +2323,12 @@ local function tally_function_definition(node, src, ctx, ranges, funcs)
         tally_walk(
             body,
             src,
-            vim.tbl_extend("force", ctx, { leaves = {}, written = {} }),
+            -- `taint`: see `walk_function_definition`.
+            vim.tbl_extend(
+                "force",
+                ctx,
+                { leaves = {}, written = {}, taint = { set = true } }
+            ),
             body_ranges
         )
     end
@@ -2066,13 +2346,16 @@ end
 
 --- Tally a `redirected_statement`: the body recurses; any redirect that is not
 --- a safe form (`> /dev/null`, FD duplication) records as unapproved. The
---- files it writes go into `ctx.written`.
+--- files it writes go into `ctx.written` before the body is tallied, as in
+--- `walk_redirected`.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.TallyCtx
 --- @param ranges agentic.utils.PermissionRules.Range[]
 --- @param known table<string, string>|nil constant environment of the enclosing sequence
 local function tally_redirected(node, src, ctx, ranges, known)
+    local paths, content = redirect_writes(node, src, known)
+    record_writes(ctx.written, paths, content, cwds_at(ctx, node))
     for child, field in node:iter_children() do
         if field == "body" then
             tally_walk(child, src, ctx, ranges)
@@ -2082,24 +2365,68 @@ local function tally_redirected(node, src, ctx, ranges, known)
                 or not redirect_is_safe(child, src)
             then
                 record(ranges, child)
+                ctx.taint.set = true
             end
         end
     end
-    local paths, content = redirect_writes(node, src, known)
-    record_writes(ctx.written, paths, content)
 end
+
+--- Tally statements that may run after a write the tally reaches later; mirrors
+--- `walk_unordered`. When the tally sets `ctx.taint`, its ranges and the
+--- leaves it added are replaced by a second tally with the taint set from the
+--- start.
+--- @param ctx agentic.utils.PermissionRules.TallyCtx
+--- @param ranges agentic.utils.PermissionRules.Range[] appended with the statements' ranges
+--- @param tally_once fun(once_ranges: agentic.utils.PermissionRules.Range[]) tallies the statements once into `once_ranges`
+local function tally_unordered(ctx, ranges, tally_once)
+    local tainted = ctx.taint.set
+    local n_leaves = #ctx.leaves
+    --- @type agentic.utils.PermissionRules.Range[]
+    local once_ranges = {}
+    tally_once(once_ranges)
+    if not tainted and ctx.taint.set then
+        for i = #ctx.leaves, n_leaves + 1, -1 do
+            ctx.leaves[i] = nil
+        end
+        once_ranges = {}
+        tally_once(once_ranges)
+    end
+    vim.list_extend(ranges, once_ranges)
+end
+
+--- Forward declaration — `tally_sequence` wraps it.
+--- @type fun(node: TSNode, src: string, ctx: agentic.utils.PermissionRules.TallyCtx, ranges: agentic.utils.PermissionRules.Range[], seed: table<string, string>|nil)
+local tally_statements
 
 --- Tally a straight-line sequence, threading the constant environment so a
 --- command whose only "unapproved" token is a resolved benign `$var` is not
 --- highlighted (mirrors `walk_sequence`). `seed` (optional) pre-binds names,
 --- for a for-loop body unrolled per literal value. UI-only — a stale binding here
---- can only mis-highlight, never mis-approve.
+--- can only mis-highlight, never mis-approve. A sequence with a background
+--- statement is tallied as `tally_unordered`.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.TallyCtx
 --- @param ranges agentic.utils.PermissionRules.Range[]
 --- @param seed table<string, string>|nil
 local function tally_sequence(node, src, ctx, ranges, seed)
+    local function tally_once(sequence_ranges)
+        tally_statements(node, src, ctx, sequence_ranges, seed)
+    end
+    if has_background(node) then
+        tally_unordered(ctx, ranges, tally_once)
+    else
+        tally_once(ranges)
+    end
+end
+
+--- `tally_sequence` once, in statement order.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.TallyCtx
+--- @param ranges agentic.utils.PermissionRules.Range[]
+--- @param seed table<string, string>|nil
+function tally_statements(node, src, ctx, ranges, seed)
     --- @type table<string, string>
     local known = seed and vim.tbl_extend("force", {}, seed) or {}
     --- @type table<string, boolean>
@@ -2214,7 +2541,9 @@ local function tally_for(node, src, ctx, ranges)
         record_substitutions(item, src, ctx, ranges)
     end
     if body then
-        tally_walk(body, src, ctx, ranges)
+        tally_unordered(ctx, ranges, function(loop_ranges)
+            tally_walk(body, src, ctx, loop_ranges)
+        end)
     end
 end
 
@@ -2225,11 +2554,13 @@ end
 --- @param ctx agentic.utils.PermissionRules.TallyCtx
 --- @param ranges agentic.utils.PermissionRules.Range[]
 local function tally_while(node, src, ctx, ranges)
-    for child, field in node:iter_children() do
-        if child:named() and (field == "condition" or field == "body") then
-            tally_walk(child, src, ctx, ranges)
+    tally_unordered(ctx, ranges, function(loop_ranges)
+        for child, field in node:iter_children() do
+            if child:named() and (field == "condition" or field == "body") then
+                tally_walk(child, src, ctx, loop_ranges)
+            end
         end
-    end
+    end)
 end
 
 --- Tally a `case_statement`: the matched value and each item pattern record
@@ -2275,6 +2606,10 @@ function tally_walk(node, src, ctx, ranges)
         or t == "subshell"
     then
         tally_sequence(node, src, ctx, ranges)
+    elseif t == "pipeline" then
+        tally_unordered(ctx, ranges, function(pipeline_ranges)
+            tally_children(node, src, ctx, pipeline_ranges)
+        end)
     elseif CONTAINER_TYPES[t] then
         tally_children(node, src, ctx, ranges)
     elseif t == "command" then
@@ -2314,6 +2649,14 @@ function tally_walk(node, src, ctx, ranges)
     end
 end
 
+--- The cwds of a command that starts in `cwd`.
+--- @param cwd string|nil absolute directory; nil when unknown
+--- @return agentic.utils.ShellParse.Cwds
+local function start_cwds(cwd)
+    return cwd and { dirs = { vim.fs.normalize(cwd) }, unknown = false }
+        or unknown_cwds()
+end
+
 --- Find every part of a Bash command that is NOT known-safe — the leaves and
 --- structural nodes the permission prompt is asking about. Find-all (every
 --- branch), unlike the first-bail decision `walk`. Two consumers:
@@ -2335,10 +2678,11 @@ end
 --- never grants anything.
 --- @param command string
 --- @param config_dir string Claude's config directory
+--- @param cwd string|nil absolute directory the command starts in; nil when unknown
 --- @return agentic.utils.PermissionRules.Range[]|nil ranges
 --- @return string[] leaves
 --- @return boolean complete
-function M.tally_unapproved(command, config_dir)
+function M.tally_unapproved(command, config_dir, cwd)
     local root = ZshParse.parse_command(command)
     if not root then
         return nil, {}, false
@@ -2361,7 +2705,11 @@ function M.tally_unapproved(command, config_dir)
             for_budget = FOR_UNROLL_CAP,
             shadowed = shadowed,
             read_scripts = true,
+            cwd_of = {},
+            taint = { set = false },
+            sourced = {},
         }
+        ctx.cwd_of = tree_cwds(root, command, start_cwds(cwd), ctx, 0)
         --- @type agentic.utils.PermissionRules.Range[]
         local ranges = {}
         tally_walk(root, command, ctx, ranges)
@@ -2559,7 +2907,7 @@ end
 --- recurse into every branch. Fail-closed: an absent parser, a parse error,
 --- or a truncated/malformed tree all return false.
 --- @param command string
---- @param rules { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], tier: agentic.PermAutoApproveTier, read_scripts: boolean } `read_scripts` false makes a script the command runs or sources bail unread
+--- @param rules { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], tier: agentic.PermAutoApproveTier, read_scripts: boolean, cwd: string|nil } `read_scripts` false makes a script the command runs or sources bail unread. `cwd` is the absolute directory the command starts in, nil when unknown
 --- @return boolean ok Structurally approvable
 --- @return agentic.utils.PermissionRules.Effect[] effects Concrete file-mutating effects (redirect writes, `rm` operands) the command would produce, in order
 --- @return table<agentic.utils.PermissionRules.Source, true> sources Every source that allowed a single command; empty unless ok
@@ -2596,7 +2944,11 @@ local function run_walk(command, rules)
             for_budget = FOR_UNROLL_CAP,
             shadowed = shadowed,
             read_scripts = rules.read_scripts,
+            cwd_of = {},
+            taint = { set = false },
+            sourced = {},
         }
+        ctx.cwd_of = tree_cwds(root, command, start_cwds(rules.cwd), ctx, 0)
         local ok = walk(root, command, ctx)
         -- More shadowed names only turn approvals into bails.
         return { ok = ok, ctx = ctx }, not ok
@@ -2615,13 +2967,16 @@ end
 ---
 --- `extra_allow` injects session-remembered leaf patterns on top of the
 --- configured allow rules; they widen approval only, never override a deny/ask.
+--- A script the command runs or sources is read from every directory the
+--- command may be in at that point, starting from `cwd`.
 --- @param command string
 --- @param config_dir string Claude's config directory
+--- @param cwd string|nil absolute directory the command starts in; nil when unknown
 --- @param extra_allow agentic.utils.PermissionRules.CompiledPattern[]|nil
 --- @return boolean ok
 --- @return agentic.utils.PermissionRules.Effect[] effects
 --- @return table<agentic.utils.PermissionRules.Source, true> sources
-function M.evaluate(command, config_dir, extra_allow)
+function M.evaluate(command, config_dir, cwd, extra_allow)
     -- Remembered leaves count even when `auto_approve_tier` is nil, because the
     -- user approved each one.
     return run_walk(command, {
@@ -2633,6 +2988,7 @@ function M.evaluate(command, config_dir, extra_allow)
         ask = M.get_settings_patterns("ask", config_dir),
         tier = Config.permissions.auto_approve_tier,
         read_scripts = true,
+        cwd = cwd,
     })
 end
 
@@ -2672,10 +3028,11 @@ end
 --- write or an `rm`, see `evaluate`).
 --- @param command string
 --- @param config_dir string Claude's config directory
+--- @param cwd string|nil see `evaluate`
 --- @param extra_allow agentic.utils.PermissionRules.CompiledPattern[]|nil session-remembered leaf patterns (forwarded to `evaluate`)
 --- @return boolean
-function M.should_auto_approve(command, config_dir, extra_allow)
-    local ok, effects = M.evaluate(command, config_dir, extra_allow)
+function M.should_auto_approve(command, config_dir, cwd, extra_allow)
+    local ok, effects = M.evaluate(command, config_dir, cwd, extra_allow)
     return ok and #effects == 0
 end
 

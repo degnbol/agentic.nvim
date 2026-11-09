@@ -1,4 +1,5 @@
 local assert = require("tests.helpers.assert")
+local MiniTest = require("mini.test")
 local ShellParse = require("agentic.utils.shell_parse")
 local ZshParse = require("agentic.utils.zsh_parse")
 
@@ -526,14 +527,15 @@ describe("ShellParse.extract_commands", function()
         it("tracks literal cds in the same shell", function()
             assert.equal(
                 "/a/b",
-                record("cd /a && cd b && python3", "python3").cwd
+                record("cd /a && cd ./b && python3", "python3").cwd
             )
-            assert.equal("b", record("cd b && python3", "python3").cwd)
+            assert.equal("./b", record("cd ./b && python3", "python3").cwd)
             assert.equal(
                 "/x",
                 record("cd /x 2>/dev/null && python3", "python3").cwd
             )
-            assert.equal("~", record("cd; python3", "python3").cwd)
+            assert.equal(vim.env.HOME, record("cd; python3", "python3").cwd)
+            assert.equal("/x", record("pushd /x; python3", "python3").cwd)
             assert.equal(
                 "/abs",
                 record("cd $D; cd /abs; python3", "python3").cwd
@@ -574,8 +576,10 @@ describe("ShellParse.extract_commands", function()
                 "cd $D; python3",
                 "cd a b; python3",
                 "cd ''; python3",
-                "pushd /x; python3",
-                "cd $D; cd rel; python3",
+                "cd rel; python3",
+                "pushd; python3",
+                "popd; python3",
+                "cd $D; cd ./rel; python3",
             }) do
                 assert.equal(false, record(src, "python3").cwd)
             end
@@ -1513,6 +1517,7 @@ describe("ShellParse.extract_commands", function()
                 "fd -- -x echo",
                 "fd -x echo '{{}}'",
                 "fd -x echo '{{x}}'",
+                "find . -exec zsh ~/x \\;",
             }) do
                 assert.is_nil(actions_of(src))
             end
@@ -1524,5 +1529,285 @@ describe("ShellParse.extract_commands", function()
                 resolved("fd --type=f -x cat").inner
             )
         end)
+    end)
+end)
+
+describe("ShellParse.cd_target", function()
+    local home = vim.env.HOME
+
+    it("knows the operands that name one directory", function()
+        assert.equal(home, ShellParse.cd_target("cd", {}, {}))
+        assert.equal(home, ShellParse.cd_target("cd", { "~" }, { false }))
+        assert.equal(
+            home .. "/a",
+            ShellParse.cd_target("chdir", { "~/a" }, { false })
+        )
+        assert.equal("/b", ShellParse.cd_target("cd", { "/a/../b" }, { false }))
+        assert.equal("./a", ShellParse.cd_target("cd", { "./a" }, { false }))
+        assert.equal(
+            "../a",
+            ShellParse.cd_target("pushd", { "../a" }, { false })
+        )
+    end)
+
+    it("is false for operands it cannot pin", function()
+        for _, case in ipairs({
+            { "cd", { "-" } },
+            { "cd", { "-P", "/x" } },
+            { "cd", { "name" } },
+            { "cd", { "" } },
+            { "cd", { "~u" } },
+            { "cd", { "~+" } },
+            { "cd", { "~-" } },
+            { "cd", { "~1" } },
+            { "cd", { "/a", "/b" } },
+            { "pushd", {} },
+        }) do
+            local dynamic = vim.tbl_map(function()
+                return false
+            end, case[2])
+            assert.is_false(ShellParse.cd_target(case[1], case[2], dynamic))
+        end
+        assert.is_false(ShellParse.cd_target("cd", { "$d" }, { true }))
+    end)
+end)
+
+describe("ShellParse.command_cwds", function()
+    --- @type agentic.utils.ShellParse.Cwds
+    local START = { dirs = { "/s/t" }, unknown = false }
+    --- @type agentic.utils.ShellParse.Cwds
+    local UNKNOWN = { dirs = {}, unknown = true }
+
+    --- The first node in `root` (pre-order) passing `pred`; errors when none
+    --- does.
+    --- @param root TSNode
+    --- @param pred fun(node: TSNode): boolean
+    --- @return TSNode
+    local function find(root, pred)
+        local function visit(node)
+            if pred(node) then
+                return node
+            end
+            for child in node:iter_children() do
+                local hit = visit(child)
+                if hit then
+                    return hit
+                end
+            end
+        end
+        return visit(root) or error("no matching node")
+    end
+
+    --- The sorted possible cwds of the first command named `name` in `src`,
+    --- or "unknown".
+    --- @param src string
+    --- @param name string
+    --- @param start agentic.utils.ShellParse.Cwds|nil default START
+    --- @param source_cwds (fun(path: string, before: agentic.utils.ShellParse.Cwds): agentic.utils.ShellParse.Cwds)|nil
+    --- @return string[]|"unknown"
+    local function dirs_of(src, name, start, source_cwds)
+        local root = ZshParse.parse(src) --[[@as TSNode]]
+        local cwd_of =
+            ShellParse.command_cwds(root, src, start or START, source_cwds)
+        local node = find(root, function(n)
+            return n:type() == "command"
+                and ShellParse.command_name(n, src) == name
+        end)
+        local cwds = cwd_of[node:id()]
+        if cwds.unknown then
+            return "unknown"
+        end
+        local dirs = vim.deepcopy(cwds.dirs)
+        table.sort(dirs)
+        return dirs
+    end
+
+    it("follows && and || to the branch that runs", function()
+        assert.same({ "/x" }, dirs_of("cd /x && r", "r"))
+        assert.same({ "/s/t" }, dirs_of("cd /x || r", "r"))
+        assert.same({ "/s/t", "/x" }, dirs_of("cd /x; r", "r"))
+        assert.same({ "/s/t", "/x" }, dirs_of("cd /x && false || r", "r"))
+        assert.same({ "/x" }, dirs_of("! cd /x || r", "r"))
+    end)
+
+    it("joins a ./ or ../ target to each possible cwd", function()
+        assert.same({ "/s/t/sub" }, dirs_of("cd ./sub && r", "r"))
+        assert.same({ "/s/u" }, dirs_of("cd ../u && r", "r"))
+        assert.same({ "/s/t/a", "/x/a" }, dirs_of("cd /x; cd ./a && r", "r"))
+        assert.equal("unknown", dirs_of("cd ./sub && r", "r", UNKNOWN))
+        assert.same({ "/x" }, dirs_of("cd /x && r", "r", UNKNOWN))
+    end)
+
+    it("expands a home target", function()
+        assert.same({ vim.env.HOME }, dirs_of("cd && r", "r"))
+        assert.same({ vim.env.HOME .. "/p" }, dirs_of("cd ~/p && r", "r"))
+    end)
+
+    it("is unknown after a cd it cannot pin", function()
+        for _, src in ipairs({
+            "cd sub && r",
+            'cd "$d" && r',
+            "cd - && r",
+            "cd -P /x && r",
+            "cd ~u && r",
+            "pushd && r",
+            "popd; r",
+            "cd 2>/dev/null /x; r",
+        }) do
+            assert.equal("unknown", dirs_of(src, "r"))
+        end
+    end)
+
+    it("reads cd through a same-shell prefix", function()
+        assert.same({ "/x" }, dirs_of("command cd /x && r", "r"))
+        assert.same({ "/s/t/y" }, dirs_of("builtin cd ./y && r", "r"))
+        assert.equal("unknown", dirs_of("command -p cd /x; r", "r"))
+    end)
+
+    it("starts each if branch from its condition's outcome", function()
+        assert.same({ "/x" }, dirs_of("if cd /x; then r; fi", "r"))
+        assert.same({ "/s/t" }, dirs_of("if cd /x; then :; else r; fi", "r"))
+        assert.same(
+            { "/s/t" },
+            dirs_of("if cd /x; then :; elif r; then :; fi", "r")
+        )
+        assert.same({ "/s/t", "/x" }, dirs_of("if a; then cd /x; fi; r", "r"))
+        assert.same(
+            { "/s/t", "/x", "/y" },
+            dirs_of("if a; then cd /x; else cd /y; fi; r", "r")
+        )
+    end)
+
+    it("joins every case body with the set before it", function()
+        assert.same(
+            { "/s/t", "/x", "/y" },
+            dirs_of("case $v in a) cd /x;; b) cd /y;; esac; r", "r")
+        )
+    end)
+
+    it("flows through a brace group", function()
+        assert.same({ "/x" }, dirs_of("{ cd /x; } && r", "r"))
+    end)
+
+    it("does not leak a child shell's cd", function()
+        for _, src in ipairs({
+            "(cd /x); r",
+            "echo $(cd /x); r",
+            "cat <(cd /x); r",
+            "cd /x | cat; r",
+            "cd /x & r",
+        }) do
+            assert.same({ "/s/t" }, dirs_of(src, "r"))
+        end
+        -- bash and sh run every pipeline element in a subshell.
+        assert.same({ "/s/t", "/x" }, dirs_of("echo | cd /x && r", "r"))
+    end)
+
+    it("reads a quoted ~ as a directory named ~", function()
+        assert.same({ "/s/t/~" }, dirs_of("cd '~' && r", "r"))
+    end)
+
+    it("starts a case body at every earlier body's exit", function()
+        assert.same(
+            { "/s/t", "/x" },
+            dirs_of("case v in v) cd /x ;& w) :;; *) r;; esac", "r")
+        )
+    end)
+
+    it("gives a substitution the set of the command holding it", function()
+        assert.same({ "/x" }, dirs_of("cd /x && cat $(r)", "r"))
+    end)
+
+    it("widens a loop that changes directory", function()
+        assert.same(
+            { "/s/t", "/x" },
+            dirs_of("while a; do cd /x; done; r", "r")
+        )
+        assert.same(
+            { "/s/t", "/x" },
+            dirs_of("for i in a; do r; cd /x; done", "r")
+        )
+        assert.equal("unknown", dirs_of("for i in a; do cd ./x; done; r", "r"))
+        assert.same({ "/s/t" }, dirs_of("for i in a; do b; done; r", "r"))
+    end)
+
+    it("judges a function body from an unknown cwd", function()
+        assert.equal("unknown", dirs_of("f() { r; }", "r"))
+        assert.same({ "/s/t", "/x" }, dirs_of("f() { cd /x; }; r", "r"))
+        assert.equal("unknown", dirs_of("f() { cd ./x; }; r", "r"))
+    end)
+
+    it("takes a sourced file's exit set from the callback", function()
+        assert.equal("unknown", dirs_of("source ./a.sh; r", "r"))
+        local calls = {}
+        local exit = dirs_of(
+            "cd /x && source ./a.sh && r",
+            "r",
+            nil,
+            function(path, before)
+                table.insert(calls, { path, before })
+                return { dirs = { "/z" }, unknown = false }
+            end
+        )
+        assert.same({ "/z" }, exit)
+        assert.same(
+            { { "./a.sh", { dirs = { "/x" }, unknown = false } } },
+            calls
+        )
+    end)
+
+    it("gives up past 8 possible directories", function()
+        local items = {}
+        for i = 1, 9 do
+            table.insert(items, ("%d) cd /%d;;"):format(i, i))
+        end
+        local src = "case $v in " .. table.concat(items, " ") .. " esac; r"
+        assert.equal("unknown", dirs_of(src, "r"))
+    end)
+
+    it("maps a redirected statement to its redirect target's set", function()
+        local src = "cd /x && cat > f"
+        local root = ZshParse.parse(src) --[[@as TSNode]]
+        local cwd_of = ShellParse.command_cwds(root, src, START)
+        local stmt = find(root, function(n)
+            return n:type() == "redirected_statement"
+        end)
+        assert.same({ dirs = { "/x" }, unknown = false }, cwd_of[stmt:id()])
+    end)
+
+    it("returns the set after the whole tree", function()
+        local src = "cd /x"
+        local _, exit = ShellParse.command_cwds(
+            ZshParse.parse(src) --[[@as TSNode]],
+            src,
+            START
+        )
+        assert.same({ "/s/t", "/x" }, vim.fn.sort(exit.dirs))
+    end)
+end)
+
+describe("ShellParse.resolve_against_cwd", function()
+    it("joins a relative path to the given cwd", function()
+        assert.equal(
+            "/nonexistent-root/a/b",
+            ShellParse.resolve_against_cwd("b", "/nonexistent-root/a")
+        )
+        assert.equal(
+            "/nonexistent-root/b",
+            ShellParse.resolve_against_cwd("/nonexistent-root/b", "/elsewhere")
+        )
+    end)
+
+    it("resolves .. after a symlink physically", function()
+        local base = vim.fn.resolve(vim.fn.tempname())
+        vim.fn.mkdir(base .. "/real/sub", "p")
+        vim.uv.fs_symlink(base .. "/real/sub", base .. "/link")
+        MiniTest.finally(function()
+            vim.fs.rm(base, { recursive = true })
+        end)
+        assert.equal(
+            base .. "/real/x",
+            ShellParse.resolve_against_cwd("link/../x", base)
+        )
     end)
 end)

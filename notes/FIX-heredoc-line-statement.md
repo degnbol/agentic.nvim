@@ -13,7 +13,7 @@ Status: reviewed spec
   `tally_sequence`, `walk`, `tally_walk`
 - `lua/agentic/utils/permission_rules.test.lua`, `shell_parse.test.lua`
 - Skill: `permissions` (§ Shell command parsing, § Grant scopes)
-- `notes/FIX-walk-file-model.md` — `command_cwds` (see Changes)
+- `lua/agentic/utils/shell_parse.lua` `command_cwds` (see Changes)
 
 ## Background
 tree-sitter-zsh puts everything on a heredoc's line after the delimiter
@@ -109,7 +109,7 @@ target values stay resolved in two places (see Non-goals).
   shadows through `walk_function_definition`, which the `rest` walk
   reaches.
 
-### `notes/FIX-walk-file-model.md`
+### `command_cwds`
 - `command_cwds` reads a `redirected_statement` through `redirected_parts`:
   the body, then `rest` under `rest_op` (`&&`/`||` as in a list; `|` puts
   the body in a child shell).

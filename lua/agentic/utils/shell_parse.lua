@@ -1663,7 +1663,9 @@ end
 --- @return agentic.utils.ShellParse.HostActions|nil actions nil when
 ---         `cmd_name` is no action host, it has no action, or an action does
 ---         not resolve: it is empty or unterminated, holds a dynamic word or an
----         escape, or its option may be the value of an option before it
+---         escape, or its option may be the value of an option before it. A
+---         word starting with `~` does not resolve either: whether the shell
+---         expanded it is not known from its delivered text.
 function M.host_actions(cmd_name, args, args_dynamic)
     local spec = ACTION_HOSTS[cmd_name]
     local spans = spec and action_spans(args, args_dynamic, spec)
@@ -1678,7 +1680,9 @@ function M.host_actions(cmd_name, args, args_dynamic)
         local words = {}
         local has_placeholder = false
         for k = span.first, span.last do
-            if contains_any(args[k], spec.placeholders) then
+            if args[k]:sub(1, 1) == "~" then
+                return nil
+            elseif contains_any(args[k], spec.placeholders) then
                 has_placeholder = true
                 table.insert(words, EXEC_PATH)
             else
@@ -1818,36 +1822,65 @@ local function inner_source(
 end
 
 --- Resolve a path token to a canonical absolute path, so two spellings of one
---- file compare equal as strings. Expands a leading `~` (a `$VAR` is literal
---- text), joins a relative path to the cwd, collapses `.`/`..`, and resolves symlinks in the
---- parent directory (on macOS `/tmp/f` gives `/private/tmp/f`). The last
---- component is kept as written because the file may not exist yet. When the
---- parent does not exist, the result is the lexical form.
+--- file compare equal as strings. Expands a leading `~` or `~/` (a `$VAR` is
+--- literal text) and joins a relative path to `cwd`. The parent directory is
+--- resolved by the file system, before any `..` in it is collapsed, as the
+--- kernel resolves `link/../x` through the link's target (on macOS `/tmp/f`
+--- gives `/private/tmp/f`). The last component is kept as written because the
+--- file may not exist yet. When the parent does not exist, the result is the
+--- lexical form.
 --- @param path string
---- @return string
-local function resolve_against_cwd(path)
-    path = vim.fs.normalize(vim.fs.abspath(path), { expand_env = false })
-    local real_parent = vim.uv.fs_realpath(vim.fs.dirname(path))
-    return real_parent and vim.fs.joinpath(real_parent, vim.fs.basename(path))
-        or path
+--- @param cwd string|nil absolute directory a relative `path` is relative to;
+---        not read for an absolute or home path
+--- @return string|nil resolved nil for a `~name` path, or a relative `path`
+---         with no `cwd`
+local function resolve_against_cwd(path, cwd)
+    if path == "~" or vim.startswith(path, "~/") then
+        path = vim.fs.normalize(path, { expand_env = false })
+    end
+    if path:sub(1, 1) ~= "/" then
+        if path:sub(1, 1) == "~" or not cwd then
+            return nil
+        end
+        path = cwd .. "/" .. path
+    end
+    local parent, base = path:match("^(.*)/([^/]+)/*$")
+    if not parent or base == "." or base == ".." then
+        return vim.uv.fs_realpath(path)
+            or vim.fs.normalize(path, { expand_env = false })
+    end
+    local real_parent = vim.uv.fs_realpath(parent == "" and "/" or parent)
+    return real_parent and vim.fs.joinpath(real_parent, base)
+        or vim.fs.normalize(path, { expand_env = false })
 end
 
---- Resolve the on-disk script a command would execute for the two non-`-c`
---- forms that run a file's contents: `zsh|bash|sh|dash <file>` and
---- `source|. <file>`. Returns the cwd-resolved absolute path, or nil to bail
---- (the caller falls through to a prompt) — the caller reads the bytes,
---- re-parses, and walks them, the same shape as the `-c` body recursion.
+--- The path a static word names: a leading `~` the shell does not expand
+--- (quoted or escaped) names a directory `~` in the cwd.
+--- @param text string the word's delivered text
+--- @param node TSNode the word
+--- @param src string
+--- @return string path
+function M.delivered_path(text, node, src)
+    if
+        text:sub(1, 1) == "~"
+        and vim.treesitter.get_node_text(node, src):sub(1, 1) ~= "~"
+    then
+        return "./" .. text
+    end
+    return text
+end
+
+--- The script operand of the two non-`-c` forms that run a file's contents:
+--- `zsh|bash|sh|dash <file>` and `source|. <file>`, as written.
 ---
 --- nil for: any other command; a missing, dynamic, or option-leading first arg
---- (a shell flag / `--`, or the `-c` that `inner_source` already owns). For
---- `source`/`.` two extra gates close body-swap holes that `zsh <file>` does not
---- have: the arg must contain a slash (a bare name searches `$path`, which is not
---- knowable from the token), and no sibling `<path>.zwc` may exist (zsh runs the
---- compiled bytecode over the `.sh` text we would read).
+--- (a shell flag / `--`, or the `-c` that `inner_source` already owns); and for
+--- `source`/`.` an operand without a slash (a bare name searches `$path`, which
+--- is not knowable from the token).
 --- @param cmd_name string path-stripped command name
 --- @param args string[] quote-stripped arg tokens
 --- @param args_dynamic boolean[]
---- @return string|nil path
+--- @return string|nil operand
 local function script_file_source(cmd_name, args, args_dynamic)
     local is_source = cmd_name == "source" or cmd_name == "."
     if not (SHELL_C_COMMANDS[cmd_name] or is_source) then
@@ -1860,11 +1893,7 @@ local function script_file_source(cmd_name, args, args_dynamic)
     if is_source and not arg:find("/", 1, true) then
         return nil
     end
-    local path = resolve_against_cwd(arg)
-    if is_source and vim.uv.fs_stat(path .. ".zwc") then
-        return nil
-    end
-    return path
+    return arg
 end
 
 -- ── Command extraction ───────────────────────────────────────────────────────
@@ -1898,9 +1927,22 @@ end
 --- @field redirects? agentic.utils.ShellParse.Redirect[] the file redirects and herestrings applied to the node, in order
 --- @field words? TSNode[] words of the node's command that the grammar put on its redirects
 
+--- The node a redirected statement's redirects apply to. The grammar hangs
+--- them on the whole list or pipeline, but the shell applies them to its last
+--- element.
+--- @param stmt TSNode `redirected_statement`
+--- @return TSNode|nil
+local function redirects_target(stmt)
+    --- @type TSNode|nil
+    local target = stmt:field("body")[1]
+    while target and (target:type() == "list" or target:type() == "pipeline") do
+        target = target:named_child(target:named_child_count() - 1)
+    end
+    return target
+end
+
 --- Map each node a redirected statement's redirects apply to, to what they
---- give it. The grammar hangs them on the whole list or pipeline, but the shell
---- applies them to its last element. Only a simple command reads a heredoc on
+--- give it. Only a simple command reads a heredoc on
 --- stdin: a heredoc on a non-zero fd, or on a compound statement, subshell or
 --- `negated_command`, has no reader.
 ---
@@ -1916,13 +1958,7 @@ local function node_io(root, src)
     local io_of = {}
     local function visit(node)
         if node:type() == "redirected_statement" then
-            local target = node:field("body")[1]
-            while
-                target
-                and (target:type() == "list" or target:type() == "pipeline")
-            do
-                target = target:named_child(target:named_child_count() - 1)
-            end
+            local target = redirects_target(node)
             if target then
                 --- @type agentic.utils.ShellParse.NodeIO
                 local io = { redirects = {}, words = {} }
@@ -1959,28 +1995,131 @@ local function node_io(root, src)
     return io_of
 end
 
---- The directory a shell is in after `cd` with the given operands. No `..`
---- or `~` resolution (`/a/../b` stays as is, `~` stays unexpanded).
---- @param cwd string|false|nil directory before the `cd`: nil = the caller's
----        cwd, false = unknown
---- @param args string[] the `cd` operands
+--- The directory a successful `cd`, `chdir` or `pushd` with these operands
+--- enters. Known for no operand (home), `~`, `~/…`, `/…`, `./…` and `../…`;
+--- `..` is collapsed lexically, as zsh's logical `cd` does. A bare relative
+--- name may resolve through `cdpath`, and `-`, `~name`, `~+`, `~-` and `~N`
+--- name a remembered or named directory, so they are not known.
+--- @param cmd_name "cd"|"chdir"|"pushd"
+--- @param args string[] the operands
 --- @param args_dynamic boolean[] parallel to `args`
---- @return string|false|nil cwd same encoding as the `cwd` parameter
-local function cwd_after_cd(cwd, args, args_dynamic)
+--- @return string|false dir absolute and normalised, or relative to the cwd
+---         before, starting `./` or `../`; false when unknown,
+---         for an option, a dynamic operand, two operands, or `pushd` with no
+---         operand (it swaps the directory stack)
+function M.cd_target(cmd_name, args, args_dynamic)
     if #args == 0 then
-        return "~"
+        return cmd_name ~= "pushd" and vim.env.HOME or false
     end
     local dir = args[1]
-    if #args > 1 or args_dynamic[1] or dir == "" or dir:sub(1, 1) == "-" then
+    if #args > 1 or args_dynamic[1] then
         return false
     end
-    if dir:match("^[/~]") or cwd == nil then
+    if dir == "~" or vim.startswith(dir, "~/") or dir:sub(1, 1) == "/" then
+        return vim.fs.normalize(dir, { expand_env = false })
+    end
+    if vim.startswith(dir, "./") or vim.startswith(dir, "../") then
         return dir
     end
-    if cwd == false then
-        return false
+    return false
+end
+
+--- The directories a point in a command may run in.
+--- @class agentic.utils.ShellParse.Cwds
+--- @field dirs string[] absolute, normalised; empty when `unknown`
+--- @field unknown boolean any directory is possible
+
+--- A `Cwds` above this many directories becomes unknown.
+local MAX_CWDS = 8
+
+--- A `Cwds` where any directory is possible.
+--- @return agentic.utils.ShellParse.Cwds
+local function unknown_cwds()
+    return { dirs = {}, unknown = true }
+end
+
+--- The directories in any of the sets: unknown when one is unknown, or past
+--- `MAX_CWDS` directories.
+--- @param ... agentic.utils.ShellParse.Cwds
+--- @return agentic.utils.ShellParse.Cwds
+local function cwds_union(...)
+    --- @type string[]
+    local dirs = {}
+    for _, cwds in ipairs({ ... }) do
+        if cwds.unknown then
+            return unknown_cwds()
+        end
+        for _, dir in ipairs(cwds.dirs) do
+            if not vim.list_contains(dirs, dir) then
+                table.insert(dirs, dir)
+            end
+        end
     end
-    return vim.fs.joinpath(cwd, dir)
+    if #dirs > MAX_CWDS then
+        return unknown_cwds()
+    end
+    return { dirs = dirs, unknown = false }
+end
+
+--- The cwds after entering `target` from any of `before`.
+--- @param before agentic.utils.ShellParse.Cwds
+--- @param target string|false absolute, or relative to each of `before`;
+---        false when unknown
+--- @return agentic.utils.ShellParse.Cwds
+local function cwds_enter(before, target)
+    if not target then
+        return unknown_cwds()
+    end
+    if target:sub(1, 1) == "/" then
+        return { dirs = { target }, unknown = false }
+    end
+    if before.unknown then
+        return unknown_cwds()
+    end
+    return cwds_union({
+        unknown = false,
+        dirs = vim.tbl_map(function(dir)
+            return vim.fs.normalize(dir .. "/" .. target)
+        end, before.dirs),
+    })
+end
+
+--- The files a script operand may name, one per
+--- possible cwd, each with the cwds the script starts in. A `source`d file
+--- with a sibling `<path>.zwc` is refused: zsh runs the compiled bytecode
+--- over the text a reader would see.
+--- @param cmd_name string path-stripped command name
+--- @param operand string as written
+--- @param cwds agentic.utils.ShellParse.Cwds the command's possible cwds
+--- @return { path: string, start: agentic.utils.ShellParse.Cwds }[]|nil
+---         paths nil for a relative operand under unknown cwds, a `~name`
+---         operand, or a refused `source`
+function M.script_paths(cmd_name, operand, cwds)
+    local paths = {}
+    if operand:match("^[/~]") then
+        local path = resolve_against_cwd(operand)
+        if not path then
+            return nil
+        end
+        paths = { { path = path, start = cwds } }
+    elseif cwds.unknown then
+        return nil
+    else
+        for _, dir in ipairs(cwds.dirs) do
+            table.insert(paths, {
+                path = resolve_against_cwd(operand, dir) --[[@as string]],
+                start = { dirs = { dir }, unknown = false },
+            })
+        end
+    end
+    if cmd_name == "source" or cmd_name == "." then
+        for _, p in ipairs(paths) do
+            if vim.uv.fs_stat(p.path .. ".zwc") then
+                return nil
+            end
+        end
+    end
+    return paths
 end
 
 --- Join each run of byte-adjacent argument nodes into one shell word. The
@@ -2022,6 +2161,9 @@ function M.join_adjacent_args(args, arg_nodes, args_dynamic, src)
     end
     return joined_args, joined_nodes, joined_dynamic
 end
+
+--- Builtins that enter a directory named by their operand (`cd_target`).
+local CD_COMMANDS = { cd = true, chdir = true, pushd = true }
 
 --- Transparent prefixes whose inner runs in the current shell, not a child.
 local SAME_SHELL_PREFIXES = {
@@ -2378,9 +2520,17 @@ local function collect_command(node, src, out, depth, shell, io_of, enclosing)
         return false
     end
 
-    if cmd_name == "cd" then
-        shell.cwd = cwd_after_cd(shell.cwd, args, args_dynamic)
-    elseif cmd_name == "pushd" or cmd_name == "popd" then
+    if CD_COMMANDS[cmd_name] then
+        local target = M.cd_target(cmd_name, args, args_dynamic)
+        local cwd = shell.cwd
+        if not target or target:sub(1, 1) == "/" or cwd == nil then
+            shell.cwd = target
+        elseif cwd == false then
+            shell.cwd = false
+        else
+            shell.cwd = vim.fs.normalize(cwd .. "/" .. target)
+        end
+    elseif cmd_name == "popd" then
         shell.cwd = false
     end
     return true
@@ -2401,17 +2551,23 @@ local CHILD_SHELL_TYPES = {
 --- trailing sibling.
 local BACKGROUND_OPERATORS = { ["&"] = true, ["&!"] = true, ["&|"] = true }
 
+--- Whether a statement runs in the background.
+--- @param node TSNode
+--- @return boolean
+function M.is_background(node)
+    local next_sibling = node:next_sibling()
+    return next_sibling ~= nil and BACKGROUND_OPERATORS[next_sibling:type()]
+        or false
+end
+
 --- Whether `child` of `parent` runs in a child shell of its own: a background
 --- statement, or (in zsh) any pipeline element but the last.
 --- @param parent TSNode
 --- @param child TSNode
 --- @return boolean
 local function runs_in_child_shell(parent, child)
-    local next_sibling = child:next_sibling()
-    if next_sibling and BACKGROUND_OPERATORS[next_sibling:type()] then
-        return true
-    end
-    return parent:type() == "pipeline" and child:next_named_sibling() ~= nil
+    return M.is_background(child)
+        or parent:type() == "pipeline" and child:next_named_sibling() ~= nil
 end
 
 --- @param node TSNode
@@ -2500,6 +2656,386 @@ function collect(node, src, out, depth, shell, io_of, enclosing)
     return true
 end
 
+--- Statements that may change the directory of the shell running them.
+local DIR_CHANGERS = {
+    cd = true,
+    chdir = true,
+    pushd = true,
+    popd = true,
+    source = true,
+    ["."] = true,
+}
+
+--- Node types whose statements run in a child shell, but which are not a
+--- function body (that runs where it is called).
+local SUBSHELL_TYPES = {
+    subshell = true,
+    command_substitution = true,
+    process_substitution = true,
+}
+
+--- The command a `command` node runs in its own shell, past the same-shell
+--- prefixes (`command cd /x`), with its delivered words (a static one as
+--- `delivered_path`).
+--- @param node TSNode `command`
+--- @param src string
+--- @param io_of table<string, agentic.utils.ShellParse.NodeIO> see `node_io`
+--- @return string|nil name nil when the name is dynamic or missing, or a
+---         prefix may hide a directory change (an `eval`, or an option or
+---         dynamic word before an operand that names one)
+--- @return string[] args
+--- @return boolean[] args_dynamic parallel to `args`; a word the grammar put
+---         on a redirect counts as one dynamic word
+local function shell_command(node, src, io_of)
+    local name = M.command_name(node, src)
+    --- @type string[]
+    local args = {}
+    --- @type boolean[]
+    local args_dynamic = {}
+    for child, field in node:iter_children() do
+        local t = child:type()
+        if field == "redirect" then
+            if #child:field("destination") > 1 then
+                table.insert(args, "")
+                table.insert(args_dynamic, true)
+            end
+        elseif
+            child:named()
+            and field ~= "name"
+            and t ~= "variable_assignment"
+            and t ~= "comment"
+        then
+            local text, dynamic = word_value(child, src)
+            table.insert(
+                args,
+                dynamic and text or M.delivered_path(text, child, src)
+            )
+            table.insert(args_dynamic, dynamic)
+        end
+    end
+    local io = io_of[node:id()]
+    if io and io.words and #io.words > 0 then
+        table.insert(args, "")
+        table.insert(args_dynamic, true)
+    end
+    if not name then
+        return nil, args, args_dynamic
+    end
+    name = strip_command_path(name)
+    while (SAME_SHELL_PREFIXES[name] or name == "command") and #args > 0 do
+        if name == "eval" or args_dynamic[1] or args[1]:sub(1, 1) == "-" then
+            local hides = name == "eval"
+                or vim.iter(args):any(function(arg)
+                    return DIR_CHANGERS[arg] ~= nil
+                end)
+            return not hides and name or nil, args, args_dynamic
+        end
+        name = table.remove(args, 1)
+        table.remove(args_dynamic, 1)
+    end
+    return name, args, args_dynamic
+end
+
+--- The cwds every command of a tree may run in, from where the tree starts.
+---
+--- Each statement leaves a set on success and one on failure. A `cd`,
+--- `chdir` or `pushd` enters its `cd_target` from each member of the set
+--- before it on success and keeps that set on failure; `popd`, and a command
+--- with a dynamic name, leave an unknown set. `a && b` starts `b` at a's
+--- success set, `a || b` at its failure set, `a; b` at both; `!` swaps them.
+--- An `if` branch starts at the outcome of its condition; a `case` body at
+--- the set before the `case` joined with every earlier body's exit, as a
+--- fall-through (`;&`, `;|`) may run it after one. A loop, and a function
+--- definition, whose body may change directory leave every command inside
+--- and after it the set before joined with the absolute `cd` targets in it,
+--- or an unknown set when one is not absolute. A function body itself starts
+--- at an unknown set, as it runs where it is called. A subshell, a
+--- substitution, a background statement and every pipeline element but the
+--- last start from the set before them and change nothing after them; the
+--- last element's sets are joined with the set before, as bash and sh run it
+--- in a subshell too. A quoted or escaped `~` operand is a directory `~`.
+---
+--- `source file` / `. file` leaves the set `source_cwds` gives for it, or
+--- an unknown set without one.
+--- @param root TSNode
+--- @param src string
+--- @param start agentic.utils.ShellParse.Cwds where `root` starts
+--- @param source_cwds (fun(operand: string, before: agentic.utils.ShellParse.Cwds): agentic.utils.ShellParse.Cwds)|nil
+---        the cwds after sourcing `operand`, as written, from `before`
+--- @return table<string, agentic.utils.ShellParse.Cwds> cwd_of keyed by
+---         `node:id()`: the cwds of each node the flow reaches before it runs;
+---         for a `redirected_statement`, those its redirects open in (the
+---         redirects' target's)
+--- @return agentic.utils.ShellParse.Cwds exit the cwds after `root`
+function M.command_cwds(root, src, start, source_cwds)
+    local io_of = node_io(root, src)
+    --- @type table<string, agentic.utils.ShellParse.Cwds>
+    local cwd_of = {}
+    --- @type fun(node: TSNode, before: agentic.utils.ShellParse.Cwds): agentic.utils.ShellParse.Cwds, agentic.utils.ShellParse.Cwds
+    local flow
+
+    --- Run a sequence of sibling nodes, applying the operator before each
+    --- statement. A keyword or bracket counts as `;`.
+    --- @param children TSNode[]
+    --- @param before agentic.utils.ShellParse.Cwds
+    --- @return agentic.utils.ShellParse.Cwds success
+    --- @return agentic.utils.ShellParse.Cwds failure
+    local function flow_children(children, before)
+        local success, failure = before, before
+        local op = nil
+        local first = true
+        for _, child in ipairs(children) do
+            if not child:named() then
+                op = child:type()
+            elseif child:type() ~= "comment" then
+                local from = first and before
+                    or op == "&&" and success
+                    or op == "||" and failure
+                    or cwds_union(success, failure)
+                local s, f = flow(child, from)
+                if M.is_background(child) then
+                    s, f = from, from
+                end
+                if first or (op ~= "&&" and op ~= "||") then
+                    success, failure = s, f
+                elseif op == "&&" then
+                    success, failure = s, cwds_union(failure, f)
+                else
+                    success, failure = cwds_union(success, s), f
+                end
+                first = false
+                op = nil
+            end
+        end
+        return success, failure
+    end
+
+    --- @param node TSNode
+    --- @return TSNode[]
+    local function children_of(node)
+        local out = {}
+        for child in node:iter_children() do
+            table.insert(out, child)
+        end
+        return out
+    end
+
+    --- Run the substitutions in a non-statement subtree, each from `before`.
+    --- @param node TSNode
+    --- @param before agentic.utils.ShellParse.Cwds
+    local function flow_substitutions(node, before)
+        if SUBSHELL_TYPES[node:type()] then
+            flow(node, before)
+            return
+        end
+        for child in node:iter_children() do
+            flow_substitutions(child, before)
+        end
+    end
+
+    --- The cwds a loop or function body leaves for the commands inside and
+    --- after it, or nil when it changes no directory.
+    --- @param node TSNode
+    --- @param before agentic.utils.ShellParse.Cwds
+    --- @return agentic.utils.ShellParse.Cwds|nil
+    local function changed_cwds(node, before)
+        --- @type string[]
+        local targets = {}
+        local changes = false
+        local unpinned = false
+        local function visit(n)
+            if SUBSHELL_TYPES[n:type()] then
+                return
+            end
+            if n:type() == "command" then
+                local name, args, args_dynamic = shell_command(n, src, io_of)
+                if not name then
+                    changes, unpinned = true, true
+                elseif DIR_CHANGERS[name] then
+                    changes = true
+                    local target = CD_COMMANDS[name]
+                        and M.cd_target(name, args, args_dynamic)
+                    if target and target:sub(1, 1) == "/" then
+                        table.insert(targets, target)
+                    else
+                        unpinned = true
+                    end
+                end
+            end
+            for child in n:iter_children() do
+                visit(child)
+            end
+        end
+        visit(node)
+        if not changes then
+            return nil
+        end
+        if unpinned then
+            return unknown_cwds()
+        end
+        return cwds_union(before, { dirs = targets, unknown = false })
+    end
+
+    --- @param node TSNode `command`
+    --- @param before agentic.utils.ShellParse.Cwds
+    --- @return agentic.utils.ShellParse.Cwds success
+    --- @return agentic.utils.ShellParse.Cwds failure
+    local function flow_command(node, before)
+        flow_substitutions(node, before)
+        local name, args, args_dynamic = shell_command(node, src, io_of)
+        if not name or name == "popd" then
+            return unknown_cwds(), unknown_cwds()
+        end
+        if CD_COMMANDS[name] then
+            return cwds_enter(before, M.cd_target(name, args, args_dynamic)),
+                before
+        end
+        if name == "source" or name == "." then
+            local operand = script_file_source(name, args, args_dynamic)
+            local after = operand
+                    and source_cwds
+                    and source_cwds(operand, before)
+                or unknown_cwds()
+            return after, after
+        end
+        return before, before
+    end
+
+    --- Split an `if_statement` or `elif_clause` into its condition, its body
+    --- and its `elif`/`else` clauses.
+    --- @param node TSNode
+    --- @return TSNode[] condition
+    --- @return TSNode[] body
+    --- @return TSNode[] clauses
+    local function split_if(node)
+        local condition, body, clauses = {}, {}, {}
+        local part = condition
+        for child in node:iter_children() do
+            local t = child:type()
+            if t == "then" then
+                part = body
+            elseif t == "elif_clause" or t == "else_clause" then
+                table.insert(clauses, child)
+            else
+                table.insert(part, child)
+            end
+        end
+        return condition, body, clauses
+    end
+
+    --- @param node TSNode `if_statement`
+    --- @param before agentic.utils.ShellParse.Cwds
+    --- @return agentic.utils.ShellParse.Cwds after
+    local function flow_if(node, before)
+        local condition, body, clauses = split_if(node)
+        local cs, failure = flow_children(condition, before)
+        local after = cwds_union(flow_children(body, cs))
+        local has_else = false
+        for _, clause in ipairs(clauses) do
+            if clause:type() == "else_clause" then
+                has_else = true
+                after = cwds_union(
+                    after,
+                    flow_children(children_of(clause), failure)
+                )
+            else
+                local clause_condition, clause_body = split_if(clause)
+                local s, f = flow_children(clause_condition, failure)
+                after = cwds_union(after, flow_children(clause_body, s))
+                failure = f
+            end
+        end
+        return has_else and after or cwds_union(after, failure)
+    end
+
+    --- @param node TSNode `case_statement`
+    --- @param before agentic.utils.ShellParse.Cwds
+    --- @return agentic.utils.ShellParse.Cwds after
+    local function flow_case(node, before)
+        local after = before
+        for child, field in node:iter_children() do
+            if field == "value" then
+                flow_substitutions(child, before)
+            elseif child:type() == "case_item" then
+                local body = {}
+                for item_child, item_field in child:iter_children() do
+                    if item_field == "value" then
+                        flow_substitutions(item_child, before)
+                    else
+                        table.insert(body, item_child)
+                    end
+                end
+                after = cwds_union(after, flow_children(body, after))
+            end
+        end
+        return after
+    end
+
+    flow = function(node, before)
+        cwd_of[node:id()] = before
+        local t = node:type()
+        if t == "command" then
+            return flow_command(node, before)
+        elseif t == "negated_command" then
+            local s, f = flow_children(children_of(node), before)
+            return f, s
+        elseif
+            t == "program"
+            or t == "list"
+            or t == "compound_statement"
+            or t == "do_group"
+        then
+            return flow_children(children_of(node), before)
+        elseif SUBSHELL_TYPES[t] then
+            flow_children(children_of(node), before)
+            return before, before
+        elseif t == "pipeline" then
+            --- @type TSNode[]
+            local elements = vim.iter(node:named_children())
+                :filter(function(child)
+                    return child:type() ~= "comment"
+                end)
+                :totable()
+            for i = 1, #elements - 1 do
+                flow(elements[i], before)
+            end
+            -- zsh runs the last element in the current shell; bash and sh
+            -- run it in a subshell.
+            local s, f = flow(elements[#elements], before)
+            return cwds_union(before, s), cwds_union(before, f)
+        elseif t == "redirected_statement" then
+            local s, f = before, before
+            for child, field in node:iter_children() do
+                if field == "body" then
+                    s, f = flow(child, before)
+                elseif child:named() then
+                    flow_substitutions(child, before)
+                end
+            end
+            local target = redirects_target(node)
+            cwd_of[node:id()] = target and cwd_of[target:id()] or before
+            return s, f
+        elseif t == "if_statement" then
+            local after = flow_if(node, before)
+            return after, after
+        elseif t == "case_statement" then
+            local after = flow_case(node, before)
+            return after, after
+        elseif t == "function_definition" then
+            flow_children(children_of(node), unknown_cwds())
+            local after = changed_cwds(node, before) or before
+            return after, after
+        end
+        -- Loops and every other node: what runs inside starts from one set
+        -- that holds at each iteration.
+        local within = changed_cwds(node, before) or before
+        flow_children(children_of(node), within)
+        return within, within
+    end
+
+    return cwd_of, cwds_union(flow(root, start))
+end
+
 --- @class agentic.ShellCommand
 --- @field name string unwrapped inner command name; a leading system binary directory is stripped (`/usr/bin/ls` → `ls`), any other path is kept (`./x`)
 --- @field flags string[] short clusters split (`-rf` → `-r`,`-f`), long flags whole
@@ -2509,7 +3045,7 @@ end
 --- @field stdin? agentic.utils.ShellParse.Heredoc the heredoc this command reads on stdin
 --- @field redirects? agentic.utils.ShellParse.Redirect[] every file redirect and herestring the shell applies to this command, in the order it applies them: those of the compound statements and launchers enclosing it, outermost first, then its own. A list or pipeline's redirect applies to its last command. Heredocs are in `stdin`. nil when none.
 --- @field assignments? table<string, agentic.utils.ShellParse.Assignment> the prefix assignments in effect for this command (`IFS=$'\t' read` → `IFS`), its launchers' prefix assignments and `env` operands included. nil when none.
---- @field cwd? string|false the directory this command starts in, after earlier `cd`s in the same shell. Not normalised, and relative to the caller's cwd when relative. nil = no `cd` yet, false = unknown. A `cd` in a branch or loop counts as if it always ran.
+--- @field cwd? string|false the directory this command starts in, after earlier `cd`s in the same shell (targets as `ShellParse.cd_target` knows them). Relative to the caller's cwd when relative. nil = no `cd` yet, false = unknown. A `cd` in a branch or loop counts as if it always ran.
 --- @field opaque? true the command runs code from its arguments that extraction could not unwrap (`eval "$x"`, `sudo -i …`, `zsh -c "$x"`), so `argv` holds commands no record shows
 --- @field via string[] the launchers, `-c` shells and static `eval`s this command was unwrapped from, outermost first (`timeout 5 uv run x` → `{ "timeout", "uv" }`)
 --- @field pipe_from? integer[] indices, in the same record list, of the records of the pipeline element before this command's, whose output its stdin reads. Every record inside a pipeline element, its substitutions included, gets them. nil outside a pipeline and in its first element.
@@ -2572,6 +3108,8 @@ M.is_bare_cat = is_bare_cat
 M.inner_source = inner_source
 M.script_file_source = script_file_source
 M.resolve_against_cwd = resolve_against_cwd
+M.cwds_union = cwds_union
+M.unknown_cwds = unknown_cwds
 M.CONTAINER_TYPES = CONTAINER_TYPES
 M.SUBSTITUTION_TYPES = SUBSTITUTION_TYPES
 M.SUBSTITUTION_INNER_STATEMENT_TYPES = SUBSTITUTION_INNER_STATEMENT_TYPES

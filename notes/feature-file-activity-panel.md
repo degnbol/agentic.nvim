@@ -17,9 +17,8 @@ Status: reviewed spec
   `utils/permission_rules.test.lua`, `session_manager.test.lua`
 - Skills: `permissions` (§ shell command parsing), `provider-system`
   (tracker reads), `session-lifecycle` (Path A replay)
-- Prerequisite: `notes/FIX-walk-file-model.md` — the hook-reported start cwd
-  (`PermissionManager:bash_cwd`) and `cd_target`, which changes what
-  `ShellCommand.cwd` holds
+- `PermissionManager:bash_cwd` (the hook-reported start cwd) and
+  `ShellParse.cd_target` (what `ShellCommand.cwd` holds)
 - Related: `notes/FIX-heredoc-line-statement.md`
 
 ## Background

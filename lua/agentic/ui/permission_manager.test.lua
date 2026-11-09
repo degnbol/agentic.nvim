@@ -2,6 +2,7 @@
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 local BufHelpers = require("agentic.utils.buf_helpers")
+local MiniTest = require("mini.test")
 
 describe("agentic.ui.PermissionManager", function()
     --- @type agentic.ui.MessageWriter
@@ -1922,6 +1923,77 @@ describe("agentic.ui.PermissionManager", function()
             assert.spy(cb).was.called(0)
             assert.is_not_nil(pm.current_request)
             pm:_complete_request("reject-once")
+        end)
+
+        describe("bash cwds", function()
+            --- @type string
+            local dir
+
+            before_each(function()
+                dir = vim.fn.resolve(vim.fn.tempname())
+                vim.fn.mkdir(dir, "p")
+                vim.fn.writefile({ "ls" }, dir .. "/run.sh")
+            end)
+            after_each(function()
+                vim.fs.rm(dir, { recursive = true })
+            end)
+
+            it("reads a script from the cwd recorded for its call", function()
+                local prompted = pm:add_request(
+                    make_execute_request("zsh run.sh", "tc-no-cwd"),
+                    function() end
+                )
+                assert.is_true(prompted)
+                pm:_complete_request("reject-once")
+
+                pm:record_bash_cwd("tc-cwd", dir)
+                prompted = pm:add_request(
+                    make_execute_request("zsh run.sh", "tc-cwd"),
+                    function() end
+                )
+                assert.is_false(prompted)
+                assert.same({ "read-only" }, pm:take_deciders("tc-cwd"))
+            end)
+
+            it("decide reads a script from the given cwd", function()
+                --- @type agentic.acp.ToolCall
+                local tool_call = {
+                    toolCallId = "t",
+                    kind = "execute",
+                    rawInput = { command = "zsh run.sh" } --[[@as agentic.acp.RawInput]],
+                }
+                assert.is_nil(pm:decide("execute", tool_call, nil))
+                assert.equal("allow", pm:decide("execute", tool_call, nil, dir))
+            end)
+
+            it("keeps a cwd until dropped or cleared", function()
+                pm:record_bash_cwd("a", "/x")
+                pm:record_bash_cwd("b", "/y")
+                assert.equal("/x", pm:bash_cwd("a"))
+                pm:drop_bash_cwd("a")
+                assert.is_nil(pm:bash_cwd("a"))
+                pm:clear()
+                assert.is_nil(pm:bash_cwd("b"))
+            end)
+
+            it("remembers allow-always leaves from the recorded cwd", function()
+                local tally = spy.on(PermissionRules, "tally_unapproved")
+                MiniTest.finally(function()
+                    tally:revert()
+                end)
+                local request = make_execute_request("zsh run.sh", "tc-always")
+                table.insert(request.options, {
+                    optionId = "allow-always",
+                    name = "Allow always",
+                    kind = "allow_always",
+                })
+                pm:add_request(request, function() end)
+                pm:record_bash_cwd("tc-always", dir)
+                pm:_complete_request("allow-always")
+                local call = tally.calls[#tally.calls]
+                assert.equal("zsh run.sh", call[1])
+                assert.equal(dir, call[3])
+            end)
         end)
     end)
 
