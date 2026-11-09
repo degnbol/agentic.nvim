@@ -37,7 +37,7 @@ differ in kind casing. It is wrong, from provider source:
   *"Unknown ACP tool call kind… Please report this"* on miss. A provider
   capitalising `Read` would have spammed it.
 
-**Four copies of the false claim must go with §1** (they instruct the opposite
+**Three copies of the false claim must go with §1** (they instruct the opposite
 of what this plan does):
 
 1. `.claude/skills/provider-system/SKILL.md:330-339` — a whole section, *"Tool
@@ -47,7 +47,6 @@ of what this plan does):
    docstring the hoist carried forward.
 3. `session_manager.test.lua:1625` — *"opencode capitalises kinds"*, in the
    comment of a test that exists to assert the behaviour §6 deletes.
-4. `notes/feature-file-activity-panel.md:168`.
 
 ## The twelve mints
 
@@ -359,7 +358,7 @@ block field only, per § Scope.
   members of both vocabularies, so the `@param kind agentic.acp.ToolKind` at
   `:484` is semantically wrong but not a diagnostic — do not go looking for a
   lint. Pre-existing; this plan neither creates nor fixes it.
-- **Documentation §1a invalidates**, beyond the four premise copies:
+- **Documentation §1a invalidates**, beyond the three premise copies:
   `tool_call_renderer.lua:33` (*"Leaves already-capitalised kinds (WebSearch,
   SubAgent, etc.) unchanged"*), `config_default.lua:499` (*"ACP kind
   `Skill`"*), `auggie_acp_adapter.lua:9`, `theme.lua:158`, `glyphs.lua:14`
@@ -367,8 +366,7 @@ block field only, per § Scope.
   invariant), `.claude/skills/rendering/SKILL.md:113`, `:158`. A
   prose-reviewer pass over `provider-system/SKILL.md` should follow §1: its
   ExitPlanMode title row (`:320-324`) and `display_kind` sentence (`:335-339`)
-  go stale with the section at `:330`, and
-  `notes/feature-file-activity-panel.md:166-172` cross-references that heading.
+  go stale with the section at `:330`.
 - **The adapter override contract changes.** "An adapter must hand downstream
   a lowercase `kind`" belongs in the `provider-system` skill, which also needs
   `__build_tool_call_message` added to its list of override points.

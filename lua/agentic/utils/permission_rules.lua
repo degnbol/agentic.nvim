@@ -252,9 +252,7 @@ end
 --- the policy layer to clear against the grant scopes (over-prompt-only: an
 --- effect that does not clear still blocks approval). `path` may be
 --- relative.
---- @class agentic.utils.PermissionRules.Effect
---- @field kind "write"|"delete" Mutation kind (redirect write, or an `rm` operand)
---- @field path string Concrete target path
+--- @alias agentic.utils.PermissionRules.Effect agentic.utils.ShellParse.FileEffect
 
 --- What allowed one single command in the approve walk: a structured allow
 --- kind, a settings.json allow pattern, or a session-remembered leaf.
@@ -1184,13 +1182,12 @@ local function walk_command(node, src, ctx, known, funcs)
     end
 
     -- An `rm` emits a delete effect per concrete operand instead of bailing to
-    -- the structured `ask`. A dash-token rm parses as an option (it never
-    -- deletes a file for it), so only `--`-trailing words and plain words are
-    -- operands. A dynamic operand (`rm $x`) cannot be pinned to a literal →
-    -- bail like a dynamic redirect. A directory delete (`-r`/`-R`/`-d`, their
-    -- long forms, an operand ending in `/`) bails too: the policy layer judges
-    -- one file per effect. The policy layer (`_bash_effects_clear`) then
-    -- clears each operand against the grant scopes.
+    -- the structured `ask`. A dynamic operand (`rm $x`) cannot be pinned to a
+    -- literal → bail like a dynamic redirect. A directory delete (`-r`/`-R`/
+    -- `-d`, their long forms, an operand ending in `/`) bails too: the policy
+    -- layer judges one file per effect. The policy layer
+    -- (`_bash_effects_clear`) then clears each operand against the grant
+    -- scopes.
     --
     -- This is a fallback for an `rm` that would otherwise prompt: an explicit
     -- glob allow (`Bash(rm *)`) approves it cleanly with no effect, so it is not
@@ -1204,39 +1201,21 @@ local function walk_command(node, src, ctx, known, funcs)
         and not M.matches_any_pattern(leaf, ctx.allow_settings)
         and not M.matches_any_pattern(leaf, ctx.allow_remembered)
     then
-        local operands = {}
-        local end_of_options = false
-        for i, a in ipairs(args) do
-            local is_operand = end_of_options
-                or (a:sub(1, 1) ~= "-")
-                or a == "-"
-            if a == "--" and not end_of_options then
-                end_of_options = true
-                is_operand = false
-            end
-            if is_operand then
-                if args_dynamic[i] or a:sub(-1) == "/" then
-                    return false
-                end
-                table.insert(operands, a)
-            else
-                -- GNU getopt takes any unambiguous prefix of a long option.
-                local long = a:match("^%-%-(.+)$")
-                if long then
-                    if
-                        vim.startswith("recursive", long)
-                        or vim.startswith("dir", long)
-                    then
-                        return false
-                    end
-                elseif a:find("[rRd]") then
-                    return false
-                end
+        local operands, recursive = ShellParse.rm_operands(args, args_dynamic)
+        if recursive then
+            return false
+        end
+        for _, operand in ipairs(operands) do
+            if operand.dynamic or operand.path:sub(-1) == "/" then
+                return false
             end
         end
         if #operands > 0 then
-            for _, p in ipairs(operands) do
-                table.insert(ctx.effects, { kind = "delete", path = p })
+            for _, operand in ipairs(operands) do
+                table.insert(
+                    ctx.effects,
+                    { kind = "delete", path = operand.path }
+                )
             end
             ctx.taint.set = true
             return true
