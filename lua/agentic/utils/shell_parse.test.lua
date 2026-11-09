@@ -534,6 +534,10 @@ describe("ShellParse.extract_commands", function()
                 "/x",
                 record("cd /x 2>/dev/null && python3", "python3").cwd
             )
+            assert.equal(
+                "/x",
+                record("cd /x >! /dev/null && python3", "python3").cwd
+            )
             assert.equal(vim.env.HOME, record("cd; python3", "python3").cwd)
             assert.equal("/x", record("pushd /x; python3", "python3").cwd)
             assert.equal(

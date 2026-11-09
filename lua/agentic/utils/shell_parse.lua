@@ -2749,7 +2749,10 @@ local function shell_command(node, src, io_of)
     for child, field in node:iter_children() do
         local t = child:type()
         if field == "redirect" then
-            if #child:field("destination") > 1 then
+            if
+                t == "file_redirect"
+                and #redirect_operands(child, src).dests > 1
+            then
                 table.insert(args, "")
                 table.insert(args_dynamic, true)
             end
