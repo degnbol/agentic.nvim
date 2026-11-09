@@ -902,6 +902,103 @@ describe("ShellParse.extract_commands", function()
         it("leaves redirects nil when there are none", function()
             assert.equal(nil, record("a x", "a").redirects)
         end)
+
+        describe("zsh clobber forms", function()
+            it("reads `!` right after the operator as part of it", function()
+                local rec = record("echo a >! /x/a", "echo")
+                assert.same({ "a" }, rec.argv)
+                assert.same({ file(">!", nil, "/x/a") }, rec.redirects)
+                for _, op in ipairs({ ">>", "&>", "&>>" }) do
+                    assert.same(
+                        { file(op .. "!", nil, "/x/a") },
+                        record("echo a " .. op .. "! /x/a", "echo").redirects
+                    )
+                end
+                assert.same(
+                    { file(">!", 2, "/x/a") },
+                    record("echo a 2>! /x/a", "echo").redirects
+                )
+            end)
+
+            it("reads a target attached to the `!`", function()
+                assert.same(
+                    { file(">!", nil, "/x/a") },
+                    record("echo a >!/x/a", "echo").redirects
+                )
+                assert.same({
+                    {
+                        op = ">!",
+                        target = '"$f"',
+                        target_fd = false,
+                        dynamic = true,
+                    },
+                }, record('echo a >!"$f"', "echo").redirects)
+                assert.same({ "echo", "x" }, names("echo a >!$(x)"))
+                assert.same(
+                    { file(">!", 2, "/x/a") },
+                    record("echo a 2>!/x/a", "echo").redirects
+                )
+                assert.same(
+                    { file("&>>!", nil, "/x/a") },
+                    record("echo a &>>!/x/a", "echo").redirects
+                )
+                assert.same(
+                    { file(">!", nil, "f") },
+                    record("echo a >!$'f'", "echo").redirects
+                )
+            end)
+
+            it(
+                "reads a substitution right after the `!` as the target",
+                function()
+                    local rec = record("echo a >!<(x)", "echo")
+                    assert.same({ "a" }, rec.argv)
+                    assert.equal(">!", rec.redirects[1].op)
+                    assert.equal("<(x)", rec.redirects[1].target)
+                end
+            )
+
+            it(
+                "gives the words after the target back to the command",
+                function()
+                    local rec = record('echo a >! "$f"', "echo")
+                    assert.same({ "a" }, rec.argv)
+                    assert.is_true(rec.redirects[1].dynamic)
+                    assert.same(
+                        { "a", "b" },
+                        record("echo a >! /x/a b", "echo").argv
+                    )
+                end
+            )
+
+            it("reads a spaced or escaped `!` as a file name", function()
+                local rec = record("echo a > ! /x/a", "echo")
+                assert.same({ "a", "/x/a" }, rec.argv)
+                assert.same({ file(">", nil, "!") }, rec.redirects)
+                assert.same(
+                    { file(">", nil, "!") },
+                    record("echo a >\\! f", "echo").redirects
+                )
+            end)
+
+            it("reads a clobber redirect before the command name", function()
+                local rec = record(">!f cmd", "cmd")
+                assert.same({ file(">!", nil, "f") }, rec.redirects)
+                -- The grammar takes the spaced target for the command name.
+                assert.equal(nil, ShellParse.extract_commands(">! f cmd"))
+            end)
+
+            it("records a clobber redirect without a target", function()
+                assert.same({
+                    {
+                        op = ">!",
+                        target = "",
+                        target_fd = false,
+                        dynamic = true,
+                    },
+                }, record("echo a >!", "echo").redirects)
+            end)
+        end)
     end)
 
     describe("assignments", function()

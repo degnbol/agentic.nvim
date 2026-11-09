@@ -578,6 +578,29 @@ describe("PermissionRules", function()
             end)
         end)
 
+        -- zsh reads `>!` as a clobbering `>`, bash as a write to a file named
+        -- `!`, so the target is not pinned. `>&!` and `> !` have two
+        -- destinations.
+        describe("zsh clobber forms", function()
+            for _, cmd in ipairs({
+                "ls >! /dev/null",
+                "ls >! /tmp/x",
+                "ls >!/tmp/x",
+                "ls >!/dev/null",
+                "ls 2>!/dev/null",
+                "ls &>>!f",
+                "ls >&! /tmp/x",
+                "ls > ! /dev/null",
+            }) do
+                it("evaluate bails: " .. cmd, function()
+                    assert.is_false((PermissionRules.evaluate(cmd, config_dir)))
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(cmd, config_dir)
+                    )
+                end)
+            end
+        end)
+
         -- `env` is a launcher, not an effect-neutral wrapper (it can set PATH /
         -- LD_PRELOAD), so it must carry no blanket read-only entry — otherwise it
         -- would launder whatever it launches. `cat *` is allowed; `env cat …`
