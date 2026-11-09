@@ -3215,9 +3215,10 @@ describe("agentic.SessionManager", function()
 
     describe("_record_file_op", function()
         --- @param tracker table|nil MessageWriter tracker for "tc-1"
+        --- @param bash_cwd string|nil start directory the hook reported for "tc-1"
         --- @return agentic.SessionManager
         --- @return table[] recorded
-        local function make_session(tracker)
+        local function make_session(tracker, bash_cwd)
             --- @type table[]
             local recorded = {}
             --- @type agentic.SessionManager
@@ -3231,8 +3232,14 @@ describe("agentic.SessionManager", function()
                         return true
                     end,
                 },
+                permission_manager = {
+                    bash_cwd = function(_self, id)
+                        return id == "tc-1" and bash_cwd or nil
+                    end,
+                },
                 _view_for = SessionManager._view_for,
                 _record_file_op = SessionManager._record_file_op,
+                _record_shell_ops = SessionManager._record_shell_ops,
             } --[[@as agentic.SessionManager]]
             with_subagents(session)
             return session, recorded
@@ -3350,8 +3357,113 @@ describe("agentic.SessionManager", function()
             assert.equal(0, #recorded)
         end)
 
+        describe("a shell command", function()
+            it("records the files its text writes and deletes", function()
+                local session, recorded = make_session({
+                    kind = "execute",
+                    status = "completed",
+                    argument = "echo x > /nonexistent-root/a && rm /nonexistent-root/b",
+                })
+
+                session:_record_file_op("tc-1")
+
+                assert.same({
+                    {
+                        tool_call_id = "tc-1",
+                        path = "/nonexistent-root/a",
+                        op = "edit",
+                        source = "parsed",
+                    },
+                    {
+                        tool_call_id = "tc-1",
+                        path = "/nonexistent-root/b",
+                        op = "delete",
+                        source = "parsed",
+                    },
+                }, recorded)
+            end)
+
+            it(
+                "resolves a relative path against the hook's directory",
+                function()
+                    local session, recorded = make_session({
+                        kind = "execute",
+                        status = "completed",
+                        argument = "rm x",
+                    }, "/p")
+
+                    session:_record_file_op("tc-1")
+
+                    assert.equal(1, #recorded)
+                    assert.equal("/p/x", recorded[1].path)
+                end
+            )
+
+            it("drops a relative path with no known directory", function()
+                local session, recorded = make_session({
+                    kind = "execute",
+                    status = "completed",
+                    argument = "rm x",
+                })
+
+                session:_record_file_op("tc-1")
+
+                assert.equal(0, #recorded)
+            end)
+
+            it("records a command that ran and exited non-zero", function()
+                local session, recorded = make_session({
+                    kind = "execute",
+                    status = "failed",
+                    argument = "rm /tmp/b",
+                })
+
+                session:_record_file_op("tc-1")
+
+                assert.equal(1, #recorded)
+            end)
+
+            it("ignores a command the provider rejected", function()
+                local session, recorded = make_session({
+                    kind = "execute",
+                    status = "failed",
+                    rejection = "User rejected",
+                    argument = "rm /tmp/b",
+                })
+
+                session:_record_file_op("tc-1")
+
+                assert.equal(0, #recorded)
+            end)
+
+            it("ignores a command the plugin rejected", function()
+                local session, recorded = make_session({
+                    kind = "execute",
+                    status = "failed",
+                    decided_by = { "prompt-reject" },
+                    argument = "rm /tmp/b",
+                })
+
+                session:_record_file_op("tc-1")
+
+                assert.equal(0, #recorded)
+            end)
+
+            it("ignores a command that has not finished", function()
+                local session, recorded = make_session({
+                    kind = "execute",
+                    status = "in_progress",
+                    argument = "rm /tmp/b",
+                })
+
+                session:_record_file_op("tc-1")
+
+                assert.equal(0, #recorded)
+            end)
+        end)
+
         it("ignores non-mutating kinds", function()
-            for _, kind in ipairs({ "read", "search", "execute", "fetch" }) do
+            for _, kind in ipairs({ "read", "search", "fetch" }) do
                 local session, recorded = make_session({
                     kind = kind,
                     status = "completed",
@@ -4794,6 +4906,52 @@ describe("agentic.SessionManager", function()
                 SessionManager._ring_bell()
             end)
         end)
+    end)
+
+    describe("_tagfunc", function()
+        --- @type TestStub
+        local lsp_tagfunc_stub
+        local lsp_tags = { { name = "f", filename = "/a.lua", cmd = "1" } }
+
+        before_each(function()
+            lsp_tagfunc_stub = spy.stub(vim.lsp, "tagfunc")
+            lsp_tagfunc_stub:returns(lsp_tags)
+        end)
+
+        after_each(function()
+            lsp_tagfunc_stub:revert()
+        end)
+
+        it(
+            "falls back to vim.lsp.tagfunc with no message or job at the cursor",
+            function()
+                local session = setmetatable({
+                    _writer_of_buf = function()
+                        return nil
+                    end,
+                }, { __index = SessionManager }) --[[@as agentic.SessionManager]]
+
+                assert.same(lsp_tags, session:_tagfunc("f", "c"))
+                assert.is_true(lsp_tagfunc_stub:called_with("f", "c"))
+            end
+        )
+
+        it(
+            "falls back to vim.lsp.tagfunc when no message or job has the tag",
+            function()
+                local session = setmetatable({
+                    _writers_of_message = function()
+                        return {}
+                    end,
+                    _background_job_record = function()
+                        return nil
+                    end,
+                }, { __index = SessionManager }) --[[@as agentic.SessionManager]]
+
+                assert.same(lsp_tags, session:_tagfunc("f", ""))
+                assert.is_true(lsp_tagfunc_stub:called_with("f", ""))
+            end
+        )
     end)
 
     describe("on_permission_request hook", function()

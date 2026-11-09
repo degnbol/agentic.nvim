@@ -31,6 +31,7 @@ local Recovery = require("agentic.session_recovery")
 local SessionRegistry = require("agentic.session_registry")
 local SessionResume = require("agentic.session_resume")
 local SequenceTail = require("agentic.utils.sequence_tail")
+local ShellParse = require("agentic.utils.shell_parse")
 local SideRecords = require("agentic.ui.side_records")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
@@ -585,7 +586,7 @@ end
 SessionManager.TAGFUNC = "v:lua.require'agentic.session_manager'.tagfunc"
 
 --- 'tagfunc' (`:h tag-function`) that runs the `_tagfunc` of the session
---- owning the current buffer. `vim.NIL` (a standard lookup) when no session
+--- owning the current buffer. Falls back to `vim.lsp.tagfunc` when no session
 --- owns it.
 --- @param pattern string
 --- @param flags string
@@ -593,7 +594,7 @@ SessionManager.TAGFUNC = "v:lua.require'agentic.session_manager'.tagfunc"
 function SessionManager.tagfunc(pattern, flags)
     local owner = SessionRegistry.owner_of_buf(vim.api.nvim_get_current_buf())
     if not owner then
-        return vim.NIL
+        return vim.lsp.tagfunc(pattern, flags)
     end
     return owner:_tagfunc(pattern, flags)
 end
@@ -603,7 +604,7 @@ end
 --- buffer's, and each background job id a tag at the head of the job's block.
 --- With the `c` flag (`CTRL-]`) the tag is the message whose row holds the
 --- cursor, else the job the tool call block there stops, instead of
---- `pattern`. `vim.NIL` (a standard lookup) when nothing matches.
+--- `pattern`. Falls back to `vim.lsp.tagfunc` when nothing matches.
 --- @param pattern string
 --- @param flags string
 --- @return { name: string, filename: string, cmd: string }[]|vim.NIL
@@ -626,7 +627,7 @@ function SessionManager:_tagfunc(pattern, flags)
         end
     end
     if not name then
-        return vim.NIL
+        return vim.lsp.tagfunc(pattern, flags)
     end
     local tags = {}
     --- @type agentic.ui.MessageWriter|nil
@@ -667,7 +668,7 @@ function SessionManager:_tagfunc(pattern, flags)
         -- following would move.
         first_other:hand_next_window_to_user()
     end
-    return #tags > 0 and tags or vim.NIL
+    return #tags > 0 and tags or vim.lsp.tagfunc(pattern, flags)
 end
 
 --- The writers of the buffers that can hold a row of a message: the chat's,
@@ -1721,7 +1722,8 @@ end
 --- triggered it: `argument` arrives on an early update and is absent from the
 --- `completed` one.
 ---
---- Only `completed` is recorded. `failed` covers a rejected permission prompt,
+--- An `execute` call is recorded by `_record_shell_ops`. Of the edit family,
+--- only `completed` is recorded. `failed` covers a rejected permission prompt,
 --- where nothing reached disk.
 ---
 --- `file_created` comes from the provider's post-tool response and is the exact
@@ -1736,11 +1738,15 @@ function SessionManager:_record_file_op(tool_call_id)
     end
     local tracker =
         self:_view_for(tool_call_id).writer.tool_call_blocks[tool_call_id]
-    if not tracker or tracker.status ~= "completed" then
+    if not tracker then
         return
     end
     local kind = AcpKind.normalise(tracker.kind)
-    if not FILE_MUTATING_KINDS[kind] then
+    if kind == "execute" then
+        self:_record_shell_ops(tool_call_id, tracker)
+        return
+    end
+    if tracker.status ~= "completed" or not FILE_MUTATING_KINDS[kind] then
         return
     end
     if not tracker.argument or tracker.argument == "" then
@@ -1766,6 +1772,40 @@ function SessionManager:_record_file_op(tool_call_id)
         op = op,
         ranges = tracker.hunk_ranges,
     })
+end
+
+--- Append the files a shell command's text writes or deletes to the activity
+--- tally, marked `parsed`.
+---
+--- Recorded on `completed`, and on `failed` without a rejection line
+--- (`CanonicalToolCall.rejection_line`): a provider may report a command that
+--- ran and exited non-zero as `failed`, while one that never ran (rejected,
+--- denied, interrupted) has a rejection line. A relative path is dropped when
+--- the call's start directory is unknown.
+--- @param tool_call_id string
+--- @param tracker agentic.ui.MessageWriter.ToolCallBlock
+function SessionManager:_record_shell_ops(tool_call_id, tracker)
+    local ran = tracker.status == "completed"
+        or (
+            tracker.status == "failed"
+            and not CanonicalToolCall.rejection_line(tracker)
+        )
+    if not ran or not tracker.argument or tracker.argument == "" then
+        return
+    end
+
+    local effects = ShellParse.file_effects(
+        tracker.argument,
+        self.permission_manager:bash_cwd(tool_call_id)
+    )
+    for _, effect in ipairs(effects) do
+        self.file_activity:record({
+            tool_call_id = tool_call_id,
+            path = effect.path,
+            op = effect.kind == "delete" and "delete" or "edit",
+            source = "parsed",
+        })
+    end
 end
 
 --- Show or hide the changed-files panel. Opening reconciles the rows against

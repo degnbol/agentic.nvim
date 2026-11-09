@@ -43,6 +43,7 @@ Theme.HL_GROUPS = {
     ACTIVITY_DELETE = "AgenticActivityDelete",
     ACTIVITY_READ = "AgenticActivityRead",
     ACTIVITY_UNSEEN = "AgenticActivityUnseen",
+    ACTIVITY_SOURCE = "AgenticActivitySource",
     TABLE_ROW_END = "AgenticTableRowEnd",
     BUDGET_WARNING = "AgenticBudgetWarning",
     BUDGET_EXHAUSTED = "AgenticBudgetExhausted",
@@ -230,6 +231,7 @@ function Theme.setup()
         { Theme.HL_GROUPS.ACTIVITY_DELETE, { link = "Removed" } },
         { Theme.HL_GROUPS.ACTIVITY_READ, { link = "Comment" } },
         { Theme.HL_GROUPS.ACTIVITY_UNSEEN, { link = "DiagnosticHint" } },
+        { Theme.HL_GROUPS.ACTIVITY_SOURCE, { link = "Comment" } },
 
         -- Last line of each table body row, in tables whose rows wrap onto
         -- continuation lines, in the colour the markdown highlights

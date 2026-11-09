@@ -1123,8 +1123,10 @@ drops the rest of the queue.
 9.5 FILE ACTIVITY                                      *agentic-file-activity*
 
 A toggled panel listing the files the agent has changed over the session,
-one row per file however many times it was touched. Subagent (Task) edits
-appear alongside the main agent's, unmarked.
+one row per file however many times it was touched. Files a shell command
+changes are listed when the command text names them (a redirect target, an
+`rm` operand), marked `shell`. Subagent (Task) edits appear alongside the
+main agent's, unmarked.
 
     Row      Meaning ~
     `+ path`   File created
@@ -1144,15 +1146,13 @@ Inside the panel:
 
 Opening the panel drops rows whose change is no longer on disk: a created
 file that no longer exists, and a tracked file that no longer differs from
-HEAD, so committing the agent's work drops its rows. Rows for untracked
-files that still exist, and every row outside a git repository, stay.
+HEAD, so committing the agent's work drops its rows. A deleted file's row
+drops when the file exists again, unless it is tracked and differs from
+HEAD, or when the agent created the file before deleting it.
 `windows.activity.hide_reverted = false` keeps them all.
 
 The list survives a resume and a provider switch. `/new`
 and `/clear` start a new conversation, and empty it.
-
-Only the file-editing tools are tracked. Files a shell command changes are
-not listed.
 
 ------------------------------------------------------------------------------
 9.6 SESSION INFO                                          *agentic-info-panel*

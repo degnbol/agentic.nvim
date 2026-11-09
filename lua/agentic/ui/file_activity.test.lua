@@ -88,7 +88,7 @@ describe("agentic.ui.FileActivity", function()
             assert.equal(0, changes)
         end)
 
-        it("ignores a repeated tool call id", function()
+        it("ignores a repeated tool call id and path", function()
             local activity = make_activity()
 
             assert.is_true(record(activity, "tc-1", "/repo/a.lua", "edit"))
@@ -96,6 +96,15 @@ describe("agentic.ui.FileActivity", function()
 
             assert.equal(1, #activity:rows())
             assert.equal(1, activity:count())
+        end)
+
+        it("records every path of one tool call", function()
+            local activity = make_activity()
+
+            assert.is_true(record(activity, "tc-1", "/repo/a.lua", "edit"))
+            assert.is_true(record(activity, "tc-1", "/repo/b.lua", "delete"))
+
+            assert.equal(2, #activity:rows())
         end)
 
         it("collapses repeated edits of one path into one row", function()
@@ -228,6 +237,46 @@ describe("agentic.ui.FileActivity", function()
             assert.same({ "+", "~", "-", "·" }, markers)
         end)
 
+        it("marks a row whose every op was parsed from a command", function()
+            --- @return string[]
+            local function suffixes()
+                local marks = vim.api.nvim_buf_get_extmarks(
+                    bufnr,
+                    vim.api.nvim_create_namespace("agentic_file_activity"),
+                    0,
+                    -1,
+                    { details = true }
+                )
+                local out = {}
+                for _, mark in ipairs(marks) do
+                    local virt_text = mark[4].virt_text
+                    if virt_text then
+                        table.insert(out, mark[2] .. ":" .. virt_text[1][1])
+                    end
+                end
+                return out
+            end
+            local activity = make_activity()
+
+            activity:record({
+                tool_call_id = "tc-1",
+                path = "/repo/a.lua",
+                op = "edit",
+                source = "parsed",
+            })
+            activity:record({
+                tool_call_id = "tc-1",
+                path = "/repo/b.lua",
+                op = "edit",
+                source = "parsed",
+            })
+            record(activity, "tc-2", "/repo/b.lua", "edit")
+
+            assert.same({ "0:shell" }, suffixes())
+            assert.is_true(activity:rows()[1].parsed)
+            assert.is_false(activity:rows()[2].parsed)
+        end)
+
         it("notifies the owner after every render", function()
             local activity = make_activity()
             local before = changes
@@ -358,6 +407,23 @@ describe("agentic.ui.FileActivity", function()
 
             assert.equal(1, #replayed:rows())
         end)
+
+        it(
+            "keeps a stored op whose tool call is stored with another path",
+            function()
+                local activity = make_activity()
+                record(activity, "tc-1", "/repo/a.lua", "edit")
+                local stored = activity:serialize()
+
+                local replayed = make_activity()
+                record(replayed, "tc-1", "/repo/a.lua", "edit")
+                record(replayed, "tc-1", "/repo/b.lua", "edit")
+                replayed:load(stored)
+
+                assert.equal(2, #replayed:rows())
+                assert.is_false(record(replayed, "tc-1", "/repo/b.lua", "edit"))
+            end
+        )
 
         it("keeps ops recorded before the stored log arrived", function()
             local activity = make_activity()
@@ -513,6 +579,78 @@ describe("agentic.ui.FileActivity", function()
             activity:reconcile()
 
             assert.same({ "/repo/deleted.lua" }, row_paths(activity))
+        end)
+
+        describe("a deletion", function()
+            it("hides a created file that is gone again", function()
+                local activity = make_activity()
+                record(activity, "tc-1", "/repo/a.lua", "create")
+                record(activity, "tc-2", "/repo/a.lua", "delete")
+
+                activity:reconcile()
+
+                assert.same({}, row_paths(activity))
+            end)
+
+            it("keeps a deleted untracked file", function()
+                local activity = make_activity()
+                record(activity, "tc-1", "/repo/a.lua", "delete")
+
+                activity:reconcile()
+
+                assert.same({ "/repo/a.lua" }, row_paths(activity))
+            end)
+
+            it("hides an untracked file that exists again", function()
+                local activity = make_activity()
+                record(activity, "tc-1", "/repo/a.lua", "delete")
+                on_disk["/repo/a.lua"] = true
+                dirty["/repo/a.lua"] = true
+
+                activity:reconcile()
+
+                assert.same({}, row_paths(activity))
+            end)
+
+            it("hides a tracked file restored to its HEAD content", function()
+                local activity = make_activity()
+                record(activity, "tc-1", "/repo/a.lua", "delete")
+                on_disk["/repo/a.lua"] = true
+                tracked["/repo/a.lua"] = true
+
+                activity:reconcile()
+
+                assert.same({}, row_paths(activity))
+            end)
+
+            it("keeps a tracked file recreated with other content", function()
+                local activity = make_activity()
+                record(activity, "tc-1", "/repo/a.lua", "delete")
+                on_disk["/repo/a.lua"] = true
+                tracked["/repo/a.lua"] = true
+                dirty["/repo/a.lua"] = true
+
+                activity:reconcile()
+
+                assert.same({ "/repo/a.lua" }, row_paths(activity))
+            end)
+
+            it(
+                "outside a repository, keeps it while the file is gone",
+                function()
+                    root_stub:returns(nil)
+                    local activity = make_activity()
+                    record(activity, "tc-1", "/repo/gone.lua", "delete")
+                    record(activity, "tc-2", "/repo/back.lua", "delete")
+                    record(activity, "tc-3", "/repo/temp.lua", "create")
+                    record(activity, "tc-4", "/repo/temp.lua", "delete")
+                    on_disk["/repo/back.lua"] = true
+
+                    activity:reconcile()
+
+                    assert.same({ "/repo/gone.lua" }, row_paths(activity))
+                end
+            )
         end)
 
         it("keeps every existing file outside a repository", function()

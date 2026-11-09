@@ -505,7 +505,7 @@ describe("PermissionRules", function()
 
         -- The grammar hangs the rest of the line after a redirect's target on
         -- the redirect (words of the command; after a heredoc delimiter also
-        -- redirects, pipes and lists), so the redirect bails.
+        -- redirects, pipes and lists).
         describe("code after a redirect target", function()
             for _, cmd in ipairs({
                 "echo hi > /etc/x /dev/null",
@@ -518,6 +518,7 @@ describe("PermissionRules", function()
                 "cat <<'EOF' && python3 -c 1\nhi\nEOF",
                 "cat <<'EOF' > /etc/x\nhi\nEOF",
                 "cat <<'EOF' > $(touch /tmp/pwn)\nhi\nEOF",
+                "cat <<'EOF' && ls || rm a\nhi\nEOF",
             }) do
                 it("is not read-only: " .. cmd, function()
                     assert.is_false(PermissionRules.is_read_only(cmd))
@@ -575,6 +576,35 @@ describe("PermissionRules", function()
                         config_dir
                     )
                 )
+            end)
+
+            it("pins a write on a heredoc's line", function()
+                local ok, effects = PermissionRules.evaluate(
+                    "cat <<'EOF' > /tmp/f\nhi\nEOF",
+                    config_dir
+                )
+                assert.is_true(ok)
+                assert.same({ { kind = "write", path = "/tmp/f" } }, effects)
+            end)
+
+            it("drops a binding the rest of a heredoc's line makes", function()
+                assert.is_false(
+                    (
+                        PermissionRules.evaluate(
+                            "f=/tmp/a; cat <<'EOF' && f=/etc/x\nhi\nEOF\ncat > $f",
+                            config_dir
+                        )
+                    )
+                )
+            end)
+
+            it("tallies only the rest of a heredoc's line", function()
+                local cmd = "cat <<'EOF' && rm a\nhi\nEOF"
+                local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+                assert.same({ { 0, 15, 0, 19 } }, ranges)
+                cmd = "cat <<'EOF' | rm a\nhi\nEOF"
+                ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+                assert.same({ { 0, 14, 0, 18 } }, ranges)
             end)
         end)
 
@@ -4993,6 +5023,52 @@ describe("PermissionRules", function()
                 assert.is_false(ok)
             end
         )
+
+        it("runs a script written earlier on a heredoc's line", function()
+            local path = ghost()
+            local line = ("cat > %s <<'EOF' && zsh %s\n"):format(path, path)
+            assert.is_true(
+                (PermissionRules.evaluate(line .. "ls /tmp\nEOF", config_dir))
+            )
+            assert.is_false(
+                (
+                    PermissionRules.evaluate(
+                        line .. "rm -rf /tmp/x\nEOF",
+                        config_dir
+                    )
+                )
+            )
+        end)
+
+        it(
+            "judges a script after a negated or listed `cat` as the disk bytes",
+            function()
+                local path = script("rm -rf /tmp/x\n")
+                for _, head in ipairs({ "true || cat", "! cat" }) do
+                    local cmd = ("%s > %s <<'EOF' && zsh %s\nls /tmp\nEOF"):format(
+                        head,
+                        path,
+                        path
+                    )
+                    assert.is_false((PermissionRules.evaluate(cmd, config_dir)))
+                end
+            end
+        )
+
+        it("judges a script after `||` as the disk bytes", function()
+            local path = script("rm -rf /tmp/x\n")
+            assert.is_false(
+                (
+                    PermissionRules.evaluate(
+                        ("cat > %s <<'EOF' || zsh %s\nls /tmp\nEOF"):format(
+                            path,
+                            path
+                        ),
+                        config_dir
+                    )
+                )
+            )
+        end)
 
         it("walks reconstructed bytes, not stale disk content", function()
             -- Disk holds a disallowed body; the heredoc rewrites it to an allowed

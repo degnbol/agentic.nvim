@@ -291,6 +291,13 @@ describe("ShellParse.extract_commands", function()
             return out
         end
 
+        it("pipes a heredoc's command into the rest of its line", function()
+            assert.same(
+                { cat = false, rm = { "cat" } },
+                upstream_names("cat <<'EOF' | xargs rm\nx\nEOF")
+            )
+        end)
+
         it("links each pipeline element to the one before it", function()
             assert.same(
                 { curl = false, grep = { "curl" }, sh = { "grep" } },
@@ -464,6 +471,25 @@ describe("ShellParse.extract_commands", function()
             local src = "a <<EOF && b\nx\nEOF"
             assert.same(HEREDOC, record(src, "a").stdin)
             assert.equal(nil, record(src, "b").stdin)
+        end)
+
+        it("gives the redirects on a heredoc's line to its command", function()
+            local recs = ShellParse.extract_commands(
+                "cat <<'EOF' > /tmp/f 2>/dev/null\nx\nEOF"
+            ) or {}
+            assert.equal(1, #recs)
+            assert.same({ ">", ">" }, {
+                recs[1].redirects[1].op,
+                recs[1].redirects[2].op,
+            })
+            assert.same(
+                { "/tmp/f", "/dev/null" },
+                { recs[1].redirects[1].target, recs[1].redirects[2].target }
+            )
+        end)
+
+        it("records the expansions of a heredoc body", function()
+            assert.same({ "cat", "rm" }, names("cat <<EOF\n$(rm x)\nEOF"))
         end)
 
         it("marks an expanding heredoc body dynamic", function()
@@ -1731,6 +1757,16 @@ describe("ShellParse.command_cwds", function()
         assert.same({ "/x" }, dirs_of("! cd /x || r", "r"))
     end)
 
+    it("runs the rest of a heredoc's line after its command", function()
+        assert.same({ "/x" }, dirs_of("cd /x <<'EOF' && r\nhi\nEOF", "r"))
+        assert.same({ "/s/t" }, dirs_of("cd /x <<'EOF' || r\nhi\nEOF", "r"))
+        assert.same({ "/s/t" }, dirs_of("cd /x <<'EOF' | r\nhi\nEOF", "r"))
+        assert.same(
+            { "/x", "/y" },
+            dirs_of("cd /x || cd /y <<'EOF' && r\nhi\nEOF", "r")
+        )
+    end)
+
     it("joins a ./ or ../ target to each possible cwd", function()
         assert.same({ "/s/t/sub" }, dirs_of("cd ./sub && r", "r"))
         assert.same({ "/s/u" }, dirs_of("cd ../u && r", "r"))
@@ -1911,4 +1947,280 @@ describe("ShellParse.resolve_against_cwd", function()
             ShellParse.resolve_against_cwd("link/../x", base)
         )
     end)
+end)
+
+describe("ShellParse.rm_operands", function()
+    it("splits operands from options", function()
+        local operands, recursive = ShellParse.rm_operands(
+            { "-v", "a", "-", "b" },
+            {}
+        )
+        assert.same({
+            { path = "a", dynamic = false },
+            { path = "-", dynamic = false },
+            { path = "b", dynamic = false },
+        }, operands)
+        assert.is_false(recursive)
+    end)
+
+    it("takes every word after `--` as an operand", function()
+        local operands = ShellParse.rm_operands({ "--", "-f", "--" }, {})
+        assert.same({
+            { path = "-f", dynamic = false },
+            { path = "--", dynamic = false },
+        }, operands)
+    end)
+
+    it("marks a dynamic operand", function()
+        local operands = ShellParse.rm_operands({ "a", "$x" }, { false, true })
+        assert.same({
+            { path = "a", dynamic = false },
+            { path = "$x", dynamic = true },
+        }, operands)
+    end)
+
+    it("reports a recursive or directory delete", function()
+        for _, opt in ipairs({ "-r", "-R", "-d", "-fr", "--rec", "--dir" }) do
+            local _, recursive = ShellParse.rm_operands({ opt, "a" }, {})
+            assert.is_true(recursive)
+        end
+        local _, forced = ShellParse.rm_operands({ "--force", "a" }, {})
+        assert.is_false(forced)
+    end)
+end)
+
+describe("ShellParse.file_effects", function()
+    --- @param kind "write"|"delete"
+    --- @param path string
+    --- @return agentic.utils.ShellParse.FileEffect
+    local function effect(kind, path)
+        return { kind = kind, path = path }
+    end
+
+    it("reads the targets of file-writing redirects", function()
+        assert.same(
+            {
+                effect("write", "/x/a"),
+                effect("write", "/x/b"),
+                effect("write", "/x/c"),
+            },
+            ShellParse.file_effects(
+                "echo 1 > /x/a; echo 2 >> /x/b; echo 3 &> /x/c",
+                nil
+            )
+        )
+    end)
+
+    it("skips descriptor, /dev and dynamic targets", function()
+        assert.same(
+            {},
+            ShellParse.file_effects(
+                'echo 1 2>&1 >/dev/null; echo 2 > "$out"',
+                "/p"
+            )
+        )
+    end)
+
+    it("reads every operand of an rm", function()
+        assert.same(
+            { effect("delete", "/x/a"), effect("delete", "/x/b") },
+            ShellParse.file_effects("rm /x/a /x/b", nil)
+        )
+    end)
+
+    it("reads the operands of a recursive rm", function()
+        assert.same(
+            { effect("delete", "/x/d") },
+            ShellParse.file_effects("rm -rf /x/d", nil)
+        )
+    end)
+
+    it("reads an operand after `--`", function()
+        assert.same(
+            { effect("delete", "/p/-f") },
+            ShellParse.file_effects("rm -- -f", "/p")
+        )
+    end)
+
+    it("joins a relative path to the directory a cd entered", function()
+        assert.same(
+            { effect("delete", "/abs/x") },
+            ShellParse.file_effects("cd /abs && rm x", nil)
+        )
+        assert.same(
+            { effect("write", vim.env.HOME .. "/nonexistent-dir/x") },
+            ShellParse.file_effects("cd ~/nonexistent-dir && echo > x", nil)
+        )
+    end)
+
+    it("joins a relative path to the start directory", function()
+        assert.same(
+            { effect("delete", "/p/x") },
+            ShellParse.file_effects("rm x", "/p")
+        )
+        assert.same(
+            { effect("delete", "/p/sub/x") },
+            ShellParse.file_effects("cd ./sub && rm x", "/p")
+        )
+    end)
+
+    it("drops a relative path whose directory is unknown", function()
+        assert.same({}, ShellParse.file_effects("rm x", nil))
+        assert.same({}, ShellParse.file_effects("cd ./sub && rm x", nil))
+        assert.same({}, ShellParse.file_effects('cd "$d" && rm x', "/p"))
+    end)
+
+    it("expands a home path", function()
+        assert.same(
+            { effect("delete", vim.uv.fs_realpath(vim.env.HOME) .. "/x") },
+            ShellParse.file_effects("rm ~/x", nil)
+        )
+    end)
+
+    it("gives one effect for two spellings of one file", function()
+        local base = vim.fn.resolve(vim.fn.tempname())
+        vim.fn.mkdir(base .. "/real", "p")
+        vim.uv.fs_symlink(base .. "/real", base .. "/link")
+        MiniTest.finally(function()
+            vim.fs.rm(base, { recursive = true })
+        end)
+        assert.same(
+            { effect("delete", base .. "/real/f") },
+            ShellParse.file_effects(
+                string.format("echo > %s/link/f; rm %s/real/./f", base, base),
+                nil
+            )
+        )
+    end)
+
+    it("gives one effect for a redirect on a compound statement", function()
+        assert.same(
+            { effect("write", "/x/e") },
+            ShellParse.file_effects("{ echo a; echo b; } > /x/e", nil)
+        )
+    end)
+
+    it("keeps the last effect on a path", function()
+        assert.same(
+            { effect("write", "/x/g"), effect("delete", "/x/f") },
+            ShellParse.file_effects("echo > /x/f; echo > /x/g; rm /x/f", nil)
+        )
+    end)
+
+    it("gives none for a command that does not parse", function()
+        assert.same({}, ShellParse.file_effects("echo (", "/p"))
+    end)
+end)
+
+describe("ShellParse.redirected_parts", function()
+    --- The parts of the first statement of `src`, as text (redirects as
+    --- node types), or nil.
+    --- @param src string
+    --- @return table|nil
+    local function parts_of(src)
+        local root = ZshParse.parse(src) --[[@as TSNode]]
+        local stmt = root:named_child(0) --[[@as TSNode]]
+        local parts = ShellParse.redirected_parts(stmt, src)
+        if not parts then
+            return nil
+        end
+        local function texts(nodes)
+            return vim.tbl_map(function(n)
+                return vim.treesitter.get_node_text(n, src)
+            end, nodes)
+        end
+        return {
+            body = parts.body and vim.treesitter.get_node_text(parts.body, src),
+            redirects = vim.tbl_map(function(n)
+                return n:type()
+            end, parts.redirects),
+            words = texts(parts.words),
+            rest = texts(parts.rest),
+            rest_op = parts.rest_op,
+        }
+    end
+
+    it("gives the words on a heredoc's line to the command", function()
+        assert.same({
+            body = "sort",
+            redirects = { "heredoc_redirect" },
+            words = { "-o", "f" },
+            rest = {},
+        }, parts_of("sort <<'EOF' -o f\nx\nEOF"))
+        assert.same({ "g" }, parts_of("cat <<'EOF' > f g\nx\nEOF").words)
+    end)
+
+    it("orders the redirects on a heredoc's line after it", function()
+        assert.same(
+            { "heredoc_redirect", "file_redirect", "file_redirect" },
+            parts_of("cat <<'EOF' > f 2>/dev/null\nx\nEOF").redirects
+        )
+        assert.same(
+            { "heredoc_redirect", "herestring_redirect" },
+            parts_of("cat <<'EOF' <<<y\nx\nEOF").redirects
+        )
+        assert.same(
+            { "file_redirect", "heredoc_redirect" },
+            parts_of("cat > f <<'EOF' && zsh f\nx\nEOF").redirects
+        )
+    end)
+
+    it(
+        "flattens the chain or pipeline a heredoc's line continues into",
+        function()
+            for src, rest in pairs({
+                ["cat <<'EOF' && a && b && c\nx\nEOF"] = {
+                    rest = { "a", "b", "c" },
+                    rest_op = "&&",
+                },
+                ["cat <<'EOF' || a > f\nx\nEOF"] = {
+                    rest = { "a > f" },
+                    rest_op = "||",
+                },
+                ["cat <<'EOF' | a | b\nx\nEOF"] = {
+                    rest = { "a", "b" },
+                    rest_op = "|",
+                },
+                ["cat <<'EOF' && a | b\nx\nEOF"] = {
+                    rest = { "a | b" },
+                    rest_op = "&&",
+                },
+                ["cat > f <<'EOF' && zsh f\nx\nEOF"] = {
+                    rest = { "zsh f" },
+                    rest_op = "&&",
+                },
+            }) do
+                local parts = parts_of(src) --[[@as table]]
+                assert.same(
+                    rest,
+                    { rest = parts.rest, rest_op = parts.rest_op }
+                )
+            end
+        end
+    )
+
+    it("has no body for a bare redirect", function()
+        assert.same(
+            { redirects = { "file_redirect" }, words = {}, rest = {} },
+            parts_of("> f")
+        )
+    end)
+
+    for _, src in ipairs({
+        "cat <<'EOF' |& sh\nx\nEOF",
+        "cat <<'EOF' | a |& b\nx\nEOF",
+        "cat <<'EOF' && a || b\nx\nEOF",
+        "cat <<'EOF' && a || b && c\nx\nEOF",
+        "cat <<'EOF' | a && b\nx\nEOF",
+        "a && cat <<'EOF' | b\nx\nEOF",
+        "cat <<'EOF' &&\nls\nEOF",
+        "cat <<'EOF' && a &&\nb\nEOF",
+        "cat <<'EOF' | a |\nb\nEOF",
+        "cat <<'EOF' && { a\nb\n}\nEOF",
+        "cat <<'EOF' # c\nx\nEOF",
+    }) do
+        it("is unmodelled: " .. vim.inspect(src), function()
+            assert.is_nil(parts_of(src))
+        end)
+    end
 end)
