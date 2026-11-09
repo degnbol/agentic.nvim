@@ -19,7 +19,6 @@ Status: reviewed spec
   (tracker reads), `session-lifecycle` (Path A replay)
 - `PermissionManager:bash_cwd` (the hook-reported start cwd) and
   `ShellParse.cd_target` (what `ShellCommand.cwd` holds)
-- Related: `notes/FIX-heredoc-line-statement.md`
 
 ## Background
 The panel (`64cbb2e`) records only edit-family tool calls. A file that the
@@ -186,8 +185,6 @@ than one path, or can delete:
   a relative path is not listed unless the command `cd`s to an absolute dir.
 - Writes the command text does not show are not listed. A command that exits
   non-zero still lists its targets, also those a `&&` chain skipped.
-- `cat <<'EOF' > f` is listed only after `FIX-heredoc-line-statement` lands
-  (the grammar puts that redirect inside the heredoc today).
 
 ## Non-goals
 - **git candidate set + mtime source.** Per Execute call, `git status

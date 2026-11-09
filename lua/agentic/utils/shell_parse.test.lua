@@ -291,6 +291,13 @@ describe("ShellParse.extract_commands", function()
             return out
         end
 
+        it("pipes a heredoc's command into the rest of its line", function()
+            assert.same(
+                { cat = false, rm = { "cat" } },
+                upstream_names("cat <<'EOF' | xargs rm\nx\nEOF")
+            )
+        end)
+
         it("links each pipeline element to the one before it", function()
             assert.same(
                 { curl = false, grep = { "curl" }, sh = { "grep" } },
@@ -464,6 +471,25 @@ describe("ShellParse.extract_commands", function()
             local src = "a <<EOF && b\nx\nEOF"
             assert.same(HEREDOC, record(src, "a").stdin)
             assert.equal(nil, record(src, "b").stdin)
+        end)
+
+        it("gives the redirects on a heredoc's line to its command", function()
+            local recs = ShellParse.extract_commands(
+                "cat <<'EOF' > /tmp/f 2>/dev/null\nx\nEOF"
+            ) or {}
+            assert.equal(1, #recs)
+            assert.same({ ">", ">" }, {
+                recs[1].redirects[1].op,
+                recs[1].redirects[2].op,
+            })
+            assert.same(
+                { "/tmp/f", "/dev/null" },
+                { recs[1].redirects[1].target, recs[1].redirects[2].target }
+            )
+        end)
+
+        it("records the expansions of a heredoc body", function()
+            assert.same({ "cat", "rm" }, names("cat <<EOF\n$(rm x)\nEOF"))
         end)
 
         it("marks an expanding heredoc body dynamic", function()
@@ -1731,6 +1757,16 @@ describe("ShellParse.command_cwds", function()
         assert.same({ "/x" }, dirs_of("! cd /x || r", "r"))
     end)
 
+    it("runs the rest of a heredoc's line after its command", function()
+        assert.same({ "/x" }, dirs_of("cd /x <<'EOF' && r\nhi\nEOF", "r"))
+        assert.same({ "/s/t" }, dirs_of("cd /x <<'EOF' || r\nhi\nEOF", "r"))
+        assert.same({ "/s/t" }, dirs_of("cd /x <<'EOF' | r\nhi\nEOF", "r"))
+        assert.same(
+            { "/x", "/y" },
+            dirs_of("cd /x || cd /y <<'EOF' && r\nhi\nEOF", "r")
+        )
+    end)
+
     it("joins a ./ or ../ target to each possible cwd", function()
         assert.same({ "/s/t/sub" }, dirs_of("cd ./sub && r", "r"))
         assert.same({ "/s/u" }, dirs_of("cd ../u && r", "r"))
@@ -1911,4 +1947,117 @@ describe("ShellParse.resolve_against_cwd", function()
             ShellParse.resolve_against_cwd("link/../x", base)
         )
     end)
+end)
+
+describe("ShellParse.redirected_parts", function()
+    --- The parts of the first statement of `src`, as text (redirects as
+    --- node types), or nil.
+    --- @param src string
+    --- @return table|nil
+    local function parts_of(src)
+        local root = ZshParse.parse(src) --[[@as TSNode]]
+        local stmt = root:named_child(0) --[[@as TSNode]]
+        local parts = ShellParse.redirected_parts(stmt, src)
+        if not parts then
+            return nil
+        end
+        local function texts(nodes)
+            return vim.tbl_map(function(n)
+                return vim.treesitter.get_node_text(n, src)
+            end, nodes)
+        end
+        return {
+            body = parts.body and vim.treesitter.get_node_text(parts.body, src),
+            redirects = vim.tbl_map(function(n)
+                return n:type()
+            end, parts.redirects),
+            words = texts(parts.words),
+            rest = texts(parts.rest),
+            rest_op = parts.rest_op,
+        }
+    end
+
+    it("gives the words on a heredoc's line to the command", function()
+        assert.same({
+            body = "sort",
+            redirects = { "heredoc_redirect" },
+            words = { "-o", "f" },
+            rest = {},
+        }, parts_of("sort <<'EOF' -o f\nx\nEOF"))
+        assert.same({ "g" }, parts_of("cat <<'EOF' > f g\nx\nEOF").words)
+    end)
+
+    it("orders the redirects on a heredoc's line after it", function()
+        assert.same(
+            { "heredoc_redirect", "file_redirect", "file_redirect" },
+            parts_of("cat <<'EOF' > f 2>/dev/null\nx\nEOF").redirects
+        )
+        assert.same(
+            { "heredoc_redirect", "herestring_redirect" },
+            parts_of("cat <<'EOF' <<<y\nx\nEOF").redirects
+        )
+        assert.same(
+            { "file_redirect", "heredoc_redirect" },
+            parts_of("cat > f <<'EOF' && zsh f\nx\nEOF").redirects
+        )
+    end)
+
+    it(
+        "flattens the chain or pipeline a heredoc's line continues into",
+        function()
+            for src, rest in pairs({
+                ["cat <<'EOF' && a && b && c\nx\nEOF"] = {
+                    rest = { "a", "b", "c" },
+                    rest_op = "&&",
+                },
+                ["cat <<'EOF' || a > f\nx\nEOF"] = {
+                    rest = { "a > f" },
+                    rest_op = "||",
+                },
+                ["cat <<'EOF' | a | b\nx\nEOF"] = {
+                    rest = { "a", "b" },
+                    rest_op = "|",
+                },
+                ["cat <<'EOF' && a | b\nx\nEOF"] = {
+                    rest = { "a | b" },
+                    rest_op = "&&",
+                },
+                ["cat > f <<'EOF' && zsh f\nx\nEOF"] = {
+                    rest = { "zsh f" },
+                    rest_op = "&&",
+                },
+            }) do
+                local parts = parts_of(src) --[[@as table]]
+                assert.same(
+                    rest,
+                    { rest = parts.rest, rest_op = parts.rest_op }
+                )
+            end
+        end
+    )
+
+    it("has no body for a bare redirect", function()
+        assert.same(
+            { redirects = { "file_redirect" }, words = {}, rest = {} },
+            parts_of("> f")
+        )
+    end)
+
+    for _, src in ipairs({
+        "cat <<'EOF' |& sh\nx\nEOF",
+        "cat <<'EOF' | a |& b\nx\nEOF",
+        "cat <<'EOF' && a || b\nx\nEOF",
+        "cat <<'EOF' && a || b && c\nx\nEOF",
+        "cat <<'EOF' | a && b\nx\nEOF",
+        "a && cat <<'EOF' | b\nx\nEOF",
+        "cat <<'EOF' &&\nls\nEOF",
+        "cat <<'EOF' && a &&\nb\nEOF",
+        "cat <<'EOF' | a |\nb\nEOF",
+        "cat <<'EOF' && { a\nb\n}\nEOF",
+        "cat <<'EOF' # c\nx\nEOF",
+    }) do
+        it("is unmodelled: " .. vim.inspect(src), function()
+            assert.is_nil(parts_of(src))
+        end)
+    end
 end)

@@ -15,10 +15,8 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 
 **Shell parsing** (1 has no prerequisites; the others name theirs)
 1. P1 [`FIX-walk-file-model.md`](notes/FIX-walk-file-model.md)
-2. P2 [`FIX-heredoc-line-statement.md`](notes/FIX-heredoc-line-statement.md):
-   after 1
-3. P2 [`FEAT-executed-code.md`](notes/FEAT-executed-code.md): after 1
-4. P3 [`feature-file-activity-panel.md`](notes/feature-file-activity-panel.md):
+2. P2 [`FEAT-executed-code.md`](notes/FEAT-executed-code.md): after 1
+3. P3 [`feature-file-activity-panel.md`](notes/feature-file-activity-panel.md):
    after 1
 
 **Tool call rendering**

@@ -22,7 +22,7 @@ local redirect_is_safe = ShellParse.redirect_is_safe
 local redirect_write_dest = ShellParse.redirect_write_dest
 local redirect_is_truncate = ShellParse.redirect_is_truncate
 local heredoc_pure_body = ShellParse.heredoc_pure_body
-local heredoc_ends_line = ShellParse.heredoc_ends_line
+local redirected_parts = ShellParse.redirected_parts
 local is_bare_cat = ShellParse.is_bare_cat
 local inner_source = ShellParse.inner_source
 local script_file_source = ShellParse.script_file_source
@@ -589,7 +589,14 @@ local function collect_bindings(node, src, targets)
         end
         return true
     elseif t == "redirected_statement" then
-        return recurse({ body = true })
+        local parts = redirected_parts(node, src)
+        if not parts then
+            return false
+        end
+        local statements = vim.list_extend({ parts.body }, parts.rest)
+        return vim.iter(statements):all(function(statement)
+            return collect_bindings(statement, src, targets)
+        end)
     elseif t == "command" then
         local name = command_leaf_name(node, src)
         if name == "printf" then
@@ -938,17 +945,20 @@ local function read_script(path)
     return data --[[@as string|nil]]
 end
 
---- The files a `redirected_statement` writes, and the bytes they then
---- hold. Content is known only for `cat > f <<'EOF' … EOF`: a bare `cat`,
---- one truncating write, one heredoc without expansions. Safe redirects
---- (`> /dev/null`, fd duplication) write nothing.
---- @param node TSNode `redirected_statement`
+--- The files a redirected statement writes, and the bytes they then hold.
+--- Content is known only for `cat > f <<'EOF' … EOF`: a bare `cat` with no
+--- words on its redirects, one truncating write, one heredoc without
+--- expansions, and the rest of the line, if any, after `&&`. After `||` or
+--- `|` the rest may run before the file holds the body.
+--- Safe redirects (`> /dev/null`, fd duplication) write nothing.
+--- @param parts agentic.utils.ShellParse.RedirectedParts the statement
 --- @param src string
 --- @param known table<string, string>|nil constant environment of the enclosing sequence
 --- @return string[] paths write targets that resolve to a literal, as delivered
---- @return string|nil content bytes every target holds after the statement; nil when unknown
+--- @return string|nil content bytes every target holds when the rest of the
+---         line and the later statements run, nil when unknown
 --- @return boolean resolved every write target resolves to a literal
-local function redirect_writes(node, src, known)
+local function redirect_writes(parts, src, known)
     --- @type string[]
     local paths = {}
     local resolved = true
@@ -956,31 +966,29 @@ local function redirect_writes(node, src, known)
     --- @type (string|false)[] pure body of each heredoc, false for one with expansions
     local heredocs = {}
     local other_redirect = false
-    for child, field in node:iter_children() do
-        if field ~= "body" and child:named() then
-            local t = child:type()
-            if t == "heredoc_redirect" then
-                table.insert(heredocs, heredoc_pure_body(child, src) or false)
-            elseif t ~= "file_redirect" then
-                other_redirect = true
-            elseif not redirect_is_safe(child, src) then
-                -- Resolved exactly as an `rm` operand is, so the two correlate
-                -- for the intra-command create-then-delete check: a `$var`
-                -- bound to a literal earlier in the sequence resolves through
-                -- `known`, a quoted literal is quote-stripped.
-                local dest = redirect_write_dest(child, src)
-                local kname = dest and known and resolved_var_name(dest, src)
-                local target = kname and known and known[kname] or nil
-                if dest and target == nil and not token_is_dynamic(dest) then
-                    local text = literal_token(dest, src)
-                    target = text and ShellParse.delivered_path(text, dest, src)
-                end
-                if target then
-                    table.insert(paths, target)
-                    truncates = redirect_is_truncate(child)
-                else
-                    resolved = false
-                end
+    for _, r in ipairs(parts.redirects) do
+        local t = r:type()
+        if t == "heredoc_redirect" then
+            table.insert(heredocs, heredoc_pure_body(r, src) or false)
+        elseif t ~= "file_redirect" then
+            other_redirect = true
+        elseif not redirect_is_safe(r, src) then
+            -- Resolved exactly as an `rm` operand is, so the two correlate
+            -- for the intra-command create-then-delete check: a `$var`
+            -- bound to a literal earlier in the sequence resolves through
+            -- `known`, a quoted literal is quote-stripped.
+            local dest = redirect_write_dest(r, src)
+            local kname = dest and known and resolved_var_name(dest, src)
+            local target = kname and known and known[kname] or nil
+            if dest and target == nil and not token_is_dynamic(dest) then
+                local text = literal_token(dest, src)
+                target = text and ShellParse.delivered_path(text, dest, src)
+            end
+            if target then
+                table.insert(paths, target)
+                truncates = redirect_is_truncate(r)
+            else
+                resolved = false
             end
         end
     end
@@ -992,7 +1000,9 @@ local function redirect_writes(node, src, known)
         and not other_redirect
         and #paths == 1
         and truncates
-        and is_bare_cat(node:field("body")[1], src)
+        and #parts.words == 0
+        and (parts.rest_op == nil or parts.rest_op == "&&")
+        and is_bare_cat(parts.body, src)
     then
         content = heredocs[1] --[[@as string]]
     end
@@ -1560,14 +1570,16 @@ function walk_statements(node, src, ctx, seed)
 end
 
 --- Walk a `redirected_statement`: the body (command/pipeline/list) must pass,
---- and every redirect must be a safe form. A herestring (and any non-file,
---- non-heredoc redirect) is unmodelled and bails.
+--- every file redirect must be a safe form or write to a literal path, and each statement the rest of a
+--- heredoc's line continues into must pass. A herestring, a heredoc body with
+--- an expansion (it runs at write time), words on a redirect, and a line the
+--- tree may group differently from zsh bail. After `|` the rest runs beside
+--- the body, so the statement is walked as `walk_unordered`.
 ---
 --- Mutates `ctx`: every concrete file write emits a `ctx.effects` entry and
 --- sets `ctx.taint`, and `ctx.written` maps each written path, resolved
---- against its possible cwds, to the bytes the file will hold: reconstructed
---- content for a `cat > f.sh <<'EOF' … EOF` heredoc, else `false` for a write
---- whose output is not statically known. `ctx.written` is set before the body
+--- against its possible cwds, to the bytes the file will hold
+--- (`redirect_writes`), else `false`. `ctx.written` is set before the body
 --- is walked, as the shell opens the files before the body runs.
 --- @param node TSNode
 --- @param src string
@@ -1575,41 +1587,40 @@ end
 --- @param known table<string, string>|nil constant environment of the enclosing sequence
 --- @return boolean
 function walk_redirected(node, src, ctx, known)
-    local paths, content, resolved = redirect_writes(node, src, known)
-    if not resolved then
+    local parts = redirected_parts(node, src)
+    if not parts or #parts.words > 0 then
         return false
     end
-    record_writes(ctx.written, paths, content, cwds_at(ctx, node))
-    for child, field in node:iter_children() do
-        if field == "body" then
-            if not walk(child, src, ctx) then
-                return false
-            end
-        elseif child:named() then
-            local t = child:type()
-            -- A heredoc body with an expansion (`<<EOF` with `$var`/`$(…)`) runs
-            -- it at write time. The rest of the delimiter's line is code
-            -- this walk never inspects.
+    local function walk_once()
+        local paths, content, resolved = redirect_writes(parts, src, known)
+        if not resolved then
+            return false
+        end
+        record_writes(ctx.written, paths, content, cwds_at(ctx, node))
+        if parts.body and not walk(parts.body, src, ctx) then
+            return false
+        end
+        for _, r in ipairs(parts.redirects) do
+            local t = r:type()
             if
-                (
-                    t == "heredoc_redirect"
-                    and (
-                        not heredoc_pure_body(child, src)
-                        or not heredoc_ends_line(child)
-                    )
-                )
-                or (t ~= "heredoc_redirect" and t ~= "file_redirect")
+                t == "herestring_redirect"
+                or t == "heredoc_redirect" and not heredoc_pure_body(r, src)
             then
                 return false
             end
         end
+        for _, path in ipairs(paths) do
+            table.insert(ctx.effects, { kind = "write", path = path })
+        end
+        ctx.taint.set = ctx.taint.set or #paths > 0
+        return vim.iter(parts.rest):all(function(statement)
+            return walk(statement, src, ctx)
+        end)
     end
-
-    for _, path in ipairs(paths) do
-        table.insert(ctx.effects, { kind = "write", path = path })
+    if parts.rest_op == "|" then
+        return walk_unordered(ctx, walk_once)
     end
-    ctx.taint.set = ctx.taint.set or #paths > 0
-    return true
+    return walk_once()
 end
 
 --- Recurse `walk` over every inner statement of a `command_substitution`. Each
@@ -2344,33 +2355,6 @@ local function tally_function_definition(node, src, ctx, ranges, funcs)
     end
 end
 
---- Tally a `redirected_statement`: the body recurses; any redirect that is not
---- a safe form (`> /dev/null`, FD duplication) records as unapproved. The
---- files it writes go into `ctx.written` before the body is tallied, as in
---- `walk_redirected`.
---- @param node TSNode
---- @param src string
---- @param ctx agentic.utils.PermissionRules.TallyCtx
---- @param ranges agentic.utils.PermissionRules.Range[]
---- @param known table<string, string>|nil constant environment of the enclosing sequence
-local function tally_redirected(node, src, ctx, ranges, known)
-    local paths, content = redirect_writes(node, src, known)
-    record_writes(ctx.written, paths, content, cwds_at(ctx, node))
-    for child, field in node:iter_children() do
-        if field == "body" then
-            tally_walk(child, src, ctx, ranges)
-        elseif child:named() then
-            if
-                child:type() ~= "file_redirect"
-                or not redirect_is_safe(child, src)
-            then
-                record(ranges, child)
-                ctx.taint.set = true
-            end
-        end
-    end
-end
-
 --- Tally statements that may run after a write the tally reaches later; mirrors
 --- `walk_unordered`. When the tally sets `ctx.taint`, its ranges and the
 --- leaves it added are replaced by a second tally with the taint set from the
@@ -2392,6 +2376,65 @@ local function tally_unordered(ctx, ranges, tally_once)
         tally_once(once_ranges)
     end
     vim.list_extend(ranges, once_ranges)
+end
+
+--- Tally a `redirected_statement`, mirroring `walk_redirected`. The body and
+--- the rest of a heredoc's line recurse. A file redirect that is not a safe
+--- form (`> /dev/null`, FD duplication), a herestring, a heredoc body with an
+--- expansion, and the words on a heredoc's line record as unapproved. The
+--- files it writes go into `ctx.written` before the body is tallied. A
+--- statement whose line the tree may group differently from zsh records
+--- whole.
+--- @param node TSNode
+--- @param src string
+--- @param ctx agentic.utils.PermissionRules.TallyCtx
+--- @param ranges agentic.utils.PermissionRules.Range[]
+--- @param known table<string, string>|nil constant environment of the enclosing sequence
+local function tally_redirected(node, src, ctx, ranges, known)
+    local parts = redirected_parts(node, src)
+    if not parts then
+        record(ranges, node)
+        ctx.taint.set = true
+        return
+    end
+    --- @param once_ranges agentic.utils.PermissionRules.Range[]
+    local function tally_once(once_ranges)
+        local paths, content = redirect_writes(parts, src, known)
+        record_writes(ctx.written, paths, content, cwds_at(ctx, node))
+        if parts.body then
+            tally_walk(parts.body, src, ctx, once_ranges)
+        end
+        --- @type TSNode[]
+        local unsafe = {}
+        for _, r in ipairs(parts.redirects) do
+            local t = r:type()
+            if t == "heredoc_redirect" then
+                -- Not the whole redirect: it spans the rest of the line.
+                if not heredoc_pure_body(r, src) then
+                    table.insert(
+                        unsafe,
+                        ShellParse.heredoc_body(r) --[[@as TSNode]]
+                    )
+                end
+                vim.list_extend(unsafe, r:field("argument"))
+            elseif t ~= "file_redirect" or not redirect_is_safe(r, src) then
+                -- A file redirect's later destinations are inside it.
+                table.insert(unsafe, r)
+            end
+        end
+        for _, n in ipairs(unsafe) do
+            record(once_ranges, n)
+            ctx.taint.set = true
+        end
+        for _, statement in ipairs(parts.rest) do
+            tally_walk(statement, src, ctx, once_ranges)
+        end
+    end
+    if parts.rest_op == "|" then
+        tally_unordered(ctx, ranges, tally_once)
+    else
+        tally_once(ranges)
+    end
 end
 
 --- Forward declaration — `tally_sequence` wraps it.
