@@ -560,6 +560,17 @@ local ConfigDefault = {
         confirm_delete = true,
         cd_on_load = true,
     },
+
+    --- Model calls without an agent session: text in, text out.
+    --- @class agentic.UserConfig.TextModel
+    --- @field url? string Base URL of an OpenAI-compatible API, e.g. "http://localhost:4000/v1"; nil disables text-model features
+    --- @field api_key_env? string Name of the env var holding the API key; nil sends no Authorization header
+    --- @field timeout_ms integer Per-request timeout
+    text_model = {
+        url = nil,
+        api_key_env = nil,
+        timeout_ms = 60000,
+    },
 }
 
 return ConfigDefault
