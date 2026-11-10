@@ -3,7 +3,8 @@ Status: reviewed spec
 
 ## Relevant files
 - `lua/agentic/acp/acp_client.lua` — `__build_tool_call_message`,
-  `__handle_tool_call`, `__build_tool_call_update`, `extract_failure_reason`,
+  `__handle_tool_call`, `__build_tool_call_update`,
+  `__handle_tool_call_update`, `extract_failure_reason`,
   `find_content_diff`, `extract_content_body`, `exec_shell` (docstring),
   `subagent_task_id`
 - `lua/agentic/acp/adapters/auggie_acp_adapter.lua`, `codex_acp_adapter.lua`,
@@ -12,7 +13,8 @@ Status: reviewed spec
   `__handle_tool_call` / `__build_tool_call_message`
 - `lua/agentic/acp/adapters/claude_agent_acp_adapter.lua` —
   `__handle_tool_call`, `__build_tool_call_message`,
-  `__build_tool_call_update`, `__apply_tool_identity`, `__apply_raw_input`,
+  `__build_tool_call_update`, `__handle_tool_call_update`,
+  `hook_patch_facts` (docstring), `__apply_tool_identity`, `__apply_raw_input`,
   `__apply_terminal_output`, `set_head`
 - `lua/agentic/acp/adapters/claude_utils.lua` — `MODE_SWITCH_TOOLS`,
   `TOOL_KINDS`, `tool_kind`, `HEADS`, `tool_head`,
@@ -63,7 +65,7 @@ without `locations`. That is a second reason why they override the
 handler. A base predicate for "is this call shown" lets every adapter
 override only the builder and keeps the builder's result non-nil.
 
-Claude has the same pattern three times:
+Claude has the same pattern four times:
 - `__build_tool_call_update` copies the base builder so that it can unwrap
   the `tool_use_error` envelope in `failure_reason`. `__apply_terminal_output`
   unwraps a different input, the held terminal output, and stays as it is.
@@ -74,6 +76,11 @@ Claude has the same pattern three times:
   name→head lookup, which `TOOL_KINDS` and `HEADS` already express (`HEADS.Cron`
   gives one kind per-tool heads).
 - Both builders run the same five `__apply_*` steps in the same order.
+- `__handle_tool_call_update` ends with a copy of the base handler's build
+  and send (`claude_agent_acp_adapter.lua:927-931`,
+  `acp_client.lua:1011-1015`). It overrides the handler for its own drop
+  rule: it keeps a status-less update that has `rawInput` or
+  `terminal_exit`, which the base drops.
 
 The hand-built mode-switch message is also the only reason why an initial
 `ExitPlanMode` call has no body. The `MODE_SWITCH_TOOLS` docstring says the
@@ -100,6 +107,16 @@ switches use the base, both paths keep the body.
   override `__shows_tool_call` and `__build_tool_call_message`.
 - `__build_tool_call_message` docstring: adapters override it and start
   from the base result.
+- The same split on the update path. New protected predicate:
+  ```lua
+  --- Whether a tool_call_update is shown. Default: it has a status.
+  --- @protected
+  --- @param update agentic.acp.ToolCallUpdate
+  --- @return boolean shown
+  function ACPClient:__shows_tool_call_update(update)
+  ```
+  `__handle_tool_call_update` returns when it is false, else builds and
+  sends as today.
 - `exec_shell` docstring: delete "Reaches only blocks built by the base
   `__build_tool_call_message`".
 
@@ -145,6 +162,14 @@ its `body`.
   ClaudeUtils.unwrap_tool_use_error(message.failure_reason)`, then
   `apply_shared_fields`, then the update-only steps (terminal output,
   `TaskStop`, `output_ended`, rejection) as today.
+- `__shows_tool_call_update` override: true when the update has a status,
+  a non-empty `rawInput` or `_meta.terminal_exit` (today's gate in
+  `__handle_tool_call_update`). `__handle_tool_call_update` keeps the
+  hook-patch and held-terminal-output branches, then ends with
+  `ACPClient.__handle_tool_call_update(self, session_id, update)` in place
+  of its own gate, build and send. Its docstring and the
+  `hook_patch_facts` docstring name `__shows_tool_call_update` as the
+  shape-based guard.
 - Mode switches as a mint:
   - `TOOL_KINDS` gains `EnterPlanMode = "switch_mode"` and
     `ExitPlanMode = "switch_mode"`. `tool_kind` returns a table hit
@@ -187,7 +212,8 @@ its `body`.
 - Frontmatter description, pipeline diagram and routing table: the
   tool-call override points become `__shows_tool_call`,
   `__build_tool_call_message` and `__build_tool_call_update`.
-- § "Adapter override points": document `__shows_tool_call`. In the
+- § "Adapter override points": document `__shows_tool_call` and
+  `__shows_tool_call_update`. In the
   paragraph "Override a `__` handler when …", Gemini's synthetic
   `tool_call` names `__handle_request_permission`.
 - § "Edit diffs come from `content[]`": delete the paragraph about
@@ -226,11 +252,15 @@ its `body`.
   tool_use_error envelope", the `exits_plan` cases and a `switch_mode`
   tool not in `MODE_SWITCH_TOOLS` (a name such as `EnterWorktree` with
   bridge kind `switch_mode`) keep passing. A failed update with no
-  `rawOutput` has `failure_reason` nil.
+  `rawOutput` has `failure_reason` nil. The existing
+  `__handle_tool_call_update` cases (hook patch, held terminal output,
+  `terminal_exit` without status, a status-less update with no `rawInput`
+  dropped) keep passing.
 
 ### New (fail before, pass after)
 - `acp_client.test.lua`: `__shows_tool_call` false sends no
-  `on_tool_call`.
+  `on_tool_call`; `__shows_tool_call_update` false sends no
+  `on_tool_call_update`.
 - Edit diff found at `content[2]` behind a `content` entry: codex, gemini,
   mistral.
 - Claude: "renders ExitPlanMode as a switch to Normal" expects
