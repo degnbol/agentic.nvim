@@ -1844,6 +1844,51 @@ describe("agentic.ui.PermissionManager", function()
                 }))
             end)
         end)
+
+        describe("refusal_reasons", function()
+            it("gives the effect that does not clear", function()
+                grant(repo)
+                assert.same(
+                    { dirty_md .. ": file has unstaged changes" },
+                    pm:refusal_reasons("execute", {
+                        toolCallId = "t",
+                        rawInput = { command = "echo a > " .. dirty_md },
+                    })
+                )
+            end)
+
+            it("gives a relative effect path", function()
+                grant(repo)
+                assert.same(
+                    { "out: relative path" },
+                    pm:refusal_reasons("execute", {
+                        toolCallId = "t",
+                        rawInput = { command = "echo a > out" },
+                    })
+                )
+            end)
+
+            it("gives the grant check's reason for a file kind", function()
+                grant(repo)
+                assert.same(
+                    { dirty_md .. ": file has unstaged changes" },
+                    pm:refusal_reasons(
+                        "delete",
+                        make_grant_request("t", "delete", dirty_md).toolCall
+                    )
+                )
+            end)
+
+            it("names a path outside every grant scope", function()
+                assert.same(
+                    { a_lua .. ": not in a grant scope" },
+                    pm:refusal_reasons(
+                        "write",
+                        make_grant_request("t", "write", a_lua).toolCall
+                    )
+                )
+            end)
+        end)
     end)
 
     describe("auto-reject deny commands", function()
@@ -2107,6 +2152,97 @@ describe("agentic.ui.PermissionManager", function()
             local result = { pm:decide("read", { toolCallId = "t" }) }
             Config.permissions.auto_approve_kinds = original
             assert.same({}, result)
+        end)
+    end)
+
+    describe("resolve_request", function()
+        it("reads an opencode command from the tracker", function()
+            writer.tool_call_blocks["tc-oc"] = {
+                tool_call_id = "tc-oc",
+                kind = "execute",
+                argument = "ls",
+                diff = { new = { "x" } },
+            }
+            pm:record_bash_cwd("tc-oc", "/work")
+            local kind, tool_call, diff, cwd = pm:resolve_request({
+                sessionId = "s",
+                toolCall = { toolCallId = "tc-oc", kind = "execute" },
+                options = {},
+            })
+            assert.equal("execute", kind)
+            assert.same({ command = "ls" }, tool_call and tool_call.rawInput)
+            assert.same({ new = { "x" } }, diff)
+            assert.equal("/work", cwd)
+        end)
+
+        it("returns nothing for a request with no tool call", function()
+            assert.same(
+                {},
+                { pm:resolve_request({ sessionId = "s", options = {} }) }
+            )
+        end)
+    end)
+
+    describe("refusal_reasons", function()
+        local Config = require("agentic.config")
+        local PermissionRules = require("agentic.utils.permission_rules")
+        local orig_tier
+
+        before_each(function()
+            orig_tier = Config.permissions.auto_approve_tier
+        end)
+        after_each(function()
+            Config.permissions.auto_approve_tier = orig_tier
+        end)
+
+        --- @param command string
+        --- @return string[]
+        local function shell_reasons(command)
+            return pm:refusal_reasons("execute", {
+                toolCallId = "t",
+                rawInput = { command = command },
+            })
+        end
+
+        it("names the deciders of a deny", function()
+            assert.same(
+                { "denied by glob-deny, session-reject" },
+                pm:refusal_reasons(
+                    "execute",
+                    { toolCallId = "t", rawInput = { command = "x" } },
+                    nil,
+                    nil,
+                    { "glob-deny", "session-reject" }
+                )
+            )
+        end)
+
+        it("gives each unapproved part of a command", function()
+            assert.same({
+                "eval x: " .. PermissionRules.REASON_TEXT.code_builtin,
+            }, shell_reasons("cat a && eval x"))
+        end)
+
+        it("gives one line for a command that does not parse", function()
+            assert.same(
+                { "if: " .. PermissionRules.REASON_TEXT.unparsed },
+                shell_reasons("if")
+            )
+        end)
+
+        it("names the tier when only the tier withholds approval", function()
+            Config.permissions.auto_approve_tier = "read_only"
+            assert.same(
+                { "mktemp: not in the read-only command set" },
+                shell_reasons("mktemp")
+            )
+        end)
+
+        it("says other kinds need approval", function()
+            assert.same(
+                { "fetch calls need approval" },
+                pm:refusal_reasons("fetch", { toolCallId = "t" })
+            )
         end)
     end)
 

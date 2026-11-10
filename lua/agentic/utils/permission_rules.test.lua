@@ -601,10 +601,10 @@ describe("PermissionRules", function()
             it("tallies only the rest of a heredoc's line", function()
                 local cmd = "cat <<'EOF' && rm a\nhi\nEOF"
                 local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
-                assert.same({ { 0, 15, 0, 19 } }, ranges)
+                assert.same({ { 0, 15, 0, 19, "ask" } }, ranges)
                 cmd = "cat <<'EOF' | rm a\nhi\nEOF"
                 ranges = PermissionRules.tally_unapproved(cmd, config_dir)
-                assert.same({ { 0, 14, 0, 18 } }, ranges)
+                assert.same({ { 0, 14, 0, 18, "ask" } }, ranges)
             end)
         end)
 
@@ -4056,6 +4056,75 @@ describe("PermissionRules", function()
         local function span_text(command, range)
             return command:sub(range[2] + 1, range[4])
         end
+
+        describe("range reasons", function()
+            --- The `{ text, reason }` of each range `command` tallies.
+            --- @param command string single line
+            --- @param permissions table|nil See `stub_settings`
+            --- @return [string, agentic.utils.PermissionRules.Reason][]
+            local function reasons(command, permissions)
+                stub_settings(permissions)
+                local ranges =
+                    PermissionRules.tally_unapproved(command, config_dir)
+                return vim.tbl_map(function(r)
+                    return { span_text(command, r), r[5] }
+                end, ranges --[[@as agentic.utils.PermissionRules.Range[] ]])
+            end
+
+            local cases = {
+                { "frob x", "frob x", "no_allow" },
+                {
+                    "rm x",
+                    "rm x",
+                    "ask",
+                    { allow = { "Bash(rm *)" }, ask = { "Bash(rm *)" } },
+                },
+                { "$cmd x", "$cmd x", "dynamic" },
+                { "eval x", "eval x", "code_builtin" },
+                { 'sh -c "frob x"', 'sh -c "frob x"', "inner_code" },
+                { "sh -c 'if'", "sh -c 'if'", "unparsed" },
+                {
+                    "for f in <(frob); do echo $f; done",
+                    "<(frob)",
+                    "dirty_subst",
+                },
+                { "echo a > out", "> out", "redirect" },
+                { "PATH=/x; echo a", "PATH=/x", "structure" },
+            }
+            for _, case in ipairs(cases) do
+                local command, part, reason, permissions =
+                    case[1], case[2], case[3], case[4]
+                it(reason .. ": " .. command, function()
+                    assert.same(
+                        { { part, reason } },
+                        reasons(
+                            command,
+                            permissions or { allow = { "Bash(echo *)" } }
+                        )
+                    )
+                end)
+            end
+
+            it("dynamic: a structured ask only a dynamic word fires", function()
+                Config.permissions.use_plugin_defaults = true
+                assert.same(
+                    { { "git $sub", "dynamic" } },
+                    reasons("git $sub", nil)
+                )
+            end)
+
+            it("gives one range per unapproved part", function()
+                assert.same(
+                    {
+                        { "eval x", "code_builtin" },
+                        { "rm -r y", "no_allow" },
+                    },
+                    reasons("cat a && eval x && rm -r y", {
+                        allow = { "Bash(cat *)" },
+                    })
+                )
+            end)
+        end)
 
         it("returns only the unapproved leaf of a mixed pipeline", function()
             stub_settings({

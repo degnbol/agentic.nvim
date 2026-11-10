@@ -415,24 +415,25 @@ function PermissionManager:decide(kind, tool_call, diff, cwd)
     return nil, nil
 end
 
---- Try to auto-approve/reject a permission request without user interaction.
---- Resolves the tracker-derived inputs `decide` deliberately won't read (kind
---- and command for opencode's re-kinded / metadata-less requests, and the edit
---- diff), delegates the verdict to `decide`, then fires the ACP callback.
+--- The inputs `decide` takes for a request, read from the request and its
+--- tool call tracker (which `decide` deliberately does not read):
+--- - kind: a tracker kind in `auto_approve_kinds` wins. opencode raises
+---   `external_directory` with kind="other" before the underlying tool's own
+---   permission, sharing toolCallId, and Claude's Skill requests also arrive
+---   with kind="other": only the tracker has the minted "Skill" kind.
+--- - tool_call: opencode sends `metadata: {}` on shell requests, so the
+---   tracker's command is injected as `rawInput.command`.
 --- @param request agentic.acp.RequestPermission
---- @param callback fun(option_id: string|nil)
---- @return boolean handled
-function PermissionManager:_try_auto_approve(request, callback)
+--- @return string|nil kind
+--- @return agentic.acp.ToolCall|nil tool_call Nil when the request has none
+--- @return table|nil diff The tracker's edit diff
+--- @return string|nil cwd Directory the Bash call starts in; nil when unknown
+function PermissionManager:resolve_request(request)
     local tool_call = request.toolCall
     if not tool_call then
-        return false
+        return nil, nil, nil, nil
     end
 
-    -- opencode raises `external_directory` with kind="other" before the
-    -- underlying tool's own permission, sharing toolCallId. Claude's Skill
-    -- requests also arrive with kind="other"; only the tracker has the minted
-    -- "Skill" kind. Prefer a tracker kind in `auto_approve_kinds` so those
-    -- still auto-approve.
     local tracker =
         self:_writer(tool_call.toolCallId).tool_call_blocks[tool_call.toolCallId]
     local kind = tool_call.kind
@@ -441,9 +442,6 @@ function PermissionManager:_try_auto_approve(request, callback)
         kind = tracker.kind
     end
 
-    -- opencode sends metadata:{} on shell requests; the command lives in the
-    -- tracker as `argument`. Inject it so `decide` (and its cache-key build)
-    -- see a command without reading the tracker themselves.
     local command = self:_request_command(request)
     if command and not (tool_call.rawInput and tool_call.rawInput.command) then
         tool_call = vim.tbl_extend("force", {}, tool_call) --[[@as agentic.acp.ToolCall]]
@@ -454,9 +452,24 @@ function PermissionManager:_try_auto_approve(request, callback)
         ) --[[@as agentic.acp.RawInput]]
     end
 
-    local diff = tracker and tracker.diff
-    local verdict, deciders =
-        self:decide(kind, tool_call, diff, self:bash_cwd(tool_call.toolCallId))
+    return kind,
+        tool_call,
+        tracker and tracker.diff,
+        self:bash_cwd(tool_call.toolCallId)
+end
+
+--- Try to auto-approve/reject a permission request without user interaction.
+--- Delegates the verdict on `resolve_request`'s inputs to `decide`, then
+--- fires the ACP callback.
+--- @param request agentic.acp.RequestPermission
+--- @param callback fun(option_id: string|nil)
+--- @return boolean handled
+function PermissionManager:_try_auto_approve(request, callback)
+    local kind, tool_call, diff, cwd = self:resolve_request(request)
+    if not tool_call then
+        return false
+    end
+    local verdict, deciders = self:decide(kind, tool_call, diff, cwd)
     local handled = false
     if verdict == "allow" then
         handled = auto_approve(request, callback, "ladder verdict: allow")
@@ -619,7 +632,9 @@ end
 --- earlier leaf in the same command that changes files (an allowed
 --- formatter, as in `black f.py; rm f.py`) can change that state.
 --- @param effects agentic.utils.PermissionRules.Effect[]
---- @return boolean
+--- @return boolean ok
+--- @return string|nil reason Why the first effect that does not clear fails
+--- @return string|nil path That effect's path
 function PermissionManager:_bash_effects_clear(effects)
     if #effects == 0 then
         return true
@@ -630,18 +645,27 @@ function PermissionManager:_bash_effects_clear(effects)
     --- @type { path: string, snap: agentic.utils.GrantSafety.StatSnapshot }[]
     local snapshots = {}
     for _, eff in ipairs(effects) do
+        if eff.path:sub(1, 1) ~= "/" then
+            return false, "relative path", eff.path
+        end
         local orig, real = self:_granted_pair(eff.path)
         if not orig or not real then
-            return false
+            return false, "not in a grant scope", eff.path
         end
         local snap = GrantSafety.stat_snapshot(orig)
         local args = self:_kind_args(eff.kind, orig, real, nil, nil)
         if eff.kind == "delete" and GrantSafety.is_scratch(args) then
-            if not (Config.permissions.tmp_cleanup and written[orig]) then
-                return false
+            if not Config.permissions.tmp_cleanup then
+                return false, "scratch delete with tmp_cleanup off", eff.path
             end
-        elseif not GrantSafety.safe_for_kind(eff.kind, args) then
-            return false
+            if not written[orig] then
+                return false, "scratch delete with no earlier write", eff.path
+            end
+        else
+            local safe, reason = GrantSafety.safe_for_kind(eff.kind, args)
+            if not safe then
+                return false, reason, eff.path
+            end
         end
         table.insert(snapshots, { path = orig, snap = snap })
         if eff.kind == "write" then
@@ -650,7 +674,7 @@ function PermissionManager:_bash_effects_clear(effects)
     end
     for _, s in ipairs(snapshots) do
         if not GrantSafety.stat_unchanged(s.path, s.snap) then
-            return false
+            return false, "file changed during check", s.path
         end
     end
     return true
@@ -739,7 +763,7 @@ function PermissionManager:_check_grant(kind_lc, tool_call, diff)
 
     local orig, real = self:_granted_pair(source_path)
     if not orig or not real then
-        return false, "path not granted"
+        return false, "not in a grant scope"
     end
 
     local source_snap = GrantSafety.stat_snapshot(orig)
@@ -758,7 +782,7 @@ function PermissionManager:_check_grant(kind_lc, tool_call, diff)
         local dest_real
         dest_orig, dest_real = self:_granted_pair(dest)
         if not dest_orig or not dest_real then
-            return false, "destination not granted"
+            return false, "destination not in a grant scope"
         end
         dest_snap = GrantSafety.stat_snapshot(dest_orig)
         source_args.dest = self:_kind_args(
@@ -786,6 +810,94 @@ function PermissionManager:_check_grant(kind_lc, tool_call, diff)
     end
 
     return true, reason or "safe"
+end
+
+--- The text of `src` a tally range covers.
+--- @param src string
+--- @param range agentic.utils.PermissionRules.Range
+--- @return string
+local function range_text(src, range)
+    local lines = vim.split(src, "\n", { plain = true })
+    local sr, sc, er, ec = range[1] + 1, range[2], range[3] + 1, range[4]
+    if sr == er then
+        return lines[sr]:sub(sc + 1, ec)
+    end
+    local out = { lines[sr]:sub(sc + 1) }
+    vim.list_extend(out, lines, sr + 1, er - 1)
+    table.insert(out, lines[er]:sub(1, ec))
+    return table.concat(out, "\n")
+end
+
+--- Why `decide` did not approve a call, one line per unapproved part:
+--- `<part text>: <reason text>`. A deny verdict gives one line,
+--- "denied by <decider words>".
+--- Shell: the parts `PermissionRules.tally_unapproved` finds, or, when the
+--- command passes the walk, the first effect `_bash_effects_clear` refuses.
+--- A command that does not parse gives one "unparsed" line, and one left
+--- unapproved only by `auto_approve_tier` (an empty tally) names the tier.
+--- File kinds: `_check_grant`'s reason. Other kinds: "<kind> calls need
+--- approval".
+--- @param kind string|nil
+--- @param tool_call agentic.acp.ToolCall
+--- @param diff table|nil
+--- @param cwd string|nil
+--- @param deciders agentic.PermissionDecider[]|nil From `decide`, set on a deny
+--- @return string[] reasons Never empty
+function PermissionManager:refusal_reasons(kind, tool_call, diff, cwd, deciders)
+    if deciders then
+        return { "denied by " .. table.concat(deciders, ", ") }
+    end
+
+    local command = tool_call.rawInput and tool_call.rawInput.command
+    if command then
+        local ok, effects = PermissionRules.evaluate(
+            command,
+            self._get_config_dir(),
+            cwd,
+            self:_remembered_leaf_patterns()
+        )
+        if ok then
+            local _, reason, path = self:_bash_effects_clear(effects)
+            return { ("%s: %s"):format(path, reason) }
+        end
+        local ranges = PermissionRules.tally_unapproved(
+            command,
+            self._get_config_dir(),
+            cwd
+        )
+        if not ranges then
+            return {
+                ("%s: %s"):format(
+                    command,
+                    PermissionRules.REASON_TEXT.unparsed
+                ),
+            }
+        end
+        if #ranges == 0 then
+            local tier = Config.permissions.auto_approve_tier
+            return {
+                ("%s: %s"):format(
+                    command,
+                    tier == "read_only" and "not in the read-only command set"
+                        or "shell commands need approval"
+                ),
+            }
+        end
+        return vim.tbl_map(function(range)
+            return ("%s: %s"):format(
+                range_text(command, range),
+                PermissionRules.REASON_TEXT[range[5]]
+            )
+        end, ranges)
+    end
+
+    local kind_lc = AcpKind.normalise(kind)
+    if FILE_SCOPED_KINDS[kind_lc] then
+        local _, reason = self:_check_grant(kind_lc, tool_call, diff)
+        local path = raw_input_path(tool_call.rawInput)
+        return { path and ("%s: %s"):format(path, reason) or reason }
+    end
+    return { kind_lc .. " calls need approval" }
 end
 
 --- Record the pre-edit position of an Edit tool call. Called from

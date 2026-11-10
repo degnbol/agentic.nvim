@@ -2001,14 +2001,43 @@ end
 --- @type fun(node: TSNode, src: string, ctx: agentic.utils.PermissionRules.TallyCtx, ranges: agentic.utils.PermissionRules.Range[])
 local tally_walk
 
---- @alias agentic.utils.PermissionRules.Range [integer, integer, integer, integer]
+--- Why a part of a command is not known-safe.
+--- @alias agentic.utils.PermissionRules.Reason
+--- | "no_allow"        # no allow rule matches the command
+--- | "ask"             # an ask gate (structured or glob) matches
+--- | "dynamic"         # a word whose value is unknown before it runs
+--- | "code_builtin"    # a builtin that runs code (eval, source, …) or a shadowed function
+--- | "inner_code"      # `-c` code, a wrapper's command, a script, makefile or config body, or `find -exec` that is not safe
+--- | "dirty_subst"     # a substitution that is not checked command by command
+--- | "redirect"        # a redirect, herestring or heredoc that is not modelled as safe
+--- | "structure"       # a function definition, loop variable, assignment, argument or node the walker does not model
+--- | "unparsed"        # the command, or code it runs, does not parse
 
---- Append a node's `node:range()` (0-indexed byte cols) to `ranges`.
+--- Node range (0-indexed rows, byte cols, as `node:range()`) and why it is
+--- not known-safe.
+--- @alias agentic.utils.PermissionRules.Range [integer, integer, integer, integer, agentic.utils.PermissionRules.Reason]
+
+--- Fixed text per reason, written for an agent reading the refusal.
+--- @type table<agentic.utils.PermissionRules.Reason, string>
+M.REASON_TEXT = {
+    no_allow = "no allow rule matches it",
+    ask = "an ask rule matches it",
+    dynamic = "a word in it has no value until it runs",
+    code_builtin = "it runs code the check cannot see (eval, source, a redefined function)",
+    inner_code = "code it runs (-c code, a wrapped command, a script, makefile or config file, find -exec) is not approved",
+    dirty_subst = "a command or process substitution here is not checked",
+    redirect = "a redirect, herestring or heredoc here may write a file",
+    structure = "the check does not model this shell construct",
+    unparsed = "the command, or code it runs, does not parse",
+}
+
+--- Append a node's `node:range()` and `reason` to `ranges`.
 --- @param ranges agentic.utils.PermissionRules.Range[]
 --- @param node TSNode
-local function record(ranges, node)
+--- @param reason agentic.utils.PermissionRules.Reason
+local function record(ranges, node, reason)
     local sr, sc, er, ec = node:range()
-    table.insert(ranges, { sr, sc, er, ec })
+    table.insert(ranges, { sr, sc, er, ec, reason })
 end
 
 --- Tally a `command_substitution`'s inner statements into `out`. Returns false
@@ -2058,12 +2087,12 @@ local function record_substitutions(node, src, ctx, ranges)
                 table.insert(ranges, r)
             end
         else
-            record(ranges, node) -- empty/invalid inner: coarse
+            record(ranges, node, "dirty_subst") -- empty/invalid inner: coarse
         end
         return
     end
     if SUBSTITUTION_TYPES[node:type()] then
-        record(ranges, node) -- process substitution etc.: coarse
+        record(ranges, node, "dirty_subst") -- process substitution etc.: coarse
         return
     end
     for child in node:iter_children() do
@@ -2091,9 +2120,34 @@ local function translate_ranges(ranges, origin)
             sr == 0 and sc + ocol or sc,
             er + orow,
             er == 0 and ec + ocol or ec,
+            r[5],
         })
     end
     return out
+end
+
+--- Why the structured gates do not approve a leaf: `"dynamic"` when the
+--- block lifts once every dynamic word is read as written, else `"ask"` for a
+--- matching deny or ask gate and `"no_allow"` for none.
+--- @param entries agentic.StructuredEntries
+--- @param parsed agentic.ParsedLeaf
+--- @param c agentic.PermClassification `PermissionStructured.classify_leaf` of `parsed`
+--- @return agentic.utils.PermissionRules.Reason
+local function structured_reason(entries, parsed, c)
+    local gated = c.deny or c.ask
+    if vim.list_contains(parsed.args_dynamic or {}, true) then
+        local static = PermissionStructured.classify_leaf(
+            entries,
+            { cmd_name = parsed.cmd_name, args = parsed.args }
+        )
+        if
+            gated and not (static.deny or static.ask)
+            or not gated and (static.read_only or static.safe_write)
+        then
+            return "dynamic"
+        end
+    end
+    return gated and "ask" or "no_allow"
 end
 
 --- Whether a `command` leaf is known-safe: it matches a structured
@@ -2131,6 +2185,8 @@ end
 --- @return string|nil leaf #stripped, rememberable leaf signature; non-nil only
 ---   when an allow match on the leaf would approve it (never on a deny/ask or
 ---   structural/substitution bail)
+--- @return agentic.utils.PermissionRules.Reason|nil reason #why the leaf is not
+---   known-safe; nil when it is. `sub_ranges` carry their own reasons
 local function command_known_safe(node, src, ctx, known, funcs)
     --- @type agentic.utils.PermissionRules.Range[]
     local subst_ranges = {}
@@ -2147,13 +2203,13 @@ local function command_known_safe(node, src, ctx, known, funcs)
     -- prompt runs it all once approved.
     if not (args and arg_nodes and args_dynamic) then
         ctx.taint.set = true
-        return false
+        return false, nil, nil, "structure"
     end
 
     local name = ShellParse.command_name(node, src)
     if not name then
         ctx.taint.set = true
-        return false
+        return false, nil, nil, "dynamic"
     end
     local cmd_name = M.strip_command_path(name)
     -- Mirror of walk_command: a non-`-c` script execution lifts source/. out of
@@ -2169,7 +2225,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
         ) or ctx.shadowed[name]
     then
         ctx.taint.set = true
-        return false
+        return false, nil, nil, "code_builtin"
     end
 
     local leaf = leaf_text(name, args)
@@ -2179,7 +2235,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
         or M.matches_any_pattern(leaf, ctx.ask)
     then
         ctx.taint.set = true
-        return false
+        return false, nil, nil, "ask"
     end
 
     -- a call to a function recorded earlier in this sequence is known-safe
@@ -2198,7 +2254,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
         local root = parse_zsh(inner)
         if not root then
             ctx.taint.set = true
-            return false
+            return false, nil, nil, "unparsed"
         end
         --- @type agentic.utils.PermissionRules.Range[]
         local body_ranges = {}
@@ -2225,9 +2281,12 @@ local function command_known_safe(node, src, ctx, known, funcs)
             return true
         end
         if origin then
-            return false, translate_ranges(body_ranges, origin)
+            return false,
+                translate_ranges(body_ranges, origin),
+                nil,
+                "inner_code"
         end
-        return false
+        return false, nil, nil, "inner_code"
     end
 
     local glob_safe = M.matches_any_pattern(leaf, ctx.allow)
@@ -2253,7 +2312,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
             local root = parse_zsh_untrusted(body.src)
             if not root then
                 ctx.taint.set = true
-                return false
+                return false, nil, nil, "unparsed"
             end
             tally_walk(
                 root,
@@ -2269,7 +2328,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
         if #body_ranges == 0 then
             return true
         end
-        return false, nil, leaf
+        return false, nil, leaf, "inner_code"
     end
 
     -- Action host (`find -exec`, `fd -x`): its actions must be known-safe, and
@@ -2298,24 +2357,37 @@ local function command_known_safe(node, src, ctx, known, funcs)
             body_ranges
         )
         if #body_ranges > 0 then
-            return false
+            return false, nil, nil, "inner_code"
         end
         args, args_dynamic = actions.args, actions.args_dynamic
     end
 
     local struct_safe = false
+    --- @type agentic.utils.PermissionRules.Reason
+    local reason = "no_allow"
     if next(ctx.structured_entries) ~= nil then
-        local c = PermissionStructured.classify_leaf(ctx.structured_entries, {
+        --- @type agentic.ParsedLeaf
+        local parsed = {
             cmd_name = cmd_name,
             args = args,
             args_dynamic = args_dynamic,
-        })
+        }
+        local c =
+            PermissionStructured.classify_leaf(ctx.structured_entries, parsed)
         ctx.taint.set = ctx.taint.set or not c.read_only
         if c.deny or c.ask then
-            return false
+            return false,
+                nil,
+                nil,
+                structured_reason(ctx.structured_entries, parsed, c)
         end
-        struct_safe = (c.read_only or c.safe_write)
-            and not may_run_config_code(cmd_name, args, args_dynamic, ctx, node)
+        if c.read_only or c.safe_write then
+            struct_safe =
+                not may_run_config_code(cmd_name, args, args_dynamic, ctx, node)
+            reason = "inner_code"
+        else
+            reason = structured_reason(ctx.structured_entries, parsed, c)
+        end
     else
         ctx.taint.set = true
     end
@@ -2324,12 +2396,12 @@ local function command_known_safe(node, src, ctx, known, funcs)
     if safe and #subst_ranges > 0 then
         -- Otherwise-safe leaf whose only problem is a dirty substitution:
         -- pinpoint the in-place inner instead of washing the whole leaf.
-        return false, subst_ranges
+        return false, subst_ranges, nil, "dirty_subst"
     end
     if not safe then
         -- Reached only when no deny/ask/structural bail fired above: the leaf is
         -- unapproved purely for lack of an allow match, so it is rememberable.
-        return false, nil, leaf
+        return false, nil, leaf, reason
     end
     return true
 end
@@ -2361,7 +2433,7 @@ end
 local function tally_function_definition(node, src, ctx, ranges, funcs)
     local names = ShellParse.function_names(node, src)
     if not names or vim.iter(names):any(ShellParse.runs_without_call) then
-        record(ranges, node)
+        record(ranges, node, "structure")
         return
     end
     local body = node:field("body")[1]
@@ -2432,7 +2504,7 @@ end
 local function tally_redirected(node, src, ctx, ranges, known)
     local parts = redirected_parts(node, src)
     if not parts then
-        record(ranges, node)
+        record(ranges, node, "structure")
         ctx.taint.set = true
         return
     end
@@ -2462,7 +2534,7 @@ local function tally_redirected(node, src, ctx, ranges, known)
             end
         end
         for _, n in ipairs(unsafe) do
-            record(once_ranges, n)
+            record(once_ranges, n, "redirect")
             ctx.taint.set = true
         end
         for _, statement in ipairs(parts.rest) do
@@ -2517,7 +2589,7 @@ function tally_statements(node, src, ctx, ranges, seed)
         if child:named() and child:type() ~= "comment" then
             local t = child:type()
             if t == "command" then
-                local safe, sub_ranges, leaf =
+                local safe, sub_ranges, leaf, reason =
                     command_known_safe(child, src, ctx, known, funcs)
                 if not safe then
                     if sub_ranges then
@@ -2525,7 +2597,11 @@ function tally_statements(node, src, ctx, ranges, seed)
                             table.insert(ranges, r)
                         end
                     else
-                        record(ranges, child)
+                        record(
+                            ranges,
+                            child,
+                            reason --[[@as agentic.utils.PermissionRules.Reason]]
+                        )
                         if leaf then
                             table.insert(ctx.leaves, leaf)
                         end
@@ -2572,7 +2648,7 @@ local function tally_for(node, src, ctx, ranges)
     end
 
     if not (var_name and ShellParse.is_safe_var_name(var_name)) then
-        record(ranges, node)
+        record(ranges, node, "structure")
         return
     end
 
@@ -2608,7 +2684,7 @@ local function tally_for(node, src, ctx, ranges)
                     { [var_name] = v }
                 )
                 for _, r in ipairs(per_value) do
-                    local key = table.concat(r, ",")
+                    local key = table.concat(r, ",", 1, 4)
                     if not seen[key] then
                         seen[key] = true
                         table.insert(ranges, r)
@@ -2695,14 +2771,19 @@ function tally_walk(node, src, ctx, ranges)
     elseif CONTAINER_TYPES[t] then
         tally_children(node, src, ctx, ranges)
     elseif t == "command" then
-        local safe, sub_ranges, leaf = command_known_safe(node, src, ctx)
+        local safe, sub_ranges, leaf, reason =
+            command_known_safe(node, src, ctx)
         if not safe then
             if sub_ranges then
                 for _, r in ipairs(sub_ranges) do
                     table.insert(ranges, r)
                 end
             else
-                record(ranges, node)
+                record(
+                    ranges,
+                    node,
+                    reason --[[@as agentic.utils.PermissionRules.Reason]]
+                )
                 if leaf then
                     table.insert(ctx.leaves, leaf)
                 end
@@ -2713,7 +2794,7 @@ function tally_walk(node, src, ctx, ranges)
     elseif t == "variable_assignment" then
         local value = node:field("value")[1]
         if not safe_assignment_name(node, src) then
-            record(ranges, node)
+            record(ranges, node, "structure")
         elseif value then
             record_substitutions(value, src, ctx, ranges)
         end
@@ -2727,7 +2808,7 @@ function tally_walk(node, src, ctx, ranges)
         -- A bare substitution statement or any unknown/unmodelled node:
         -- highlight it. The decision walk fails closed here, so the prompt
         -- fired — show the user what triggered it.
-        record(ranges, node)
+        record(ranges, node, "structure")
     end
 end
 
@@ -2746,7 +2827,7 @@ end
 --- * The highlighter reads `ranges` — byte ranges relative to `command`'s own
 ---   lines (0-indexed rows, byte cols, matching `node:range()`). It binds to the
 ---   *displayed* (reformatted) command, whereas the decision walk binds to the
----   raw `rawInput.command`.
+---   raw `rawInput.command`. Each range also holds why its part is unapproved.
 --- * The allow-always collector reads `leaves`/`complete`: `leaves` are the
 ---   stripped signatures of parts unapproved purely for lack of an allow match
 ---   (rememberable as session-local allow patterns); `complete` is true iff
