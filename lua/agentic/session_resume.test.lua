@@ -266,7 +266,10 @@ describe("SessionResume", function()
 
         for icon_key, fields in pairs({
             interrupted = { status = "failed", ended_as = "interrupted" },
-            rejected = { status = "failed", decided_by = { "prompt-reject" } },
+            rejected = {
+                status = "failed",
+                causes = { { code = "prompt-reject" } },
+            },
         }) do
             it("shows the " .. icon_key .. " icon", function()
                 local lines = SessionResume.format_preview({
@@ -1031,15 +1034,15 @@ describe("SessionResume", function()
                         kind = "execute",
                         argument = "grep x f > /tmp/out",
                         status = "completed",
-                        decided_by = { "read-only", "grant" },
+                        causes = { { code = "read-only" }, { code = "grant" } },
                     },
                 },
                 no_buffer
             )
 
             assert.same(
-                { "read-only", "grant" },
-                write_tool_spy.calls[1][2].decided_by
+                { { code = "read-only" }, { code = "grant" } },
+                write_tool_spy.calls[1][2].causes
             )
         end)
 

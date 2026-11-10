@@ -77,15 +77,21 @@ local function materialize_injections(bufnr, start_row, end_row)
     parser:parse(Intervals.union(ranges))
 end
 
---- The status footer note of a tool call: its deciders, or nil when it has none.
+--- The status footer note of a tool call: the distinct words of its causes,
+--- in order, or nil when it has none. A cause's word is its code, or the kind
+--- it names for a `kind` cause.
 --- @param block agentic.ui.MessageWriter.ToolCallBase
 --- @return string|nil note
 local function footer_note(block)
-    local deciders = block.decided_by
-    if not deciders or #deciders == 0 then
+    local words = vim.iter(block.causes or {})
+        :map(function(cause)
+            return cause.code == "kind" and cause.subject or cause.code
+        end)
+        :totable()
+    if #words == 0 then
         return nil
     end
-    return table.concat(deciders, ", ")
+    return table.concat(vim.list.unique(words), ", ")
 end
 
 --- The word a tool call's status footer shows: `stopped` when the call
@@ -153,7 +159,7 @@ end
 --- @field hunk_ranges? agentic.ui.MessageWriter.HunkRange[] Post-edit line range of each changed hunk, as reported by the provider. Not rendered; recorded so the range survives in the session file, which re-deriving from disk cannot (the file is post-edit by then).
 --- @field skill_path? string Absolute path to the SKILL.md a Skill call loaded, verified to exist when it was resolved. Absent when no root held the skill.
 --- @field subagent? agentic.ui.MessageWriter.SubagentInfo Set on a subagent's block in its parent's view
---- @field decided_by? agentic.PermissionDecider[] What let the call run or stopped it; nil when the provider decided
+--- @field causes? agentic.PermissionCause[] What let the call run or stopped it; nil when the provider decided
 --- @field rejection? string One line from the provider saying why the call was rejected before it ran
 --- @field ended_as? string How the run holding the call ended while the call was open: `interrupted` for a stop, else a `CanonicalToolCall.stop_reason_word`. Shown when the call fails
 --- @field background_job_id? string Id the provider gave the command when it went to the background

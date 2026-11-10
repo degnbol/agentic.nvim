@@ -14,19 +14,22 @@ end
 describe("agentic.permission_hook", function()
     --- Args captured from the stubbed `decide`.
     local last_call
+    --- `allow` of the verdict the stubbed `decide` returns.
+    --- @type boolean|nil
     local verdict_to_return
 
     before_each(function()
         last_call = nil
-        verdict_to_return = "allow"
+        verdict_to_return = true
         SessionRegistry.session_for_acp_id = function(_)
             return {
                 permission_manager = {
                     decide = function(_, kind, tool_call, diff)
                         last_call =
                             { kind = kind, tool_call = tool_call, diff = diff }
-                        return verdict_to_return
+                        return { allow = verdict_to_return, causes = {} }
                     end,
+                    record_causes = function() end,
                 },
             }
         end
@@ -65,8 +68,8 @@ describe("agentic.permission_hook", function()
     end)
 
     describe("verdict passthrough", function()
-        it("returns the ladder verdict verbatim", function()
-            verdict_to_return = "deny"
+        it("maps a rejecting verdict to deny", function()
+            verdict_to_return = false
             assert.equal(
                 "deny",
                 PermissionHook.evaluate(encode({
@@ -135,23 +138,23 @@ describe("agentic.permission_hook", function()
         end)
     end)
 
-    describe("deciders", function()
+    describe("causes", function()
         local PermissionManager = require("agentic.ui.permission_manager")
         local deferred
         local pm
         local decided
+        local GLOB_ALLOW = { { code = "glob-allow" } }
 
         before_each(function()
             deferred = Deferred.capture()
             decided = {}
             pm = setmetatable({
-                _deciders = {},
+                _causes = {},
                 decide = function()
-                    return verdict_to_return,
-                        verdict_to_return and { "glob-allow" } or nil
+                    return { allow = verdict_to_return, causes = GLOB_ALLOW }
                 end,
-                on_decided = function(id, deciders)
-                    table.insert(decided, { id, deciders })
+                on_decided = function(id, causes)
+                    table.insert(decided, { id, causes })
                 end,
             }, { __index = PermissionManager })
             SessionRegistry.session_for_acp_id = function(_)
@@ -177,24 +180,24 @@ describe("agentic.permission_hook", function()
         it("records a decided call against its tool_use_id", function()
             assert.equal("allow", evaluate("toolu_1"))
             assert.same({}, decided)
-            assert.same({ "glob-allow" }, pm._deciders.toolu_1)
+            assert.same(GLOB_ALLOW, pm._causes.toolu_1)
 
             deferred.drain()
-            assert.same({ { "toolu_1", { "glob-allow" } } }, decided)
+            assert.same({ { "toolu_1", GLOB_ALLOW } }, decided)
         end)
 
         it("records nothing for an undecided call", function()
             verdict_to_return = nil
             assert.equal("", evaluate("toolu_1"))
             deferred.drain()
-            assert.same({}, pm._deciders)
+            assert.same({}, pm._causes)
             assert.same({}, decided)
         end)
 
         it("records nothing without a tool_use_id", function()
             assert.equal("allow", evaluate(nil))
             deferred.drain()
-            assert.same({}, pm._deciders)
+            assert.same({}, pm._causes)
         end)
     end)
 

@@ -375,7 +375,7 @@ local TOOL_CALL_FIELDS = {
     "hunk_ranges",
     "skill_path",
     "subagent",
-    "decided_by",
+    "causes",
     "rejection",
     "ended_as",
     "background_job_id",

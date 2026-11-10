@@ -86,13 +86,16 @@ end
 --- Highlight the non-known-safe parts of the execute command rendered in
 --- `block`. No-op if the buffer, the block's extmark, or its code fence cannot
 --- be resolved. On a parse failure the whole command body is highlighted
---- (look-at-all-of-it fallback).
+--- (look-at-all-of-it fallback). Parts are judged at the `safe_write` tier,
+--- with settings.json allows counted whatever `auto_approve_tier` is, so the
+--- highlight marks what is unsafe, not what the tier leaves to the prompt.
 --- @param bufnr integer chat buffer
 --- @param ns integer highlight namespace
 --- @param block agentic.ui.MessageWriter.ToolCallBlock
 --- @param config_dir string Claude's config directory, whose settings.json rules count as approval
+--- @param remembered agentic.utils.PermissionRules.CompiledPattern[] Leaves that count as approved
 --- @param cwd string|nil directory the command starts in; nil when unknown
-function M.apply(bufnr, ns, block, config_dir, cwd)
+function M.apply(bufnr, ns, block, config_dir, remembered, cwd)
     if not vim.api.nvim_buf_is_valid(bufnr) then
         return
     end
@@ -111,11 +114,16 @@ function M.apply(bufnr, ns, block, config_dir, cwd)
         return
     end
 
-    local ranges = PermissionRules.tally_unapproved(
-        table.concat(body, "\n"),
-        config_dir,
-        cwd
-    )
+    local ranges = PermissionRules.tally_unapproved(table.concat(body, "\n"), {
+        allow_settings = PermissionRules.get_settings_patterns(
+            "allow",
+            config_dir
+        ),
+        allow_remembered = remembered,
+        deny = PermissionRules.get_settings_patterns("deny", config_dir),
+        ask = PermissionRules.get_settings_patterns("ask", config_dir),
+        tier = "safe_write",
+    }, cwd)
 
     if ranges == nil then
         for i, line in ipairs(body) do

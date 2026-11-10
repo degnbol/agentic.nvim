@@ -25,11 +25,40 @@ local PERMISSION_KIND_PRIORITY = {
     reject_always = 4,
 }
 
---- What allowed or rejected a tool call: a rule kind, a remembered decision,
---- a grant, the user at the prompt, a prompt withdrawn unanswered
---- (`prompt-cancel`), or (any other string) the `AcpKind.normalise` form of a
---- kind in `auto_approve_kinds`.
---- @alias agentic.PermissionDecider "read-only"|"safe-write"|"deny"|"glob-allow"|"glob-deny"|"session-allow"|"session-reject"|"grant"|"prompt-allow"|"prompt-reject"|"prompt-cancel"|string
+--- What approved, rejected or withheld approval of a tool call.
+--- @alias agentic.PermissionCauseCode
+--- | "read-only"       # a structured read_only rule allowed a shell command
+--- | "safe-write"      # a structured safe_write rule allowed a shell command
+--- | "glob-allow"      # a settings.json allow pattern allowed a shell command
+--- | "session-allow"   # a remembered allow-always decision
+--- | "session-reject"  # a remembered reject-always decision
+--- | "deny"            # a structured deny gate matched a shell command
+--- | "glob-deny"       # a settings.json deny pattern matched a shell command
+--- | "kind"            # whether `auto_approve_kinds` lists the call's kind
+--- | "grant"           # the grant check of a path, approving or not
+--- | "prompt-allow"    # the user allowed at the prompt
+--- | "prompt-reject"   # the user rejected at the prompt
+--- | "prompt-cancel"   # the prompt was withdrawn unanswered
+--- | agentic.utils.PermissionRules.Reason
+
+--- @class agentic.PermissionCause
+--- @field code agentic.PermissionCauseCode
+--- @field subject? string Command part, path or kind it judged
+--- @field detail? string Why, where `code` alone does not say
+
+--- @class agentic.PermissionVerdict
+--- @field allow? boolean True to approve, false to reject, nil when no check decides
+--- @field causes agentic.PermissionCause[] Empty only for an approved command that runs nothing (`# hi`)
+
+--- Agent-facing text per cause code, for a cause with no `detail`.
+--- @type table<agentic.PermissionCauseCode, string>
+local CAUSE_TEXT = vim.tbl_extend("error", PermissionRules.REASON_TEXT, {
+    deny = "a deny rule matches it",
+    ["glob-deny"] = "a deny rule matches it",
+    ["session-reject"] = "rejected for this session",
+    kind = "calls of this kind need approval",
+    grant = "a grant scope clears it",
+})
 
 --- @class agentic.ui.PermissionManager
 --- @field message_writer agentic.ui.MessageWriter Main-chat writer; default when no per-tool-call resolver is set
@@ -45,8 +74,8 @@ local PERMISSION_KIND_PRIORITY = {
 --- @field open_anchor? fun(bufnr: integer, how: agentic.ui.OpenHow): integer|nil Opens `bufnr` and returns its window, or nil when nothing opened. Called by the open keys, which are bound while a request's float shows on the chat in place of its tool call's buffer
 --- @field proxy_tool_call? fun(anchor_bufnr: integer): string|nil The id of the tool call in the chat that stands for the owner of `anchor_bufnr`, or nil when there is none
 --- @field companion_bufs? fun(anchor: integer): integer[] Buffers besides the session's own that also get the option keys of a request whose tool call is in `anchor`
---- @field on_decided? fun(tool_call_id: string, deciders: agentic.PermissionDecider[]) Called on a later event loop tick after deciders are recorded for a tool call
---- @field _deciders table<string, agentic.PermissionDecider[]> Recorded deciders not yet taken, keyed by tool call id
+--- @field on_decided? fun(tool_call_id: string, causes: agentic.PermissionCause[]) Called on a later event loop tick after causes are recorded for a tool call
+--- @field _causes table<string, agentic.PermissionCause[]> Recorded causes not yet taken, keyed by tool call id
 --- @field _bash_cwds table<string, string> Directory each Bash call starts in, keyed by tool call id
 --- @field _hidden boolean Whether the current request waits with its float hidden
 --- @field _always_cache table<string, "allow"|"reject"> Client-side cache for allow_always/reject_always decisions
@@ -86,7 +115,7 @@ function PermissionManager:new(
         _tmp_roots = GrantSafety.tmp_roots(),
         _edit_records = {},
         _pending_edits = {},
-        _deciders = {},
+        _causes = {},
         _bash_cwds = {},
     }, self)
 
@@ -310,16 +339,26 @@ function PermissionManager:_remembered_leaf_patterns()
     return patterns
 end
 
---- The shell sources in the order their decider words display.
+--- The shell sources in the order their cause codes display.
 --- @type agentic.utils.PermissionRules.Source[]
 local SHELL_SOURCE_ORDER =
     { "read_only", "safe_write", "glob_allow", "session_allow" }
 
---- The decider word of a permission rule source.
+--- The cause code of a permission rule source.
 --- @param source agentic.utils.PermissionRules.Source|"deny"|"glob_deny"
---- @return agentic.PermissionDecider
-local function decider_word(source)
-    return (source:gsub("_", "-")) --[[@as agentic.PermissionDecider]]
+--- @return agentic.PermissionCauseCode
+local function cause_code(source)
+    return (source:gsub("_", "-")) --[[@as agentic.PermissionCauseCode]]
+end
+
+--- One agent-facing line for a cause: `<subject>: <why>`, or `<why>` for a
+--- cause with no subject. `<why>` is the cause's detail, else its code's text,
+--- else the code itself.
+--- @param cause agentic.PermissionCause
+--- @return string
+function PermissionManager.cause_line(cause)
+    local why = cause.detail or CAUSE_TEXT[cause.code] or cause.code
+    return cause.subject and ("%s: %s"):format(cause.subject, why) or why
 end
 
 --- Whether `Config.permissions.auto_approve_kinds` lists a kind, compared
@@ -330,89 +369,6 @@ local function is_auto_approved_kind(kind_lc)
     return vim.tbl_contains(Config.permissions.auto_approve_kinds, function(k)
         return AcpKind.normalise(k) == kind_lc
     end, { predicate = true })
-end
-
---- Run the deterministic permission ladder and return its verdict, with **no**
---- ACP-side effect (no callback, no auto_approve/auto_reject). This is the
---- single source of truth shared by the `canUseTool` path (`_try_auto_approve`)
---- and the auto-mode PreToolUse hook RPC.
----
---- Checks in order (the first to decide wins):
---- 1. Compound Bash commands: a concrete `deny` match on any executed leaf
----    → "deny".
---- 2. allow_always/reject_always client cache, so a cached reject also beats
----    the checks below.
---- 3. Kinds listed in `Config.permissions.auto_approve_kinds`, whatever the
----    path → "allow", with the kind as the decider.
---- 4. Compound Bash commands: every leaf matching an allow pattern with no
----    deny/ask, and every file effect clearing the grant scopes → "allow".
---- 5. Grant scopes for file-scoped kinds.
----
---- Tracker-free by contract: `kind` and `diff` are passed in (the tracker may
---- be unpopulated at hook time). `command` is read straight from
---- `tool_call.rawInput.command`; opencode's tracker fallbacks are applied by
---- the `_try_auto_approve` caller before it delegates here.
---- @param kind string|nil ACP tool kind
---- @param tool_call agentic.acp.ToolCall
---- @param diff { old?: string[], new?: string[], all?: boolean }|nil Edit diff for the grant check
---- @param cwd string|nil Directory a Bash command starts in; nil when unknown
---- @return "allow"|"deny"|nil verdict
---- @return agentic.PermissionDecider[]|nil deciders What decided the verdict, in display order; nil when there is no verdict
-function PermissionManager:decide(kind, tool_call, diff, cwd)
-    local kind_lc = AcpKind.normalise(kind)
-
-    local command = tool_call.rawInput and tool_call.rawInput.command
-    if command then
-        local rejected, source =
-            PermissionRules.should_auto_reject(command, self._get_config_dir())
-        if rejected then
-            return "deny", { decider_word(source) }
-        end
-    end
-
-    local cache_key = self:_build_cache_key(tool_call)
-    if cache_key then
-        local cached = self._always_cache[cache_key]
-        if cached == "allow" then
-            return "allow", { "session-allow" }
-        elseif cached == "reject" then
-            return "deny", { "session-reject" }
-        end
-    end
-
-    if is_auto_approved_kind(kind_lc) then
-        return "allow", { kind_lc }
-    end
-
-    if command then
-        local ok, effects, sources = PermissionRules.evaluate(
-            command,
-            self._get_config_dir(),
-            cwd,
-            self:_remembered_leaf_patterns()
-        )
-        if ok and self:_bash_effects_clear(effects) then
-            --- @type agentic.PermissionDecider[]
-            local deciders = {}
-            for _, source in ipairs(SHELL_SOURCE_ORDER) do
-                if sources[source] then
-                    table.insert(deciders, decider_word(source))
-                end
-            end
-            if #effects > 0 then
-                table.insert(deciders, "grant")
-            end
-            return "allow", deciders
-        end
-    end
-
-    if #self._grant_scopes > 0 and FILE_SCOPED_KINDS[kind_lc] then
-        if self:_check_grant(kind_lc, tool_call, diff) then
-            return "allow", { "grant" }
-        end
-    end
-
-    return nil, nil
 end
 
 --- A request's kind, tool call, edit diff and Bash cwd, with what the request
@@ -470,53 +426,53 @@ function PermissionManager:_try_auto_approve(request, callback)
     if not tool_call then
         return false
     end
-    local verdict, deciders = self:decide(kind, tool_call, diff, cwd)
+    local verdict = self:decide(kind, tool_call, diff, cwd)
     local handled = false
-    if verdict == "allow" then
+    if verdict.allow == true then
         handled = auto_approve(request, callback, "ladder verdict: allow")
-    elseif verdict == "deny" then
+    elseif verdict.allow == false then
         handled = auto_reject(request, callback, "ladder verdict: deny")
     end
     -- Unhandled (no matching option), the request goes to the prompt.
-    if handled and deciders then
-        self:record_deciders(tool_call.toolCallId, deciders)
+    if handled then
+        self:record_causes(tool_call.toolCallId, verdict.causes)
     end
     return handled
 end
 
---- Hold `deciders` for a tool call, replacing any already held.
+--- Hold `causes` for a tool call, replacing any already held.
 --- @param tool_call_id string
---- @param deciders agentic.PermissionDecider[]
-function PermissionManager:stash_deciders(tool_call_id, deciders)
-    self._deciders[tool_call_id] = deciders
+--- @param causes agentic.PermissionCause[]
+function PermissionManager:stash_causes(tool_call_id, causes)
+    self._causes[tool_call_id] = causes
 end
 
---- Hold `deciders` for a tool call, then call `on_decided` on a later event
+--- Hold `causes` for a tool call, then call `on_decided` on a later event
 --- loop tick. Does no other work, so it is safe in a context that must not
 --- fail or block.
 --- @param tool_call_id string
---- @param deciders agentic.PermissionDecider[]
-function PermissionManager:record_deciders(tool_call_id, deciders)
-    self:stash_deciders(tool_call_id, deciders)
+--- @param causes agentic.PermissionCause[]
+function PermissionManager:record_causes(tool_call_id, causes)
+    self:stash_causes(tool_call_id, causes)
     vim.schedule(function()
         if self.on_decided then
-            self.on_decided(tool_call_id, deciders)
+            self.on_decided(tool_call_id, causes)
         end
     end)
 end
 
---- Remove and return the deciders held for a tool call.
+--- Remove and return the causes held for a tool call.
 --- @param tool_call_id string
---- @return agentic.PermissionDecider[]|nil deciders
-function PermissionManager:take_deciders(tool_call_id)
-    local deciders = self._deciders[tool_call_id]
-    self._deciders[tool_call_id] = nil
-    return deciders
+--- @return agentic.PermissionCause[]|nil causes
+function PermissionManager:take_causes(tool_call_id)
+    local causes = self._causes[tool_call_id]
+    self._causes[tool_call_id] = nil
+    return causes
 end
 
---- Forget the deciders held for every tool call.
-function PermissionManager:drop_deciders()
-    self._deciders = {}
+--- Forget the causes held for every tool call.
+function PermissionManager:drop_causes()
+    self._causes = {}
 end
 
 --- Hold the directory a Bash call starts in, replacing any already held.
@@ -602,8 +558,11 @@ function PermissionManager:_granted_pair(path)
         return nil, nil
     end
     local orig = vim.fs.normalize(path, { expand_env = false })
+    if not self:_path_granted(orig) then
+        return nil, nil
+    end
     local real = GrantSafety.resolve(path)
-    if real and self:_path_granted(orig) and self:_path_granted(real) then
+    if real and self:_path_granted(real) then
         return orig, real
     end
     return nil, nil
@@ -829,76 +788,154 @@ local function range_text(src, range)
     return table.concat(out, "\n")
 end
 
---- Agent-facing lines `<part>: <reason>` that say why a call is unapproved.
---- The call must be one that `decide` did not approve.
---- - Denied: one line, "denied by <deciders>".
---- - Shell command: one line per unapproved part. A command whose parts are
----   all known-safe gives its first file effect that no grant clears. One
----   that does not parse, or is unapproved only by `auto_approve_tier`, gives
----   one line for the whole command.
---- - File kinds: the path and why its grant check fails.
---- - Other kinds: "<kind> calls need approval".
---- @param kind string|nil
---- @param tool_call agentic.acp.ToolCall
---- @param diff table|nil
---- @param cwd string|nil
---- @param deciders agentic.PermissionDecider[]|nil Deciders of a deny verdict, nil otherwise
---- @return string[] reasons Never empty
-function PermissionManager:refusal_reasons(kind, tool_call, diff, cwd, deciders)
-    if deciders then
-        return { "denied by " .. table.concat(deciders, ", ") }
+--- The verdict of the shell checks on `command`: approved when every leaf
+--- matches an allow rule with no deny/ask and every file effect clears the
+--- grant scopes, else undecided. An approval's causes are its allow sources
+--- in display order, then one `grant` per effect. An undecided verdict has
+--- one `grant` cause for the first effect that does not clear, else one cause
+--- per unapproved part. A command with no part to blame gets one `unparsed`
+--- or `structure` cause on the whole command.
+--- @param command string
+--- @param cwd string|nil Directory the command starts in; nil when unknown
+--- @return agentic.PermissionVerdict
+function PermissionManager:_shell_verdict(command, cwd)
+    local rules = PermissionRules.rules(
+        self._get_config_dir(),
+        self:_remembered_leaf_patterns()
+    )
+    --- @type agentic.PermissionVerdict
+    local verdict = { causes = {} }
+    local ok, effects, sources = PermissionRules.evaluate(command, rules, cwd)
+    if ok then
+        local clear, reason, path = self:_bash_effects_clear(effects)
+        if not clear then
+            verdict.causes =
+                { { code = "grant", subject = path, detail = reason } }
+            return verdict
+        end
+        verdict.allow = true
+        for _, source in ipairs(SHELL_SOURCE_ORDER) do
+            if sources[source] then
+                table.insert(verdict.causes, { code = cause_code(source) })
+            end
+        end
+        for _, effect in ipairs(effects) do
+            table.insert(
+                verdict.causes,
+                { code = "grant", subject = effect.path }
+            )
+        end
+        return verdict
     end
+
+    local ranges = PermissionRules.tally_unapproved(command, rules, cwd)
+    if not ranges then
+        verdict.causes = { { code = "unparsed", subject = command } }
+    elseif #ranges == 0 then
+        -- The walk bailed on something the tally does not model.
+        verdict.causes = { { code = "structure", subject = command } }
+    else
+        verdict.causes = vim.tbl_map(function(range)
+            --- @type agentic.PermissionCause
+            local cause =
+                { code = range[5], subject = range_text(command, range) }
+            return cause
+        end, ranges)
+    end
+    return verdict
+end
+
+--- Run the deterministic permission ladder and return its verdict, with **no**
+--- ACP-side effect (no callback, no auto_approve/auto_reject).
+---
+--- Checks in order (the first to decide wins):
+--- 1. Compound Bash commands: a concrete `deny` match on any executed leaf
+---    → reject, with the leaf as the cause's subject.
+--- 2. allow_always/reject_always client cache, so a cached reject also beats
+---    the checks below.
+--- 3. Kinds listed in `Config.permissions.auto_approve_kinds`, whatever the
+---    path → approve.
+--- 4. Compound Bash commands: `_shell_verdict`.
+--- 5. Grant scopes for file-scoped kinds.
+---
+--- An undecided verdict's causes are the shell check's, then the grant
+--- check's, for whichever of the two judge the call. A call that neither
+--- judges has one `kind` cause.
+---
+--- Tracker-free: `kind` and `diff` are taken as given, since the tracker may
+--- be unpopulated, and `command` is read only from `tool_call.rawInput.command`.
+--- @param kind string|nil ACP tool kind
+--- @param tool_call agentic.acp.ToolCall
+--- @param diff { old?: string[], new?: string[], all?: boolean }|nil Edit diff for the grant check
+--- @param cwd string|nil Directory a Bash command starts in; nil when unknown
+--- @return agentic.PermissionVerdict
+function PermissionManager:decide(kind, tool_call, diff, cwd)
+    local kind_lc = AcpKind.normalise(kind)
 
     local command = tool_call.rawInput and tool_call.rawInput.command
     if command then
-        local ok, effects = PermissionRules.evaluate(
-            command,
-            self._get_config_dir(),
-            cwd,
-            self:_remembered_leaf_patterns()
-        )
-        if ok then
-            local _, reason, path = self:_bash_effects_clear(effects)
-            return { ("%s: %s"):format(path, reason) }
-        end
-        local ranges = PermissionRules.tally_unapproved(
-            command,
-            self._get_config_dir(),
-            cwd
-        )
-        if not ranges then
-            return {
-                ("%s: %s"):format(
-                    command,
-                    PermissionRules.REASON_TEXT.unparsed
-                ),
+        local rejected, source, leaf =
+            PermissionRules.should_auto_reject(command, self._get_config_dir())
+        if rejected and source then
+            --- @type agentic.PermissionVerdict
+            local denied = {
+                allow = false,
+                causes = { { code = cause_code(source), subject = leaf } },
             }
+            return denied
         end
-        if #ranges == 0 then
-            local tier = Config.permissions.auto_approve_tier
-            return {
-                ("%s: %s"):format(
-                    command,
-                    tier == "read_only" and "not in the read-only command set"
-                        or "shell commands need approval"
-                ),
-            }
-        end
-        return vim.tbl_map(function(range)
-            return ("%s: %s"):format(
-                range_text(command, range),
-                PermissionRules.REASON_TEXT[range[5]]
-            )
-        end, ranges)
     end
 
-    local kind_lc = AcpKind.normalise(kind)
-    if FILE_SCOPED_KINDS[kind_lc] then
-        local _, reason = self:_check_grant(kind_lc, tool_call, diff)
-        local path = raw_input_path(tool_call.rawInput)
-        return { path and ("%s: %s"):format(path, reason) or reason }
+    local cache_key = self:_build_cache_key(tool_call)
+    local cached = cache_key and self._always_cache[cache_key]
+    if cached then
+        --- @type agentic.PermissionVerdict
+        local remembered = {
+            allow = cached == "allow",
+            causes = {
+                {
+                    code = cached == "allow" and "session-allow"
+                        or "session-reject",
+                },
+            },
+        }
+        return remembered
     end
-    return { kind_lc .. " calls need approval" }
+
+    --- @type agentic.PermissionVerdict
+    local verdict = { causes = {} }
+    if is_auto_approved_kind(kind_lc) then
+        verdict.allow = true
+        verdict.causes = { { code = "kind", subject = kind_lc } }
+        return verdict
+    end
+
+    if command then
+        local shell = self:_shell_verdict(command, cwd)
+        if shell.allow then
+            return shell
+        end
+        verdict.causes = shell.causes
+    end
+
+    if FILE_SCOPED_KINDS[kind_lc] then
+        local ok, reason = self:_check_grant(kind_lc, tool_call, diff)
+        --- @type agentic.PermissionCause
+        local grant = {
+            code = "grant",
+            subject = raw_input_path(tool_call.rawInput),
+            detail = reason,
+        }
+        if ok then
+            verdict.allow = true
+            verdict.causes = { grant }
+            return verdict
+        end
+        table.insert(verdict.causes, grant)
+    elseif not command then
+        verdict.causes = { { code = "kind", subject = kind_lc } }
+    end
+    return verdict
 end
 
 --- Record the pre-edit position of an Edit tool call. Called from
@@ -1159,6 +1196,7 @@ function PermissionManager:_apply_unapproved_highlight(request)
             NS_PERMISSION_HIGHLIGHT,
             tracker,
             self._get_config_dir(),
+            self:_remembered_leaf_patterns(),
             self:bash_cwd(tool_call.toolCallId)
         )
     end
@@ -1212,20 +1250,25 @@ function PermissionManager:_complete_request(option_id)
         -- Allow-always on an execute prompt remembers the individual safe-but-
         -- unruled leaves, so a later block sharing them auto-approves. Only the
         -- non-leaf parts (deny/ask-gated, structural) need the whole-command
-        -- fallback — `complete` reports whether any such part remains.
+        -- fallback — `complete` reports whether any such part remains. A tally
+        -- with no part to blame remembers no leaf, so it needs the fallback too.
         local store_whole = true
         if selected == "allow_always" then
             local command = self:_request_command(current.request)
             if command then
-                local _, leaves, complete = PermissionRules.tally_unapproved(
-                    command,
-                    self._get_config_dir(),
-                    self:bash_cwd(current.toolCallId)
-                )
+                local ranges, leaves, complete =
+                    PermissionRules.tally_unapproved(
+                        command,
+                        PermissionRules.rules(
+                            self._get_config_dir(),
+                            self:_remembered_leaf_patterns()
+                        ),
+                        self:bash_cwd(current.toolCallId)
+                    )
                 for _, leaf in ipairs(leaves) do
                     self._execute_leaf_allow[leaf] = true
                 end
-                store_whole = not complete
+                store_whole = not complete or #ranges == 0
             end
         end
 
@@ -1246,9 +1289,9 @@ function PermissionManager:_complete_request(option_id)
     end
 
     if vim.startswith(selected, "allow_") then
-        self:record_deciders(current.toolCallId, { "prompt-allow" })
+        self:record_causes(current.toolCallId, { { code = "prompt-allow" } })
     elseif vim.startswith(selected, "reject_") then
-        self:record_deciders(current.toolCallId, { "prompt-reject" })
+        self:record_causes(current.toolCallId, { { code = "prompt-reject" } })
     end
 
     self.permission_float:close()
@@ -1266,9 +1309,9 @@ end
 --- stay.
 function PermissionManager:cancel_requests()
     if self.current_request then
-        self:record_deciders(
+        self:record_causes(
             self.current_request.toolCallId,
-            { "prompt-cancel" }
+            { { code = "prompt-cancel" } }
         )
         self.permission_float:close()
         self:_clear_unapproved_highlight()
@@ -1285,7 +1328,7 @@ function PermissionManager:cancel_requests()
     end
 
     for _, item in ipairs(self.queue) do
-        self:record_deciders(item[1], { "prompt-cancel" })
+        self:record_causes(item[1], { { code = "prompt-cancel" } })
         local callback = item[3]
         local ok, err = pcall(callback, nil)
         if not ok then
@@ -1308,7 +1351,7 @@ function PermissionManager:clear()
     self._execute_leaf_allow = {}
     self._edit_records = {}
     self._pending_edits = {}
-    self:drop_deciders()
+    self:drop_causes()
     self._bash_cwds = {}
     self:clear_grant_scopes()
 end
@@ -1332,10 +1375,9 @@ function PermissionManager:reject_and_cancel_remaining()
         end
     end
 
-    self:record_deciders(
-        self.current_request.toolCallId,
-        { reject_option_id and "prompt-reject" or "prompt-cancel" }
-    )
+    self:record_causes(self.current_request.toolCallId, {
+        { code = reject_option_id and "prompt-reject" or "prompt-cancel" },
+    })
 
     -- Remove UI and keymaps for current request
     self.permission_float:close()
@@ -1350,7 +1392,7 @@ function PermissionManager:reject_and_cancel_remaining()
     self.current_request = nil
 
     for _, item in ipairs(self.queue) do
-        self:record_deciders(item[1], { "prompt-cancel" })
+        self:record_causes(item[1], { { code = "prompt-cancel" } })
         local callback = item[3]
         local ok2, err2 = pcall(callback, nil)
         if not ok2 then

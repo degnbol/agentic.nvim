@@ -55,7 +55,7 @@ end
 --- @param b64 string base64-encoded JSON hook input; fields read: `{session_id, tool_name, tool_input, tool_use_id, cwd}`
 --- @return string verdict "allow" | "deny" | "" (undecided / fall-through)
 function M.evaluate(b64)
-    local ok, verdict = pcall(function()
+    local ok, result = pcall(function()
         local payload = vim.json.decode(vim.base64.decode(b64))
         local session = SessionRegistry.session_for_acp_id(payload.session_id)
 
@@ -88,24 +88,28 @@ function M.evaluate(b64)
             pm:record_bash_cwd(tool_use_id, cwd)
         end
 
-        local decision, deciders = pm:decide(kind, tool_call, diff, cwd)
-        if deciders and tool_use_id then
-            pm:record_deciders(tool_use_id, deciders)
+        local verdict = pm:decide(kind, tool_call, diff, cwd)
+        if verdict.allow ~= nil and tool_use_id then
+            pm:record_causes(tool_use_id, verdict.causes)
         end
+        local decision = verdict.allow == true and "allow"
+            or verdict.allow == false and "deny"
+            or ""
         Logger.debug_to_file(
             "permission_hook:",
             tool,
             "→",
-            decision or "undecided (falls through to classifier)"
+            decision ~= "" and decision
+                or "undecided (falls through to classifier)"
         )
-        return decision or ""
+        return decision
     end)
 
     if not ok then
-        Logger.debug_to_file("permission_hook: error:", tostring(verdict))
+        Logger.debug_to_file("permission_hook: error:", tostring(result))
         return ""
     end
-    return verdict
+    return result
 end
 
 return M

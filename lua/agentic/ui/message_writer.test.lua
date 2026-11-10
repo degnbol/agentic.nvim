@@ -3633,7 +3633,10 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         for word, fields in pairs({
-            rejected = { status = "failed", decided_by = { "prompt-reject" } },
+            rejected = {
+                status = "failed",
+                causes = { { code = "prompt-reject" } },
+            },
             interrupted = { status = "failed", ended_as = "interrupted" },
         }) do
             it("shows " .. word .. " in the footer", function()
@@ -3654,6 +3657,31 @@ describe("agentic.ui.MessageWriter", function()
                 )
                 assert.is_not_nil(text:find(" " .. word .. " ", 1, true))
                 assert.is_nil(text:find("failed", 1, true))
+            end)
+        end
+
+        for note, causes in pairs({
+            ["read-only, grant"] = {
+                { code = "read-only" },
+                { code = "grant", subject = "/a" },
+                { code = "grant", subject = "/b" },
+            },
+            ["fetch"] = { { code = "kind", subject = "fetch" } },
+        }) do
+            it("notes " .. note .. " in the footer", function()
+                writer:write_tool_call_block(
+                    make_tool_call_block("noted", "pending")
+                )
+                writer:update_tool_call_block({
+                    tool_call_id = "noted",
+                    status = "pending",
+                    causes = causes,
+                })
+                local text = table.concat(
+                    vim.api.nvim_buf_get_lines(bufnr, 0, -1, false),
+                    "\n"
+                )
+                assert.is_not_nil(text:find("· " .. note .. " \n", 1, true))
             end)
         end
 
@@ -6409,7 +6437,7 @@ describe("agentic.ui.MessageWriter", function()
                 writer:update_tool_call_block({
                     tool_call_id = "diff-reject",
                     status = "pending",
-                    decided_by = { "prompt-reject" },
+                    causes = { { code = "prompt-reject" } },
                 })
             end)
 

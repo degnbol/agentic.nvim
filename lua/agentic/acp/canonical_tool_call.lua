@@ -53,36 +53,36 @@ function M.split_read_range(message, kind)
     return split
 end
 
---- Each rejecting decider's line, in precedence order.
---- @type { decider: agentic.PermissionDecider, line: string }[]
-local DECIDER_LINES = {
-    { decider = "prompt-reject", line = "Rejected at the prompt" },
-    { decider = "session-reject", line = "Rejected for this session" },
-    { decider = "deny", line = "Rejected by a permission rule" },
-    { decider = "glob-deny", line = "Rejected by a permission rule" },
-    { decider = "prompt-cancel", line = "Cancelled at the prompt" },
+--- The line of each rejecting cause code.
+--- @type table<agentic.PermissionCauseCode, string>
+local REJECTION_LINES = {
+    ["prompt-reject"] = "Rejected at the prompt",
+    ["session-reject"] = "Rejected for this session",
+    deny = "Rejected by a permission rule",
+    ["glob-deny"] = "Rejected by a permission rule",
+    ["prompt-cancel"] = "Cancelled at the prompt",
 }
 
 --- The line saying why the plugin rejected a call: that of the first
---- rejecting decider in precedence order that `deciders` holds, wherever it
---- holds it: `decided_by` lists merge by index, so position says nothing.
---- @param deciders agentic.PermissionDecider[]|nil
---- @return string|nil line nil when no decider rejected the call
-function M.deciders_line(deciders)
-    for _, entry in ipairs(DECIDER_LINES) do
-        if vim.tbl_contains(deciders or {}, entry.decider) then
-            return entry.line
+--- rejecting cause in `causes`.
+--- @param causes agentic.PermissionCause[]|nil
+--- @return string|nil line nil when no cause rejected the call
+function M.causes_line(causes)
+    for _, cause in ipairs(causes or {}) do
+        local line = REJECTION_LINES[cause.code]
+        if line then
+            return line
         end
     end
     return nil
 end
 
 --- The line saying why a call was rejected before it ran: the plugin's, from
---- `decided_by`, else the provider's `rejection`.
+--- `causes`, else the provider's `rejection`.
 --- @param call agentic.ui.MessageWriter.ToolCallBase
 --- @return string|nil line nil when the call was not rejected
 function M.rejection_line(call)
-    return M.deciders_line(call.decided_by) or call.rejection
+    return M.causes_line(call.causes) or call.rejection
 end
 
 --- @type table<string, string>

@@ -9,13 +9,16 @@ describe("xargs exec-wrapper", function()
 
     it("approves a read-only inner (dynamic token is a no-op)", function()
         assert.is_true(
-            R.should_auto_approve("find . | xargs grep foo", config_dir)
+            R.should_auto_approve(
+                "find . | xargs grep foo",
+                R.rules(config_dir)
+            )
         )
     end)
 
     it("prompts a gated inner: dyn token trips sort's -o gate", function()
         assert.is_false(
-            R.should_auto_approve("find . | xargs sort", config_dir)
+            R.should_auto_approve("find . | xargs sort", R.rules(config_dir))
         )
     end)
 
@@ -26,10 +29,12 @@ describe("xargs exec-wrapper", function()
     end)
 
     it("approves standalone xargs of a read-only inner", function()
-        assert.is_true(R.should_auto_approve("xargs grep foo", config_dir))
+        assert.is_true(
+            R.should_auto_approve("xargs grep foo", R.rules(config_dir))
+        )
     end)
 
     it("subsumes the old xargs ls carve-out", function()
-        assert.is_true(R.should_auto_approve("xargs ls", config_dir))
+        assert.is_true(R.should_auto_approve("xargs ls", R.rules(config_dir)))
     end)
 end)

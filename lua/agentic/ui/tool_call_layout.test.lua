@@ -1394,7 +1394,7 @@ describe("agentic.ui.ToolCallLayout", function()
     end)
 
     describe("rejected call", function()
-        local REJECTED = { "prompt-reject" }
+        local REJECTED = { { code = "prompt-reject" } }
 
         it("folds a one-row command closed by its fence", function()
             local layout = Layout.build({
@@ -1403,7 +1403,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 argument = "rm -rf build",
                 status = "failed",
                 shell = "zsh",
-                decided_by = REJECTED,
+                causes = REJECTED,
                 failure_reason = { "The user doesn't want to proceed." },
             }, 0)
 
@@ -1433,7 +1433,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 argument = "a\nb\nc",
                 status = "failed",
                 shell = "zsh",
-                decided_by = REJECTED,
+                causes = REJECTED,
             }, 0)
 
             assert.equal("```zsh-foldfence", layout.lines[2])
@@ -1446,7 +1446,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 kind = "execute",
                 argument = "rm x",
                 status = "pending",
-                decided_by = REJECTED,
+                causes = REJECTED,
             }, 0)
 
             assert.same({
@@ -1503,7 +1503,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 argument = "/tmp/rej.lua",
                 status = "failed",
                 diff = { old = { "old" }, new = { "new" } },
-                decided_by = REJECTED,
+                causes = REJECTED,
                 failure_reason = { "Denied." },
             }, 0)
 
@@ -1524,7 +1524,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 kind = "fetch",
                 argument = "https://example.com",
                 status = "pending",
-                decided_by = { "prompt-cancel" },
+                causes = { { code = "prompt-cancel" } },
             }, 0)
 
             assert.same({

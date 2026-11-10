@@ -3440,7 +3440,7 @@ describe("agentic.SessionManager", function()
                 local session, recorded = make_session({
                     kind = "execute",
                     status = "failed",
-                    decided_by = { "prompt-reject" },
+                    causes = { { code = "prompt-reject" } },
                     argument = "rm /tmp/b",
                 })
 
@@ -5552,8 +5552,8 @@ describe("agentic.SessionManager", function()
                 _apply_tool_call_fields = SessionManager._apply_tool_call_fields,
             } --[[@as agentic.SessionManager]]
             with_subagents(session)
-            pm.on_decided = function(id, deciders)
-                session:_on_permission_decided(id, deciders)
+            pm.on_decided = function(id, causes)
+                session:_on_permission_decided(id, causes)
             end
         end)
 
@@ -6060,8 +6060,8 @@ describe("agentic.SessionManager", function()
 
                 assert.equal("rejected", word("tc-1"))
                 assert.same(
-                    { "prompt-cancel" },
-                    session.chat_history.messages[1].decided_by
+                    { { code = "prompt-cancel" } },
+                    session.chat_history.messages[1].causes
                 )
             end)
 
@@ -6236,7 +6236,7 @@ describe("agentic.SessionManager", function()
                             kind = "execute",
                             argument = "rm -rf build",
                             status = "failed",
-                            decided_by = { "prompt-reject" },
+                            causes = { { code = "prompt-reject" } },
                             failure_reason = { "No.", "Stop." },
                         })
                     )
@@ -6350,37 +6350,46 @@ describe("agentic.SessionManager", function()
             return ""
         end
 
-        it("shows deciders recorded before the block arrives", function()
-            session.permission_manager:record_deciders("tc-1", { "read-only" })
+        it("shows causes recorded before the block arrives", function()
+            session.permission_manager:record_causes(
+                "tc-1",
+                { { code = "read-only" } }
+            )
             tool_call("tc-1")
             deferred.drain()
 
             assert.truthy(footer():find("pending · read-only", 1, true))
             assert.same(
-                { "read-only" },
-                session.chat_history.messages[1].decided_by
+                { { code = "read-only" } },
+                session.chat_history.messages[1].causes
             )
-            assert.is_nil(session.permission_manager:take_deciders("tc-1"))
+            assert.is_nil(session.permission_manager:take_causes("tc-1"))
         end)
 
         it("updates the footer and history for a later verdict", function()
             tool_call("tc-1")
             assert.is_nil(footer():find("·", 1, true))
 
-            session.permission_manager:record_deciders("tc-1", { "grant" })
+            session.permission_manager:record_causes(
+                "tc-1",
+                { { code = "grant" } }
+            )
             deferred.drain()
 
             assert.truthy(footer():find("pending · grant", 1, true))
             assert.same(
-                { "grant" },
-                session.chat_history.messages[1].decided_by
+                { { code = "grant" } },
+                session.chat_history.messages[1].causes
             )
         end)
 
         it(
             "does not redraw or save a verdict the block already shows",
             function()
-                session.permission_manager:record_deciders("tc-1", { "grant" })
+                session.permission_manager:record_causes(
+                    "tc-1",
+                    { { code = "grant" } }
+                )
                 tool_call("tc-1")
                 local save = spy.new(function() end)
                 session._history_changed = save --[[@as function]]
@@ -6392,12 +6401,15 @@ describe("agentic.SessionManager", function()
 
         it("ignores a verdict that lands after the session ends", function()
             tool_call("tc-1")
-            session.permission_manager:record_deciders("tc-1", { "grant" })
+            session.permission_manager:record_causes(
+                "tc-1",
+                { { code = "grant" } }
+            )
             session.destroyed = true
             deferred.drain()
 
             assert.is_nil(footer():find("·", 1, true))
-            assert.is_nil(session.chat_history.messages[1].decided_by)
+            assert.is_nil(session.chat_history.messages[1].causes)
         end)
     end)
 

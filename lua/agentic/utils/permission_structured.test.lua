@@ -1651,7 +1651,7 @@ describe("PermissionStructured", function()
             Config.permissions.use_claude_settings = false
             return PermissionRules.should_auto_approve(
                 command,
-                vim.fn.tempname()
+                PermissionRules.rules(vim.fn.tempname())
             )
         end
 

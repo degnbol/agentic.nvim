@@ -1052,6 +1052,16 @@ local function eligible_allow_kinds(tier)
     return {}
 end
 
+--- Whether `tier` admits the allow gates of any kind `c` matches.
+--- @param tier agentic.PermAutoApproveTier
+--- @param c agentic.PermClassification
+--- @return boolean
+function M.tier_admits(tier, c)
+    return vim.iter(eligible_allow_kinds(tier)):any(function(kind)
+        return c[kind]
+    end)
+end
+
 --- Reset `Config.permissions.auto_approve_tier` to nil, with a warning, when
 --- it is not an `agentic.PermAutoApproveTier` value. Any other string is
 --- truthy, so it would let settings.json allow patterns count while no

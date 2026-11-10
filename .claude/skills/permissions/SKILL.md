@@ -68,7 +68,7 @@ decision wins.
 ### 1. Approved kinds (`Config.permissions.auto_approve_kinds`)
 
 Listed kinds (default `read`, `search`, `skill`) approve whatever the path,
-with the kind as decider. Bypasses the provider's directory sandbox, which
+with a `kind` cause. Bypasses the provider's directory sandbox, which
 otherwise prompts for paths outside `additionalDirectories` even for reads.
 
 ### 2. Shell command parsing (always on)
@@ -202,14 +202,17 @@ for the rest, so the provider can adapt on the next turn; `<C-c>`
 `option.kind` (`"reject_once"`). Look the option up by `optionId` and read its
 `kind`.
 
-## Deciders
+## Causes
 
-What decided a call is recorded on it (`decided_by`, `record_deciders`) and
-shown in its footer. A request resolved unanswered — by `cancel_requests`, or
-queued behind `Lx`, or current under `Lx` with no `reject_once` option —
-records `prompt-cancel`. A rejecting decider also gives the call its rejection
-line (`CanonicalToolCall.deciders_line`), which wins over a provider's own
-`rejection`.
+`decide` returns a verdict: `allow` (true, false, or nil when undecided) and
+the causes behind it, each a code plus the command part, path or kind it
+judged. A decided verdict's causes are recorded on the call (`causes`,
+`record_causes`) and shown in its footer. A prompt answer records
+`prompt-allow` or `prompt-reject`; a request resolved unanswered — by
+`cancel_requests`, or queued behind `Lx`, or current under `Lx` with no
+`reject_once` option — records `prompt-cancel`. A rejecting cause also gives
+the call its rejection line (`CanonicalToolCall.rejection_line`), which wins
+over a provider's own `rejection`.
 
 ## Permission float
 

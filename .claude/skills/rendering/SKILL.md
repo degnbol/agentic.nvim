@@ -71,7 +71,7 @@ Only levels 2 and 3 are dimmed by the chat window's `winhighlight`
 │  ```<lang>              ← optional body fence
 │  <body lines>
 │  ```
-╰─  ✔ completed · grant   ← footer (sign + status text + decider note — NS_STATUS)
+╰─  ✔ completed · grant   ← footer (sign + status text + cause note — NS_STATUS)
 ```
 
 The sign column says what a region *is*, the buffer text what it *contains*:

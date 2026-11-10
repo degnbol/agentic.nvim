@@ -462,7 +462,7 @@ describe("ChatHistory", function()
                     status = "failed",
                     argument = "rm -rf build",
                     body = { "Permission denied: no" },
-                    decided_by = { "prompt-reject" },
+                    causes = { { code = "prompt-reject" } },
                 },
             }):prepend_history_messages(prompt)
             assert.equal(
@@ -1271,7 +1271,7 @@ describe("ChatHistory", function()
             hunk_ranges = { { start_line = 1, end_line = 2 } },
             skill_path = "/s/SKILL.md",
             subagent = { label = "a", mode = "blocking", confirmed = true },
-            decided_by = { "grant" },
+            causes = { { code = "grant" } },
             rejection = "Rejected by the permission mode",
             ended_as = "interrupted",
         }

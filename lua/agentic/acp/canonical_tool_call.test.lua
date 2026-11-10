@@ -128,51 +128,55 @@ describe("agentic.acp.CanonicalToolCall", function()
         end)
     end)
 
-    describe("deciders_line", function()
-        it("gives the line of each rejecting decider", function()
+    describe("causes_line", function()
+        it("gives the line of each rejecting cause", function()
             assert.equal(
                 "Rejected at the prompt",
-                CanonicalToolCall.deciders_line({ "prompt-reject" })
+                CanonicalToolCall.causes_line({ { code = "prompt-reject" } })
             )
             assert.equal(
                 "Rejected for this session",
-                CanonicalToolCall.deciders_line({ "session-reject" })
+                CanonicalToolCall.causes_line({ { code = "session-reject" } })
             )
             assert.equal(
                 "Rejected by a permission rule",
-                CanonicalToolCall.deciders_line({ "deny" })
+                CanonicalToolCall.causes_line({ { code = "deny" } })
             )
             assert.equal(
                 "Rejected by a permission rule",
-                CanonicalToolCall.deciders_line({ "glob-deny" })
+                CanonicalToolCall.causes_line({ { code = "glob-deny" } })
             )
             assert.equal(
                 "Cancelled at the prompt",
-                CanonicalToolCall.deciders_line({ "prompt-cancel" })
+                CanonicalToolCall.causes_line({ { code = "prompt-cancel" } })
             )
         end)
 
-        it("gives nil for allowing deciders and for none", function()
-            assert.is_nil(
-                CanonicalToolCall.deciders_line({ "read-only", "grant" })
-            )
-            assert.is_nil(CanonicalToolCall.deciders_line(nil))
+        it("gives nil for allowing causes and for none", function()
+            assert.is_nil(CanonicalToolCall.causes_line({
+                { code = "read-only" },
+                { code = "grant" },
+            }))
+            assert.is_nil(CanonicalToolCall.causes_line(nil))
         end)
 
-        it("takes the first match by presence, not position", function()
+        it("finds the rejecting cause among others", function()
             assert.equal(
                 "Rejected at the prompt",
-                CanonicalToolCall.deciders_line({ "deny", "prompt-reject" })
+                CanonicalToolCall.causes_line({
+                    { code = "read-only" },
+                    { code = "prompt-reject" },
+                })
             )
         end)
     end)
 
     describe("rejection_line", function()
-        it("prefers the deciders' line over the provider's", function()
+        it("prefers the causes' line over the provider's", function()
             assert.equal(
                 "Rejected at the prompt",
                 CanonicalToolCall.rejection_line({
-                    decided_by = { "prompt-reject" },
+                    causes = { { code = "prompt-reject" } },
                     rejection = "Rejected by the auto-mode classifier",
                 })
             )
@@ -182,7 +186,7 @@ describe("agentic.acp.CanonicalToolCall", function()
             assert.equal(
                 "Rejected by the permission mode",
                 CanonicalToolCall.rejection_line({
-                    decided_by = { "read-only" },
+                    causes = { { code = "read-only" } },
                     rejection = "Rejected by the permission mode",
                 })
             )

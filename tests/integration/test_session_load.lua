@@ -154,7 +154,7 @@ saved.timestamp = 1000
 saved.messages = {
     _G.p("first prompt"),
     { type = "tool_call", tool_call_id = "t1", kind = "read", status = "completed",
-      argument = "a.txt", decided_by = { "grant" } },
+      argument = "a.txt", causes = { { code = "grant" } } },
     _G.a("done text"),
     _G.p("/compact"),
     { type = "tool_call", tool_call_id = "t2", kind = "read", status = "cancelled",
@@ -217,10 +217,8 @@ end
         assert.equal(1, count(chat, "first prompt"))
         assert.equal(1, count(chat, "after text"))
         assert.same(
-            { "grant" },
-            child.lua_get(
-                [[_G.s.message_writer.tool_call_blocks.t1.decided_by]]
-            )
+            { { code = "grant" } },
+            child.lua_get([[_G.s.message_writer.tool_call_blocks.t1.causes]])
         )
     end)
 

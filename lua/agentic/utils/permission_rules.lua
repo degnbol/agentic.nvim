@@ -1979,22 +1979,22 @@ end
 
 -- ── Tally walk (highlight the unapproved parts of a prompt) ──────────────────
 --
--- A second traversal over the same parse tree, used only for UI: it records the
--- byte ranges of every leaf/structural node that is NOT known-safe, so the
--- permission prompt can wash those bytes. It is deliberately SEPARATE from the
--- decision `walk` above — a bug here can only mis-highlight, never mis-approve,
--- since it never feeds `should_auto_approve`. It reuses every structural helper
+-- A second traversal over the same parse tree: it records the byte ranges of
+-- every leaf/structural node that is NOT known-safe, and why. It is
+-- deliberately SEPARATE from the decision `walk` above — a bug here can only
+-- mis-report, never mis-approve, since it never feeds `should_auto_approve`.
+-- It reuses every structural helper
 -- (`literal_token`, `command_name_text`, `redirect_is_safe`,
 -- `subtree_has_substitution`, the node-type sets, …) so "what counts as safe
 -- structure" stays single-sourced; only the control flow differs (record and
 -- continue, vs bail on first).
 --
--- Classification is CATEGORY-level (`PermissionStructured.classify_leaf` + the
--- settings.json allow/deny/ask globs), not the `auto_approve_tier`-resolved
--- decision, so a `safe_write` like `git add` never lights up even at the
--- read_only tier.
+-- A leaf is classified against a `Rules`, as in the decision walk
+-- (`PermissionStructured.classify_leaf` + its allow/deny/ask globs). A leaf
+-- whose structured allow is of a kind `rules.tier` does not admit records
+-- reason `tier`.
 
---- @alias agentic.utils.PermissionRules.TallyCtx { allow: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[], written: table<string, string|false>, for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed, read_scripts: boolean, cwd_of: table<string, agentic.utils.ShellParse.Cwds>, taint: agentic.utils.PermissionRules.Taint, sourced: agentic.utils.PermissionRules.Sourced, reader_memo: table }
+--- @alias agentic.utils.PermissionRules.TallyCtx { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], tier: agentic.PermAutoApproveTier, structured_entries: agentic.StructuredEntries, depth: integer, leaves: string[], written: table<string, string|false>, for_budget: integer, shadowed: agentic.utils.PermissionRules.Shadowed, read_scripts: boolean, cwd_of: table<string, agentic.utils.ShellParse.Cwds>, taint: agentic.utils.PermissionRules.Taint, sourced: agentic.utils.PermissionRules.Sourced, reader_memo: table }
 
 --- Forward declaration — the tally handlers are mutually recursive, and
 --- `command_known_safe` recurses through `tally_walk` for inline `-c` bodies.
@@ -2003,15 +2003,16 @@ local tally_walk
 
 --- Why a part of a command is not known-safe.
 --- @alias agentic.utils.PermissionRules.Reason
---- | "no_allow"        # no allow rule matches the command
+--- | "no-allow"        # no allow rule matches the command
 --- | "ask"             # an ask or deny gate (structured or glob) matches
 --- | "dynamic"         # a word whose value is unknown before it runs
---- | "code_builtin"    # a builtin that runs code (eval, source and the like) or a shadowed function
---- | "inner_code"      # `-c` code, a wrapper's command, a script, makefile or config body, or `find -exec` that is not safe
---- | "dirty_subst"     # a substitution that is not checked command by command
+--- | "code-builtin"    # a builtin that runs code (eval, source and the like) or a shadowed function
+--- | "inner-code"      # `-c` code, a wrapper's command, a script, makefile or config body, or `find -exec` that is not safe
+--- | "dirty-subst"     # a substitution that is not checked command by command
 --- | "redirect"        # a redirect, herestring or heredoc that is not modelled as safe
 --- | "structure"       # a function definition, loop variable, assignment, argument or node the check does not model
 --- | "unparsed"        # the command, or code it runs, does not parse
+--- | "tier"            # a structured allow matches, of a kind the rules' tier does not admit
 
 --- A command part's range (0-indexed rows, byte cols, as `node:range()`) and
 --- why the part is not known-safe.
@@ -2020,15 +2021,16 @@ local tally_walk
 --- Fixed text per reason, written for an agent reading the refusal.
 --- @type table<agentic.utils.PermissionRules.Reason, string>
 M.REASON_TEXT = {
-    no_allow = "no allow rule matches it",
+    ["no-allow"] = "no allow rule matches it",
     ask = "an ask rule matches it",
     dynamic = "a word in it has no value until it runs",
-    code_builtin = "it runs code the check cannot see (eval, source, a redefined function)",
-    inner_code = "code it runs (-c code, a wrapped command, a script, makefile or config file, find -exec) is not approved",
-    dirty_subst = "a command or process substitution here is not checked",
+    ["code-builtin"] = "it runs code the check cannot see (eval, source, a redefined function)",
+    ["inner-code"] = "code it runs (-c code, a wrapped command, a script, makefile or config file, find -exec) is not approved",
+    ["dirty-subst"] = "a command or process substitution here is not checked",
     redirect = "a redirect, herestring or heredoc here may write a file",
     structure = "the check does not model this shell construct",
     unparsed = "the command, or code it runs, does not parse",
+    tier = "the auto-approval tier does not cover commands of its kind",
 }
 
 --- Append a node's `node:range()` and `reason` to `ranges`.
@@ -2087,12 +2089,12 @@ local function record_substitutions(node, src, ctx, ranges)
                 table.insert(ranges, r)
             end
         else
-            record(ranges, node, "dirty_subst") -- empty/invalid inner: coarse
+            record(ranges, node, "dirty-subst") -- empty/invalid inner: coarse
         end
         return
     end
     if SUBSTITUTION_TYPES[node:type()] then
-        record(ranges, node, "dirty_subst") -- process substitution etc.: coarse
+        record(ranges, node, "dirty-subst") -- process substitution etc.: coarse
         return
     end
     for child in node:iter_children() do
@@ -2129,7 +2131,7 @@ end
 --- Why the structured gates do not approve a leaf. `"dynamic"` when reading
 --- every dynamic word as written would clear its deny or ask gate, or, with no
 --- gate, would match a read_only or safe_write rule. Else `"ask"` for a
---- matching deny or ask gate and `"no_allow"` for none.
+--- matching deny or ask gate and `"no-allow"` for none.
 --- @param entries agentic.StructuredEntries
 --- @param parsed agentic.ParsedLeaf
 --- @param c agentic.PermClassification `PermissionStructured.classify_leaf` of `parsed`
@@ -2148,16 +2150,14 @@ local function structured_reason(entries, parsed, c)
             return "dynamic"
         end
     end
-    return gated and "ask" or "no_allow"
+    return gated and "ask" or "no-allow"
 end
 
---- Whether a `command` leaf is known-safe: it matches a structured
---- read_only/safe_write rule or a settings.json allow AND no deny/ask rule,
+--- Whether a `command` leaf is known-safe: it matches a structured allow of a
+--- kind `ctx.tier` admits, or an allow pattern of `ctx`, AND no deny/ask rule,
 --- with no structural reason to bail (substitution in a non-bare position,
 --- env-hijack prefix, dynamic name, code-taking builtin, unextractable token).
---- Mirrors `walk_command`'s
---- extraction but classifies by category instead of resolving the mode-gated
---- decision.
+--- Mirrors `walk_command`'s extraction.
 ---
 --- For a transparent prefix (exec-wrapper or `sh -c`) the inner command is
 --- tallied recursively. A wrapper inner returns its unapproved sub-ranges
@@ -2226,7 +2226,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
         ) or ctx.shadowed[name]
     then
         ctx.taint.set = true
-        return false, nil, nil, "code_builtin"
+        return false, nil, nil, "code-builtin"
     end
 
     local leaf = leaf_text(name, args)
@@ -2284,10 +2284,11 @@ local function command_known_safe(node, src, ctx, known, funcs)
         if origin then
             return false, translate_ranges(body_ranges, origin)
         end
-        return false, nil, nil, "inner_code"
+        return false, nil, nil, "inner-code"
     end
 
-    local glob_safe = M.matches_any_pattern(leaf, ctx.allow)
+    local glob_safe = M.matches_any_pattern(leaf, ctx.allow_settings)
+        or M.matches_any_pattern(leaf, ctx.allow_remembered)
 
     -- Code the command reads: known-safe iff every command in it is. The code
     -- has no place in the chat buffer to anchor ranges to, so an unsafe
@@ -2326,7 +2327,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
         if #body_ranges == 0 then
             return true
         end
-        return false, nil, leaf, "inner_code"
+        return false, nil, leaf, "inner-code"
     end
 
     -- Action host (`find -exec`, `fd -x`): its actions must be known-safe, and
@@ -2355,14 +2356,14 @@ local function command_known_safe(node, src, ctx, known, funcs)
             body_ranges
         )
         if #body_ranges > 0 then
-            return false, nil, nil, "inner_code"
+            return false, nil, nil, "inner-code"
         end
         args, args_dynamic = actions.args, actions.args_dynamic
     end
 
     local struct_safe = false
     --- @type agentic.utils.PermissionRules.Reason
-    local reason = "no_allow"
+    local reason = "no-allow"
     if next(ctx.structured_entries) ~= nil then
         --- @type agentic.ParsedLeaf
         local parsed = {
@@ -2379,12 +2380,13 @@ local function command_known_safe(node, src, ctx, known, funcs)
                 nil,
                 structured_reason(ctx.structured_entries, parsed, c)
         end
-        if c.read_only or c.safe_write then
-            struct_safe =
-                not may_run_config_code(cmd_name, args, args_dynamic, ctx, node)
-            reason = "inner_code"
+        if not PermissionStructured.tier_admits(ctx.tier, c) then
+            reason = (c.read_only or c.safe_write) and "tier"
+                or structured_reason(ctx.structured_entries, parsed, c)
+        elseif may_run_config_code(cmd_name, args, args_dynamic, ctx, node) then
+            reason = "inner-code"
         else
-            reason = structured_reason(ctx.structured_entries, parsed, c)
+            struct_safe = true
         end
     else
         ctx.taint.set = true
@@ -2397,8 +2399,8 @@ local function command_known_safe(node, src, ctx, known, funcs)
         return false, subst_ranges
     end
     if not safe then
-        -- Reached only when no deny/ask/structural bail fired above: the leaf is
-        -- unapproved purely for lack of an allow match, so it is rememberable.
+        -- Reached only when no deny/ask/structural bail fired above: an allow
+        -- match on the leaf would approve it, so it is rememberable.
         return false, nil, leaf, reason
     end
     return true
@@ -2818,48 +2820,31 @@ local function start_cwds(cwd)
         or unknown_cwds()
 end
 
---- Find every part of a Bash command that is NOT known-safe — the leaves and
---- structural nodes the permission prompt is asking about. Find-all (every
---- branch), unlike the first-bail decision `walk`. Two consumers:
----
---- * The highlighter reads `ranges` — byte ranges relative to `command`'s own
----   lines (0-indexed rows, byte cols, matching `node:range()`). It binds to the
----   *displayed* (reformatted) command, whereas the decision walk binds to the
----   raw `rawInput.command`. Each range also holds why its part is unapproved.
---- * The allow-always collector reads `leaves`/`complete`: `leaves` are the
----   stripped signatures of parts unapproved purely for lack of an allow match
----   (rememberable as session-local allow patterns); `complete` is true iff
----   *every* unapproved part was such a leaf — false signals the manager to keep
----   the whole-command fallback for deny/ask-gated or structural parts.
----
---- `ranges` is `nil` when the command does not parse (no parser / parse error)
---- so the highlighter can fall back to highlighting the whole block; an empty
---- list means it parsed and nothing needs attention (bare prompt). On any
---- non-parse path `leaves` is empty and `complete` is false. Pure analysis — it
---- never grants anything.
+--- Find every part of a Bash command that is NOT known-safe under `rules`.
+--- Find-all (every branch), unlike the first-bail decision `walk`. Pure
+--- analysis: it never grants anything.
 --- @param command string
---- @param config_dir string Claude's config directory
+--- @param rules agentic.utils.PermissionRules.Rules
 --- @param cwd string|nil absolute directory the command starts in; nil when unknown
---- @return agentic.utils.PermissionRules.Range[]|nil ranges
---- @return string[] leaves
---- @return boolean complete
-function M.tally_unapproved(command, config_dir, cwd)
+--- @return agentic.utils.PermissionRules.Range[]|nil ranges One per unapproved part, relative to `command`'s own lines, with why. nil when the command does not parse. Empty when no part is found unapproved
+--- @return string[] leaves Stripped signatures of the unapproved parts that an allow pattern for the leaf would approve. Empty when the command does not parse
+--- @return boolean complete True iff every unapproved part is in `leaves`. False when the command does not parse
+function M.tally_unapproved(command, rules, cwd)
     local root = ZshParse.parse_command(command)
     if not root then
         return nil, {}, false
     end
 
-    local allow = M.get_settings_patterns("allow", config_dir)
-    local deny = M.get_settings_patterns("deny", config_dir)
-    local ask = M.get_settings_patterns("ask", config_dir)
     local structured_entries = PermissionStructured.get_entries()
     local reader_memo = {}
     local run = walk_until_shadowed_settles(function(shadowed)
         --- @type agentic.utils.PermissionRules.TallyCtx
         local ctx = {
-            allow = allow,
-            deny = deny,
-            ask = ask,
+            allow_settings = rules.allow_settings,
+            allow_remembered = rules.allow_remembered,
+            deny = rules.deny,
+            ask = rules.ask,
+            tier = rules.tier,
             structured_entries = structured_entries,
             depth = 0,
             leaves = {},
@@ -2904,19 +2889,21 @@ end
 
 --- Forward declaration — `reject_walk` and `command_is_denied` are mutually
 --- recursive (a transparent-prefix wrapper re-walks its inner command).
---- @type fun(node: TSNode, src: string, ctx: agentic.utils.PermissionRules.RejectCtx): "deny"|"glob_deny"|nil
+--- @type fun(node: TSNode, src: string, ctx: agentic.utils.PermissionRules.RejectCtx): "deny"|"glob_deny"|nil, string|nil
 local reject_walk
 
 --- Which deny a single `command` leaf concretely matches: `"glob_deny"` for a
 --- glob deny pattern from settings.json, `"deny"` for a structured deny gate
 --- (concrete-only), nil for neither. A transparent prefix (`timeout … cmd`,
---- `sh -c '…'`) re-walks its inner command so a wrapped deny still rejects. Returns nil on any extraction bail — the leaf's own
---- denial cannot be established, and any executed substitution inside it is
---- visited separately by `reject_walk`'s child recursion.
+--- `sh -c '…'`) or an action host re-walks its inner command so a wrapped deny
+--- still rejects, naming the inner leaf. Returns nil on any extraction bail —
+--- the leaf's own denial cannot be established, and any executed substitution
+--- inside it is visited separately by `reject_walk`'s child recursion.
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.RejectCtx
---- @return "deny"|"glob_deny"|nil
+--- @return "deny"|"glob_deny"|nil source
+--- @return string|nil leaf The denied leaf as matched (`leaf_text`); nil unless denied
 local function command_is_denied(node, src, ctx)
     local args, arg_nodes, args_dynamic = extract_args(
         node,
@@ -2941,16 +2928,17 @@ local function command_is_denied(node, src, ctx)
         inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
     if inner and ctx.depth < NESTED_MAX_DEPTH then
         local root = parse_zsh(inner)
-        local source = root
-            and reject_walk(
+        if root then
+            local source, inner_leaf = reject_walk(
                 root,
                 inner,
                 vim.tbl_extend("force", ctx, {
                     depth = ctx.depth + 1,
                 })
             )
-        if source then
-            return source
+            if source then
+                return source, inner_leaf
+            end
         end
     end
 
@@ -2965,7 +2953,7 @@ local function command_is_denied(node, src, ctx)
         ctx.depth
     )
     if actions and actions_root then
-        local source = reject_walk(
+        local source, action_leaf = reject_walk(
             actions_root,
             actions.inner,
             vim.tbl_extend("force", ctx, {
@@ -2973,13 +2961,13 @@ local function command_is_denied(node, src, ctx)
             })
         )
         if source then
-            return source
+            return source, action_leaf
         end
         args, args_dynamic = actions.args, actions.args_dynamic
     end
 
     if #ctx.deny > 0 and M.matches_any_pattern(leaf, ctx.deny) then
-        return "glob_deny"
+        return "glob_deny", leaf
     end
 
     if next(ctx.structured_entries) ~= nil then
@@ -2990,7 +2978,7 @@ local function command_is_denied(node, src, ctx)
                 args_dynamic = args_dynamic,
             })
         then
-            return "deny"
+            return "deny", leaf
         end
     end
     return nil
@@ -3007,23 +2995,24 @@ end
 --- @param node TSNode
 --- @param src string
 --- @param ctx agentic.utils.PermissionRules.RejectCtx
---- @return "deny"|"glob_deny"|nil
+--- @return "deny"|"glob_deny"|nil source
+--- @return string|nil leaf The denied leaf (see `command_is_denied`)
 reject_walk = function(node, src, ctx)
     local t = node:type()
     if t == "function_definition" then
         return nil
     end
     if t == "command" then
-        local source = command_is_denied(node, src, ctx)
+        local source, leaf = command_is_denied(node, src, ctx)
         if source then
-            return source
+            return source, leaf
         end
     end
     for child in node:iter_children() do
         if child:named() and child:type() ~= "comment" then
-            local source = reject_walk(child, src, ctx)
+            local source, leaf = reject_walk(child, src, ctx)
             if source then
-                return source
+                return source, leaf
             end
         end
     end
@@ -3041,6 +3030,7 @@ end
 --- @param config_dir string Claude's config directory
 --- @return boolean rejected
 --- @return "deny"|"glob_deny"|nil source The rejecting leaf's match: a structured deny gate (`"deny"`) or a settings.json deny pattern (`"glob_deny"`); nil unless rejected
+--- @return string|nil leaf The rejecting leaf as matched: normalised, and the inner leaf of a wrapper, `sh -c` body or action host (`find -exec`); nil unless rejected
 function M.should_auto_reject(command, config_dir)
     local deny = M.get_settings_patterns("deny", config_dir)
     local structured_entries = PermissionStructured.get_entries()
@@ -3053,12 +3043,12 @@ function M.should_auto_reject(command, config_dir)
         return false
     end
 
-    local source = reject_walk(root, command, {
+    local source, leaf = reject_walk(root, command, {
         deny = deny,
         structured_entries = structured_entries,
         depth = 0,
     })
-    return source ~= nil, source
+    return source ~= nil, source, leaf
 end
 
 --- Parse a Bash command with the zsh grammar and walk the tree against
@@ -3068,13 +3058,15 @@ end
 --- bails. A file-writing redirect emits an effect rather than bailing; brace
 --- groups (`{ …; }`), subshells (`( … )`), loops, and if/case control flow
 --- recurse into every branch. Fail-closed: an absent parser, a parse error,
---- or a truncated/malformed tree all return false.
+--- or a truncated/malformed tree all return false. Returns as `M.evaluate`.
 --- @param command string
---- @param rules { allow_settings: agentic.utils.PermissionRules.CompiledPattern[], allow_remembered: agentic.utils.PermissionRules.CompiledPattern[], deny: agentic.utils.PermissionRules.CompiledPattern[], ask: agentic.utils.PermissionRules.CompiledPattern[], tier: agentic.PermAutoApproveTier, read_scripts: boolean, cwd: string|nil } `read_scripts` false leaves code a command reads unread, so its leaf meets the rules as written. `cwd` is the absolute directory the command starts in, nil when unknown
---- @return boolean ok Structurally approvable
---- @return agentic.utils.PermissionRules.Effect[] effects Concrete file-mutating effects (redirect writes, `rm` operands) the command would produce, in order
---- @return table<agentic.utils.PermissionRules.Source, true> sources Every source that allowed a single command; empty unless ok
-local function run_walk(command, rules)
+--- @param rules agentic.utils.PermissionRules.Rules
+--- @param cwd string|nil absolute directory the command starts in; nil when unknown
+--- @param read_scripts boolean false leaves code a command reads unread, so its leaf meets the rules as written
+--- @return boolean ok
+--- @return agentic.utils.PermissionRules.Effect[] effects
+--- @return table<agentic.utils.PermissionRules.Source, true> sources
+local function run_walk(command, rules, cwd, read_scripts)
     local structured_entries = PermissionStructured.get_entries()
     -- Skip the parse entirely when neither layer has any allow source — the
     -- walker has nothing to approve against.
@@ -3107,13 +3099,13 @@ local function run_walk(command, rules)
             written = {},
             for_budget = FOR_UNROLL_CAP,
             shadowed = shadowed,
-            read_scripts = rules.read_scripts,
+            read_scripts = read_scripts,
             cwd_of = {},
             taint = { set = false },
             sourced = {},
             reader_memo = reader_memo,
         }
-        ctx.cwd_of = tree_cwds(root, command, start_cwds(rules.cwd), ctx, 0)
+        ctx.cwd_of = tree_cwds(root, command, start_cwds(cwd), ctx, 0)
         local ok = walk(root, command, ctx)
         -- More shadowed names only turn approvals into bails.
         return { ok = ok, ctx = ctx }, not ok
@@ -3122,39 +3114,52 @@ local function run_walk(command, rules)
     return run.ok, run.ctx.effects, run.ok and run.ctx.sources or {}
 end
 
---- Check if a Bash command should be auto-approved under the configured
---- settings.json rules and `auto_approve_tier`, by the walk of `run_walk`.
+--- The rules a shell command is judged by.
+--- @class agentic.utils.PermissionRules.Rules
+--- @field allow_settings agentic.utils.PermissionRules.CompiledPattern[]
+--- @field allow_remembered agentic.utils.PermissionRules.CompiledPattern[] Session-remembered leaves. They widen approval only, never override a deny/ask
+--- @field deny agentic.utils.PermissionRules.CompiledPattern[]
+--- @field ask agentic.utils.PermissionRules.CompiledPattern[]
+--- @field tier agentic.PermAutoApproveTier
+
+--- The configured rules: settings.json patterns and
+--- `Config.permissions.auto_approve_tier`. Settings.json allows count only at
+--- a non-nil tier. Remembered leaves count at every tier, because the user
+--- approved each one.
+--- @param config_dir string Claude's config directory
+--- @param remembered agentic.utils.PermissionRules.CompiledPattern[]|nil Session-remembered leaves
+--- @return agentic.utils.PermissionRules.Rules
+function M.rules(config_dir, remembered)
+    local tier = Config.permissions.auto_approve_tier
+    --- @type agentic.utils.PermissionRules.Rules
+    local rules = {
+        allow_settings = tier and M.get_settings_patterns("allow", config_dir)
+            or {},
+        allow_remembered = remembered or {},
+        deny = M.get_settings_patterns("deny", config_dir),
+        ask = M.get_settings_patterns("ask", config_dir),
+        tier = tier,
+    }
+    return rules
+end
+
+--- Whether a Bash command is structurally approvable under `rules`, with the
+--- file effects and allow sources of that check.
 ---
---- A structurally-ok command with effects STILL requires every effect to clear
---- at the policy layer before approval — `ok` alone is not approval (see
---- permission_manager's `_bash_effects_clear`). Empty effects means a pure
+--- `ok` alone is not approval: a command with effects needs every effect
+--- cleared by the caller's own policy. Empty effects means a pure
 --- read/no-write command that approves on `ok` alone.
 ---
---- `extra_allow` injects session-remembered leaf patterns on top of the
---- configured allow rules; they widen approval only, never override a deny/ask.
 --- A script the command runs or sources is read from every directory the
 --- command may be in at that point, starting from `cwd`.
 --- @param command string
---- @param config_dir string Claude's config directory
+--- @param rules agentic.utils.PermissionRules.Rules
 --- @param cwd string|nil absolute directory the command starts in; nil when unknown
---- @param extra_allow agentic.utils.PermissionRules.CompiledPattern[]|nil
---- @return boolean ok
---- @return agentic.utils.PermissionRules.Effect[] effects
---- @return table<agentic.utils.PermissionRules.Source, true> sources
-function M.evaluate(command, config_dir, cwd, extra_allow)
-    -- Remembered leaves count even when `auto_approve_tier` is nil, because the
-    -- user approved each one.
-    return run_walk(command, {
-        allow_settings = Config.permissions.auto_approve_tier
-                and M.get_settings_patterns("allow", config_dir)
-            or {},
-        allow_remembered = extra_allow or {},
-        deny = M.get_settings_patterns("deny", config_dir),
-        ask = M.get_settings_patterns("ask", config_dir),
-        tier = Config.permissions.auto_approve_tier,
-        read_scripts = true,
-        cwd = cwd,
-    })
+--- @return boolean ok Structurally approvable
+--- @return agentic.utils.PermissionRules.Effect[] effects Concrete file-mutating effects (redirect writes, `rm` operands), in order
+--- @return table<agentic.utils.PermissionRules.Source, true> sources Every source that allowed a single command; empty unless ok
+function M.evaluate(command, rules, cwd)
+    return run_walk(command, rules, cwd, true)
 end
 
 --- Whether a command only reads: every leaf passes a structured `read_only`
@@ -3181,8 +3186,7 @@ function M.is_read_only(command)
         deny = {},
         ask = {},
         tier = "read_only",
-        read_scripts = false,
-    })
+    }, nil, false)
     local read_only = ok and #effects == 0
     cached_read_only[command] = read_only
     return read_only
@@ -3192,12 +3196,11 @@ end
 --- is structurally approvable AND produces no file-mutating effects (a redirect
 --- write or an `rm`, see `evaluate`).
 --- @param command string
---- @param config_dir string Claude's config directory
+--- @param rules agentic.utils.PermissionRules.Rules
 --- @param cwd string|nil see `evaluate`
---- @param extra_allow agentic.utils.PermissionRules.CompiledPattern[]|nil session-remembered leaf patterns (forwarded to `evaluate`)
 --- @return boolean
-function M.should_auto_approve(command, config_dir, cwd, extra_allow)
-    local ok, effects = M.evaluate(command, config_dir, cwd, extra_allow)
+function M.should_auto_approve(command, rules, cwd)
+    local ok, effects = M.evaluate(command, rules, cwd)
     return ok and #effects == 0
 end
 

@@ -591,7 +591,10 @@ describe("agentic.ui.PermissionManager", function()
             pm:add_request(request, cb --[[@as function]])
             Config.permissions.auto_approve_kinds = original
             assert.is_true(cb:called_with("allow-once"))
-            assert.same({ "fetch" }, pm:take_deciders("tc-skill"))
+            assert.same(
+                { { code = "kind", subject = "fetch" } },
+                pm:take_causes("tc-skill")
+            )
         end)
 
         it("prompts when skill is not in auto_approve_kinds", function()
@@ -917,6 +920,55 @@ describe("agentic.ui.PermissionManager", function()
                 )
                 assert.spy(cb2).was.called(1)
                 assert.is_true(cb2:called_with("allow-once"))
+            end
+        )
+
+        it("allow_always remembers a leaf the tier withholds", function()
+            local Config = require("agentic.config")
+            local tier = Config.permissions.auto_approve_tier
+            MiniTest.finally(function()
+                Config.permissions.auto_approve_tier = tier
+            end)
+            Config.permissions.auto_approve_tier = "read_only"
+            pm:add_request(
+                make_execute_request("mktemp", "tc-tier-1"),
+                function() end
+            )
+            assert.is_not_nil(pm.current_request)
+            pm:_complete_request("allow-always")
+
+            assert.is_true(pm._execute_leaf_allow["mktemp"])
+            assert.same({}, pm._always_cache)
+            assert.same(
+                { allow = true, causes = { { code = "session-allow" } } },
+                pm:decide("execute", {
+                    toolCallId = "tc-tier-2",
+                    rawInput = { command = "mktemp" },
+                })
+            )
+        end)
+
+        it(
+            "allow_always keeps the whole command when no part is blamed",
+            function()
+                local PermissionRules =
+                    require("agentic.utils.permission_rules")
+                local tally = spy.stub(PermissionRules, "tally_unapproved")
+                MiniTest.finally(function()
+                    tally:revert()
+                end)
+                tally:invokes(function()
+                    return {}, {}, true
+                end)
+                pm:add_request(
+                    make_execute_request("frobnicate a", "tc-blameless"),
+                    function() end
+                )
+                pm:_complete_request("allow-always")
+                assert.same(
+                    { ["execute:frobnicate a"] = "allow" },
+                    pm._always_cache
+                )
             end
         )
 
@@ -1791,27 +1843,32 @@ describe("agentic.ui.PermissionManager", function()
                         command = "echo x > " .. repo .. "/new.md",
                     } --[[@as agentic.acp.RawInput]],
                 }
-                assert.equal("allow", pm:decide("execute", tool_call, nil))
+                assert.is_true(pm:decide("execute", tool_call, nil).allow)
                 pm._always_cache[
                     pm:_build_cache_key(tool_call) --[[@as string]]
                 ] =
                     "reject"
-                assert.equal("deny", pm:decide("execute", tool_call, nil))
+                assert.is_false(pm:decide("execute", tool_call, nil).allow)
             end)
 
             it(
                 "a granted redirect is decided by its command and the grant",
                 function()
                     grant(tmp)
-                    local verdict, deciders = pm:decide("execute", {
+                    local verdict = pm:decide("execute", {
                         toolCallId = "tc-grant-redirect",
                         kind = "execute",
                         rawInput = {
                             command = "grep x f > " .. tmp .. "/out",
                         } --[[@as agentic.acp.RawInput]],
                     }, nil)
-                    assert.equal("allow", verdict)
-                    assert.same({ "read-only", "grant" }, deciders)
+                    assert.same({
+                        allow = true,
+                        causes = {
+                            { code = "read-only" },
+                            { code = "grant", subject = tmp .. "/out" },
+                        },
+                    }, verdict)
                 end
             )
 
@@ -1845,34 +1902,56 @@ describe("agentic.ui.PermissionManager", function()
             end)
         end)
 
-        describe("refusal_reasons", function()
+        describe("undecided causes", function()
+            --- The verdict of `decide` on a shell command.
+            --- @param command string
+            --- @return agentic.PermissionVerdict
+            local function shell_verdict(command)
+                return pm:decide("execute", {
+                    toolCallId = "t",
+                    rawInput = { command = command },
+                })
+            end
+
             it("gives the effect that does not clear", function()
                 grant(repo)
-                assert.same(
-                    { dirty_md .. ": file has unstaged changes" },
-                    pm:refusal_reasons("execute", {
-                        toolCallId = "t",
-                        rawInput = { command = "echo a > " .. dirty_md },
-                    })
-                )
+                assert.same({
+                    causes = {
+                        {
+                            code = "grant",
+                            subject = dirty_md,
+                            detail = "file has unstaged changes",
+                        },
+                    },
+                }, shell_verdict("echo a > " .. dirty_md))
             end)
 
             it("gives a relative effect path", function()
                 grant(repo)
-                assert.same(
-                    { "out: relative path" },
-                    pm:refusal_reasons("execute", {
-                        toolCallId = "t",
-                        rawInput = { command = "echo a > out" },
-                    })
-                )
+                assert.same({
+                    causes = {
+                        {
+                            code = "grant",
+                            subject = "out",
+                            detail = "relative path",
+                        },
+                    },
+                }, shell_verdict("echo a > out"))
             end)
 
             it("gives the grant check's reason for a file kind", function()
                 grant(repo)
                 assert.same(
-                    { dirty_md .. ": file has unstaged changes" },
-                    pm:refusal_reasons(
+                    {
+                        causes = {
+                            {
+                                code = "grant",
+                                subject = dirty_md,
+                                detail = "file has unstaged changes",
+                            },
+                        },
+                    },
+                    pm:decide(
                         "delete",
                         make_grant_request("t", "delete", dirty_md).toolCall
                     )
@@ -1881,11 +1960,32 @@ describe("agentic.ui.PermissionManager", function()
 
             it("names a path outside every grant scope", function()
                 assert.same(
-                    { a_lua .. ": not in a grant scope" },
-                    pm:refusal_reasons(
+                    {
+                        causes = {
+                            {
+                                code = "grant",
+                                subject = a_lua,
+                                detail = "not in a grant scope",
+                            },
+                        },
+                    },
+                    pm:decide(
                         "write",
                         make_grant_request("t", "write", a_lua).toolCall
                     )
+                )
+            end)
+
+            it("names a granted file kind's path and reason", function()
+                grant(tmp)
+                local verdict = pm:decide(
+                    "write",
+                    make_grant_request("t", "write", tmp .. "/new.md").toolCall
+                )
+                assert.is_true(verdict.allow)
+                assert.same(
+                    { "grant", tmp .. "/new.md" },
+                    { verdict.causes[1].code, verdict.causes[1].subject }
                 )
             end)
         end)
@@ -1947,7 +2047,10 @@ describe("agentic.ui.PermissionManager", function()
             assert.spy(cb).was.called(1)
             assert.is_true(cb:called_with("reject-once"))
             assert.is_nil(pm.current_request)
-            assert.same({ "deny" }, pm:take_deciders("tc-deny-1"))
+            assert.same(
+                { { code = "deny", subject = "find . -delete" } },
+                pm:take_causes("tc-deny-1")
+            )
         end)
 
         it("records the rule kinds that auto-approved a command", function()
@@ -1955,7 +2058,10 @@ describe("agentic.ui.PermissionManager", function()
                 make_execute_request("ls -la | grep x", "tc-allow-1"),
                 function() end
             )
-            assert.same({ "read-only" }, pm:take_deciders("tc-allow-1"))
+            assert.same(
+                { { code = "read-only" } },
+                pm:take_causes("tc-allow-1")
+            )
         end)
 
         it("prompts an ask command instead of rejecting", function()
@@ -1997,7 +2103,10 @@ describe("agentic.ui.PermissionManager", function()
                     function() end
                 )
                 assert.is_false(prompted)
-                assert.same({ "read-only" }, pm:take_deciders("tc-cwd"))
+                assert.same(
+                    { { code = "read-only" } },
+                    pm:take_causes("tc-cwd")
+                )
             end)
 
             it("decide reads a script from the given cwd", function()
@@ -2007,8 +2116,8 @@ describe("agentic.ui.PermissionManager", function()
                     kind = "execute",
                     rawInput = { command = "zsh run.sh" } --[[@as agentic.acp.RawInput]],
                 }
-                assert.is_nil(pm:decide("execute", tool_call, nil))
-                assert.equal("allow", pm:decide("execute", tool_call, nil, dir))
+                assert.is_nil(pm:decide("execute", tool_call, nil).allow)
+                assert.is_true(pm:decide("execute", tool_call, nil, dir).allow)
             end)
 
             it("keeps a cwd until dropped or cleared", function()
@@ -2051,107 +2160,127 @@ describe("agentic.ui.PermissionManager", function()
         end)
 
         it("allows read-only kinds", function()
-            assert.same(
-                { "allow", { "read" } },
-                { pm:decide("read", { toolCallId = "t" }) }
-            )
-            assert.same(
-                { "allow", { "search" } },
-                { pm:decide("search", { toolCallId = "t" }) }
-            )
+            assert.same({
+                allow = true,
+                causes = { { code = "kind", subject = "read" } },
+            }, pm:decide("read", { toolCallId = "t" }))
+            assert.same({
+                allow = true,
+                causes = { { code = "kind", subject = "search" } },
+            }, pm:decide("search", { toolCallId = "t" }))
         end)
 
         it("allows any kind listed in auto_approve_kinds", function()
             local original = Config.permissions.auto_approve_kinds
             Config.permissions.auto_approve_kinds = { "Fetch" }
-            local result = { pm:decide("fetch", { toolCallId = "t" }) }
+            local verdict = pm:decide("fetch", { toolCallId = "t" })
             Config.permissions.auto_approve_kinds = original
-            assert.same({ "allow", { "fetch" } }, result)
+            assert.same({
+                allow = true,
+                causes = { { code = "kind", subject = "fetch" } },
+            }, verdict)
         end)
 
         it("lets deny rules and reject_always beat a listed kind", function()
             local original = Config.permissions.auto_approve_kinds
             Config.permissions.auto_approve_kinds = { "execute" }
-            local denied = {
-                pm:decide("execute", {
-                    toolCallId = "t",
-                    rawInput = { command = "rm -rf /" },
-                }),
-            }
+            local denied = pm:decide("execute", {
+                toolCallId = "t",
+                rawInput = { command = "rm -rf /" },
+            })
             pm._always_cache["execute:secret"] = "reject"
-            local rejected = {
-                pm:decide("execute", {
-                    toolCallId = "t",
-                    kind = "execute",
-                    rawInput = { command = "secret" },
-                }),
-            }
+            local rejected = pm:decide("execute", {
+                toolCallId = "t",
+                kind = "execute",
+                rawInput = { command = "secret" },
+            })
             Config.permissions.auto_approve_kinds = original
-            assert.same({ "deny", { "deny" } }, denied)
-            assert.same({ "deny", { "session-reject" } }, rejected)
-        end)
-
-        it("allows skill loads", function()
+            assert.same({
+                allow = false,
+                causes = { { code = "deny", subject = "rm -rf /" } },
+            }, denied)
             assert.same(
-                { "allow", { "skill" } },
-                { pm:decide("skill", { toolCallId = "t" }) }
+                { allow = false, causes = { { code = "session-reject" } } },
+                rejected
             )
         end)
 
-        it("denies a settings-denied bash command", function()
-            assert.equal(
-                "deny",
+        it("names the denied leaf inside sh -c", function()
+            assert.same(
+                {
+                    allow = false,
+                    causes = { { code = "deny", subject = "rm -rf /" } },
+                },
                 pm:decide("execute", {
                     toolCallId = "t",
-                    rawInput = { command = "rm -rf /" },
+                    rawInput = { command = "ls && sh -c 'rm -rf /'" },
                 })
             )
         end)
 
-        it("returns nil for an unprovable bash command", function()
+        it("allows skill loads", function()
+            assert.same({
+                allow = true,
+                causes = { { code = "kind", subject = "skill" } },
+            }, pm:decide("skill", { toolCallId = "t" }))
+        end)
+
+        it("leaves an unprovable bash command undecided", function()
             assert.is_nil(pm:decide("execute", {
                 toolCallId = "t",
                 rawInput = { command = "python -c 'print(1)'" },
-            }))
+            }).allow)
         end)
 
         it("honours the allow_always cache", function()
             pm._always_cache["execute:echo hi"] = "allow"
-            assert.same({ "allow", { "session-allow" } }, {
+            assert.same(
+                { allow = true, causes = { { code = "session-allow" } } },
                 pm:decide("execute", {
                     toolCallId = "t",
                     kind = "execute",
                     rawInput = { command = "echo hi" },
-                }),
-            })
+                })
+            )
         end)
 
-        it("honours the reject_always cache", function()
-            pm._always_cache["execute:secret"] = "reject"
-            assert.same({ "deny", { "session-reject" } }, {
+        it("gives a command that runs nothing no cause", function()
+            assert.same(
+                { allow = true, causes = {} },
                 pm:decide("execute", {
                     toolCallId = "t",
-                    kind = "execute",
-                    rawInput = { command = "secret" },
-                }),
-            })
+                    rawInput = { command = "# hi" },
+                })
+            )
         end)
 
-        it("returns nil with no matching rule", function()
-            assert.same({}, {
+        it("leaves a file kind with no grant undecided", function()
+            assert.same(
+                {
+                    causes = {
+                        {
+                            code = "grant",
+                            subject = "/some/repo/file.lua",
+                            detail = "not in a grant scope",
+                        },
+                    },
+                },
                 pm:decide("edit", {
                     toolCallId = "t",
                     rawInput = { file_path = "/some/repo/file.lua" },
-                }),
-            })
+                })
+            )
         end)
 
-        it("returns nil for a kind not in auto_approve_kinds", function()
+        it("gives a kind not in auto_approve_kinds a kind cause", function()
             local original = Config.permissions.auto_approve_kinds
             Config.permissions.auto_approve_kinds = { "skill" }
-            local result = { pm:decide("read", { toolCallId = "t" }) }
+            local verdict = pm:decide("read", { toolCallId = "t" })
             Config.permissions.auto_approve_kinds = original
-            assert.same({}, result)
+            assert.same(
+                { causes = { { code = "kind", subject = "read" } } },
+                verdict
+            )
         end)
     end)
 
@@ -2183,7 +2312,7 @@ describe("agentic.ui.PermissionManager", function()
         end)
     end)
 
-    describe("refusal_reasons", function()
+    describe("shell causes", function()
         local Config = require("agentic.config")
         local PermissionRules = require("agentic.utils.permission_rules")
         local orig_tier
@@ -2195,58 +2324,94 @@ describe("agentic.ui.PermissionManager", function()
             Config.permissions.auto_approve_tier = orig_tier
         end)
 
+        --- The verdict of `decide` on a shell command.
         --- @param command string
-        --- @return string[]
-        local function shell_reasons(command)
-            return pm:refusal_reasons("execute", {
+        --- @return agentic.PermissionVerdict
+        local function shell_verdict(command)
+            return pm:decide("execute", {
                 toolCallId = "t",
                 rawInput = { command = command },
             })
         end
 
-        it("names the deciders of a deny", function()
+        it("gives each unapproved part of a command", function()
             assert.same(
-                { "denied by glob-deny, session-reject" },
-                pm:refusal_reasons(
-                    "execute",
-                    { toolCallId = "t", rawInput = { command = "x" } },
-                    nil,
-                    nil,
-                    { "glob-deny", "session-reject" }
-                )
+                { causes = { { code = "code-builtin", subject = "eval x" } } },
+                shell_verdict("cat a && eval x")
             )
         end)
 
-        it("gives each unapproved part of a command", function()
-            assert.same({
-                "eval x: " .. PermissionRules.REASON_TEXT.code_builtin,
-            }, shell_reasons("cat a && eval x"))
-        end)
-
-        it("gives one line for a command that does not parse", function()
+        it("gives one cause for a command that does not parse", function()
             assert.same(
-                { "if: " .. PermissionRules.REASON_TEXT.unparsed },
-                shell_reasons("if")
+                { causes = { { code = "unparsed", subject = "if" } } },
+                shell_verdict("if")
             )
         end)
 
         it("names the tier when only the tier withholds approval", function()
             Config.permissions.auto_approve_tier = "read_only"
             assert.same(
-                { "mktemp: not in the read-only command set" },
-                shell_reasons("mktemp")
+                { causes = { { code = "tier", subject = "mktemp" } } },
+                shell_verdict("mktemp")
             )
         end)
 
-        it("says other kinds need approval", function()
+        it("blames the whole command when the tally finds no part", function()
+            local tally = spy.stub(PermissionRules, "tally_unapproved")
+            MiniTest.finally(function()
+                tally:revert()
+            end)
+            tally:returns({})
             assert.same(
-                { "fetch calls need approval" },
-                pm:refusal_reasons("fetch", { toolCallId = "t" })
+                { causes = { { code = "structure", subject = "eval x" } } },
+                shell_verdict("eval x")
             )
         end)
     end)
 
-    describe("deciders", function()
+    describe("cause_line", function()
+        local PermissionRules = require("agentic.utils.permission_rules")
+
+        it("gives the subject and its code's text", function()
+            assert.equal(
+                "eval x: " .. PermissionRules.REASON_TEXT["code-builtin"],
+                PermissionManager.cause_line({
+                    code = "code-builtin",
+                    subject = "eval x",
+                })
+            )
+        end)
+
+        it("prefers the detail over the code's text", function()
+            assert.equal(
+                "/a: relative path",
+                PermissionManager.cause_line({
+                    code = "grant",
+                    subject = "/a",
+                    detail = "relative path",
+                })
+            )
+        end)
+
+        it("gives the text alone with no subject", function()
+            assert.equal(
+                "rejected for this session",
+                PermissionManager.cause_line({ code = "session-reject" })
+            )
+        end)
+
+        it("says a kind needs approval", function()
+            assert.equal(
+                "fetch: calls of this kind need approval",
+                PermissionManager.cause_line({
+                    code = "kind",
+                    subject = "fetch",
+                })
+            )
+        end)
+    end)
+
+    describe("causes", function()
         --- @param tool_call_id string
         --- @param kind agentic.acp.ToolKind
         --- @param option_kinds string[]
@@ -2274,23 +2439,29 @@ describe("agentic.ui.PermissionManager", function()
         local all_options =
             { "allow_once", "allow_always", "reject_once", "reject_always" }
 
+        --- @param code agentic.PermissionCauseCode
+        --- @return agentic.PermissionCause[]
+        local function only(code)
+            return { { code = code } }
+        end
+
         it("calls on_decided only once the event loop runs", function()
             local on_decided = spy.new(function() end)
             pm.on_decided = on_decided --[[@as function]]
 
-            pm:record_deciders("tc-1", { "grant" })
+            pm:record_causes("tc-1", only("grant"))
 
             assert.spy(on_decided).was.called(0)
             local scheduled = schedule_stub.calls[#schedule_stub.calls][1]
             scheduled()
             assert.spy(on_decided).was.called(1)
-            assert.is_true(on_decided:called_with("tc-1", { "grant" }))
+            assert.is_true(on_decided:called_with("tc-1", only("grant")))
         end)
 
-        it("take_deciders removes the entry", function()
-            pm:stash_deciders("tc-1", { "skill" })
-            assert.same({ "skill" }, pm:take_deciders("tc-1"))
-            assert.is_nil(pm:take_deciders("tc-1"))
+        it("take_causes removes the entry", function()
+            pm:stash_causes("tc-1", only("kind"))
+            assert.same(only("kind"), pm:take_causes("tc-1"))
+            assert.is_nil(pm:take_causes("tc-1"))
         end)
 
         it("records nothing when the verdict has no matching option", function()
@@ -2298,23 +2469,23 @@ describe("agentic.ui.PermissionManager", function()
                 make_request("tc-read", "read", { "reject_once" }),
                 function() end
             )
-            assert.is_nil(pm:take_deciders("tc-read"))
+            assert.is_nil(pm:take_causes("tc-read"))
             pm:_complete_request("reject-once")
         end)
 
-        for option_kind, decider in pairs({
+        for option_kind, code in pairs({
             allow_once = "prompt-allow",
             allow_always = "prompt-allow",
             reject_once = "prompt-reject",
             reject_always = "prompt-reject",
         }) do
-            it("records " .. decider .. " for " .. option_kind, function()
+            it("records " .. code .. " for " .. option_kind, function()
                 pm:add_request(
                     make_request("tc-edit", "edit", all_options),
                     function() end
                 )
                 pm:_complete_request((option_kind:gsub("_", "-")))
-                assert.same({ decider }, pm:take_deciders("tc-edit"))
+                assert.same(only(code), pm:take_causes("tc-edit"))
             end)
         end
 
@@ -2324,7 +2495,7 @@ describe("agentic.ui.PermissionManager", function()
                 function() end
             )
             pm:remove_request_by_tool_call_id("tc-edit")
-            assert.is_nil(pm:take_deciders("tc-edit"))
+            assert.is_nil(pm:take_causes("tc-edit"))
         end)
 
         it(
@@ -2339,8 +2510,8 @@ describe("agentic.ui.PermissionManager", function()
                     function() end
                 )
                 pm:reject_and_cancel_remaining()
-                assert.same({ "prompt-reject" }, pm:take_deciders("tc-first"))
-                assert.same({ "prompt-cancel" }, pm:take_deciders("tc-queued"))
+                assert.same(only("prompt-reject"), pm:take_causes("tc-first"))
+                assert.same(only("prompt-cancel"), pm:take_causes("tc-queued"))
             end
         )
 
@@ -2352,7 +2523,7 @@ describe("agentic.ui.PermissionManager", function()
                     function() end
                 )
                 pm:reject_and_cancel_remaining()
-                assert.same({ "prompt-cancel" }, pm:take_deciders("tc-first"))
+                assert.same(only("prompt-cancel"), pm:take_causes("tc-first"))
             end
         )
 
@@ -2368,15 +2539,15 @@ describe("agentic.ui.PermissionManager", function()
                     function() end
                 )
                 pm:cancel_requests()
-                assert.same({ "prompt-cancel" }, pm:take_deciders("tc-first"))
-                assert.same({ "prompt-cancel" }, pm:take_deciders("tc-queued"))
+                assert.same(only("prompt-cancel"), pm:take_causes("tc-first"))
+                assert.same(only("prompt-cancel"), pm:take_causes("tc-queued"))
             end
         )
 
-        it("clear forgets stashed deciders", function()
-            pm:stash_deciders("tc-1", { "grant" })
+        it("clear forgets stashed causes", function()
+            pm:stash_causes("tc-1", only("grant"))
             pm:clear()
-            assert.is_nil(pm:take_deciders("tc-1"))
+            assert.is_nil(pm:take_causes("tc-1"))
         end)
     end)
 end)

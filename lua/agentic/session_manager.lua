@@ -407,8 +407,8 @@ function SessionManager:new(provider)
         local input = child_id and self._subagents:input_of(child_id)
         return input and { input.bufnr } or {}
     end
-    self.permission_manager.on_decided = function(tool_call_id, deciders)
-        self:_on_permission_decided(tool_call_id, deciders)
+    self.permission_manager.on_decided = function(tool_call_id, causes)
+        self:_on_permission_decided(tool_call_id, causes)
     end
 
     self.config_options = AgentConfigOptions:new(
@@ -1590,7 +1590,7 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
     -- (https://agentclientprotocol.com/protocol/v2/tool-calls#status).
     tool_call.status = tool_call.status or "pending"
     tool_call = CanonicalToolCall.normalise(tool_call, tool_call.kind)
-    tool_call.decided_by = self.permission_manager:take_deciders(id)
+    tool_call.causes = self.permission_manager:take_causes(id)
     local view = self:_view_for(id)
     view.writer:write_tool_call_block(tool_call)
     view.status_indicator:reposition()
@@ -1616,25 +1616,25 @@ end
 
 --- Show what decided a tool call's permission on its block and keep it in the
 --- history. No-op once the session is destroyed, or while the call has no
---- block, in which case the deciders stay held in the permission manager.
---- Also a no-op when the block already shows `deciders`.
+--- block, in which case the causes stay held in the permission manager.
+--- Also a no-op when the block already shows `causes`.
 --- @param tool_call_id string
---- @param deciders agentic.PermissionDecider[]
-function SessionManager:_on_permission_decided(tool_call_id, deciders)
+--- @param causes agentic.PermissionCause[]
+function SessionManager:_on_permission_decided(tool_call_id, causes)
     if self.destroyed then
         return
     end
     local writer = self:_view_for(tool_call_id).writer
     local tracker = writer.tool_call_blocks[tool_call_id]
-    if not tracker or vim.deep_equal(tracker.decided_by, deciders) then
+    if not tracker or vim.deep_equal(tracker.causes, causes) then
         return
     end
-    self.permission_manager:take_deciders(tool_call_id)
+    self.permission_manager:take_causes(tool_call_id)
     --- @type agentic.ui.MessageWriter.ToolCallBase
     local update = {
         tool_call_id = tool_call_id,
         status = tracker.status,
-        decided_by = deciders,
+        causes = causes,
     }
     writer:update_tool_call_block(update)
     self.chat_history:update_tool_call(

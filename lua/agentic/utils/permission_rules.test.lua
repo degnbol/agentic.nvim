@@ -44,7 +44,10 @@ describe("PermissionRules", function()
     local function decide(command, permissions)
         Config.permissions.use_plugin_defaults = false
         stub_settings(permissions)
-        return PermissionRules.should_auto_approve(command, config_dir)
+        return PermissionRules.should_auto_approve(
+            command,
+            PermissionRules.rules(config_dir)
+        )
     end
 
     describe("settings per config dir", function()
@@ -288,7 +291,7 @@ describe("PermissionRules", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve(
                         "foo() { echo hi }; foo",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -299,7 +302,7 @@ describe("PermissionRules", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve(
                         "foo() { echo $1 }; foo whatever",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -310,7 +313,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         "foo() { rm -rf / }; foo",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -321,7 +324,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         "foo() { echo hi }; foo() { rm -rf / }; foo",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -330,7 +333,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         "foo() { rm -rf / }; foo() { echo hi }; foo",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -343,7 +346,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "foo() { echo hi }; /bin/foo",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -354,7 +357,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         "foo; foo() { echo hi }",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -365,7 +368,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         "foo() { echo hi }; foo $(rm x)",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -379,7 +382,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "foo() { echo hi }; if true; then foo; fi",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -446,7 +449,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "cat /etc/hosts > /tmp/x",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -455,14 +458,17 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "echo x >> /tmp/log",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
 
         it("approves allowed command with stderr fd dup", function()
             assert.is_true(
-                PermissionRules.should_auto_approve("echo hi >&2", config_dir)
+                PermissionRules.should_auto_approve(
+                    "echo hi >&2",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -470,7 +476,7 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "ls /tmp 2>/dev/null",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -479,7 +485,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "cat /etc/hosts | head -3 > /tmp/x",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -489,7 +495,7 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "wc -l </tmp/x.txt",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -498,7 +504,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "wc -l <$(echo /tmp/x)",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -540,7 +546,14 @@ describe("PermissionRules", function()
                 "rm /tmp/a 2>/dev/null /tmp/b",
             }) do
                 it("evaluate bails: " .. cmd, function()
-                    assert.is_false((PermissionRules.evaluate(cmd, config_dir)))
+                    assert.is_false(
+                        (
+                            PermissionRules.evaluate(
+                                cmd,
+                                PermissionRules.rules(config_dir)
+                            )
+                        )
+                    )
                 end)
             end
 
@@ -548,20 +561,23 @@ describe("PermissionRules", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve(
                         "f() { :; } > /dev/null; f",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         "f() { :; } > /tmp/x /dev/null; f",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
 
             it("tallies the redirect as unapproved", function()
                 local cmd = "sort a 2>/dev/null -o /etc/x /dev/null"
-                local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+                local ranges = PermissionRules.tally_unapproved(
+                    cmd,
+                    PermissionRules.rules(config_dir)
+                )
                 assert.equal(1, #ranges)
                 assert.equal(
                     "2>/dev/null -o /etc/x /dev/null",
@@ -581,7 +597,7 @@ describe("PermissionRules", function()
             it("pins a write on a heredoc's line", function()
                 local ok, effects = PermissionRules.evaluate(
                     "cat <<'EOF' > /tmp/f\nhi\nEOF",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.is_true(ok)
                 assert.same({ { kind = "write", path = "/tmp/f" } }, effects)
@@ -592,7 +608,7 @@ describe("PermissionRules", function()
                     (
                         PermissionRules.evaluate(
                             "f=/tmp/a; cat <<'EOF' && f=/etc/x\nhi\nEOF\ncat > $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 )
@@ -600,10 +616,16 @@ describe("PermissionRules", function()
 
             it("tallies only the rest of a heredoc's line", function()
                 local cmd = "cat <<'EOF' && rm a\nhi\nEOF"
-                local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+                local ranges = PermissionRules.tally_unapproved(
+                    cmd,
+                    PermissionRules.rules(config_dir)
+                )
                 assert.same({ { 0, 15, 0, 19, "ask" } }, ranges)
                 cmd = "cat <<'EOF' | rm a\nhi\nEOF"
-                ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+                ranges = PermissionRules.tally_unapproved(
+                    cmd,
+                    PermissionRules.rules(config_dir)
+                )
                 assert.same({ { 0, 14, 0, 18, "ask" } }, ranges)
             end)
         end)
@@ -623,9 +645,19 @@ describe("PermissionRules", function()
                 "ls > ! /dev/null",
             }) do
                 it("evaluate bails: " .. cmd, function()
-                    assert.is_false((PermissionRules.evaluate(cmd, config_dir)))
                     assert.is_false(
-                        PermissionRules.should_auto_approve(cmd, config_dir)
+                        (
+                            PermissionRules.evaluate(
+                                cmd,
+                                PermissionRules.rules(config_dir)
+                            )
+                        )
+                    )
+                    assert.is_false(
+                        PermissionRules.should_auto_approve(
+                            cmd,
+                            PermissionRules.rules(config_dir)
+                        )
                     )
                 end)
             end
@@ -639,7 +671,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "env cat /etc/hosts",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -649,8 +681,10 @@ describe("PermissionRules", function()
         -- layer (permission_manager) then decides; should_auto_approve, which
         -- has no scope, stays false for these.
         it("evaluate: emits a write effect for an output redirect", function()
-            local ok, effects =
-                PermissionRules.evaluate("cat /etc/hosts > /tmp/x", config_dir)
+            local ok, effects = PermissionRules.evaluate(
+                "cat /etc/hosts > /tmp/x",
+                PermissionRules.rules(config_dir)
+            )
             assert.is_true(ok)
             assert.equal(1, #effects)
             assert.equal("write", effects[1].kind)
@@ -658,22 +692,28 @@ describe("PermissionRules", function()
         end)
 
         it("evaluate: emits a write effect for an append redirect", function()
-            local ok, effects =
-                PermissionRules.evaluate("echo x >> /tmp/log", config_dir)
+            local ok, effects = PermissionRules.evaluate(
+                "echo x >> /tmp/log",
+                PermissionRules.rules(config_dir)
+            )
             assert.is_true(ok)
             assert.equal("/tmp/log", effects[1].path)
         end)
 
         it("evaluate: a nested redirect inside $() emits an effect", function()
-            local ok, effects =
-                PermissionRules.evaluate("cat $(ls > /tmp/o)", config_dir)
+            local ok, effects = PermissionRules.evaluate(
+                "cat $(ls > /tmp/o)",
+                PermissionRules.rules(config_dir)
+            )
             assert.is_true(ok)
             assert.equal("/tmp/o", effects[1].path)
         end)
 
         it("evaluate: no effect for /dev/null or fd dup", function()
-            local ok, effects =
-                PermissionRules.evaluate("ls /tmp 2>/dev/null", config_dir)
+            local ok, effects = PermissionRules.evaluate(
+                "ls /tmp 2>/dev/null",
+                PermissionRules.rules(config_dir)
+            )
             assert.is_true(ok)
             assert.equal(0, #effects)
         end)
@@ -681,8 +721,10 @@ describe("PermissionRules", function()
         it("evaluate: a dynamic redirect target bails (no effect)", function()
             -- A target the walker cannot pin to a literal stays a structural
             -- bail — over-prompt, never a launderable effect.
-            local ok, effects =
-                PermissionRules.evaluate("cat > $(echo out)", config_dir)
+            local ok, effects = PermissionRules.evaluate(
+                "cat > $(echo out)",
+                PermissionRules.rules(config_dir)
+            )
             assert.is_false(ok)
             assert.equal(0, #effects)
         end)
@@ -692,8 +734,10 @@ describe("PermissionRules", function()
         it(
             "evaluate: a quoted-literal redirect target is quote-stripped",
             function()
-                local ok, effects =
-                    PermissionRules.evaluate([[echo x > "/tmp/x"]], config_dir)
+                local ok, effects = PermissionRules.evaluate(
+                    [[echo x > "/tmp/x"]],
+                    PermissionRules.rules(config_dir)
+                )
                 assert.is_true(ok)
                 assert.equal("/tmp/x", effects[1].path)
             end
@@ -704,7 +748,7 @@ describe("PermissionRules", function()
             function()
                 local ok, effects = PermissionRules.evaluate(
                     "f=/tmp/x; echo y > $f",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.is_true(ok)
                 assert.equal("/tmp/x", effects[1].path)
@@ -714,7 +758,7 @@ describe("PermissionRules", function()
         it("evaluate: a quoted known-var redirect target resolves", function()
             local ok, effects = PermissionRules.evaluate(
                 [[f=/tmp/x; echo y > "$f"]],
-                config_dir
+                PermissionRules.rules(config_dir)
             )
             assert.is_true(ok)
             assert.equal("/tmp/x", effects[1].path)
@@ -725,8 +769,10 @@ describe("PermissionRules", function()
             function()
                 -- Previously emitted the raw `$f` as the path (never matched a tmp
                 -- root, never correlated). Now bails like any dynamic target.
-                local ok, effects =
-                    PermissionRules.evaluate("echo y > $f", config_dir)
+                local ok, effects = PermissionRules.evaluate(
+                    "echo y > $f",
+                    PermissionRules.rules(config_dir)
+                )
                 assert.is_false(ok)
                 assert.equal(0, #effects)
             end
@@ -737,7 +783,7 @@ describe("PermissionRules", function()
             function()
                 local ok, effects = PermissionRules.evaluate(
                     [[f=/tmp/x; echo y > "$f"; rm "$f"]],
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.is_true(ok)
                 assert.equal(2, #effects)
@@ -751,8 +797,10 @@ describe("PermissionRules", function()
         it(
             "evaluate: an unapproved command with a redirect is not ok",
             function()
-                local ok =
-                    PermissionRules.evaluate("danger > /tmp/x", config_dir)
+                local ok = PermissionRules.evaluate(
+                    "danger > /tmp/x",
+                    PermissionRules.rules(config_dir)
+                )
                 assert.is_false(ok)
             end
         )
@@ -760,8 +808,10 @@ describe("PermissionRules", function()
         -- rm emits ordered delete effects instead of bailing to the structured
         -- `ask`. The policy layer clears them against the grant scopes.
         it("evaluate: rm emits a delete effect", function()
-            local ok, effects =
-                PermissionRules.evaluate("rm /tmp/x", config_dir)
+            local ok, effects = PermissionRules.evaluate(
+                "rm /tmp/x",
+                PermissionRules.rules(config_dir)
+            )
             assert.is_true(ok)
             assert.equal(1, #effects)
             assert.equal("delete", effects[1].kind)
@@ -778,8 +828,10 @@ describe("PermissionRules", function()
                 "rm --rec x",
                 "rm link/",
             }) do
-                local ok, effects =
-                    PermissionRules.evaluate(command, config_dir)
+                local ok, effects = PermissionRules.evaluate(
+                    command,
+                    PermissionRules.rules(config_dir)
+                )
                 assert.is_false(ok)
                 assert.equal(0, #effects)
             end
@@ -790,7 +842,7 @@ describe("PermissionRules", function()
             function()
                 local ok, effects = PermissionRules.evaluate(
                     "echo x > /tmp/f; rm /tmp/f",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.is_true(ok)
                 assert.equal(2, #effects)
@@ -803,8 +855,10 @@ describe("PermissionRules", function()
         it(
             "evaluate: rm flags are options, only operands emit effects",
             function()
-                local ok, effects =
-                    PermissionRules.evaluate("rm -v /tmp/d", config_dir)
+                local ok, effects = PermissionRules.evaluate(
+                    "rm -v /tmp/d",
+                    PermissionRules.rules(config_dir)
+                )
                 assert.is_true(ok)
                 assert.equal(1, #effects)
                 assert.equal("/tmp/d", effects[1].path)
@@ -812,7 +866,10 @@ describe("PermissionRules", function()
         )
 
         it("evaluate: a dynamic rm operand bails (no effect)", function()
-            local ok, effects = PermissionRules.evaluate("rm $x", config_dir)
+            local ok, effects = PermissionRules.evaluate(
+                "rm $x",
+                PermissionRules.rules(config_dir)
+            )
             assert.is_false(ok)
             assert.equal(0, #effects)
         end)
@@ -820,8 +877,10 @@ describe("PermissionRules", function()
         it(
             "evaluate: rm -- treats a trailing dash word as an operand",
             function()
-                local ok, effects =
-                    PermissionRules.evaluate("rm -- -weird", config_dir)
+                local ok, effects = PermissionRules.evaluate(
+                    "rm -- -weird",
+                    PermissionRules.rules(config_dir)
+                )
                 assert.is_true(ok)
                 assert.equal("-weird", effects[1].path)
             end
@@ -849,7 +908,11 @@ describe("PermissionRules", function()
             Config.permissions.use_claude_settings = false
             Config.permissions.auto_approve_tier = tier
             PermissionRules.invalidate_cache()
-            return PermissionRules.should_auto_approve(cmd, config_dir, cwd)
+            return PermissionRules.should_auto_approve(
+                cmd,
+                PermissionRules.rules(config_dir),
+                cwd
+            )
         end
 
         describe("uv", function()
@@ -955,7 +1018,10 @@ describe("PermissionRules", function()
             Config.permissions.use_claude_settings = false
             PermissionRules.invalidate_cache()
             assert.is_false(
-                PermissionRules.should_auto_approve("ls -la /tmp", config_dir)
+                PermissionRules.should_auto_approve(
+                    "ls -la /tmp",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -1034,13 +1100,20 @@ describe("PermissionRules", function()
                     "find . -execdir rm foo \\;",
                     "fd --base-directory d -x rm foo",
                 }) do
-                    assert.is_false((PermissionRules.evaluate(cmd, config_dir)))
+                    assert.is_false(
+                        (
+                            PermissionRules.evaluate(
+                                cmd,
+                                PermissionRules.rules(config_dir)
+                            )
+                        )
+                    )
                 end
                 assert.is_true(
                     (
                         PermissionRules.evaluate(
                             "find . -exec rm /tmp/foo \\;",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 )
@@ -1068,7 +1141,7 @@ describe("PermissionRules", function()
                     1,
                     #PermissionRules.tally_unapproved(
                         "find . -execdir sh x.sh \\;",
-                        config_dir,
+                        PermissionRules.rules(config_dir),
                         dir
                     )
                 )
@@ -1078,8 +1151,10 @@ describe("PermissionRules", function()
                 Config.permissions.use_plugin_defaults = true
                 Config.permissions.use_claude_settings = false
                 PermissionRules.invalidate_cache()
-                local ok, effects =
-                    PermissionRules.evaluate("fd -x rm /tmp/{//}", config_dir)
+                local ok, effects = PermissionRules.evaluate(
+                    "fd -x rm /tmp/{//}",
+                    PermissionRules.rules(config_dir)
+                )
                 assert.is_false(ok)
                 assert.same({}, effects)
             end)
@@ -1107,15 +1182,21 @@ describe("PermissionRules", function()
             stub_settings({ allow = { "Bash(make test*)" } })
 
             assert.is_true(
-                PermissionRules.should_auto_approve("ls -la", config_dir)
+                PermissionRules.should_auto_approve(
+                    "ls -la",
+                    PermissionRules.rules(config_dir)
+                )
             )
             assert.is_true(
-                PermissionRules.should_auto_approve("make test foo", config_dir)
+                PermissionRules.should_auto_approve(
+                    "make test foo",
+                    PermissionRules.rules(config_dir)
+                )
             )
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "ls /tmp && make test x",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -1134,7 +1215,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         "make test x",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
                 assert.is_true(
@@ -1147,9 +1228,11 @@ describe("PermissionRules", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve(
                         "make test x",
-                        config_dir,
-                        nil,
-                        { PermissionRules.literal_pattern("make test x") }
+                        PermissionRules.rules(
+                            config_dir,
+                            { PermissionRules.literal_pattern("make test x") }
+                        ),
+                        nil
                     )
                 )
             end
@@ -1164,7 +1247,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         "make test x",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
                 assert.is_false(
@@ -1747,7 +1830,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             'find "$(echo -exec rm)"',
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -1800,7 +1883,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             'find . "x$(echo -exec rm)"',
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -1916,26 +1999,40 @@ describe("PermissionRules", function()
 
         it("denies sort -uo out (short cluster)", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("sort -uo out", config_dir)
+                PermissionRules.should_auto_approve(
+                    "sort -uo out",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
         it("denies sort --out=x (GNU abbreviation)", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("sort --out=x", config_dir)
+                PermissionRules.should_auto_approve(
+                    "sort --out=x",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
         it("denies sort -oFILE (glued arg)", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("sort -oFILE", config_dir)
+                PermissionRules.should_auto_approve(
+                    "sort -oFILE",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
         it("approves date with a relative -d value", function()
             local cmd = "date -d '-5 minutes' +%s"
             assert.is_false(PermissionRules.should_auto_reject(cmd, config_dir))
-            assert.is_true(PermissionRules.should_auto_approve(cmd, config_dir))
+            assert.is_true(
+                PermissionRules.should_auto_approve(
+                    cmd,
+                    PermissionRules.rules(config_dir)
+                )
+            )
         end)
 
         it("rejects date -s", function()
@@ -1948,7 +2045,10 @@ describe("PermissionRules", function()
             local cmd = "rm -${x:- f} y"
             assert.is_false(PermissionRules.should_auto_reject(cmd, config_dir))
             assert.is_false(
-                PermissionRules.should_auto_approve(cmd, config_dir)
+                PermissionRules.should_auto_approve(
+                    cmd,
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -1956,7 +2056,7 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "shuf -n 5 file",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -1965,14 +2065,17 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "shuf -rn5 -o out",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
 
         it("denies shuf --out=x (GNU abbreviation)", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("shuf --out=x", config_dir)
+                PermissionRules.should_auto_approve(
+                    "shuf --out=x",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -1980,14 +2083,17 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "base64 -d file",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
 
         it("denies base64 -o out (BSD output file)", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("base64 -o out", config_dir)
+                PermissionRules.should_auto_approve(
+                    "base64 -o out",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -1995,26 +2101,35 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "base64 --out=x",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
 
         it("auto-approves xxd file", function()
             assert.is_true(
-                PermissionRules.should_auto_approve("xxd file", config_dir)
+                PermissionRules.should_auto_approve(
+                    "xxd file",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
         it("denies xxd in out (outfile positional)", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("xxd in out", config_dir)
+                PermissionRules.should_auto_approve(
+                    "xxd in out",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
         it("denies xxd -r - out (revert to outfile)", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("xxd -r - out", config_dir)
+                PermissionRules.should_auto_approve(
+                    "xxd -r - out",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -2022,7 +2137,7 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "pkg-config --cflags --libs foo",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2031,7 +2146,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "pkg-config --log-file=x foo",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2040,59 +2155,80 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "PKG_CONFIG_LOG=x pkg-config --libs foo",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
 
         it("auto-approves gzip stdout and test modes", function()
             assert.is_true(
-                PermissionRules.should_auto_approve("gzip -dc a.gz", config_dir)
+                PermissionRules.should_auto_approve(
+                    "gzip -dc a.gz",
+                    PermissionRules.rules(config_dir)
+                )
             )
             assert.is_true(
-                PermissionRules.should_auto_approve("gzip -t a.gz", config_dir)
+                PermissionRules.should_auto_approve(
+                    "gzip -t a.gz",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
         it("does not auto-approve in-place gzip", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("gzip a.txt", config_dir)
+                PermissionRules.should_auto_approve(
+                    "gzip a.txt",
+                    PermissionRules.rules(config_dir)
+                )
             )
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "gzip -kf a.txt",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
             -- `-Sc` is suffix `c`, not `-S -c`: gzip writes `a.txtc`
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "gzip -Sc a.txt",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
 
         it("auto-approves pacman -Si/-Ss as the cluster S + i/s", function()
             assert.is_true(
-                PermissionRules.should_auto_approve("pacman -Si x", config_dir)
+                PermissionRules.should_auto_approve(
+                    "pacman -Si x",
+                    PermissionRules.rules(config_dir)
+                )
             )
             assert.is_true(
-                PermissionRules.should_auto_approve("pacman -Ss x", config_dir)
+                PermissionRules.should_auto_approve(
+                    "pacman -Ss x",
+                    PermissionRules.rules(config_dir)
+                )
             )
             assert.is_false(
-                PermissionRules.should_auto_approve("pacman -S x", config_dir)
+                PermissionRules.should_auto_approve(
+                    "pacman -S x",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
         it("auto-approves pip3 list and launchctl list", function()
             assert.is_true(
-                PermissionRules.should_auto_approve("pip3 list", config_dir)
+                PermissionRules.should_auto_approve(
+                    "pip3 list",
+                    PermissionRules.rules(config_dir)
+                )
             )
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "launchctl list",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2101,17 +2237,23 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "fc-list :lang=ja",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
             assert.is_true(
-                PermissionRules.should_auto_approve("whence -v ls", config_dir)
+                PermissionRules.should_auto_approve(
+                    "whence -v ls",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
         it("auto-approves plain print", function()
             assert.is_true(
-                PermissionRules.should_auto_approve("print hello", config_dir)
+                PermissionRules.should_auto_approve(
+                    "print hello",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -2119,7 +2261,10 @@ describe("PermissionRules", function()
         -- buffer stack), -p (coprocess), -u (arbitrary fd) and -v (parameter).
         it("does not auto-approve print -s (history write)", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("print -s foo", config_dir)
+                PermissionRules.should_auto_approve(
+                    "print -s foo",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -2127,14 +2272,17 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "print -rz 'rm -rf x'",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
 
         it("does not auto-approve print -u2 (glued arg)", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("print -u2 hi", config_dir)
+                PermissionRules.should_auto_approve(
+                    "print -u2 hi",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -2142,7 +2290,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "print -v out hi",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2153,7 +2301,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "git -C diff push",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2162,7 +2310,7 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "git -C path config --get foo",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2171,14 +2319,17 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "git stash list",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
 
         it("does not auto-approve bare git stash (unlisted)", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("git stash", config_dir)
+                PermissionRules.should_auto_approve(
+                    "git stash",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -2186,7 +2337,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "git stash drop stash@{0}",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2195,7 +2346,7 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "pdftotext foo.pdf -",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2203,7 +2354,10 @@ describe("PermissionRules", function()
         it("does not auto-approve tee out", function()
             -- tee is intentionally absent from permissions.json.
             assert.is_false(
-                PermissionRules.should_auto_approve("tee out", config_dir)
+                PermissionRules.should_auto_approve(
+                    "tee out",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -2211,14 +2365,17 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "curl -K config.txt",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
 
         it("auto-approves ls --help", function()
             assert.is_true(
-                PermissionRules.should_auto_approve("ls --help", config_dir)
+                PermissionRules.should_auto_approve(
+                    "ls --help",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -2233,7 +2390,10 @@ describe("PermissionRules", function()
         }) do
             it("auto-approves: " .. cmd, function()
                 assert.is_true(
-                    PermissionRules.should_auto_approve(cmd, config_dir)
+                    PermissionRules.should_auto_approve(
+                        cmd,
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end)
         end
@@ -2288,7 +2448,10 @@ describe("PermissionRules", function()
         }) do
             it("does not auto-approve: " .. cmd, function()
                 assert.is_false(
-                    PermissionRules.should_auto_approve(cmd, config_dir)
+                    PermissionRules.should_auto_approve(
+                        cmd,
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end)
         end
@@ -2298,7 +2461,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "git --attr-source -- -p push",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2327,7 +2490,10 @@ describe("PermissionRules", function()
         }) do
             it("auto-approves: " .. cmd, function()
                 assert.is_true(
-                    PermissionRules.should_auto_approve(cmd, config_dir)
+                    PermissionRules.should_auto_approve(
+                        cmd,
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end)
         end
@@ -2338,7 +2504,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         "mlr -I foo",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end
@@ -2350,7 +2516,10 @@ describe("PermissionRules", function()
                 Config.permissions.auto_approve_tier = "read_only"
                 PermissionRules.invalidate_cache()
                 assert.is_true(
-                    PermissionRules.should_auto_approve("mlr foo", config_dir)
+                    PermissionRules.should_auto_approve(
+                        "mlr foo",
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end
         )
@@ -2363,7 +2532,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         "stylua foo.lua",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end
@@ -2375,7 +2544,7 @@ describe("PermissionRules", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve(
                         "stylua foo.lua",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end
@@ -2388,7 +2557,7 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "curl https://example.com",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2397,7 +2566,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "curl -X POST -d @body https://example.com",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2406,7 +2575,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "curl -o out https://example.com",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2431,7 +2600,10 @@ describe("PermissionRules", function()
         }) do
             it("asks " .. cmd, function()
                 assert.is_false(
-                    PermissionRules.should_auto_approve(cmd, config_dir)
+                    PermissionRules.should_auto_approve(
+                        cmd,
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end)
         end
@@ -2439,7 +2611,10 @@ describe("PermissionRules", function()
         for _, cmd in ipairs({ "curl -sSL https://x", "curl -fsSL https://x" }) do
             it("auto-approves " .. cmd, function()
                 assert.is_true(
-                    PermissionRules.should_auto_approve(cmd, config_dir)
+                    PermissionRules.should_auto_approve(
+                        cmd,
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end)
         end
@@ -2477,7 +2652,7 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "gh api /rate_limit",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2493,7 +2668,10 @@ describe("PermissionRules", function()
         }) do
             it("auto-approves " .. cmd, function()
                 assert.is_true(
-                    PermissionRules.should_auto_approve(cmd, config_dir)
+                    PermissionRules.should_auto_approve(
+                        cmd,
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end)
         end
@@ -2520,7 +2698,10 @@ describe("PermissionRules", function()
         }) do
             it("asks " .. cmd, function()
                 assert.is_false(
-                    PermissionRules.should_auto_approve(cmd, config_dir)
+                    PermissionRules.should_auto_approve(
+                        cmd,
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end)
         end
@@ -2529,7 +2710,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "gh api -XDELETE /repos/o/r",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2538,7 +2719,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "gh api /x -F leak=@/etc/passwd",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2547,7 +2728,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "gh api --hostname ghe.example.com /rate_limit",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2556,7 +2737,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "yq --inplace '.a=1' f.yaml",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2565,7 +2746,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "qalc -s 'prec 5'",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2574,7 +2755,7 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "mlr --icsv cat foo",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2583,7 +2764,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "mlr split -n 1000 foo",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2592,7 +2773,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "mlr tee out.csv",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2601,7 +2782,7 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "http https://example.com",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2610,7 +2791,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "http post https://example.com a=b",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2619,7 +2800,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "http --download https://example.com",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2630,7 +2811,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "pacman -QR foo",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2639,7 +2820,7 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "pacman -Q kitty",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2648,7 +2829,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "luac -lo evil.luac foo.lua",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2657,7 +2838,7 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "luac -p -l foo.lua",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2666,7 +2847,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "zsh -nc 'rm -rf x'",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2675,7 +2856,7 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "zsh -n script.zsh",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2707,7 +2888,12 @@ describe("PermissionRules", function()
                     "logout n",
                     "print -P x",
                 }) do
-                    if PermissionRules.should_auto_approve(cmd, config_dir) then
+                    if
+                        PermissionRules.should_auto_approve(
+                            cmd,
+                            PermissionRules.rules(config_dir)
+                        )
+                    then
                         table.insert(approved, cmd)
                     end
                 end
@@ -2729,7 +2915,10 @@ describe("PermissionRules", function()
                     "n=4; shift $n",
                 }) do
                     if
-                        not PermissionRules.should_auto_approve(cmd, config_dir)
+                        not PermissionRules.should_auto_approve(
+                            cmd,
+                            PermissionRules.rules(config_dir)
+                        )
                     then
                         table.insert(prompted, cmd)
                     end
@@ -2773,7 +2962,12 @@ describe("PermissionRules", function()
                     "echo ${(A)path::=/tmp/evil}; ls",
                     "f=/safe; : ${f::=-delete}; find . $f",
                 }) do
-                    if PermissionRules.should_auto_approve(cmd, config_dir) then
+                    if
+                        PermissionRules.should_auto_approve(
+                            cmd,
+                            PermissionRules.rules(config_dir)
+                        )
+                    then
                         table.insert(approved, cmd)
                     end
                 end
@@ -2794,7 +2988,10 @@ describe("PermissionRules", function()
                     "read -rd: a b < f",
                 }) do
                     if
-                        not PermissionRules.should_auto_approve(cmd, config_dir)
+                        not PermissionRules.should_auto_approve(
+                            cmd,
+                            PermissionRules.rules(config_dir)
+                        )
                     then
                         table.insert(prompted, cmd)
                     end
@@ -2807,7 +3004,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         'printf "$x\\n"',
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -2827,7 +3024,7 @@ describe("PermissionRules", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve(
                         "zsh -c 'rg foo'",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -2836,7 +3033,7 @@ describe("PermissionRules", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve(
                         'bash -c "echo hi"',
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -2845,7 +3042,7 @@ describe("PermissionRules", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve(
                         "sh -c 'rg foo | head -5'",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -2854,7 +3051,7 @@ describe("PermissionRules", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve(
                         "zsh -lc 'rg foo'",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -2863,7 +3060,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         "zsh -c 'rm foo'",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -2872,7 +3069,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         'zsh -c "$x"',
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -2881,7 +3078,7 @@ describe("PermissionRules", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve(
                         [[zsh -c 'zsh -c "rg foo"']],
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -2891,7 +3088,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "curl --remote-name-all https://x",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -2900,20 +3097,32 @@ describe("PermissionRules", function()
         -- `gzip -$c f` as `gzip - f`, compressing `f` in place.
         it("prompts on gzip -$c f, approves gzip -c f", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("gzip -$c f", config_dir)
+                PermissionRules.should_auto_approve(
+                    "gzip -$c f",
+                    PermissionRules.rules(config_dir)
+                )
             )
             assert.is_false(
-                PermissionRules.should_auto_approve("gzip -c$x f", config_dir)
+                PermissionRules.should_auto_approve(
+                    "gzip -c$x f",
+                    PermissionRules.rules(config_dir)
+                )
             )
             assert.is_true(
-                PermissionRules.should_auto_approve("gzip -c f", config_dir)
+                PermissionRules.should_auto_approve(
+                    "gzip -c f",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
         -- `-$x` may expand to `-` or `--` and shift the subcommand.
         it("prompts on git -$x log", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("git -$x log", config_dir)
+                PermissionRules.should_auto_approve(
+                    "git -$x log",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -2936,7 +3145,10 @@ describe("PermissionRules", function()
             }) do
                 it("approves: " .. cmd, function()
                     assert.is_true(
-                        PermissionRules.should_auto_approve(cmd, config_dir)
+                        PermissionRules.should_auto_approve(
+                            cmd,
+                            PermissionRules.rules(config_dir)
+                        )
                     )
                 end)
             end
@@ -2954,7 +3166,10 @@ describe("PermissionRules", function()
             }) do
                 it("prompts: " .. cmd, function()
                     assert.is_false(
-                        PermissionRules.should_auto_approve(cmd, config_dir)
+                        PermissionRules.should_auto_approve(
+                            cmd,
+                            PermissionRules.rules(config_dir)
+                        )
                     )
                 end)
             end
@@ -2970,13 +3185,19 @@ describe("PermissionRules", function()
         describe("use-site dynamic-token gate", function()
             it("prompts on find . $f (-exec gate reachable)", function()
                 assert.is_false(
-                    PermissionRules.should_auto_approve("find . $f", config_dir)
+                    PermissionRules.should_auto_approve(
+                        "find . $f",
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end)
 
             it('prompts on find "$f" (quoting does not help)', function()
                 assert.is_false(
-                    PermissionRules.should_auto_approve('find "$f"', config_dir)
+                    PermissionRules.should_auto_approve(
+                        'find "$f"',
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end)
 
@@ -2984,14 +3205,17 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         "sort $f in",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
 
             it("prompts on git $sub (dynamic subcommand)", function()
                 assert.is_false(
-                    PermissionRules.should_auto_approve("git $sub", config_dir)
+                    PermissionRules.should_auto_approve(
+                        "git $sub",
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end)
 
@@ -3001,7 +3225,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "git branch $x",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3013,7 +3237,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "git log $ref",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3021,7 +3245,10 @@ describe("PermissionRules", function()
 
             it("auto-approves ls $f (no gate to evade)", function()
                 assert.is_true(
-                    PermissionRules.should_auto_approve("ls $f", config_dir)
+                    PermissionRules.should_auto_approve(
+                        "ls $f",
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end)
 
@@ -3031,7 +3258,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "find . -name '*.lua'",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3043,7 +3270,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "find . -name *.lua",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3062,7 +3289,7 @@ describe("PermissionRules", function()
                         assert.is_false(
                             PermissionRules.should_auto_approve(
                                 "f=$(printf -- '-exec rm {} ;'); find . $f",
-                                config_dir
+                                PermissionRules.rules(config_dir)
                             )
                         )
                     end
@@ -3074,7 +3301,7 @@ describe("PermissionRules", function()
                         assert.is_false(
                             PermissionRules.should_auto_approve(
                                 "for f in *.txt; do find . $f; done",
-                                config_dir
+                                PermissionRules.rules(config_dir)
                             )
                         )
                     end
@@ -3088,7 +3315,7 @@ describe("PermissionRules", function()
                         assert.is_false(
                             PermissionRules.should_auto_approve(
                                 "find . $(echo -exec rm {} \\;)",
-                                config_dir
+                                PermissionRules.rules(config_dir)
                             )
                         )
                     end
@@ -3100,7 +3327,7 @@ describe("PermissionRules", function()
                         assert.is_false(
                             PermissionRules.should_auto_approve(
                                 'g=-exec; find . "$g" rm X {} \\;',
-                                config_dir
+                                PermissionRules.rules(config_dir)
                             )
                         )
                     end
@@ -3112,7 +3339,7 @@ describe("PermissionRules", function()
                         assert.is_true(
                             PermissionRules.should_auto_approve(
                                 "for r in a b; do git show $r; done",
-                                config_dir
+                                PermissionRules.rules(config_dir)
                             )
                         )
                     end
@@ -3124,7 +3351,7 @@ describe("PermissionRules", function()
                         assert.is_true(
                             PermissionRules.should_auto_approve(
                                 "branch=$(git rev-parse --abbrev-ref HEAD)",
-                                config_dir
+                                PermissionRules.rules(config_dir)
                             )
                         )
                     end
@@ -3134,7 +3361,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             'root=$(git rev-parse --git-dir); cd "$root"',
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end)
@@ -3153,7 +3380,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "git -C $repo log",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3165,7 +3392,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "git -C /repo log",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3175,7 +3402,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         "git -c $x log",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -3194,7 +3421,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "git -c core.pager=x log",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3206,7 +3433,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "git log $ref",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3218,7 +3445,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "git log -c",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3234,7 +3461,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "git --config-env=core.pager=X log",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3252,7 +3479,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "git -C /repo log",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3264,7 +3491,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "git -p push",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3274,7 +3501,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         "git --no-pager push",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -3287,7 +3514,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "git --new-global val push",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3299,7 +3526,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "git --foo ci log",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3311,7 +3538,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "git -C push log",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3323,7 +3550,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "xargs -0 ls",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3348,7 +3575,10 @@ describe("PermissionRules", function()
             }) do
                 it("prompts on " .. cmd, function()
                     assert.is_false(
-                        PermissionRules.should_auto_approve(cmd, config_dir)
+                        PermissionRules.should_auto_approve(
+                            cmd,
+                            PermissionRules.rules(config_dir)
+                        )
                     )
                 end)
             end
@@ -3369,7 +3599,10 @@ describe("PermissionRules", function()
             }) do
                 it("auto-approves " .. cmd, function()
                     assert.is_true(
-                        PermissionRules.should_auto_approve(cmd, config_dir)
+                        PermissionRules.should_auto_approve(
+                            cmd,
+                            PermissionRules.rules(config_dir)
+                        )
                     )
                 end)
             end
@@ -3387,7 +3620,12 @@ describe("PermissionRules", function()
                     "f=/x; f[1]=-delete; find . $f",
                     "f=-; f+=delete; find . $f",
                 }) do
-                    if PermissionRules.should_auto_approve(cmd, config_dir) then
+                    if
+                        PermissionRules.should_auto_approve(
+                            cmd,
+                            PermissionRules.rules(config_dir)
+                        )
+                    then
                         table.insert(approved, cmd)
                     end
                 end
@@ -3400,7 +3638,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "f=/safe/dir; find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3410,7 +3648,7 @@ describe("PermissionRules", function()
                 assert.is_true(
                     PermissionRules.should_auto_approve(
                         "f=/safe; find ${f}",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -3421,7 +3659,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             'base=/safe/dir; find "$base"',
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3433,7 +3671,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             'base=/safe; find "${base}"',
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3445,7 +3683,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             'base=--exec; find "$base"',
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3455,7 +3693,7 @@ describe("PermissionRules", function()
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         'find "$base"',
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end)
@@ -3466,7 +3704,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             'base=/safe; find "$base/x"',
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3478,7 +3716,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             'base=/safe; find "${base:-x}"',
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3495,7 +3733,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             'base=/safe; find "$(echo x)"',
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3507,7 +3745,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "d=/repo; git -C $d log",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3519,7 +3757,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "f=data.txt; sort $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3531,7 +3769,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "f=/safe; ls; find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3543,7 +3781,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "f=--exec; find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3555,7 +3793,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "f='-exec rm'; find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3567,7 +3805,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "f=*.txt; find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3579,7 +3817,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "f=/safe; f=$x; find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3591,7 +3829,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "f=/safe; printf -v f -- -exec; find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3603,7 +3841,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "f=/safe; printf 'msg'; find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3615,7 +3853,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "f=/safe; printf -v g x; find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3629,7 +3867,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "f=/safe; if true; then echo hi; fi; find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3641,7 +3879,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "f=/safe; [[ -n x ]] && echo ok; find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3653,7 +3891,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "f=/safe; for x in a b; do echo $x; done; find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3665,7 +3903,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "f=/safe; if true; then f=/danger; fi; find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3677,7 +3915,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "f=/safe; for f in a b; do echo $f; done; find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3689,7 +3927,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "f=/safe; if true; then printf -v f -- -exec; fi; find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3701,7 +3939,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "f=/safe; find $f; printf x",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3713,7 +3951,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "find $f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3727,7 +3965,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "head -40 $d/SKILL.md",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3739,7 +3977,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "ls -la $d",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3751,7 +3989,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "find . $d/x",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3763,7 +4001,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "base=/safe; head $base/x",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3779,7 +4017,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "base=-o; sort $base/x",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3797,7 +4035,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "base=--exec; find $base/x",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3809,7 +4047,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "head $d/*.js",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3821,7 +4059,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "rm $d/*.js",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3833,7 +4071,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "cat a$(b)c",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3845,7 +4083,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "echo x > $d/f",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3865,7 +4103,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "for d in acp permissions provider-system; do find . $d/SKILL.md; done",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3877,7 +4115,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "for d in acp -delete; do find . $d; done",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3889,7 +4127,7 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "for d in acp permissions; do head $d/SKILL.md; done",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3901,7 +4139,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "for f in $(ls); do find . $f; done",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3916,7 +4154,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "for a in 1 2 3 4 5 6 7 8 9; do for b in 1 2 3 4 5 6 7 8 9; do find . $b; done; done",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -3930,7 +4168,7 @@ describe("PermissionRules", function()
                     assert.is_false(
                         PermissionRules.should_auto_approve(
                             "for d in acp; do d=$x; find . $d; done",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -4010,7 +4248,10 @@ describe("PermissionRules", function()
             }) do
                 it("does not approve: " .. cmd, function()
                     assert.is_false(
-                        PermissionRules.should_auto_approve(cmd, config_dir)
+                        PermissionRules.should_auto_approve(
+                            cmd,
+                            PermissionRules.rules(config_dir)
+                        )
                     )
                 end)
             end
@@ -4021,13 +4262,13 @@ describe("PermissionRules", function()
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "grep --include=x foo src",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                     assert.is_true(
                         PermissionRules.should_auto_approve(
                             "grep --include=*.{ts,tsx} foo src",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     )
                 end
@@ -4035,10 +4276,16 @@ describe("PermissionRules", function()
 
             it("approves \\cat f as cat f", function()
                 assert.is_true(
-                    PermissionRules.should_auto_approve("cat f", config_dir)
+                    PermissionRules.should_auto_approve(
+                        "cat f",
+                        PermissionRules.rules(config_dir)
+                    )
                 )
                 assert.is_true(
-                    PermissionRules.should_auto_approve([[\cat f]], config_dir)
+                    PermissionRules.should_auto_approve(
+                        [[\cat f]],
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end)
         end)
@@ -4064,15 +4311,17 @@ describe("PermissionRules", function()
             --- @return [string, agentic.utils.PermissionRules.Reason][]
             local function reasons(command, permissions)
                 stub_settings(permissions)
-                local ranges =
-                    PermissionRules.tally_unapproved(command, config_dir)
+                local ranges = PermissionRules.tally_unapproved(
+                    command,
+                    PermissionRules.rules(config_dir)
+                )
                 return vim.tbl_map(function(r)
                     return { span_text(command, r), r[5] }
                 end, ranges --[[@as agentic.utils.PermissionRules.Range[] ]])
             end
 
             local cases = {
-                { "frob x", "frob x", "no_allow" },
+                { "frob x", "frob x", "no-allow" },
                 {
                     "rm x",
                     "rm x",
@@ -4080,13 +4329,13 @@ describe("PermissionRules", function()
                     { allow = { "Bash(rm *)" }, ask = { "Bash(rm *)" } },
                 },
                 { "$cmd x", "$cmd x", "dynamic" },
-                { "eval x", "eval x", "code_builtin" },
-                { 'sh -c "frob x"', 'sh -c "frob x"', "inner_code" },
+                { "eval x", "eval x", "code-builtin" },
+                { 'sh -c "frob x"', 'sh -c "frob x"', "inner-code" },
                 { "sh -c 'if'", "sh -c 'if'", "unparsed" },
                 {
                     "for f in <(frob); do echo $f; done",
                     "<(frob)",
-                    "dirty_subst",
+                    "dirty-subst",
                 },
                 { "echo a > out", "> out", "redirect" },
                 { "PATH=/x; echo a", "PATH=/x", "structure" },
@@ -4116,12 +4365,55 @@ describe("PermissionRules", function()
             it("gives one range per unapproved part", function()
                 assert.same(
                     {
-                        { "eval x", "code_builtin" },
-                        { "rm -r y", "no_allow" },
+                        { "eval x", "code-builtin" },
+                        { "rm -r y", "no-allow" },
                     },
                     reasons("cat a && eval x && rm -r y", {
                         allow = { "Bash(cat *)" },
                     })
+                )
+            end)
+
+            it("tier: a safe_write leaf at the read_only tier", function()
+                Config.permissions.use_plugin_defaults = true
+                Config.permissions.auto_approve_tier = "read_only"
+                Config.permissions.structured = {
+                    git = { safe_write = { { positionals = { "add" } } } },
+                }
+                stub_settings(nil)
+                local cmd = "ls && git add x"
+                local ranges, leaves, complete =
+                    PermissionRules.tally_unapproved(
+                        cmd,
+                        PermissionRules.rules(config_dir)
+                    )
+                assert.same({ "git add x", "tier" }, {
+                    span_text(cmd, ranges[1]),
+                    ranges[1][5],
+                })
+                assert.equal(1, #ranges)
+                assert.same({ "git add x" }, leaves)
+                assert.is_true(complete)
+            end)
+
+            it("tier: a glob-allowed read_only leaf with no tier", function()
+                Config.permissions.use_plugin_defaults = true
+                Config.permissions.auto_approve_tier = nil
+                assert.same(
+                    { { "ls", "tier" } },
+                    reasons("ls", { allow = { "Bash(ls)" } })
+                )
+            end)
+
+            it("approves a remembered leaf", function()
+                stub_settings(nil)
+                local rules = PermissionRules.rules(
+                    config_dir,
+                    { PermissionRules.literal_pattern("frob x") }
+                )
+                assert.same(
+                    {},
+                    PermissionRules.tally_unapproved("frob x", rules)
                 )
             end)
         end)
@@ -4132,7 +4424,10 @@ describe("PermissionRules", function()
                 deny = { "Bash(rm *)" },
             })
             local cmd = "grep foo | rm bar"
-            local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+            local ranges = PermissionRules.tally_unapproved(
+                cmd,
+                PermissionRules.rules(config_dir)
+            )
             assert.equal(1, #ranges)
             assert.equal("rm bar", span_text(cmd, ranges[1]))
         end)
@@ -4140,7 +4435,10 @@ describe("PermissionRules", function()
         it("records an assignment to a live name", function()
             stub_settings({ allow = { "Bash(ls *)", "Bash(ls)" } })
             local cmd = "PATH=/x; ls"
-            local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+            local ranges = PermissionRules.tally_unapproved(
+                cmd,
+                PermissionRules.rules(config_dir)
+            )
             assert.equal(1, #ranges)
             assert.equal("PATH=/x", span_text(cmd, ranges[1]))
         end)
@@ -4148,7 +4446,10 @@ describe("PermissionRules", function()
         it("records a for loop over a live name", function()
             stub_settings({ allow = { "Bash(ls *)", "Bash(ls)" } })
             local cmd = "for path in /x; do ls; done"
-            local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+            local ranges = PermissionRules.tally_unapproved(
+                cmd,
+                PermissionRules.rules(config_dir)
+            )
             assert.equal(1, #ranges)
             assert.equal(cmd, span_text(cmd, ranges[1]))
         end)
@@ -4157,7 +4458,7 @@ describe("PermissionRules", function()
             stub_settings({ allow = { "Bash(echo *)" } })
             local ranges = PermissionRules.tally_unapproved(
                 "( echo a && echo b )",
-                config_dir
+                PermissionRules.rules(config_dir)
             )
             assert.equal(0, #ranges)
         end)
@@ -4165,7 +4466,10 @@ describe("PermissionRules", function()
         it("washes only the gated leaf of a subshell", function()
             stub_settings({ allow = { "Bash(echo *)" } })
             local cmd = "( echo a; rm b )"
-            local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+            local ranges = PermissionRules.tally_unapproved(
+                cmd,
+                PermissionRules.rules(config_dir)
+            )
             assert.equal(1, #ranges)
             assert.equal("rm b", span_text(cmd, ranges[1]))
         end)
@@ -4178,7 +4482,10 @@ describe("PermissionRules", function()
                     deny = { "Bash(rm *)" },
                 })
                 local cmd = "zsh -c 'rm -rf /'"
-                local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+                local ranges = PermissionRules.tally_unapproved(
+                    cmd,
+                    PermissionRules.rules(config_dir)
+                )
                 assert.equal(1, #ranges)
                 assert.equal("rm -rf /", span_text(cmd, ranges[1]))
             end
@@ -4190,7 +4497,10 @@ describe("PermissionRules", function()
                 deny = { "Bash(rm *)" },
             })
             local cmd = 'zsh -c "rm -rf /"'
-            local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+            local ranges = PermissionRules.tally_unapproved(
+                cmd,
+                PermissionRules.rules(config_dir)
+            )
             assert.equal(1, #ranges)
             assert.equal(cmd, span_text(cmd, ranges[1]))
         end)
@@ -4203,7 +4513,10 @@ describe("PermissionRules", function()
                     deny = { "Bash(rm *)" },
                 })
                 local cmd = "zsh -c 'grep foo\nrm bar'"
-                local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+                local ranges = PermissionRules.tally_unapproved(
+                    cmd,
+                    PermissionRules.rules(config_dir)
+                )
                 assert.equal(1, #ranges)
                 local r = ranges[1]
                 assert.equal(1, r[1]) -- row 1 (rm bar), not row 0 (grep foo)
@@ -4214,20 +4527,28 @@ describe("PermissionRules", function()
             end
         )
 
-        it("does not return a safe_write leaf (intrinsically safe)", function()
-            Config.permissions.structured = {
-                git = { safe_write = { { positionals = { "add" } } } },
-            }
-            stub_settings({ allow = { "Bash(echo *)" } })
-            local ranges =
-                PermissionRules.tally_unapproved("git add x", config_dir)
-            assert.equal(0, #ranges)
-        end)
+        it(
+            "does not return a safe_write leaf at the safe_write tier",
+            function()
+                Config.permissions.structured = {
+                    git = { safe_write = { { positionals = { "add" } } } },
+                }
+                stub_settings({ allow = { "Bash(echo *)" } })
+                local ranges = PermissionRules.tally_unapproved(
+                    "git add x",
+                    PermissionRules.rules(config_dir)
+                )
+                assert.equal(0, #ranges)
+            end
+        )
 
         it("returns an unknown command", function()
             stub_settings({ allow = { "Bash(grep *)" } })
             local cmd = "frobnicate x"
-            local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+            local ranges = PermissionRules.tally_unapproved(
+                cmd,
+                PermissionRules.rules(config_dir)
+            )
             assert.equal(1, #ranges)
             assert.equal("frobnicate x", span_text(cmd, ranges[1]))
         end)
@@ -4240,7 +4561,10 @@ describe("PermissionRules", function()
                     deny = { "Bash(rm *)" },
                 })
                 local cmd = "echo $(rm -rf /)"
-                local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+                local ranges = PermissionRules.tally_unapproved(
+                    cmd,
+                    PermissionRules.rules(config_dir)
+                )
                 assert.equal(1, #ranges)
                 assert.equal("rm -rf /", span_text(cmd, ranges[1]))
             end
@@ -4254,7 +4578,10 @@ describe("PermissionRules", function()
                     deny = { "Bash(rm *)" },
                 })
                 local cmd = "rm $(rm -rf /)"
-                local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+                local ranges = PermissionRules.tally_unapproved(
+                    cmd,
+                    PermissionRules.rules(config_dir)
+                )
                 assert.equal(1, #ranges)
                 assert.equal(cmd, span_text(cmd, ranges[1]))
             end
@@ -4266,7 +4593,7 @@ describe("PermissionRules", function()
                 stub_settings({ allow = { "Bash(echo *)" } })
                 local ranges = PermissionRules.tally_unapproved(
                     "echo $(echo hi)",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.equal(0, #ranges)
             end
@@ -4278,7 +4605,7 @@ describe("PermissionRules", function()
                 stub_settings({ allow = { "Bash(echo *)" } })
                 local ranges = PermissionRules.tally_unapproved(
                     'for f in $(echo x); do echo "$f"; done',
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.equal(0, #ranges)
             end
@@ -4292,7 +4619,10 @@ describe("PermissionRules", function()
                     deny = { "Bash(rm *)" },
                 })
                 local cmd = 'echo "$(rm -rf /)"'
-                local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+                local ranges = PermissionRules.tally_unapproved(
+                    cmd,
+                    PermissionRules.rules(config_dir)
+                )
                 assert.equal(1, #ranges)
                 assert.equal("rm -rf /", span_text(cmd, ranges[1]))
             end
@@ -4304,7 +4634,10 @@ describe("PermissionRules", function()
                 deny = { "Bash(rm *)" },
             })
             local cmd = 'echo "x $(rm y)"'
-            local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+            local ranges = PermissionRules.tally_unapproved(
+                cmd,
+                PermissionRules.rules(config_dir)
+            )
             assert.equal(1, #ranges)
             assert.equal("rm y", span_text(cmd, ranges[1]))
         end)
@@ -4317,7 +4650,10 @@ describe("PermissionRules", function()
                     deny = { "Bash(rm *)" },
                 })
                 local cmd = "f=$(rm -rf /)"
-                local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+                local ranges = PermissionRules.tally_unapproved(
+                    cmd,
+                    PermissionRules.rules(config_dir)
+                )
                 assert.equal(1, #ranges)
                 assert.equal("rm -rf /", span_text(cmd, ranges[1]))
             end
@@ -4331,7 +4667,10 @@ describe("PermissionRules", function()
                     deny = { "Bash(rm *)" },
                 })
                 local cmd = "for f in $(rm -rf /); do echo hi; done"
-                local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+                local ranges = PermissionRules.tally_unapproved(
+                    cmd,
+                    PermissionRules.rules(config_dir)
+                )
                 assert.equal(1, #ranges)
                 assert.equal("rm -rf /", span_text(cmd, ranges[1]))
             end
@@ -4343,7 +4682,10 @@ describe("PermissionRules", function()
                 deny = { "Bash(rm *)" },
             })
             local cmd = "timeout 5 echo $(rm -rf /)"
-            local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+            local ranges = PermissionRules.tally_unapproved(
+                cmd,
+                PermissionRules.rules(config_dir)
+            )
             assert.equal(1, #ranges)
             assert.equal("rm -rf /", span_text(cmd, ranges[1]))
         end)
@@ -4351,7 +4693,10 @@ describe("PermissionRules", function()
         it("returns an unsafe redirect", function()
             stub_settings({ allow = { "Bash(grep *)" } })
             local cmd = "grep foo > out.txt"
-            local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+            local ranges = PermissionRules.tally_unapproved(
+                cmd,
+                PermissionRules.rules(config_dir)
+            )
             assert.equal(1, #ranges)
             assert.is_true(span_text(cmd, ranges[1]):find("out.txt") ~= nil)
         end)
@@ -4367,7 +4712,10 @@ describe("PermissionRules", function()
                 Config.permissions.use_plugin_defaults = true
                 stub_settings(nil)
                 local cmd = "f=/safe; find $f; frobnicate x"
-                local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+                local ranges = PermissionRules.tally_unapproved(
+                    cmd,
+                    PermissionRules.rules(config_dir)
+                )
                 assert.equal(1, #ranges)
                 assert.equal("frobnicate x", span_text(cmd, ranges[1]))
             end
@@ -4375,8 +4723,10 @@ describe("PermissionRules", function()
 
         it("returns every unapproved leaf (record-and-continue)", function()
             stub_settings({ allow = {} })
-            local ranges =
-                PermissionRules.tally_unapproved("frob a | nope b", config_dir)
+            local ranges = PermissionRules.tally_unapproved(
+                "frob a | nope b",
+                PermissionRules.rules(config_dir)
+            )
             assert.equal(2, #ranges)
         end)
 
@@ -4385,20 +4735,25 @@ describe("PermissionRules", function()
             assert.is_nil(
                 PermissionRules.tally_unapproved(
                     "echo 'unterminated",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
 
         it("returns nil for empty input", function()
-            assert.is_nil(PermissionRules.tally_unapproved("", config_dir))
+            assert.is_nil(
+                PermissionRules.tally_unapproved(
+                    "",
+                    PermissionRules.rules(config_dir)
+                )
+            )
         end)
 
         it("returns nothing for a wrapper with a known-safe inner", function()
             stub_settings({ allow = { "Bash(grep *)" } })
             local ranges = PermissionRules.tally_unapproved(
                 "timeout 5 grep foo",
-                config_dir
+                PermissionRules.rules(config_dir)
             )
             assert.equal(0, #ranges)
         end)
@@ -4409,7 +4764,10 @@ describe("PermissionRules", function()
                 deny = { "Bash(rm *)" },
             })
             local cmd = "timeout 5 rm -rf /"
-            local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+            local ranges = PermissionRules.tally_unapproved(
+                cmd,
+                PermissionRules.rules(config_dir)
+            )
             assert.equal(1, #ranges)
             assert.equal("rm -rf /", span_text(cmd, ranges[1]))
         end)
@@ -4420,7 +4778,10 @@ describe("PermissionRules", function()
         it("pinpoints a not-allowed (non-deny) wrapper inner", function()
             stub_settings({ allow = { "Bash(grep *)" } })
             local cmd = "timeout 5 curl x"
-            local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+            local ranges = PermissionRules.tally_unapproved(
+                cmd,
+                PermissionRules.rules(config_dir)
+            )
             assert.equal(1, #ranges)
             assert.equal("curl x", span_text(cmd, ranges[1]))
         end)
@@ -4431,7 +4792,7 @@ describe("PermissionRules", function()
                 local ranges, leaves, complete =
                     PermissionRules.tally_unapproved(
                         "frob a | nope b",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 assert.equal(2, #ranges)
                 assert.same({ "frob a", "nope b" }, leaves)
@@ -4442,7 +4803,7 @@ describe("PermissionRules", function()
                 stub_settings({ allow = { "Bash(grep *)" } })
                 local _, leaves, complete = PermissionRules.tally_unapproved(
                     "grep foo > out.txt",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.same({}, leaves)
                 assert.is_false(complete)
@@ -4455,7 +4816,7 @@ describe("PermissionRules", function()
                 })
                 local _, leaves, complete = PermissionRules.tally_unapproved(
                     "echo $(rm -rf /)",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.same({}, leaves)
                 assert.is_false(complete)
@@ -4471,7 +4832,7 @@ describe("PermissionRules", function()
                 })
                 local _, leaves, complete = PermissionRules.tally_unapproved(
                     "echo hi; rm x",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.same({}, leaves)
                 assert.is_false(complete)
@@ -4484,7 +4845,7 @@ describe("PermissionRules", function()
                     local _, leaves, complete =
                         PermissionRules.tally_unapproved(
                             "frob a > out.txt",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     assert.same({ "frob a" }, leaves)
                     assert.is_false(complete)
@@ -4498,7 +4859,7 @@ describe("PermissionRules", function()
                     local ranges, leaves, complete =
                         PermissionRules.tally_unapproved(
                             "echo 'unterminated",
-                            config_dir
+                            PermissionRules.rules(config_dir)
                         )
                     assert.is_nil(ranges)
                     assert.same({}, leaves)
@@ -4521,9 +4882,8 @@ describe("PermissionRules", function()
             stub_settings({ allow = allow, deny = deny })
             return PermissionRules.should_auto_approve(
                 cmd,
-                config_dir,
-                nil,
-                extra_allow
+                PermissionRules.rules(config_dir, extra_allow),
+                nil
             )
         end
 
@@ -4557,8 +4917,10 @@ describe("PermissionRules", function()
             Config.permissions.auto_approve_tier = "read_only"
             stub_settings({ allow = { "Bash(file *)" } })
             local cmd = "fd -x file {}"
-            local _, leaves, complete =
-                PermissionRules.tally_unapproved(cmd, config_dir)
+            local _, leaves, complete = PermissionRules.tally_unapproved(
+                cmd,
+                PermissionRules.rules(config_dir)
+            )
             assert.same({ cmd }, leaves)
             assert.is_true(complete)
             assert.is_false(approves({ "Bash(file *)" }, nil, cmd))
@@ -4693,7 +5055,10 @@ describe("PermissionRules", function()
         }) do
             it("approves the call site alone: " .. cmd, function()
                 assert.is_true(
-                    PermissionRules.should_auto_approve(cmd, config_dir)
+                    PermissionRules.should_auto_approve(
+                        cmd,
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end)
         end
@@ -4747,7 +5112,10 @@ describe("PermissionRules", function()
         for _, cmd in ipairs(prompts) do
             it("prompts: " .. cmd, function()
                 assert.is_false(
-                    PermissionRules.should_auto_approve(cmd, config_dir)
+                    PermissionRules.should_auto_approve(
+                        cmd,
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end)
         end
@@ -4757,13 +5125,13 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "source " .. path,
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "source " .. path .. "; ls",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -4779,15 +5147,20 @@ describe("PermissionRules", function()
         }) do
             it("approves: " .. cmd, function()
                 assert.is_true(
-                    PermissionRules.should_auto_approve(cmd, config_dir)
+                    PermissionRules.should_auto_approve(
+                        cmd,
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end)
         end
 
         it("tallies a shadowed call as unrememberable", function()
             local cmd = "ls() " .. UNSAFE .. "; ls"
-            local ranges, leaves, complete =
-                PermissionRules.tally_unapproved(cmd, config_dir)
+            local ranges, leaves, complete = PermissionRules.tally_unapproved(
+                cmd,
+                PermissionRules.rules(config_dir)
+            )
             assert.equal(1, #ranges)
             assert.equal("ls", cmd:sub(ranges[1][2] + 1, ranges[1][4]))
             assert.same({}, leaves)
@@ -4796,7 +5169,10 @@ describe("PermissionRules", function()
 
         it("tallies a definition zsh calls without a call site", function()
             local cmd = "TRAPEXIT() { echo hi; }"
-            local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+            local ranges = PermissionRules.tally_unapproved(
+                cmd,
+                PermissionRules.rules(config_dir)
+            )
             assert.equal(1, #ranges)
             assert.equal(cmd, cmd:sub(ranges[1][2] + 1, ranges[1][4]))
         end)
@@ -4812,14 +5188,20 @@ describe("PermissionRules", function()
         it("approves `zsh <file>` whose body is all-allowed", function()
             local path = script("ls -la\ngrep foo bar\n")
             assert.is_true(
-                PermissionRules.should_auto_approve("zsh " .. path, config_dir)
+                PermissionRules.should_auto_approve(
+                    "zsh " .. path,
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
         it("does not approve a body with a non-allowed command", function()
             local path = script("ls /tmp\nmake build\n")
             assert.is_false(
-                PermissionRules.should_auto_approve("zsh " .. path, config_dir)
+                PermissionRules.should_auto_approve(
+                    "zsh " .. path,
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -4828,23 +5210,32 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "source " .. path,
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
             assert.is_true(
-                PermissionRules.should_auto_approve(". " .. path, config_dir)
+                PermissionRules.should_auto_approve(
+                    ". " .. path,
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
         it("bails `source <name>` without a slash", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("source foo", config_dir)
+                PermissionRules.should_auto_approve(
+                    "source foo",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
         it("`eval` still bails", function()
             assert.is_false(
-                PermissionRules.should_auto_approve("eval 'ls'", config_dir)
+                PermissionRules.should_auto_approve(
+                    "eval 'ls'",
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -4852,7 +5243,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "zsh $UNBOUND_SCRIPT",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -4861,7 +5252,10 @@ describe("PermissionRules", function()
             local helper = script("ls /tmp\n")
             local main = script("source " .. helper .. "\nls /tmp\n")
             assert.is_true(
-                PermissionRules.should_auto_approve("zsh " .. main, config_dir)
+                PermissionRules.should_auto_approve(
+                    "zsh " .. main,
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -4871,12 +5265,15 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "source " .. path,
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
             -- `zsh <file>` runs the text, ignoring the .zwc.
             assert.is_true(
-                PermissionRules.should_auto_approve("zsh " .. path, config_dir)
+                PermissionRules.should_auto_approve(
+                    "zsh " .. path,
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -4884,14 +5281,20 @@ describe("PermissionRules", function()
             local path = vim.fn.tempname() .. ".sh"
             write_file(path, "ls /tmp\nsource " .. path .. "\n")
             assert.is_false(
-                PermissionRules.should_auto_approve("zsh " .. path, config_dir)
+                PermissionRules.should_auto_approve(
+                    "zsh " .. path,
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
         it("bails an oversize body (> 64 KB)", function()
             local path = script(string.rep("ls /tmp\n", 9000))
             assert.is_false(
-                PermissionRules.should_auto_approve("zsh " .. path, config_dir)
+                PermissionRules.should_auto_approve(
+                    "zsh " .. path,
+                    PermissionRules.rules(config_dir)
+                )
             )
         end)
 
@@ -4899,15 +5302,17 @@ describe("PermissionRules", function()
             "surfaces a body's write effect; no scope → not approved",
             function()
                 local path = script("ls /tmp > /tmp/scratch_step_a\n")
-                local ok, effects =
-                    PermissionRules.evaluate("zsh " .. path, config_dir)
+                local ok, effects = PermissionRules.evaluate(
+                    "zsh " .. path,
+                    PermissionRules.rules(config_dir)
+                )
                 assert.is_true(ok)
                 assert.equal("write", effects[1].kind)
                 assert.equal("/tmp/scratch_step_a", effects[1].path)
                 assert.is_false(
                     PermissionRules.should_auto_approve(
                         "zsh " .. path,
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             end
@@ -4921,7 +5326,7 @@ describe("PermissionRules", function()
                 local path = script("ls /tmp\n")
                 local ok = PermissionRules.evaluate(
                     "ls /tmp > " .. path .. "; zsh " .. path,
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.is_false(ok)
             end
@@ -4933,7 +5338,7 @@ describe("PermissionRules", function()
                 local path = script("ls /tmp\n")
                 local ok, effects = PermissionRules.evaluate(
                     "zsh " .. path .. "; ls /tmp > " .. path,
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.is_true(ok)
                 assert.equal("write", effects[1].kind)
@@ -4959,7 +5364,7 @@ describe("PermissionRules", function()
                         .. "/f.sh; zsh "
                         .. real_dir
                         .. "/f.sh",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.is_false(ok)
             end
@@ -4967,8 +5372,10 @@ describe("PermissionRules", function()
 
         it("tally: a clean body yields no ranges", function()
             local path = script("ls /tmp\n")
-            local ranges =
-                PermissionRules.tally_unapproved("zsh " .. path, config_dir)
+            local ranges = PermissionRules.tally_unapproved(
+                "zsh " .. path,
+                PermissionRules.rules(config_dir)
+            )
             assert.equal(0, #ranges)
         end)
 
@@ -4977,7 +5384,10 @@ describe("PermissionRules", function()
             function()
                 local path = script("make build\n")
                 local ranges, leaves, complete =
-                    PermissionRules.tally_unapproved("zsh " .. path, config_dir)
+                    PermissionRules.tally_unapproved(
+                        "zsh " .. path,
+                        PermissionRules.rules(config_dir)
+                    )
                 assert.equal(1, #ranges)
                 assert.same({ "zsh " .. path }, leaves)
                 assert.is_true(complete)
@@ -4998,7 +5408,10 @@ describe("PermissionRules", function()
         --- @return boolean
         local function tallies(cmd, text)
             local lines = vim.split(cmd, "\n")
-            local ranges = PermissionRules.tally_unapproved(cmd, config_dir)
+            local ranges = PermissionRules.tally_unapproved(
+                cmd,
+                PermissionRules.rules(config_dir)
+            )
             return vim.iter(ranges or {}):any(function(r)
                 return r[1] == r[3]
                     and lines[r[1] + 1]:sub(r[2] + 1, r[4]) == text
@@ -5075,7 +5488,7 @@ describe("PermissionRules", function()
                 local path = ghost()
                 local ok = PermissionRules.evaluate(
                     create_run(path, "ls /tmp\n"),
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.is_true(ok)
             end
@@ -5087,7 +5500,7 @@ describe("PermissionRules", function()
                 local path = ghost()
                 local ok = PermissionRules.evaluate(
                     create_run(path, "make build\n"),
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.is_false(ok)
             end
@@ -5097,13 +5510,18 @@ describe("PermissionRules", function()
             local path = ghost()
             local line = ("cat > %s <<'EOF' && zsh %s\n"):format(path, path)
             assert.is_true(
-                (PermissionRules.evaluate(line .. "ls /tmp\nEOF", config_dir))
+                (
+                    PermissionRules.evaluate(
+                        line .. "ls /tmp\nEOF",
+                        PermissionRules.rules(config_dir)
+                    )
+                )
             )
             assert.is_false(
                 (
                     PermissionRules.evaluate(
                         line .. "rm -rf /tmp/x\nEOF",
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             )
@@ -5119,7 +5537,14 @@ describe("PermissionRules", function()
                         path,
                         path
                     )
-                    assert.is_false((PermissionRules.evaluate(cmd, config_dir)))
+                    assert.is_false(
+                        (
+                            PermissionRules.evaluate(
+                                cmd,
+                                PermissionRules.rules(config_dir)
+                            )
+                        )
+                    )
                 end
             end
         )
@@ -5133,7 +5558,7 @@ describe("PermissionRules", function()
                             path,
                             path
                         ),
-                        config_dir
+                        PermissionRules.rules(config_dir)
                     )
                 )
             )
@@ -5145,7 +5570,7 @@ describe("PermissionRules", function()
             local path = script("make build\n")
             local ok = PermissionRules.evaluate(
                 create_run(path, "ls /tmp\n"),
-                config_dir
+                PermissionRules.rules(config_dir)
             )
             assert.is_true(ok)
             -- And the inverse: an allowed disk body cannot rescue a disallowed
@@ -5153,7 +5578,7 @@ describe("PermissionRules", function()
             local path2 = script("ls /tmp\n")
             local ok2 = PermissionRules.evaluate(
                 create_run(path2, "make build\n"),
-                config_dir
+                PermissionRules.rules(config_dir)
             )
             assert.is_false(ok2)
         end)
@@ -5167,7 +5592,7 @@ describe("PermissionRules", function()
                         path,
                         path
                     ),
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.is_false(ok)
             end
@@ -5177,7 +5602,7 @@ describe("PermissionRules", function()
             local path = ghost()
             local ok = PermissionRules.evaluate(
                 create_run(path, "ls /tmp\n", ">>"),
-                config_dir
+                PermissionRules.rules(config_dir)
             )
             assert.is_false(ok)
         end)
@@ -5193,7 +5618,7 @@ describe("PermissionRules", function()
                         path,
                         path
                     ),
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.is_false(ok)
             end
@@ -5212,7 +5637,7 @@ describe("PermissionRules", function()
                         path,
                         path
                     ),
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
                 assert.is_false(ok)
             end
@@ -5222,7 +5647,7 @@ describe("PermissionRules", function()
             -- No redirect to a file, so no write effect — fully auto-approvable.
             local ok = PermissionRules.should_auto_approve(
                 "cat <<'EOF'\nls /tmp\nEOF",
-                config_dir
+                PermissionRules.rules(config_dir)
             )
             assert.is_true(ok)
         end)
@@ -5231,7 +5656,7 @@ describe("PermissionRules", function()
             assert.is_true(
                 PermissionRules.should_auto_approve(
                     "cat <<'EOF'\n```lua\n`rm -rf /tmp/zz`\n```\nEOF",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -5268,7 +5693,13 @@ describe("PermissionRules", function()
         --- @param cwd string|nil
         --- @return boolean
         local function walks(cmd, cwd)
-            return (PermissionRules.evaluate(cmd, config_dir, cwd))
+            return (
+                PermissionRules.evaluate(
+                    cmd,
+                    PermissionRules.rules(config_dir),
+                    cwd
+                )
+            )
         end
 
         it("reads the script a cd enters", function()
@@ -5398,7 +5829,11 @@ describe("PermissionRules", function()
             local cmd = "echo x > ~nobody/x; zsh run.sh"
             assert.is_false(walks(cmd, good))
             assert.is_not_nil(
-                PermissionRules.tally_unapproved(cmd, config_dir, good)
+                PermissionRules.tally_unapproved(
+                    cmd,
+                    PermissionRules.rules(config_dir),
+                    good
+                )
             )
         end)
 
@@ -5407,12 +5842,20 @@ describe("PermissionRules", function()
             local cmd = "cd " .. evil .. " && zsh run.sh"
             assert.equal(
                 1,
-                #PermissionRules.tally_unapproved(cmd, config_dir, good)
+                #PermissionRules.tally_unapproved(
+                    cmd,
+                    PermissionRules.rules(config_dir),
+                    good
+                )
             )
             bodies("make build\n", "ls\n")
             assert.equal(
                 0,
-                #PermissionRules.tally_unapproved(cmd, config_dir, good)
+                #PermissionRules.tally_unapproved(
+                    cmd,
+                    PermissionRules.rules(config_dir),
+                    good
+                )
             )
         end)
     end)
@@ -5438,7 +5881,13 @@ describe("PermissionRules", function()
         --- @param cwd string|nil
         --- @return boolean
         local function walks(cmd, cwd)
-            return (PermissionRules.evaluate(cmd, config_dir, cwd))
+            return (
+                PermissionRules.evaluate(
+                    cmd,
+                    PermissionRules.rules(config_dir),
+                    cwd
+                )
+            )
         end
 
         it("approves make when every recipe line approves", function()
@@ -5504,17 +5953,22 @@ describe("PermissionRules", function()
             assert.is_true(walks("zsh run.sh", dir))
             local ok = PermissionRules.evaluate(
                 "make lint",
-                config_dir,
-                dir,
-                { PermissionRules.literal_pattern("make lint") }
+                PermissionRules.rules(
+                    config_dir,
+                    { PermissionRules.literal_pattern("make lint") }
+                ),
+                dir
             )
             assert.is_true(ok)
         end)
 
         it("keeps a leaf with unapproved code rememberable", function()
             write_file(dir .. "/Makefile", "lint:\n\trm -r build\n")
-            local ranges, leaves, complete =
-                PermissionRules.tally_unapproved("make lint", config_dir, dir)
+            local ranges, leaves, complete = PermissionRules.tally_unapproved(
+                "make lint",
+                PermissionRules.rules(config_dir),
+                dir
+            )
             assert.equal(1, #ranges)
             assert.same({ "make lint" }, leaves)
             assert.is_true(complete)
@@ -5534,7 +5988,7 @@ describe("PermissionRules", function()
                 assert.is_false(walks("cargo metadata", dir))
                 local ranges, leaves = PermissionRules.tally_unapproved(
                     "cargo fmt",
-                    config_dir,
+                    PermissionRules.rules(config_dir),
                     dir
                 )
                 assert.equal(1, #ranges)
@@ -5577,7 +6031,12 @@ describe("PermissionRules", function()
                 "echo `echo \\`rm -rf /tmp/zz\\``",
                 "find /tmp/zz -name\\\n  x -delete",
             }) do
-                if PermissionRules.should_auto_approve(cmd, config_dir) then
+                if
+                    PermissionRules.should_auto_approve(
+                        cmd,
+                        PermissionRules.rules(config_dir)
+                    )
+                then
                     table.insert(approved, cmd)
                 end
             end
@@ -5602,7 +6061,10 @@ describe("PermissionRules", function()
             for _, shell in ipairs({ "/bin/zsh", "/bin/bash" }) do
                 vim.env.SHELL = shell
                 assert.is_true(
-                    PermissionRules.should_auto_approve(SED, config_dir)
+                    PermissionRules.should_auto_approve(
+                        SED,
+                        PermissionRules.rules(config_dir)
+                    )
                 )
             end
         end)
@@ -5624,7 +6086,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     "functions -M foo 1 1",
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -5633,7 +6095,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     'sed -n "$v p" f',
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -5649,7 +6111,10 @@ describe("PermissionRules", function()
                     'timeout 5 sed -n "$((40))p" f',
                 }) do
                     if
-                        not PermissionRules.should_auto_approve(cmd, config_dir)
+                        not PermissionRules.should_auto_approve(
+                            cmd,
+                            PermissionRules.rules(config_dir)
+                        )
                     then
                         table.insert(prompted, cmd)
                     end
@@ -5665,7 +6130,7 @@ describe("PermissionRules", function()
             assert.is_false(
                 PermissionRules.should_auto_approve(
                     'sed -n "$(( $(id) ))p" f',
-                    config_dir
+                    PermissionRules.rules(config_dir)
                 )
             )
         end)
@@ -5692,8 +6157,11 @@ describe("PermissionRules", function()
         --- @param extra_allow agentic.utils.PermissionRules.CompiledPattern[]|nil
         --- @return string[]
         local function sources_of(command, extra_allow)
-            local _, _, sources =
-                PermissionRules.evaluate(command, config_dir, nil, extra_allow)
+            local _, _, sources = PermissionRules.evaluate(
+                command,
+                PermissionRules.rules(config_dir, extra_allow),
+                nil
+            )
             local names = vim.tbl_keys(sources)
             table.sort(names)
             return names
@@ -5738,20 +6206,26 @@ describe("PermissionRules", function()
             )
         end)
 
-        it("names the deny that rejects a command", function()
+        it("names the deny and the leaf that reject a command", function()
             assert.same(
-                { true, "deny" },
+                { true, "deny", "rm -f x" },
                 { PermissionRules.should_auto_reject("rm -f x", config_dir) }
             )
-            assert.same({ true, "glob_deny" }, {
+            assert.same({ true, "glob_deny", "make deploy now" }, {
                 PermissionRules.should_auto_reject(
                     "make deploy now",
                     config_dir
                 ),
             })
-            assert.same({ true, "deny" }, {
+            assert.same({ true, "deny", "rm -f x" }, {
                 PermissionRules.should_auto_reject(
                     "sh -c 'rm -f x'",
+                    config_dir
+                ),
+            })
+            assert.same({ true, "deny", "rm -f y" }, {
+                PermissionRules.should_auto_reject(
+                    "grep x f | rm -f y",
                     config_dir
                 ),
             })
@@ -5809,7 +6283,10 @@ describe("PermissionRules", function()
         it("ignores a settings.json allow", function()
             stub_settings({ allow = { "Bash(mytool *)" } })
             assert.is_true(
-                PermissionRules.should_auto_approve("mytool x", config_dir)
+                PermissionRules.should_auto_approve(
+                    "mytool x",
+                    PermissionRules.rules(config_dir)
+                )
             )
             assert.is_false(PermissionRules.is_read_only("mytool x"))
         end)
@@ -5818,7 +6295,10 @@ describe("PermissionRules", function()
             it("does not read a script run with " .. launcher, function()
                 local cmd = launcher .. " " .. script("ls\n")
                 assert.is_true(
-                    PermissionRules.should_auto_approve(cmd, config_dir)
+                    PermissionRules.should_auto_approve(
+                        cmd,
+                        PermissionRules.rules(config_dir)
+                    )
                 )
 
                 local open = spy.on(vim.uv, "fs_open")
