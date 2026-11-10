@@ -40,6 +40,7 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 - P3 [`REFACTOR-grant-target.md`](notes/REFACTOR-grant-target.md)
 - P3 [`REFACTOR-redirect-effect.md`](notes/REFACTOR-redirect-effect.md)
 - P3 [`REFACTOR-acp-tool-call-builders.md`](notes/REFACTOR-acp-tool-call-builders.md)
+- P3 [`REFACTOR-view-field-apply.md`](notes/REFACTOR-view-field-apply.md)
 - P3 [`REFACTOR-agent-config-lookup.md`](notes/REFACTOR-agent-config-lookup.md)
 - P3 [`REFACTOR-agent-scoped-lookups.md`](notes/REFACTOR-agent-scoped-lookups.md)
 - P3 [`REFACTOR-return-prompt.md`](notes/REFACTOR-return-prompt.md)
