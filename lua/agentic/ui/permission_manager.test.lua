@@ -708,6 +708,61 @@ describe("agentic.ui.PermissionManager", function()
             assert.is_true(cb2:called_with("reject-once"))
         end)
 
+        describe("a command filled in from the tracker", function()
+            --- A permission request for tool call `id` on wire kind `kind`.
+            --- @param id string
+            --- @param kind agentic.acp.ToolKind
+            --- @param raw_input agentic.acp.RawInput|nil
+            --- @return agentic.acp.RequestPermission
+            local function make_request(id, kind, raw_input)
+                local request = make_edit_request(kind)
+                request.toolCall.toolCallId = id
+                request.toolCall.rawInput = raw_input
+                return request
+            end
+
+            before_each(function()
+                writer.tool_call_blocks["tc-filled"] = {
+                    tool_call_id = "tc-filled",
+                    kind = "execute",
+                    argument = "frobnicate --now",
+                }
+            end)
+
+            for _, case in ipairs({
+                { kind = "execute", raw_input = nil },
+                { kind = "other", raw_input = { metadata = {} } },
+            }) do
+                it("remembers a reject on wire kind " .. case.kind, function()
+                    local request =
+                        make_request("tc-filled", case.kind, case.raw_input)
+                    pm:add_request(request, function() end)
+                    pm:_complete_request("reject-always")
+
+                    local cb = spy.new(function() end)
+                    pm:add_request(request, cb --[[@as function]])
+                    assert.is_true(cb:called_with("reject-once"))
+                end)
+            end
+
+            it("keeps the reject from other calls of the wire kind", function()
+                pm:add_request(
+                    make_request("tc-filled", "other", { metadata = {} }),
+                    function() end
+                )
+                pm:_complete_request("reject-always")
+
+                local cb = spy.new(function() end)
+                pm:add_request(
+                    make_request("tc-bare", "other", { metadata = {} }),
+                    cb --[[@as function]]
+                )
+                assert.spy(cb).was.called(0)
+                assert.is_not_nil(pm.current_request)
+                pm:_complete_request("reject-once")
+            end)
+        end)
+
         it("clear() resets the cache", function()
             local cb1 = spy.new(function() end)
             pm:add_request(

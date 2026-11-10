@@ -214,7 +214,7 @@ end
 --- Returns `nil` when no identifying input is available. The cache then
 --- silently skips the decision and the next call prompts again — safer
 --- than under-scoping by caching on bare kind.
---- @param tool_call agentic.acp.ToolCall
+--- @param tool_call agentic.acp.ToolCall Keyed on its `kind` and `rawInput` alone, with nothing filled in from the tool call tracker
 --- @return string|nil
 function PermissionManager:_build_cache_key(tool_call)
     local kind = AcpKind.normalise(tool_call.kind)
@@ -222,25 +222,7 @@ function PermissionManager:_build_cache_key(tool_call)
         return nil
     end
 
-    -- For execute, fall back to `tracker.argument` when `rawInput.command`
-    -- is missing (opencode sends metadata:{} on shell permission requests).
     local raw_input = tool_call.rawInput
-    if kind == "execute" and not (raw_input and raw_input.command) then
-        local tracker =
-            self:_writer(tool_call.toolCallId).tool_call_blocks[tool_call.toolCallId]
-        if
-            tracker
-            and AcpKind.normalise(tracker.kind) == "execute"
-            and tracker.argument
-        then
-            raw_input = vim.tbl_extend(
-                "force",
-                raw_input or {},
-                { command = tracker.argument }
-            ) --[[@as agentic.acp.RawInput]]
-        end
-    end
-
     local fields = CACHE_KEY_FIELDS[kind]
     if fields then
         local parts = { kind }
@@ -315,9 +297,8 @@ function PermissionManager.reject(request, callback)
     return send_option(request, callback, "reject_once")
 end
 
---- Resolve the shell command of an execute permission request. `rawInput.command`
---- may be nil (opencode sends `metadata: {}`); the command then lives in the
---- prior tool_call_update tracker as `argument`.
+--- The shell command of a permission request: `rawInput.command`, else the
+--- `argument` of its tool call tracker when that tracker's kind is execute.
 --- @param request agentic.acp.RequestPermission
 --- @return string|nil command
 function PermissionManager:_request_command(request)
@@ -883,8 +864,8 @@ end
 --- check's, for whichever of the two judge the call. A call that neither
 --- judges has one `kind` cause.
 ---
---- Tracker-free: `kind` and `diff` are taken as given, since the tracker may
---- be unpopulated, and `command` is read only from `tool_call.rawInput.command`.
+--- Reads only its arguments, never the tool call tracker, since the tracker
+--- may be unpopulated. A command must be in `tool_call.rawInput.command`.
 --- @param kind string|nil ACP tool kind
 --- @param tool_call agentic.acp.ToolCall
 --- @param diff { old?: string[], new?: string[], all?: boolean }|nil Edit diff for the grant check
@@ -1268,6 +1249,8 @@ function PermissionManager:_complete_request(option_id)
     end
     local selected = AcpKind.normalise(selected_kind)
     if selected == "allow_always" or selected == "reject_always" then
+        local _, resolved, _, cwd = self:resolve_request(current.request)
+        local tool_call = resolved --[[@as agentic.acp.ToolCall]]
         -- Allow-always on an execute prompt remembers the individual safe-but-
         -- unruled leaves, so a later block sharing them auto-approves. Only the
         -- non-leaf parts (deny/ask-gated, structural) need the whole-command
@@ -1275,13 +1258,13 @@ function PermissionManager:_complete_request(option_id)
         -- with no part to blame remembers no leaf, so it needs the fallback too.
         local store_whole = true
         if selected == "allow_always" then
-            local command = self:_request_command(current.request)
+            local command = tool_call.rawInput and tool_call.rawInput.command
             if command then
                 local ranges, leaves, complete =
                     PermissionRules.tally_unapproved(
                         command,
                         self:_rules(),
-                        self:bash_cwd(current.toolCallId)
+                        cwd
                     )
                 for _, leaf in ipairs(leaves) do
                     self._execute_leaf_allow[leaf] = true
@@ -1291,7 +1274,7 @@ function PermissionManager:_complete_request(option_id)
         end
 
         if store_whole then
-            local cache_key = self:_build_cache_key(current.request.toolCall)
+            local cache_key = self:_build_cache_key(tool_call)
             if cache_key then
                 local action = selected == "allow_always" and "allow"
                     or "reject"
