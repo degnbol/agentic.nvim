@@ -6043,7 +6043,6 @@ describe("agentic.SessionManager", function()
                 _on_permission_decided = SessionManager._on_permission_decided,
                 _sync_job_stop = SessionManager._sync_job_stop,
                 _background_job_record = SessionManager._background_job_record,
-                _apply_tool_call_fields = SessionManager._apply_tool_call_fields,
             } --[[@as agentic.SessionManager]]
             with_subagents(session)
             pm.on_decided = function(id, causes)

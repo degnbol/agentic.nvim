@@ -112,15 +112,26 @@ function AgentView:show_causes(history, tool_call_id, causes)
     if not tracker or vim.deep_equal(tracker.causes, causes) then
         return false
     end
-    --- @type agentic.ui.MessageWriter.ToolCallBase
-    local update = {
-        tool_call_id = tool_call_id,
-        status = tracker.status,
-        causes = causes,
-    }
-    self.writer:update_tool_call_block(update)
-    history:update_tool_call(tool_call_id, ChatHistory.tool_call_record(update))
+    AgentView.merge_tool_call_fields(
+        self.writer,
+        history,
+        { tool_call_id = tool_call_id, causes = causes }
+    )
     return true
+end
+
+--- Merge `fields` into a tool call's history record, and into its block when
+--- `writer` tracks it. Does not persist the history.
+--- @param writer agentic.ui.MessageWriter|nil
+--- @param history agentic.ui.ChatHistory
+--- @param fields { tool_call_id: string } `ToolCallBase` fields. Fields left out keep their values.
+function AgentView.merge_tool_call_fields(writer, history, fields)
+    local update = fields --[[@as agentic.ui.MessageWriter.ToolCallBase]]
+    local id = update.tool_call_id
+    if writer and writer.tool_call_blocks[id] then
+        writer:update_tool_call_block(update)
+    end
+    history:update_tool_call(id, ChatHistory.tool_call_record(update))
 end
 
 return AgentView

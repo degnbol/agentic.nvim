@@ -193,5 +193,65 @@ describe("agentic.ui.AgentView", function()
         it("does not show causes for a call without a block", function()
             assert.is_false(view:show_causes(history, "t1", causes))
         end)
+
+        describe("merge_tool_call_fields", function()
+            it("merges into the block and the record", function()
+                write("read", "/a.lua", nil)
+
+                AgentView.merge_tool_call_fields(
+                    view.writer,
+                    history,
+                    { tool_call_id = "t1", causes = causes }
+                )
+
+                assert.same(causes, view.writer.tool_call_blocks.t1.causes)
+                assert.same(causes, history:tool_call("t1").causes)
+            end)
+
+            it("keeps fields the update leaves out", function()
+                write("read", "/a.lua", nil)
+
+                AgentView.merge_tool_call_fields(
+                    view.writer,
+                    history,
+                    { tool_call_id = "t1", causes = causes }
+                )
+
+                assert.equal("pending", view.writer.tool_call_blocks.t1.status)
+                assert.equal("pending", history:tool_call("t1").status)
+            end)
+
+            it("merges into the record only for a nil writer", function()
+                write("read", "/a.lua", nil)
+
+                AgentView.merge_tool_call_fields(
+                    nil,
+                    history,
+                    { tool_call_id = "t1", causes = causes }
+                )
+
+                assert.is_nil(view.writer.tool_call_blocks.t1.causes)
+                assert.same(causes, history:tool_call("t1").causes)
+            end)
+
+            it(
+                "merges into the record only for a writer that does not track the call",
+                function()
+                    history:add_message(ChatHistory.tool_call_record({
+                        tool_call_id = "t2",
+                        status = "pending",
+                    }))
+
+                    AgentView.merge_tool_call_fields(
+                        view.writer,
+                        history,
+                        { tool_call_id = "t2", causes = causes }
+                    )
+
+                    assert.is_nil(view.writer.tool_call_blocks.t2)
+                    assert.same(causes, history:tool_call("t2").causes)
+                end
+            )
+        end)
     end)
 end)

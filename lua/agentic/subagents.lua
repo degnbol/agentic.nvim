@@ -1,7 +1,7 @@
 local AgentConfigOptions = require("agentic.acp.agent_config_options")
+local AgentView = require("agentic.ui.agent_view")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
-local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
 local Json = require("agentic.utils.json")
 local Logger = require("agentic.utils.logger")
@@ -431,19 +431,11 @@ function Subagents:_set_agent_info(child_id, subagent)
     if not block then
         return
     end
-    --- @type agentic.ui.MessageWriter.ToolCallBase
-    local update = {
-        tool_call_id = child_id,
-        status = block.status,
-        subagent = subagent,
-    }
-    local writer = self:record_writer(block, false)
-    if writer then
-        writer:update_tool_call_block(update)
-    end
-    self._host
-        .history()
-        :update_tool_call(child_id, ChatHistory.tool_call_record(update))
+    AgentView.merge_tool_call_fields(
+        self:record_writer(block, false),
+        self._host.history(),
+        { tool_call_id = child_id, subagent = subagent }
+    )
     self._host.history_changed()
 end
 

@@ -8,6 +8,7 @@ local ACPClient = require("agentic.acp.acp_client")
 local ACPPayloads = require("agentic.acp.acp_payloads")
 local AcpKind = require("agentic.utils.acp_kind")
 local AgentConfigOptions = require("agentic.acp.agent_config_options")
+local AgentView = require("agentic.ui.agent_view")
 local Bootstrap = require("agentic.bootstrap")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Budget = require("agentic.budget")
@@ -326,7 +327,6 @@ function SessionManager:new(provider)
     local ChatWidget = require("agentic.ui.chat_widget")
     local FileActivity = require("agentic.ui.file_activity")
     local FileList = require("agentic.ui.file_list")
-    local AgentView = require("agentic.ui.agent_view")
     local PermissionManager = require("agentic.ui.permission_manager")
     local TodoList = require("agentic.ui.todo_list")
 
@@ -750,19 +750,6 @@ function SessionManager:_background_job_record(job_id)
     return nil
 end
 
---- Merge `update` into a tool call's history record, and into its block when
---- `writer` tracks it. Does not persist the history.
---- @param writer agentic.ui.MessageWriter|nil
---- @param fields { tool_call_id: string } `ToolCallBase` fields; those left out stay as they are
-function SessionManager:_apply_tool_call_fields(writer, fields)
-    local update = fields --[[@as agentic.ui.MessageWriter.ToolCallBase]]
-    local id = update.tool_call_id
-    if writer and writer.tool_call_blocks[id] then
-        writer:update_tool_call_block(update)
-    end
-    self.chat_history:update_tool_call(id, ChatHistory.tool_call_record(update))
-end
-
 --- Link a call that stops a background job to the job's block: head it with
 --- the job's description and show the job's output file, and once the stop
 --- has completed, mark the job's block stopped. Does nothing for a call that
@@ -788,7 +775,7 @@ function SessionManager:_sync_job_stop(tool_call_id)
         (description and description ~= tracker.argument)
         or record.output_file ~= tracker.stopped_job_output_file
     then
-        self:_apply_tool_call_fields(writer, {
+        AgentView.merge_tool_call_fields(writer, self.chat_history, {
             tool_call_id = tool_call_id,
             argument = description,
             stopped_job_output_file = record.output_file,
@@ -798,8 +785,9 @@ function SessionManager:_sync_job_stop(tool_call_id)
     if tracker.status == "completed" and not record.stopped_by then
         -- A transcript that is not loaded renders the field from the history
         -- when it loads.
-        self:_apply_tool_call_fields(
+        AgentView.merge_tool_call_fields(
             self._subagents:record_writer(record, false),
+            self.chat_history,
             {
                 tool_call_id = record.tool_call_id,
                 stopped_by = tool_call_id,
@@ -2118,8 +2106,7 @@ function SessionManager:_apply_side_tool_call(update, child_id)
             { update = update, child_id = child_id }
         return
     end
-    writer:update_tool_call_block(update)
-    self.chat_history:update_tool_call(id, ChatHistory.tool_call_record(update))
+    AgentView.merge_tool_call_fields(writer, self.chat_history, update)
     self:_history_changed(self.chat_history)
 end
 
