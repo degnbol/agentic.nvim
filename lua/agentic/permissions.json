@@ -36,6 +36,7 @@
   "cat":       { "read_only": [{}] },
   "head":      { "read_only": [{}] },
   "tail":      { "read_only": [{}] },
+  "nl":        { "read_only": [{}] },
   "less":      { "read_only": [{}] },
   "zless":     { "read_only": [{}] },
   "gzip": {
