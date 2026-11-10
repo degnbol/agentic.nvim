@@ -1084,47 +1084,7 @@ function ACPClient:_handle_fs_write(message_id, params)
     -- Must schedule — this runs from a libuv read callback where vim APIs
     -- are unsafe.
     vim.schedule(function()
-        -- Use write_file's reload pattern (same as FileSystem.write_file)
-        local abs = FileSystem.to_absolute_path(path)
-        local bufnr = nil
-        for _, b in ipairs(vim.api.nvim_list_bufs()) do
-            if
-                vim.api.nvim_buf_is_loaded(b)
-                and vim.api.nvim_buf_get_name(b) == abs
-            then
-                bufnr = b
-                break
-            end
-        end
-        if not bufnr then
-            return
-        end
-        local reload_ok, reload_err = pcall(function()
-            local disk_lines = FileSystem.read_from_disk(path)
-            if disk_lines then
-                local was_modifiable =
-                    vim.api.nvim_get_option_value("modifiable", { buf = bufnr })
-                vim.api.nvim_set_option_value(
-                    "modifiable",
-                    true,
-                    { buf = bufnr }
-                )
-                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, disk_lines)
-                vim.api.nvim_set_option_value(
-                    "modifiable",
-                    was_modifiable,
-                    { buf = bufnr }
-                )
-                vim.api.nvim_set_option_value(
-                    "modified",
-                    false,
-                    { buf = bufnr }
-                )
-            end
-        end)
-        if not reload_ok then
-            Logger.debug("Buffer reload error after fs/write:", reload_err)
-        end
+        FileSystem.reload_buffer(path)
     end)
 end
 

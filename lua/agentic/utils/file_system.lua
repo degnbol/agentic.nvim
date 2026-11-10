@@ -1,3 +1,4 @@
+local BufHelpers = require("agentic.utils.buf_helpers")
 local Logger = require("agentic.utils.logger")
 
 --- @class agentic.utils.FileSystem
@@ -162,15 +163,38 @@ function FileSystem.read_last_lines(abs_path, max_lines)
     return vim.list_slice(lines, math.max(1, #lines - max_lines + 1)), nil
 end
 
+--- The loaded buffer for the file at `path`. Never a buffer whose name only
+--- contains `path`.
+--- @param path string Absolute or relative to the cwd
+--- @return integer|nil bufnr
+local function loaded_buffer(path)
+    -- Not `bufnr()`: a pattern match that, when no buffer has the name, falls
+    -- back to one whose name only contains it. Compared by identity, as a
+    -- buffer name keeps directory symlinks resolved or not depending on
+    -- whether the directory existed when the buffer was named.
+    local file = FileSystem.canonical_path(path)
+    for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+        local name = vim.api.nvim_buf_get_name(bufnr)
+        if
+            name ~= ""
+            and vim.api.nvim_buf_is_loaded(bufnr)
+            and FileSystem.canonical_path(name) == file
+        then
+            return bufnr
+        end
+    end
+    return nil
+end
+
 --- Read the file content from a buffer if loaded, to get unsaved changes,
 --- or from disk otherwise
 --- @param abs_path string
 --- @return string[]|nil lines
 --- @return string|nil error
 function FileSystem.read_from_buffer_or_disk(abs_path)
-    local bufnr = vim.fn.bufnr(abs_path)
+    local bufnr = loaded_buffer(abs_path)
 
-    if bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) then
+    if bufnr then
         local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
         return lines, nil
     end
@@ -264,6 +288,28 @@ function FileSystem.watch(abs_path, on_change)
     return handle, nil
 end
 
+--- Replace the lines of the loaded buffer for the file at `path` with the
+--- file on disk and mark it unmodified. Keeps its 'modifiable' value.
+--- No-op when no buffer is loaded for the file or the file cannot be read.
+--- @param path string Absolute or relative to the cwd
+function FileSystem.reload_buffer(path)
+    local bufnr = loaded_buffer(path)
+    if not bufnr then
+        return
+    end
+    local disk_lines = FileSystem.read_from_disk(path)
+    if not disk_lines then
+        return
+    end
+    -- Not `:edit!`: inside `nvim_buf_call` that fires autocmds (BufReadPost,
+    -- FileType, swap file dialog) in the wrong window context (curwin doesn't
+    -- match curbuf), causing crashes and [O]k prompts.
+    BufHelpers.with_modifiable(bufnr, function()
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, disk_lines)
+        vim.bo[bufnr].modified = false
+    end)
+end
+
 --- @param abs_path string
 --- @param content string
 --- @param callback fun(error: string|nil)
@@ -271,43 +317,7 @@ function FileSystem.write_file(abs_path, content, callback)
     local saved, err = FileSystem.save_to_disk(abs_path, content)
 
     if saved then
-        local bufnr = vim.fn.bufnr(FileSystem.to_absolute_path(abs_path))
-
-        if bufnr ~= -1 and vim.api.nvim_buf_is_valid(bufnr) then
-            -- Reload buffer content from disk via API instead of :edit!
-            -- :edit! inside nvim_buf_call fires autocmds (BufReadPost,
-            -- FileType, swap file dialog) in wrong window context (curwin
-            -- doesn't match curbuf), causing crashes and [O]k prompts.
-            local reload_ok, reload_err = pcall(function()
-                local disk_lines = FileSystem.read_from_disk(abs_path)
-                if disk_lines then
-                    local was_modifiable = vim.api.nvim_get_option_value(
-                        "modifiable",
-                        { buf = bufnr }
-                    )
-                    vim.api.nvim_set_option_value(
-                        "modifiable",
-                        true,
-                        { buf = bufnr }
-                    )
-                    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, disk_lines)
-                    vim.api.nvim_set_option_value(
-                        "modifiable",
-                        was_modifiable,
-                        { buf = bufnr }
-                    )
-                    vim.api.nvim_set_option_value(
-                        "modified",
-                        false,
-                        { buf = bufnr }
-                    )
-                end
-            end)
-            if not reload_ok then
-                Logger.debug("Buffer reload error after write:", reload_err)
-            end
-        end
-
+        FileSystem.reload_buffer(abs_path)
         callback(nil)
         return
     end

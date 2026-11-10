@@ -11,6 +11,29 @@ describe("FileSystem", function()
         FileSystem = require("agentic.utils.file_system")
     end)
 
+    --- @param content string
+    --- @return string path A new temporary file holding `content`
+    local function write_temp(content)
+        local path = vim.fn.tempname()
+        local f = io.open(path, "w")
+        assert.is_not_nil(f)
+        ---@cast f -nil
+        f:write(content)
+        f:close()
+        return path
+    end
+
+    --- @param name string
+    --- @param lines string[]
+    --- @return integer bufnr A loaded, unmodified buffer named `name`
+    local function loaded_buffer(name, lines)
+        local bufnr = vim.api.nvim_create_buf(false, false)
+        vim.api.nvim_buf_set_name(bufnr, name)
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+        vim.bo[bufnr].modified = false
+        return bufnr
+    end
+
     describe("IMAGE_MIMES", function()
         it("maps common image extensions to MIME types", function()
             assert.equal("image/png", FileSystem.IMAGE_MIMES.png)
@@ -323,6 +346,139 @@ describe("FileSystem", function()
             assert.equal("line two", lines[2])
 
             os.remove(tmp)
+        end)
+
+        it(
+            "does not read a buffer whose name only contains the path",
+            function()
+                local path = write_temp("on disk\n")
+                local bak = loaded_buffer(path .. ".bak", { "backup" })
+
+                local lines = FileSystem.read_from_buffer_or_disk(path)
+
+                assert.same({ "on disk", "" }, lines)
+                vim.api.nvim_buf_delete(bak, { force = true })
+                os.remove(path)
+            end
+        )
+    end)
+
+    describe("reload_buffer", function()
+        it("puts the file's lines in its loaded buffer", function()
+            local path = write_temp("new one\nnew two")
+            local bufnr = loaded_buffer(path, { "old" })
+            vim.bo[bufnr].modifiable = false
+            vim.bo[bufnr].modified = true
+
+            FileSystem.reload_buffer(path)
+
+            assert.same(
+                { "new one", "new two" },
+                vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            )
+            assert.is_false(vim.bo[bufnr].modifiable)
+            assert.is_false(vim.bo[bufnr].modified)
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+            os.remove(path)
+        end)
+
+        it(
+            "does not touch a buffer whose name only contains the path",
+            function()
+                local path = write_temp("new")
+                local bak = loaded_buffer(path .. ".bak", { "backup" })
+
+                FileSystem.reload_buffer(path)
+
+                assert.same(
+                    { "backup" },
+                    vim.api.nvim_buf_get_lines(bak, 0, -1, false)
+                )
+                vim.api.nvim_buf_delete(bak, { force = true })
+                os.remove(path)
+            end
+        )
+
+        it("finds the buffer through a symlinked directory", function()
+            local dir = vim.fn.tempname()
+            vim.fn.mkdir(dir .. "/real", "p")
+            vim.uv.fs_symlink(dir .. "/real", dir .. "/link")
+            vim.uv.fs_rename(write_temp("new"), dir .. "/real/f")
+            local bufnr = loaded_buffer(dir .. "/link/f", { "old" })
+
+            FileSystem.reload_buffer(dir .. "/link/f")
+
+            assert.same(
+                { "new" },
+                vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            )
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+            vim.fn.delete(dir, "rf")
+        end)
+
+        it("finds a buffer named before its directory existed", function()
+            local dir = vim.fn.tempname()
+            vim.fn.mkdir(dir .. "/real", "p")
+            vim.uv.fs_symlink(dir .. "/real", dir .. "/link")
+            local path = dir .. "/link/new/f"
+            local bufnr = loaded_buffer(path, { "old" })
+            vim.fn.mkdir(dir .. "/link/new", "p")
+            vim.uv.fs_rename(write_temp("new"), path)
+
+            FileSystem.reload_buffer(path)
+
+            assert.same(
+                { "new" },
+                vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            )
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+            vim.fn.delete(dir, "rf")
+        end)
+
+        it("finds a buffer named after a symlink to the file", function()
+            local target = write_temp("new")
+            local link = vim.fn.tempname()
+            vim.uv.fs_symlink(target, link)
+            local bufnr = loaded_buffer(link, { "old" })
+
+            FileSystem.reload_buffer(target)
+
+            assert.same(
+                { "new" },
+                vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            )
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+            os.remove(link)
+            os.remove(target)
+        end)
+
+        it("does nothing without a loaded buffer", function()
+            local path = write_temp("new")
+            FileSystem.reload_buffer(path)
+            os.remove(path)
+        end)
+    end)
+
+    describe("write_file", function()
+        it("writes the file and reloads its loaded buffer", function()
+            local path = write_temp("old")
+            local bufnr = loaded_buffer(path, { "old" })
+            local callback = spy.new(function() end)
+
+            FileSystem.write_file(
+                path,
+                "new",
+                callback --[[@as fun(error: string|nil)]]
+            )
+
+            assert.same(
+                { "new" },
+                vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            )
+            assert.equal(1, callback.call_count)
+            assert.is_nil(callback.calls[1][1])
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+            os.remove(path)
         end)
     end)
 

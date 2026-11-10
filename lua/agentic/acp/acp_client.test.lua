@@ -1256,6 +1256,30 @@ describe("agentic.acp.ACPClient", function()
         end)
     end)
 
+    describe("_handle_fs_write", function()
+        it("answers, then reloads the loaded buffer of the path", function()
+            local deferred = Deferred.capture()
+            MiniTest.finally(deferred.revert)
+            local path = vim.fn.tempname()
+            local bufnr = vim.api.nvim_create_buf(false, false)
+            vim.api.nvim_buf_set_name(bufnr, path)
+            local client = setmetatable({}, { __index = ACPClient })
+            local send_result = spy.new(function() end)
+            client.__send_result = send_result
+
+            client:_handle_fs_write(7, { path = path, content = "new" })
+            deferred.drain()
+
+            assert.spy(send_result).was.called_with(client, 7, {})
+            assert.same(
+                { "new" },
+                vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            )
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+            os.remove(path)
+        end)
+    end)
+
     describe("__build_tool_call_update", function()
         local client
         before_each(function()
