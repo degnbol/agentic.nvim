@@ -46,7 +46,7 @@ The bridge title carries information `rawInput` lacks only for synthetic calls (
 ## Changes
 
 ### `claude_agent_acp_adapter.lua`
-1. `__handle_tool_call`: delete the `update.title = ClaudeUtils.suppress_placeholder_title(update.title)` line.
+1. `__handle_tool_call`: delete the `update.title = ClaudeUtils.suppress_placeholder_title(update.title)` line. (After `REFACTOR-acp-tool-call-builders.md`, that call is `message.argument = ClaudeUtils.suppress_placeholder_title(message.argument)` in `__build_tool_call_message`.)
 2. `__build_tool_call_message`: right after the base build, `if update.rawInput then message.argument = "" end` — replaces the bridge title on every tool use; a synthetic call keeps its title. Delete `had_raw_input`, the trailing execute special-case and its comment; change 3 makes `__apply_raw_input` cover it.
 3. `__apply_raw_input`: gate on `if not rawInput then return end` instead of nil-or-empty. The initial `tool_call`'s `{}` now runs the ladder, so each branch writes its empty head and the fallback branch writes the tool name on the first frame (needed for permission-surfaced no-input calls such as TaskList, which would otherwise stay blank). Update the `__apply_tool_identity` docstring, whose second paragraph gives the old gate as the reason it runs outside `__apply_raw_input`; the remaining reason is that minting needs only `_meta`.
 4. Skill branch: `message.argument = skill or ""`; drop the sentinel comment.
@@ -91,7 +91,7 @@ The bridge title carries information `rawInput` lacks only for synthetic calls (
 - New bridge versions cannot add a placeholder to a Claude head; no list to maintain.
 
 ## Non-goals
-- Other providers: `"unknown fetch"` in the shared `__resolve_fetch_fields` (auggie), `"unknown codex command"`, opencode's `"pending..."` and `"unknown skill"`.
+- Other providers: `"unknown fetch"` in the shared `__resolve_fetch_fields` (auggie), `"unknown codex command"`, opencode's `"unknown skill"`.
 - Kind changes (e.g. kinding an Agent call `SubAgent` before `subagent_type` arrives).
 - `notes/bug-path-b-replay-empty-argument.md` (empty-argument history records); this plan only changes which text is in `argument`.
 

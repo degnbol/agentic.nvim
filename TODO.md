@@ -13,9 +13,13 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 **Session log:**
 1. P3 [`PERF-append-session-log.md`](notes/PERF-append-session-log.md)
 
-**Shell parsing** (1 has no prerequisites; the others name theirs)
-1. P1 [`FIX-walk-file-model.md`](notes/FIX-walk-file-model.md)
-2. P2 [`FEAT-executed-code.md`](notes/FEAT-executed-code.md): after 1
+**Session gate state**
+1. P2 [`REFACTOR-session-gate-state.md`](notes/REFACTOR-session-gate-state.md)
+
+**Chat writer**
+1. P3 [`REFACTOR-prose-run-rows.md`](notes/REFACTOR-prose-run-rows.md)
+2. P3 [`REFACTOR-tool-block-rows.md`](notes/REFACTOR-tool-block-rows.md)
+3. P3 [`REFACTOR-collapsed-region-layout.md`](notes/REFACTOR-collapsed-region-layout.md)
 
 **Tool call rendering**
 1. P2 [`FIX-silent-errors.md`](notes/FIX-silent-errors.md)
@@ -28,6 +32,16 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 2. P1 [`FIX-auto-mode-fix.md`](notes/FIX-auto-mode-fix.md), which extends it
 
 **No ordering:**
+- P1 [`FIX-gemini-permission-handler.md`](notes/FIX-gemini-permission-handler.md)
+- P3 [`REFACTOR-leaf-classification.md`](notes/REFACTOR-leaf-classification.md)
+- P3 [`REFACTOR-grant-target.md`](notes/REFACTOR-grant-target.md)
+- P3 [`REFACTOR-redirect-effect.md`](notes/REFACTOR-redirect-effect.md)
+- P3 [`REFACTOR-acp-tool-call-builders.md`](notes/REFACTOR-acp-tool-call-builders.md)
+- P3 [`REFACTOR-agent-config-lookup.md`](notes/REFACTOR-agent-config-lookup.md)
+- P3 [`REFACTOR-agent-scoped-lookups.md`](notes/REFACTOR-agent-scoped-lookups.md)
+- P3 [`REFACTOR-return-prompt.md`](notes/REFACTOR-return-prompt.md)
+- P3 [`REFACTOR-read-range-on-load.md`](notes/REFACTOR-read-range-on-load.md)
+- P3 [`REFACTOR-fence-parse.md`](notes/REFACTOR-fence-parse.md)
 - P2 [`FIX-deny-gate-flag-cap.md`](notes/FIX-deny-gate-flag-cap.md)
 - P2 [`FIX-placeholder-titles.md`](notes/FIX-placeholder-titles.md)
 - P3 [`REFACTOR-widget-clear-chat.md`](notes/REFACTOR-widget-clear-chat.md)
@@ -36,7 +50,6 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
   hold; after `FIX-placeholder-titles.md`)
 - P3 [`FEAT-updated-input-display.md`](notes/FEAT-updated-input-display.md)
 - P3 [`FIX-inline-math-dollar-pairing.md`](notes/FIX-inline-math-dollar-pairing.md)
-- P3 [`FEAT-discovered-skills.md`](notes/FEAT-discovered-skills.md)
 - P3 [`FIX-context-highlight-parser-gate.md`](notes/FIX-context-highlight-parser-gate.md)
 - P3 [`FIX-model-selector-order.md`](notes/FIX-model-selector-order.md)
 - P2 [`feature-stale-read-warning.md`](notes/feature-stale-read-warning.md)
