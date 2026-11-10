@@ -2646,7 +2646,7 @@ describe("agentic.SessionManager", function()
             session._subagents.read_record = function() end
             session._subagents.transcript = function()
                 return {
-                    view = {
+                    view = setmetatable({
                         writer = {
                             update_tool_call_block = function() end,
                             tool_call_blocks = tool_call_blocks,
@@ -2655,7 +2655,7 @@ describe("agentic.SessionManager", function()
                             reposition = function() end,
                             switch = function() end,
                         },
-                    },
+                    }, { __index = AgentView }),
                 }
             end
             return session, drains
@@ -6286,7 +6286,7 @@ describe("agentic.SessionManager", function()
                             record_read = true,
                             transcript = {
                                 bufnr = child_buf,
-                                view = {
+                                view = setmetatable({
                                     writer = writer,
                                     status_indicator = {
                                         reposition = noop,
@@ -6294,7 +6294,9 @@ describe("agentic.SessionManager", function()
                                         stop = noop,
                                         switch = noop,
                                     },
-                                },
+                                }, {
+                                    __index = AgentView,
+                                }),
                                 set_running = noop,
                                 set_context = noop,
                                 is_loaded = function()

@@ -33,7 +33,6 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 
 **Background skeptic**
 1. P3 [`FEAT-skeptic.md`](notes/FEAT-skeptic.md)
-2. P3 [`REFACTOR-view-tool-call-routing.md`](notes/REFACTOR-view-tool-call-routing.md)
 
 **No ordering:**
 - P1 [`FIX-gemini-permission-handler.md`](notes/FIX-gemini-permission-handler.md)

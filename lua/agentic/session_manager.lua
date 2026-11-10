@@ -1597,7 +1597,7 @@ local function has_ended(status)
     return status == "completed" or status == "failed"
 end
 
---- Handle initial tool_call: write to UI, store in history, track plan exit.
+--- Handle initial tool_call: write to UI, store in history.
 --- @param tool_call agentic.ui.MessageWriter.ToolCallBlock
 --- @param source_session_id string|nil The session that sent it: the root, or a subagent's child session
 function SessionManager:_on_tool_call(tool_call, source_session_id)
@@ -1623,18 +1623,12 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
         self._held_tool_call_updates[id] = nil
         tool_call = vim.tbl_extend("force", tool_call, held.update) --[[@as agentic.ui.MessageWriter.ToolCallBlock]]
     end
-    -- ACP leaves `status` optional on a new call, defaulting to pending
-    -- (https://agentclientprotocol.com/protocol/v2/tool-calls#status).
-    tool_call.status = tool_call.status or "pending"
-    tool_call = CanonicalToolCall.normalise(tool_call, tool_call.kind)
-    tool_call.causes = self.permission_manager:take_causes(id)
-    local view = self:_view_for(id)
-    view.writer:write_tool_call_block(tool_call)
-    view.status_indicator:reposition()
-
-    local tool_msg = ChatHistory.tool_call_record(tool_call)
-    tool_msg.agent_key = agent_key
-    self.chat_history:add_message(tool_msg)
+    tool_call = self:_view_for(id):write_tool_call(
+        self.chat_history,
+        tool_call,
+        self.permission_manager:take_causes(id),
+        agent_key
+    )
     self:_sync_job_stop(id)
     if agent_key then
         self:_sync_modified(self.chat_history)
@@ -1651,34 +1645,20 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
     end
 end
 
---- Show what decided a tool call's permission on its block and keep it in the
---- history. No-op once the session is destroyed, or while the call has no
---- block, in which case the causes stay held in the permission manager.
---- Also a no-op when the block already shows `causes`.
+--- Show what decided a tool call's permission on its block and in the history,
+--- and take the causes from the permission manager once shown. No-op once the
+--- session is destroyed.
 --- @param tool_call_id string
 --- @param causes agentic.PermissionCause[]
 function SessionManager:_on_permission_decided(tool_call_id, causes)
     if self.destroyed then
         return
     end
-    local writer = self:_view_for(tool_call_id).writer
-    local tracker = writer.tool_call_blocks[tool_call_id]
-    if not tracker or vim.deep_equal(tracker.causes, causes) then
-        return
+    local view = self:_view_for(tool_call_id)
+    if view:show_causes(self.chat_history, tool_call_id, causes) then
+        self.permission_manager:take_causes(tool_call_id)
+        self:_history_changed(self.chat_history)
     end
-    self.permission_manager:take_causes(tool_call_id)
-    --- @type agentic.ui.MessageWriter.ToolCallBase
-    local update = {
-        tool_call_id = tool_call_id,
-        status = tracker.status,
-        causes = causes,
-    }
-    writer:update_tool_call_block(update)
-    self.chat_history:update_tool_call(
-        tool_call_id,
-        ChatHistory.tool_call_record(update)
-    )
-    self:_history_changed(self.chat_history)
 end
 
 --- Capture the pre-edit line position for an Edit, using the accumulated
@@ -2181,26 +2161,10 @@ function SessionManager:_on_tool_call_update(tool_call_update)
     end
     local view = self:_view_for(id)
     local writer = view.writer
-    local existing = writer.tool_call_blocks[id]
-    tool_call_update = CanonicalToolCall.normalise(
-        tool_call_update,
-        tool_call_update.kind or (existing and existing.kind)
-    )
-    -- A call's first rejection line is kept: a provider reports the most
-    -- specific reason first.
-    if existing and existing.rejection then
-        tool_call_update.rejection = nil
-    end
-
-    writer:update_tool_call_block(tool_call_update)
-    view.status_indicator:reposition()
+    tool_call_update =
+        view:update_tool_call(self.chat_history, tool_call_update)
     self:_try_record_edit_range(id)
     self:_record_file_op(id)
-
-    self.chat_history:update_tool_call(
-        id,
-        ChatHistory.tool_call_record(tool_call_update)
-    )
     self:_sync_job_stop(id)
     -- A subagent can outlive its turn, so outside a turn its output is written
     -- as each of its calls ends, not per update.

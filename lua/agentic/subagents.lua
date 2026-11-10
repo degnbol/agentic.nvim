@@ -487,14 +487,13 @@ function Subagents:_open_agent(child_id, label, parent_session_id, replayed)
         argument = vim.api.nvim_buf_get_name(transcript.bufnr),
         subagent = subagent,
     }
-    local view = self:_view_of(parent_session_id)
-    view.writer:write_tool_call_block(block)
-    view.status_indicator:reposition()
-    local record = ChatHistory.tool_call_record(block)
-    if self._agents[parent_session_id] then
-        record.agent_key = self:agent_key(parent_session_id)
-    end
-    history:add_message(record)
+    self:_view_of(parent_session_id):write_tool_call(
+        history,
+        block,
+        nil,
+        self._agents[parent_session_id] and self:agent_key(parent_session_id)
+            or nil
+    )
     self._host.history_changed()
 
     if replayed then

@@ -358,63 +358,36 @@ end
 
 --- @param tool_call agentic.ui.MessageWriter.ToolCallBlock
 function BackgroundSession:_on_tool_call(tool_call)
-    -- ACP leaves `status` optional on a new call, defaulting to pending.
-    tool_call.status = tool_call.status or "pending"
-    tool_call = CanonicalToolCall.normalise(tool_call, tool_call.kind)
-    tool_call.causes = self._permissions:take_causes(tool_call.tool_call_id)
-    self._transcript.view.writer:write_tool_call_block(tool_call)
-    self._transcript.view.status_indicator:reposition()
-    self._history:add_message(ChatHistory.tool_call_record(tool_call))
-    self:_check_tripwire(tool_call.tool_call_id)
+    local id = tool_call.tool_call_id
+    self._transcript.view:write_tool_call(
+        self._history,
+        tool_call,
+        self._permissions:take_causes(id),
+        nil
+    )
+    self:_check_tripwire(id)
 end
 
 --- @param update agentic.ui.MessageWriter.ToolCallBase
 function BackgroundSession:_on_tool_call_update(update)
-    local writer = self._transcript.view.writer
-    local existing = writer.tool_call_blocks[update.tool_call_id]
-    update = CanonicalToolCall.normalise(
-        update,
-        update.kind or (existing and existing.kind)
-    )
-    -- A call's first rejection line is kept: a provider reports the most
-    -- specific reason first.
-    if existing and existing.rejection then
-        update.rejection = nil
-    end
-    writer:update_tool_call_block(update)
-    self._transcript.view.status_indicator:reposition()
-    self._history:update_tool_call(
-        update.tool_call_id,
-        ChatHistory.tool_call_record(update)
-    )
+    self._transcript.view:update_tool_call(self._history, update)
     self:_check_tripwire(update.tool_call_id)
 end
 
 --- Show a tool call's causes on its block and in the history, and take them
---- from the permission manager.
+--- from the permission manager once shown. No-op once destroyed.
 --- @param tool_call_id string
 --- @param causes agentic.PermissionCause[]
 function BackgroundSession:_show_causes(tool_call_id, causes)
     if self._destroyed then
         return
     end
-    local tracker = self._transcript.view.writer.tool_call_blocks[tool_call_id]
-    if not tracker or vim.deep_equal(tracker.causes, causes) then
-        return
+    if
+        self._transcript.view:show_causes(self._history, tool_call_id, causes)
+    then
+        self._permissions:take_causes(tool_call_id)
+        self:_mark_unmodified()
     end
-    self._permissions:take_causes(tool_call_id)
-    --- @type agentic.ui.MessageWriter.ToolCallBase
-    local update = {
-        tool_call_id = tool_call_id,
-        status = tracker.status,
-        causes = causes,
-    }
-    self._transcript.view.writer:update_tool_call_block(update)
-    self._history:update_tool_call(
-        tool_call_id,
-        ChatHistory.tool_call_record(update)
-    )
-    self:_mark_unmodified()
 end
 
 --- The current turn, unless it timed out: an abandoned turn's output counts
