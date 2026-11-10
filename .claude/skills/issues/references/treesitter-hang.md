@@ -21,16 +21,18 @@ other hypothesis** — this has been misdiagnosed repeatedly.
 
 ## Ruled out by observation
 
-Two misdiagnoses that keep recurring — both falsified for the known case:
+Two diagnoses that keep recurring — both falsified for the known case:
 
 - **Permission-decision deadlock** (`pm:decide`, a re-entrant `session/update`
   "deadlock triangle"). The Bash permission walk has no event-loop-pump
   primitive, so it cannot host a re-entrant update. A missing `Bash → allow`
   log line is a *symptom* of the already-hung main thread, not its site.
 - **Render / conceal stall** (`nvim_win_text_height → decor_conceal_line →
-  ts_query_cursor`). The confirmed frozen stack is in `ts_parser_parse_string`
-  (the parse), not the query cursor. There is a *separate* real render perf bug
-  (fixed in `70c19eb`, `scroll_down` height caps) — do not conflate.
+  ts_query_cursor`). The known case's frozen stack is in
+  `ts_parser_parse_string` (the parse), not the query cursor. A main thread
+  pinned on the conceal stack is a separate stall, reported before `fd4bb21`.
+  The `scroll_down` height-cap bug (before `70c19eb`) is also separate — do
+  not conflate.
 
 ## Known trigger
 
@@ -59,8 +61,8 @@ termination oracle for *unknown* grammar bugs on untrusted file bodies.
 
 ## Do not fix this with
 
-- Chasing the permission decision or the render/conceal path first — both are
-  ruled out above for the freeze class.
+- Chasing the permission decision or the render/conceal path first when the
+  stack is in the parse — both are ruled out above for that case.
 - `pcall`, `timeout`, or neovim async parse as an interrupt — none can stop a C
   parse loop (all tested).
 - Assuming it is neovim core — confirm with `nvim --clean` first; a grammar is a
