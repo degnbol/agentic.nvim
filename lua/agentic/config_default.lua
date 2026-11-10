@@ -571,6 +571,13 @@ local ConfigDefault = {
         api_key_env = nil,
         timeout_ms = 60000,
     },
+
+    --- Agent sessions the plugin drives on behalf of a chat.
+    --- @class agentic.UserConfig.Background
+    --- @field list_buffers boolean Whether their transcript buffers are listed
+    background = {
+        list_buffers = true,
+    },
 }
 
 return ConfigDefault

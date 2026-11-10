@@ -85,6 +85,17 @@ function M.rejection_line(call)
     return M.causes_line(call.causes) or call.rejection
 end
 
+--- Whether a call ran: it is `completed`, or `failed` with no rejection line.
+--- A provider may report a command that ran and exited non-zero as `failed`,
+--- while one that never ran (rejected, denied, interrupted) has a rejection
+--- line.
+--- @param call agentic.ui.MessageWriter.ToolCallBase
+--- @return boolean
+function M.ran(call)
+    return call.status == "completed"
+        or (call.status == "failed" and not M.rejection_line(call))
+end
+
 --- @type table<string, string>
 local STOP_REASON_WORDS = {
     end_turn = "completed",

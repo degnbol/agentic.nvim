@@ -2181,6 +2181,69 @@ describe("agentic.ui.PermissionManager", function()
             }, verdict)
         end)
 
+        describe("with a policy", function()
+            local saved_permissions
+
+            before_each(function()
+                saved_permissions = vim.deepcopy(Config.permissions)
+                Config.permissions.auto_approve_tier = "safe_write"
+                Config.permissions.auto_approve_kinds = { "fetch" }
+                pm:set_policy({
+                    tier = "read_only",
+                    settings_allow = false,
+                    kinds = { "read" },
+                })
+            end)
+
+            after_each(function()
+                Config.permissions = saved_permissions
+            end)
+
+            it(
+                "approves the policy's kinds, not the configured ones",
+                function()
+                    assert.is_true(
+                        pm:decide("read", { toolCallId = "t" }).allow
+                    )
+                    assert.is_nil(
+                        pm:decide("fetch", { toolCallId = "t" }).allow
+                    )
+                end
+            )
+
+            it("judges commands by the policy's tier", function()
+                local verdict = pm:decide("execute", {
+                    toolCallId = "t",
+                    rawInput = { command = "cat a && git add x" },
+                })
+                assert.same({
+                    causes = { { code = "no-allow", subject = "git add x" } },
+                }, verdict)
+                assert.is_true(pm:decide("execute", {
+                    toolCallId = "t",
+                    rawInput = { command = "cat a" },
+                }).allow)
+            end)
+        end)
+
+        it("approve and reject send nothing without the option", function()
+            local sent = {}
+            local function callback(option_id)
+                table.insert(sent, option_id)
+            end
+            --- @type agentic.acp.RequestPermission
+            local request = {
+                sessionId = "s",
+                toolCall = { toolCallId = "t" },
+                options = {
+                    { optionId = "yes", kind = "allow_once", name = "Allow" },
+                },
+            }
+            assert.is_true(PermissionManager.approve(request, callback))
+            assert.is_false(PermissionManager.reject(request, callback))
+            assert.same({ "yes" }, sent)
+        end)
+
         it("lets deny rules and reject_always beat a listed kind", function()
             local original = Config.permissions.auto_approve_kinds
             Config.permissions.auto_approve_kinds = { "execute" }

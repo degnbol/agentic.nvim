@@ -34,7 +34,7 @@ local PERMISSION_KIND_PRIORITY = {
 --- | "session-reject"  # a remembered reject-always decision
 --- | "deny"            # a structured deny gate matched a shell command
 --- | "glob-deny"       # a settings.json deny pattern matched a shell command
---- | "kind"            # whether `auto_approve_kinds` lists the call's kind
+--- | "kind"            # whether the call's kind is an approved kind
 --- | "grant"           # the grant check of a path, approving or not
 --- | "prompt-allow"    # the user allowed at the prompt
 --- | "prompt-reject"   # the user rejected at the prompt
@@ -59,6 +59,10 @@ local CAUSE_TEXT = vim.tbl_extend("error", PermissionRules.REASON_TEXT, {
     kind = "calls of this kind need approval",
     grant = "a grant scope clears it",
 })
+
+--- An approval policy in place of the configured one.
+--- @class agentic.ui.PermissionManager.Policy : agentic.utils.PermissionRules.Policy
+--- @field kinds string[] In place of Config.permissions.auto_approve_kinds
 
 --- @class agentic.ui.PermissionManager
 --- @field message_writer agentic.ui.MessageWriter Main-chat writer; default when no per-tool-call resolver is set
@@ -85,6 +89,7 @@ local CAUSE_TEXT = vim.tbl_extend("error", PermissionRules.REASON_TEXT, {
 --- @field _edit_records table<string, agentic.utils.GrantSafety.EditRecord> Post-edit line ranges of completed Edits, keyed by tool_call_id
 --- @field _pending_edits table<string, { path: string, start_line: integer, new_lines: string[] }> Range data captured at tool_call time, promoted to _edit_records on completion
 --- @field _get_config_dir fun(): string Returns Claude's config directory. A getter, because the directory can change during this manager's life
+--- @field _policy? agentic.ui.PermissionManager.Policy Set by `set_policy`; nil judges by the configuration
 local PermissionManager = {}
 PermissionManager.__index = PermissionManager
 
@@ -279,34 +284,35 @@ local function find_option_id(options, kind)
     return nil
 end
 
---- Send allow_once for the given request. Returns true on success.
+--- Answer a request with its option of `kind`, when it has one.
 --- @param request agentic.acp.RequestPermission
 --- @param callback fun(option_id: string|nil)
---- @param reason string
---- @return boolean
-local function auto_approve(request, callback, reason)
-    local option_id = find_option_id(request.options, "allow_once")
+--- @param kind "allow_once"|"reject_once"
+--- @return boolean sent False when the request has no such option
+local function send_option(request, callback, kind)
+    local option_id = find_option_id(request.options, kind)
     if option_id then
-        Logger.debug("PermissionManager: auto-approving:", reason)
+        Logger.debug("PermissionManager: auto-answering", kind)
         callback(option_id)
         return true
     end
     return false
 end
 
---- Send reject_once for the given request. Returns true on success.
+--- Answer a request with its allow_once option, when it has one.
 --- @param request agentic.acp.RequestPermission
 --- @param callback fun(option_id: string|nil)
---- @param reason string
---- @return boolean
-local function auto_reject(request, callback, reason)
-    local option_id = find_option_id(request.options, "reject_once")
-    if option_id then
-        Logger.debug("PermissionManager: auto-rejecting:", reason)
-        callback(option_id)
-        return true
-    end
-    return false
+--- @return boolean sent False when the request has no such option
+function PermissionManager.approve(request, callback)
+    return send_option(request, callback, "allow_once")
+end
+
+--- Answer a request with its reject_once option, when it has one.
+--- @param request agentic.acp.RequestPermission
+--- @param callback fun(option_id: string|nil)
+--- @return boolean sent False when the request has no such option
+function PermissionManager.reject(request, callback)
+    return send_option(request, callback, "reject_once")
 end
 
 --- Resolve the shell command of an execute permission request. `rawInput.command`
@@ -361,19 +367,38 @@ function PermissionManager.cause_line(cause)
     return cause.subject and ("%s: %s"):format(cause.subject, why) or why
 end
 
---- Whether `Config.permissions.auto_approve_kinds` lists a kind, compared
---- case-insensitively.
+--- Whether the policy's kinds, else `Config.permissions.auto_approve_kinds`,
+--- list a kind, compared case-insensitively.
 --- @param kind_lc string Trimmed, lowercase kind (the `AcpKind.normalise` form)
 --- @return boolean
-local function is_auto_approved_kind(kind_lc)
-    return vim.tbl_contains(Config.permissions.auto_approve_kinds, function(k)
+function PermissionManager:_is_approved_kind(kind_lc)
+    local kinds = self._policy and self._policy.kinds
+        or Config.permissions.auto_approve_kinds
+    return vim.tbl_contains(kinds, function(k)
         return AcpKind.normalise(k) == kind_lc
     end, { predicate = true })
 end
 
+--- Judge every later call by `policy` in place of the configured tier,
+--- settings.json allows and approved kinds.
+--- @param policy agentic.ui.PermissionManager.Policy
+function PermissionManager:set_policy(policy)
+    self._policy = policy
+end
+
+--- The rules a shell command is judged by, under the policy when one is set.
+--- @return agentic.utils.PermissionRules.Rules
+function PermissionManager:_rules()
+    return PermissionRules.rules(
+        self._get_config_dir(),
+        self:_remembered_leaf_patterns(),
+        self._policy
+    )
+end
+
 --- A request's kind, tool call, edit diff and Bash cwd, with what the request
 --- leaves out filled in from its tool call tracker:
---- - kind: the tracker's kind when it is in `auto_approve_kinds`. opencode's
+--- - kind: the tracker's kind when it is an approved kind. opencode's
 ---   `external_directory` requests and Claude's Skill requests arrive with
 ---   kind="other".
 --- - tool_call: a copy with the tracker's command as `rawInput.command` when
@@ -394,7 +419,7 @@ function PermissionManager:resolve_request(request)
         self:_writer(tool_call.toolCallId).tool_call_blocks[tool_call.toolCallId]
     local kind = tool_call.kind
     local tracker_kind_lc = tracker and AcpKind.normalise(tracker.kind) or ""
-    if is_auto_approved_kind(tracker_kind_lc) then
+    if self:_is_approved_kind(tracker_kind_lc) then
         kind = tracker.kind
     end
 
@@ -429,9 +454,9 @@ function PermissionManager:_try_auto_approve(request, callback)
     local verdict = self:decide(kind, tool_call, diff, cwd)
     local handled = false
     if verdict.allow == true then
-        handled = auto_approve(request, callback, "ladder verdict: allow")
+        handled = PermissionManager.approve(request, callback)
     elseif verdict.allow == false then
-        handled = auto_reject(request, callback, "ladder verdict: deny")
+        handled = PermissionManager.reject(request, callback)
     end
     -- Unhandled (no matching option), the request goes to the prompt.
     if handled then
@@ -799,10 +824,7 @@ end
 --- @param cwd string|nil Directory the command starts in; nil when unknown
 --- @return agentic.PermissionVerdict
 function PermissionManager:_shell_verdict(command, cwd)
-    local rules = PermissionRules.rules(
-        self._get_config_dir(),
-        self:_remembered_leaf_patterns()
-    )
+    local rules = self:_rules()
     --- @type agentic.PermissionVerdict
     local verdict = { causes = {} }
     local ok, effects, sources = PermissionRules.evaluate(command, rules, cwd)
@@ -853,8 +875,7 @@ end
 ---    → reject, with the leaf as the cause's subject.
 --- 2. allow_always/reject_always client cache, so a cached reject also beats
 ---    the checks below.
---- 3. Kinds listed in `Config.permissions.auto_approve_kinds`, whatever the
----    path → approve.
+--- 3. Approved kinds (`_is_approved_kind`), whatever the path → approve.
 --- 4. Compound Bash commands: `_shell_verdict`.
 --- 5. Grant scopes for file-scoped kinds.
 ---
@@ -904,7 +925,7 @@ function PermissionManager:decide(kind, tool_call, diff, cwd)
 
     --- @type agentic.PermissionVerdict
     local verdict = { causes = {} }
-    if is_auto_approved_kind(kind_lc) then
+    if self:_is_approved_kind(kind_lc) then
         verdict.allow = true
         verdict.causes = { { code = "kind", subject = kind_lc } }
         return verdict
@@ -1259,10 +1280,7 @@ function PermissionManager:_complete_request(option_id)
                 local ranges, leaves, complete =
                     PermissionRules.tally_unapproved(
                         command,
-                        PermissionRules.rules(
-                            self._get_config_dir(),
-                            self:_remembered_leaf_patterns()
-                        ),
+                        self:_rules(),
                         self:bash_cwd(current.toolCallId)
                     )
                 for _, leaf in ipairs(leaves) do

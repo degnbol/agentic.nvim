@@ -1777,20 +1777,16 @@ end
 --- Append the files a shell command's text writes or deletes to the activity
 --- tally, marked `parsed`.
 ---
---- Recorded on `completed`, and on `failed` without a rejection line
---- (`CanonicalToolCall.rejection_line`): a provider may report a command that
---- ran and exited non-zero as `failed`, while one that never ran (rejected,
---- denied, interrupted) has a rejection line. A relative path is dropped when
---- the call's start directory is unknown.
+--- Recorded once the command ran (`CanonicalToolCall.ran`). A relative path is
+--- dropped when the call's start directory is unknown.
 --- @param tool_call_id string
 --- @param tracker agentic.ui.MessageWriter.ToolCallBlock
 function SessionManager:_record_shell_ops(tool_call_id, tracker)
-    local ran = tracker.status == "completed"
-        or (
-            tracker.status == "failed"
-            and not CanonicalToolCall.rejection_line(tracker)
-        )
-    if not ran or not tracker.argument or tracker.argument == "" then
+    if
+        not CanonicalToolCall.ran(tracker)
+        or not tracker.argument
+        or tracker.argument == ""
+    then
         return
     end
 

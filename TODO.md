@@ -31,6 +31,10 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 1. P2 [`FEAT-auto-mode-integration.md`](notes/FEAT-auto-mode-integration.md)
 2. P1 [`FIX-auto-mode-fix.md`](notes/FIX-auto-mode-fix.md), which extends it
 
+**Background skeptic**
+1. P3 [`FEAT-skeptic.md`](notes/FEAT-skeptic.md)
+2. P3 [`REFACTOR-view-tool-call-routing.md`](notes/REFACTOR-view-tool-call-routing.md)
+
 **No ordering:**
 - P1 [`FIX-gemini-permission-handler.md`](notes/FIX-gemini-permission-handler.md)
 - P3 [`REFACTOR-leaf-classification.md`](notes/REFACTOR-leaf-classification.md)

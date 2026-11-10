@@ -4291,6 +4291,49 @@ describe("PermissionRules", function()
         end)
     end)
 
+    describe("rules with a policy", function()
+        --- @type agentic.utils.PermissionRules.Policy
+        local read_only = { tier = "read_only", settings_allow = false }
+
+        it("takes the policy's tier over the configured one", function()
+            Config.permissions.auto_approve_tier = "safe_write"
+            stub_settings(nil)
+            assert.equal(
+                "read_only",
+                PermissionRules.rules(config_dir, nil, read_only).tier
+            )
+        end)
+
+        it("drops settings allows but keeps deny and ask", function()
+            stub_settings({
+                allow = { "Bash(git add *)" },
+                deny = { "Bash(curl *)" },
+                ask = { "Bash(git push *)" },
+            })
+            local configured = PermissionRules.rules(config_dir)
+            local rules = PermissionRules.rules(config_dir, nil, read_only)
+            assert.same({}, rules.allow_settings)
+            assert.is_true(#rules.deny > 0)
+            assert.same(configured.deny, rules.deny)
+            assert.same(configured.ask, rules.ask)
+        end)
+
+        it("tallies what the policy refuses", function()
+            stub_settings({ allow = { "Bash(git add *)" } })
+            local command = "cat a && git add x && rm y"
+            local ranges = PermissionRules.tally_unapproved(
+                command,
+                PermissionRules.rules(config_dir, nil, read_only)
+            ) --[[@as agentic.utils.PermissionRules.Range[] ]]
+            assert.same(
+                { "git add x", "rm y" },
+                vim.tbl_map(function(r)
+                    return command:sub(r[2] + 1, r[4])
+                end, ranges)
+            )
+        end)
+    end)
+
     describe("tally_unapproved", function()
         -- Plugin defaults off, so only the stubbed globs classify leaves.
         before_each(function()

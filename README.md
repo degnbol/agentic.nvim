@@ -82,12 +82,17 @@ OpenCode is trust-by-default: `edit`, `bash`, and most other tools auto-approve 
 
 ```json
 {
+  "$schema": "https://opencode.ai/config.json",
   "permission": {
     "edit": "ask",
     "bash": "ask"
   }
 }
 ```
+
+Background sessions need both set to `"ask"`. A background session stops when
+an `edit` or `bash` call that its read-only policy would refuse runs without a
+permission request. Key reference: [opencode permissions](https://opencode.ai/docs/permissions).
 
 If you want to guard against prompt injection through fetched web content (a returned page persuading the agent to execute follow-up actions), also set `"webfetch": "ask"`.
 

@@ -3122,19 +3122,33 @@ end
 --- @field ask agentic.utils.PermissionRules.CompiledPattern[]
 --- @field tier agentic.PermAutoApproveTier
 
---- The configured rules: settings.json patterns and
+--- An approval policy in place of the configured one.
+--- @class agentic.utils.PermissionRules.Policy
+--- @field tier agentic.PermAutoApproveTier In place of Config.permissions.auto_approve_tier
+--- @field settings_allow boolean Whether settings.json allow patterns count
+
+--- The rules of `policy`, else the configured rules: settings.json patterns and
 --- `Config.permissions.auto_approve_tier`. Settings.json allows count only at
 --- a non-nil tier. Remembered leaves count at every tier, because the user
---- approved each one.
+--- approved each one. Settings.json deny and ask patterns count under every
+--- policy.
 --- @param config_dir string Claude's config directory
 --- @param remembered agentic.utils.PermissionRules.CompiledPattern[]|nil Session-remembered leaves
+--- @param policy agentic.utils.PermissionRules.Policy|nil
 --- @return agentic.utils.PermissionRules.Rules
-function M.rules(config_dir, remembered)
+function M.rules(config_dir, remembered, policy)
     local tier = Config.permissions.auto_approve_tier
+    local settings_allow = true
+    if policy then
+        tier = policy.tier
+        settings_allow = policy.settings_allow
+    end
     --- @type agentic.utils.PermissionRules.Rules
     local rules = {
-        allow_settings = tier and M.get_settings_patterns("allow", config_dir)
-            or {},
+        allow_settings = tier and settings_allow and M.get_settings_patterns(
+            "allow",
+            config_dir
+        ) or {},
         allow_remembered = remembered or {},
         deny = M.get_settings_patterns("deny", config_dir),
         ask = M.get_settings_patterns("ask", config_dir),
