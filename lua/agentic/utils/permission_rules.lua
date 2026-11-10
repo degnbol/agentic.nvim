@@ -2004,17 +2004,17 @@ local tally_walk
 --- Why a part of a command is not known-safe.
 --- @alias agentic.utils.PermissionRules.Reason
 --- | "no_allow"        # no allow rule matches the command
---- | "ask"             # an ask gate (structured or glob) matches
+--- | "ask"             # an ask or deny gate (structured or glob) matches
 --- | "dynamic"         # a word whose value is unknown before it runs
---- | "code_builtin"    # a builtin that runs code (eval, source, …) or a shadowed function
+--- | "code_builtin"    # a builtin that runs code (eval, source and the like) or a shadowed function
 --- | "inner_code"      # `-c` code, a wrapper's command, a script, makefile or config body, or `find -exec` that is not safe
 --- | "dirty_subst"     # a substitution that is not checked command by command
 --- | "redirect"        # a redirect, herestring or heredoc that is not modelled as safe
---- | "structure"       # a function definition, loop variable, assignment, argument or node the walker does not model
+--- | "structure"       # a function definition, loop variable, assignment, argument or node the check does not model
 --- | "unparsed"        # the command, or code it runs, does not parse
 
---- Node range (0-indexed rows, byte cols, as `node:range()`) and why it is
---- not known-safe.
+--- A command part's range (0-indexed rows, byte cols, as `node:range()`) and
+--- why the part is not known-safe.
 --- @alias agentic.utils.PermissionRules.Range [integer, integer, integer, integer, agentic.utils.PermissionRules.Reason]
 
 --- Fixed text per reason, written for an agent reading the refusal.
@@ -2126,8 +2126,9 @@ local function translate_ranges(ranges, origin)
     return out
 end
 
---- Why the structured gates do not approve a leaf: `"dynamic"` when the
---- block lifts once every dynamic word is read as written, else `"ask"` for a
+--- Why the structured gates do not approve a leaf. `"dynamic"` when reading
+--- every dynamic word as written would clear its deny or ask gate, or, with no
+--- gate, would match a read_only or safe_write rule. Else `"ask"` for a
 --- matching deny or ask gate and `"no_allow"` for none.
 --- @param entries agentic.StructuredEntries
 --- @param parsed agentic.ParsedLeaf
@@ -2186,7 +2187,7 @@ end
 ---   when an allow match on the leaf would approve it (never on a deny/ask or
 ---   structural/substitution bail)
 --- @return agentic.utils.PermissionRules.Reason|nil reason #why the leaf is not
----   known-safe; nil when it is. `sub_ranges` carry their own reasons
+---   known-safe, nil when it is. Each of `sub_ranges` carries its own reason
 local function command_known_safe(node, src, ctx, known, funcs)
     --- @type agentic.utils.PermissionRules.Range[]
     local subst_ranges = {}
@@ -2281,10 +2282,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
             return true
         end
         if origin then
-            return false,
-                translate_ranges(body_ranges, origin),
-                nil,
-                "inner_code"
+            return false, translate_ranges(body_ranges, origin)
         end
         return false, nil, nil, "inner_code"
     end
@@ -2396,7 +2394,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
     if safe and #subst_ranges > 0 then
         -- Otherwise-safe leaf whose only problem is a dirty substitution:
         -- pinpoint the in-place inner instead of washing the whole leaf.
-        return false, subst_ranges, nil, "dirty_subst"
+        return false, subst_ranges
     end
     if not safe then
         -- Reached only when no deny/ask/structural bail fired above: the leaf is

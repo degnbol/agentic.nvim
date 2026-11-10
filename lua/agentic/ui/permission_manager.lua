@@ -415,19 +415,19 @@ function PermissionManager:decide(kind, tool_call, diff, cwd)
     return nil, nil
 end
 
---- The inputs `decide` takes for a request, read from the request and its
---- tool call tracker (which `decide` deliberately does not read):
---- - kind: a tracker kind in `auto_approve_kinds` wins. opencode raises
----   `external_directory` with kind="other" before the underlying tool's own
----   permission, sharing toolCallId, and Claude's Skill requests also arrive
----   with kind="other": only the tracker has the minted "Skill" kind.
---- - tool_call: opencode sends `metadata: {}` on shell requests, so the
----   tracker's command is injected as `rawInput.command`.
+--- A request's kind, tool call, edit diff and Bash cwd, with what the request
+--- leaves out filled in from its tool call tracker:
+--- - kind: the tracker's kind when it is in `auto_approve_kinds`. opencode's
+---   `external_directory` requests and Claude's Skill requests arrive with
+---   kind="other".
+--- - tool_call: a copy with the tracker's command as `rawInput.command` when
+---   the request has none (opencode sends `metadata: {}` on shell requests).
+--- All four are nil when the request has no tool call.
 --- @param request agentic.acp.RequestPermission
 --- @return string|nil kind
---- @return agentic.acp.ToolCall|nil tool_call Nil when the request has none
+--- @return agentic.acp.ToolCall|nil tool_call
 --- @return table|nil diff The tracker's edit diff
---- @return string|nil cwd Directory the Bash call starts in; nil when unknown
+--- @return string|nil cwd Directory the Bash call starts in, nil when unknown
 function PermissionManager:resolve_request(request)
     local tool_call = request.toolCall
     if not tool_call then
@@ -459,8 +459,9 @@ function PermissionManager:resolve_request(request)
 end
 
 --- Try to auto-approve/reject a permission request without user interaction.
---- Delegates the verdict on `resolve_request`'s inputs to `decide`, then
---- fires the ACP callback.
+--- On an allow verdict calls `callback` with the request's allow_once option,
+--- on a deny verdict with its reject_once option. Not handled when the
+--- request has no such option.
 --- @param request agentic.acp.RequestPermission
 --- @param callback fun(option_id: string|nil)
 --- @return boolean handled
@@ -633,8 +634,8 @@ end
 --- formatter, as in `black f.py; rm f.py`) can change that state.
 --- @param effects agentic.utils.PermissionRules.Effect[]
 --- @return boolean ok
---- @return string|nil reason Why the first effect that does not clear fails
---- @return string|nil path That effect's path
+--- @return string|nil reason Why the first refused effect is refused, nil when ok
+--- @return string|nil path The refused effect's path, nil when ok
 function PermissionManager:_bash_effects_clear(effects)
     if #effects == 0 then
         return true
@@ -812,7 +813,7 @@ function PermissionManager:_check_grant(kind_lc, tool_call, diff)
     return true, reason or "safe"
 end
 
---- The text of `src` a tally range covers.
+--- The text of `src` inside `range`.
 --- @param src string
 --- @param range agentic.utils.PermissionRules.Range
 --- @return string
@@ -828,20 +829,20 @@ local function range_text(src, range)
     return table.concat(out, "\n")
 end
 
---- Why `decide` did not approve a call, one line per unapproved part:
---- `<part text>: <reason text>`. A deny verdict gives one line,
---- "denied by <decider words>".
---- Shell: the parts `PermissionRules.tally_unapproved` finds, or, when the
---- command passes the walk, the first effect `_bash_effects_clear` refuses.
---- A command that does not parse gives one "unparsed" line, and one left
---- unapproved only by `auto_approve_tier` (an empty tally) names the tier.
---- File kinds: `_check_grant`'s reason. Other kinds: "<kind> calls need
---- approval".
+--- Agent-facing lines `<part>: <reason>` that say why a call is unapproved.
+--- The call must be one that `decide` did not approve.
+--- - Denied: one line, "denied by <deciders>".
+--- - Shell command: one line per unapproved part. A command whose parts are
+---   all known-safe gives its first file effect that no grant clears. One
+---   that does not parse, or is unapproved only by `auto_approve_tier`, gives
+---   one line for the whole command.
+--- - File kinds: the path and why its grant check fails.
+--- - Other kinds: "<kind> calls need approval".
 --- @param kind string|nil
 --- @param tool_call agentic.acp.ToolCall
 --- @param diff table|nil
 --- @param cwd string|nil
---- @param deciders agentic.PermissionDecider[]|nil From `decide`, set on a deny
+--- @param deciders agentic.PermissionDecider[]|nil Deciders of a deny verdict, nil otherwise
 --- @return string[] reasons Never empty
 function PermissionManager:refusal_reasons(kind, tool_call, diff, cwd, deciders)
     if deciders then
