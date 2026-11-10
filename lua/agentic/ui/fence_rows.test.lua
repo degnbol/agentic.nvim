@@ -131,6 +131,31 @@ describe("agentic.ui.FenceRows", function()
         )
     end)
 
+    describe("marked", function()
+        it("answers for rows set without a sync", function()
+            local fence_rows = FenceRows:new(bufnr)
+            set_lines(0, -1, { "a", "```lua", "x", "```" })
+
+            assert.is_true(fence_rows:marked(1))
+            assert.is_false(fence_rows:marked(2))
+        end)
+
+        it("leaves an inner fence row of a text block unmarked", function()
+            local fence_rows = FenceRows:new(bufnr)
+            set_lines(0, -1, { "````text", "x", "```", "````" })
+
+            assert.is_false(fence_rows:marked(2))
+            assert.is_true(fence_rows:marked(3))
+        end)
+
+        it("marks an inner fence row of a markdown block", function()
+            local fence_rows = FenceRows:new(bufnr)
+            set_lines(0, -1, { "````markdown", "```", "x", "```", "````" })
+
+            assert.is_true(fence_rows:marked(3))
+        end)
+    end)
+
     describe("through a MessageWriter", function()
         it("marks several edits in one write", function()
             local writer = MessageWriter:new(bufnr)

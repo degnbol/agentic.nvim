@@ -1,27 +1,33 @@
--- Trackpad scroll workaround: at conceallevel=2, fence delimiter lines (```)
--- are zero-height (`agentic.ui.FenceRows`). Combined with
--- concealcursor="n", the cursor on such a line is in an invalid visual state
--- that blocks all further scrolling. Fix: skip past zero-height lines both
--- before scrolling (unstick) and after (prevent re-sticking).
-local function skip_concealed_line(dir)
-    if vim.wo.conceallevel < 2 then
+-- Trackpad scroll workaround: rows the window draws at zero height (fence
+-- delimiters, `agentic.ui.FenceRows`) stay zero-height under the cursor with
+-- concealcursor="n", and the cursor on one blocks all further scrolling. Fix:
+-- skip past zero-height rows both before scrolling (unstick) and after
+-- (prevent re-sticking).
+
+--- @param lnum integer 1-indexed
+--- @return boolean
+local function zero_height(lnum)
+    return vim.api.nvim_win_text_height(
+        0,
+        { start_row = lnum - 1, end_row = lnum - 1 }
+    ).all == 0
+end
+
+--- Move the cursor off a zero-height row to the nearest drawn row in
+--- direction `dir`, if there is one.
+--- @param dir integer -1 for up, 1 for down
+local function skip_zero_height_rows(dir)
+    local lnum = vim.api.nvim_win_get_cursor(0)[1]
+    if not zero_height(lnum) then
         return
     end
-    local lnum = vim.fn.line(".")
-    if not vim.fn.getline(lnum):match("^```") then
-        return
-    end
-    local last = vim.fn.line("$")
+    local last = vim.api.nvim_buf_line_count(0)
     local target = lnum + dir
-    while
-        target >= 1
-        and target <= last
-        and vim.fn.getline(target):match("^```")
-    do
+    while target >= 1 and target <= last and zero_height(target) do
         target = target + dir
     end
     if target >= 1 and target <= last then
-        vim.fn.cursor(target, 1)
+        vim.api.nvim_win_set_cursor(0, { target, 0 })
     end
 end
 
@@ -32,11 +38,11 @@ for _, d in ipairs({ "Up", "Down" }) do
     local dir = d == "Up" and -1 or 1
     local scroll_key = d == "Up" and ctrl_y or ctrl_e
     vim.keymap.set({ "n", "v", "i" }, "<ScrollWheel" .. d .. ">", function()
-        skip_concealed_line(dir)
+        skip_zero_height_rows(dir)
         -- Respect mousescroll ver:N setting for scroll speed
         local count = vim.o.mousescroll:match("ver:(%d+)") or "3"
         vim.cmd.normal({ count .. scroll_key, bang = true })
-        skip_concealed_line(dir)
+        skip_zero_height_rows(dir)
     end, { buffer = 0 })
 end
 

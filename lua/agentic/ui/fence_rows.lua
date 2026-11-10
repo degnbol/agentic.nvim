@@ -24,35 +24,6 @@ FenceRows.__index = FenceRows
 --- Namespace of the marks.
 FenceRows.NS = vim.api.nvim_create_namespace("agentic_fence_rows")
 
---- 0-indexed last row a node covers.
---- @param node TSNode
---- @return integer
-local function last_row(node)
-    local _, _, end_row, end_col = node:range()
-    -- An end column of 0 means the node stops before the first byte of that
-    -- row, so the row is not part of it.
-    return end_col == 0 and end_row - 1 or end_row
-end
-
---- Nodes of the root tree of `parser` that `pattern` captures, on rows
---- `first`..`last`.
---- @param parser vim.treesitter.LanguageTree A parsed markdown-grammar tree
---- @param pattern string Query with one capture
---- @param first integer 0-indexed
---- @param last integer 0-indexed, inclusive
---- @return TSNode[]
-local function captures_in(parser, pattern, first, last)
-    local query = vim.treesitter.query.parse(parser:lang(), pattern)
-    local root = parser:trees()[1]:root()
-    local nodes = {} --- @type TSNode[]
-    for _, node in query:iter_captures(root, parser:source(), first, last + 1) do
-        if node:start() <= last and last_row(node) >= first then
-            table.insert(nodes, node)
-        end
-    end
-    return nodes
-end
-
 --- `fenced_code_block` nodes of the root tree of `parser` meeting rows
 --- `first`..`last`.
 --- @param parser vim.treesitter.LanguageTree A parsed markdown-grammar tree
@@ -60,7 +31,12 @@ end
 --- @param last integer 0-indexed, inclusive
 --- @return TSNode[]
 local function blocks_in(parser, first, last)
-    return captures_in(parser, "(fenced_code_block) @block", first, last)
+    return Treesitter.captures_in(
+        parser,
+        "(fenced_code_block) @block",
+        first,
+        last
+    )
 end
 
 --- Content of `block` when its info string's language resolves to markdown.
@@ -99,7 +75,7 @@ local function delimiter_rows(parser, first, last)
         function(node)
             return (node:start())
         end,
-        captures_in(
+        Treesitter.captures_in(
             parser,
             "(fenced_code_block_delimiter) @delimiter",
             first,
@@ -149,7 +125,7 @@ function FenceRows:sync()
         local first, last = span[1], span[2]
         for _, block in ipairs(blocks_in(parser, first, last)) do
             first = math.min(first, block:start())
-            last = math.max(last, last_row(block))
+            last = math.max(last, Treesitter.last_row(block))
         end
         return { first, last }
     end, spans)
@@ -170,6 +146,20 @@ function FenceRows:sync()
             )
         end
     end
+end
+
+--- Whether `row` carries a mark, after a `sync`.
+--- @param row integer 0-indexed
+--- @return boolean
+function FenceRows:marked(row)
+    self:sync()
+    return #vim.api.nvim_buf_get_extmarks(
+        self._bufnr,
+        FenceRows.NS,
+        { row, 0 },
+        { row, -1 },
+        { limit = 1 }
+    ) > 0
 end
 
 --- Make the next `sync` mark the whole buffer again, as needed after `NS`

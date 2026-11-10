@@ -16,6 +16,7 @@ local Renderer = require("agentic.ui.tool_call_renderer")
 local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 local ToolCallLayout = require("agentic.ui.tool_call_layout")
+local Treesitter = require("agentic.utils.treesitter")
 
 local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 --- Anchors a `*-fold` fence's opening line so a deferred close (chat window
@@ -905,28 +906,31 @@ end
 --- The row a region's `╰─` belongs on: the last row of `first_row .. last_row`
 --- that draws the corner where it can be seen.
 ---
---- A trailing blank row has nothing to close over, and a fence delimiter is
---- concealed to zero height (`agentic.ui.FenceRows`), so a corner
---- anchored on either is at best detached from the region's last content and at
---- worst never drawn, leaving the region to read as unterminated. A prompt ends
---- on a delimiter whenever it carries selected code, or whenever `close_fence`
---- had to balance one the user left open. Interior rows of both kinds need no
---- such care: a zero-height row leaves no gap in the rail.
+--- A trailing blank row has nothing to close over, and a row carrying a
+--- `fence_rows` mark is zero height at a 'conceallevel' of 2 or more, so a
+--- corner anchored on either is at best detached from the region's last
+--- content and at worst never drawn, leaving the region to read as
+--- unterminated. A prompt ends on a delimiter whenever it carries selected
+--- code, or whenever `close_fence` had to balance one the user left open.
+--- Interior rows of both kinds need no such care: a zero-height row leaves no
+--- gap in the rail.
 --- @param bufnr integer
+--- @param fence_rows agentic.ui.FenceRows Of `bufnr`
 --- @param first_row integer 0-indexed opening row of the region
 --- @param last_row integer 0-indexed last row of the region, inclusive
 --- @return integer row `first_row` when nothing below it draws, and less than
 ---         that for a range past the end of the buffer — both leave the caller's
 ---         one-drawn-row check to reject the region
-local function last_drawn_row(bufnr, first_row, last_row)
+local function last_drawn_row(bufnr, fence_rows, first_row, last_row)
     local rows =
         vim.api.nvim_buf_get_lines(bufnr, first_row, last_row + 1, false)
+    local concealed = ChatBuffer.conceallevel(bufnr) >= 2
     local last = #rows
     while
         last > 1
         and (
             rows[last]:match("^%s*$")
-            or TextWrap.is_fence_delimiter(rows[last])
+            or (concealed and fence_rows:marked(first_row + last - 1))
         )
     do
         last = last - 1
@@ -987,11 +991,12 @@ end
 --- alone. The chat window is `signcolumn=yes:1`, so a `╰─` on that row would
 --- contend with the identity for the one sign cell.
 --- @param bufnr integer
+--- @param fence_rows agentic.ui.FenceRows Of `bufnr`
 --- @param identity_row integer 0-indexed row carrying the identity sign
 --- @param last_row integer 0-indexed last row of the region, inclusive
 --- @return integer[] decoration_extmark_ids Empty for a region drawing one row
-local function render_region_rail(bufnr, identity_row, last_row)
-    local end_row = last_drawn_row(bufnr, identity_row, last_row)
+local function render_region_rail(bufnr, fence_rows, identity_row, last_row)
+    local end_row = last_drawn_row(bufnr, fence_rows, identity_row, last_row)
     if end_row <= identity_row then
         return {}
     end
@@ -1025,16 +1030,17 @@ end
 --- (`_prose_anchor_line`), so a corner above that row is scrolled out of sight
 --- for the whole of the run's streaming.
 --- @param bufnr integer
+--- @param fence_rows agentic.ui.FenceRows Of `bufnr`
 --- @param run_start integer 0-indexed row where the prose run began
 --- @return integer[]|nil decoration_extmark_ids nil when the run takes no region
-local function render_prose_region(bufnr, run_start)
+local function render_prose_region(bufnr, fence_rows, run_start)
     local buf_end = vim.api.nvim_buf_line_count(bufnr) - 1
     local first_row = first_prose_row(bufnr, run_start, buf_end)
     if not first_row then
         return nil
     end
 
-    local end_row = last_drawn_row(bufnr, first_row, buf_end)
+    local end_row = last_drawn_row(bufnr, fence_rows, first_row, buf_end)
     if not has_paragraph_break(bufnr, first_row, end_row) then
         return nil
     end
@@ -1053,11 +1059,18 @@ end
 --- the `│`/`╰─` rail beneath. That row is also the row a closed fold shows, so
 --- the gutter names the region whether it is collapsed or open.
 --- @param bufnr integer
+--- @param fence_rows agentic.ui.FenceRows Of `bufnr`
 --- @param first_row integer 0-indexed first body row of the region
 --- @param last_row integer 0-indexed last body row of the region, inclusive
 --- @param sign string `sign_text` identifying the region
-local function render_collapsed_region(bufnr, first_row, last_row, sign)
-    local end_row = last_drawn_row(bufnr, first_row, last_row)
+local function render_collapsed_region(
+    bufnr,
+    fence_rows,
+    first_row,
+    last_row,
+    sign
+)
+    local end_row = last_drawn_row(bufnr, fence_rows, first_row, last_row)
     ExtmarkBlock.render_block(bufnr, Renderer.NS_DECORATIONS, {
         header_line = first_row,
         header_sign = sign,
@@ -1083,7 +1096,7 @@ function MessageWriter:_rebuild_prose_region(bufnr)
     end
     Renderer.clear_decoration_extmarks(bufnr, self._prose_region_ids)
     self._prose_region_ids =
-        render_prose_region(bufnr, self._prose_run_start_line)
+        render_prose_region(bufnr, self._fence_rows, self._prose_run_start_line)
 end
 
 --- Move the live run's `╰─` down to the last row the run has grown, rewriting
@@ -1116,6 +1129,7 @@ function MessageWriter:_extend_prose_region(bufnr)
 
     local end_row = last_drawn_row(
         bufnr,
+        self._fence_rows,
         closer_row,
         vim.api.nvim_buf_line_count(bufnr) - 1
     )
@@ -1159,7 +1173,7 @@ function MessageWriter:_end_prose_run(bufnr)
     Renderer.clear_decoration_extmarks(bufnr, self._prose_region_ids)
     self:_reflow_chunks(bufnr, true)
     if run_start then
-        render_prose_region(bufnr, run_start)
+        render_prose_region(bufnr, self._fence_rows, run_start)
     end
     BufHelpers.end_with_one_blank(bufnr)
 end
@@ -1211,7 +1225,7 @@ function MessageWriter:_decorate_collapsed_region(
     sign,
     opts
 )
-    render_collapsed_region(bufnr, body_start, body_end, sign)
+    render_collapsed_region(bufnr, self._fence_rows, body_start, body_end, sign)
     if not opts.undimmed then
         Renderer.set_dim_range(bufnr, body_start, body_end)
     end
@@ -1741,7 +1755,12 @@ function MessageWriter:write_user_prompt(text, extra_lines)
             }
         )
 
-        render_region_rail(bufnr, heading_row, heading_row + #flat - 1)
+        render_region_rail(
+            bufnr,
+            self._fence_rows,
+            heading_row,
+            heading_row + #flat - 1
+        )
         mark_table_row_ends(bufnr, heading_row, table_row_ends)
 
         -- What the provider does with the prompt before replying is written
@@ -1870,7 +1889,12 @@ function MessageWriter:write_notice(notice)
             self:_queue_fold(heading_row + fold_offset, false)
         end
 
-        render_region_rail(bufnr, heading_row, heading_row + #lines - 1)
+        render_region_rail(
+            bufnr,
+            self._fence_rows,
+            heading_row,
+            heading_row + #lines - 1
+        )
     end)
 
     -- No section break to request: a `##` heading already closes whatever
@@ -2082,7 +2106,7 @@ function MessageWriter:write_error_message(err)
                 sign_hl_group = Theme.HL_GROUPS.ERROR_HEADING,
             }
         )
-        render_region_rail(bufnr, start_row, end_row)
+        render_region_rail(bufnr, self._fence_rows, start_row, end_row)
 
         self:_append_lines({ "" })
 
@@ -2248,6 +2272,21 @@ function MessageWriter:set_turn_usage(usage)
     })
 end
 
+--- Rows in `first`..`last` of `bufnr` that a fenced code block of its own
+--- tree covers, delimiter rows included.
+--- @param bufnr integer
+--- @param first integer 0-indexed
+--- @param last integer 0-indexed, inclusive
+--- @return table<integer, true>|nil rows 1-based offsets from `first`; nil when the buffer has no parser
+local function buffer_code_rows(bufnr, first, last)
+    local parser = vim.treesitter.get_parser(bufnr)
+    if not parser then
+        return nil
+    end
+    parser:parse()
+    return Treesitter.code_block_rows(parser, first, last)
+end
+
 --- Reflow prose in the region written by write_message_chunk.
 --- When `flush_all` is false (during streaming), only reflows complete
 --- paragraphs — up to the last blank line, leaving the in-progress
@@ -2257,9 +2296,7 @@ end
 --- `close_fence` — and releases the run. Reached through `_end_prose_run`, its
 --- only caller, which brackets the run the release drops.
 --- The streaming path keeps `_chunk_start_line`
---- outside any open fence so that check sees the opener; a marker parked inside
---- a fence would also make `wrap_prose` hard-wrap code as prose, since it starts
---- each region assuming it is not in one.
+--- outside any open fence so that check sees the opener.
 --- @param bufnr integer
 --- @param flush_all? boolean
 function MessageWriter:_reflow_chunks(bufnr, flush_all)
@@ -2316,7 +2353,10 @@ function MessageWriter:_reflow_chunks(bufnr, flush_all)
     end
 
     local raw = vim.api.nvim_buf_get_lines(bufnr, start, reflow_end, false)
-    local wrapped, table_row_ends = self:_wrap_prose(raw)
+    -- Code rows come from the buffer's tree: the slice alone lacks the
+    -- containers above it.
+    local wrapped, table_row_ends =
+        self:_wrap_prose(raw, buffer_code_rows(bufnr, start, reflow_end - 1))
 
     if not vim.deep_equal(raw, wrapped) then
         vim.api.nvim_buf_set_lines(bufnr, start, reflow_end, false, wrapped)
@@ -2478,7 +2518,9 @@ function MessageWriter:write_message_chunk(update, starts_response)
             false
         )[1] or ""
         if wrap_width > 0 and #tail > wrap_width then
-            local wrapped = TextWrap.wrap_single_line(tail, wrap_width)
+            local code = buffer_code_rows(bufnr, end_line, end_line)
+            local wrapped = (code and code[1]) and { tail }
+                or TextWrap.wrap_single_line(tail, wrap_width)
             if #wrapped > 1 then
                 vim.api.nvim_buf_set_lines(
                     bufnr,
@@ -2614,13 +2656,15 @@ end
 --- `TextWrap.wrap_prose` at the chat's wrap width, with table cells measured
 --- as this buffer shows them.
 --- @param lines string[]
+--- @param code table<integer, true>|nil See `TextWrap.wrap_prose`
 --- @return string[] wrapped
 --- @return integer[] table_row_ends
-function MessageWriter:_wrap_prose(lines)
+function MessageWriter:_wrap_prose(lines, code)
     return TextWrap.wrap_prose(
         lines,
         Config.windows.wrap_width,
-        ChatBuffer.cell_measure(self.bufnr)
+        ChatBuffer.cell_measure(self.bufnr),
+        code
     )
 end
 

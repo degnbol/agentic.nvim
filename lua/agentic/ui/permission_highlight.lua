@@ -1,5 +1,6 @@
 local PermissionRules = require("agentic.utils.permission_rules")
 local Renderer = require("agentic.ui.tool_call_renderer")
+local TextWrap = require("agentic.utils.text_wrap")
 local Theme = require("agentic.theme")
 
 --- Transient highlighting of the non-known-safe parts of an execute permission
@@ -8,13 +9,13 @@ local Theme = require("agentic.theme")
 --- those bytes while the prompt is shown. Pure UI — it never grants anything;
 --- worst case it highlights nothing while the prompt still fires.
 ---
---- The variable-width fence convention (`^`+lang` open, `^`+` close) is the
---- same one other chat consumers use; the command body is the lines between.
+--- The command body is the lines between a `^`+lang` opener and the first row
+--- that closes it by the markdown closer rule (`TextWrap.closes_fence`).
 --- @class agentic.ui.PermissionHighlight
 local M = {}
 
-local OPEN_FENCE = "^`+%a*$"
-local CLOSE_FENCE = "^`+$"
+--- Captures the opener's backtick run.
+local OPEN_FENCE = "^(`+)%a*$"
 
 --- Extmark priority — above injected bash syntax (priority 100) so the warning
 --- wash wins, consistent with other chat extmarks.
@@ -43,9 +44,8 @@ local function block_span(bufnr, block)
     return nil, nil
 end
 
---- Find the first code-fence pair inside a row span. The opening pattern also
---- matches a bare close fence (zero-length lang), so the first match is the
---- open and the search for the close starts after it.
+--- Find the first code-fence pair inside a row span: the first row that
+--- opens a backtick fence, and the first later row that closes it.
 --- @param bufnr integer
 --- @param start_row integer 0-indexed
 --- @param end_row integer 0-indexed
@@ -54,13 +54,12 @@ end
 local function find_fences(bufnr, start_row, end_row)
     local lines =
         vim.api.nvim_buf_get_lines(bufnr, start_row, end_row + 1, false)
-    local open_idx
+    local opener, open_idx
     for i, line in ipairs(lines) do
-        if not open_idx then
-            if line:match(OPEN_FENCE) then
-                open_idx = i
-            end
-        elseif line:match(CLOSE_FENCE) then
+        if not opener then
+            opener = line:match(OPEN_FENCE)
+            open_idx = opener and i
+        elseif TextWrap.closes_fence(opener, line) then
             return start_row + open_idx - 1, start_row + i - 1
         end
     end

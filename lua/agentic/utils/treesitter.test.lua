@@ -578,4 +578,82 @@ describe("Treesitter", function()
             )
         end)
     end)
+
+    describe("code_block_rows", function()
+        --- Rows `first..last` of `lines` that `code_block_rows` covers, sorted.
+        --- @param lines string[]
+        --- @param first integer|nil 0-indexed, default 0
+        --- @param last integer|nil 0-indexed, default the last row
+        --- @return integer[]
+        local function covered(lines, first, last)
+            local parser = vim.treesitter.get_string_parser(
+                table.concat(lines, "\n"),
+                "markdown"
+            )
+            parser:parse()
+            first = first or 0
+            local rows = vim.tbl_map(
+                function(offset)
+                    return first + offset - 1
+                end,
+                vim.tbl_keys(
+                    Treesitter.code_block_rows(
+                        parser,
+                        first,
+                        last or #lines - 1
+                    )
+                )
+            )
+            table.sort(rows)
+            return rows
+        end
+
+        it("covers a block holding a shorter fence row", function()
+            assert.same(
+                { 1, 2, 3, 4, 5 },
+                covered({ "a", "````text", "```", "x", "```", "````", "b" })
+            )
+        end)
+
+        it("covers a tilde fence", function()
+            assert.same({ 1, 2, 3 }, covered({ "a", "~~~", "x", "~~~", "b" }))
+        end)
+
+        it("covers a fence indented 2", function()
+            assert.same(
+                { 1, 2, 3 },
+                covered({ "a", "  ```lua", "  x", "  ```", "b" })
+            )
+        end)
+
+        it("covers a fence under a nested list item indented 4", function()
+            assert.same(
+                { 4, 5, 6 },
+                covered({
+                    "- a",
+                    "",
+                    "  - b",
+                    "",
+                    "    ```lua",
+                    "    x",
+                    "    ```",
+                })
+            )
+        end)
+
+        it("covers an unclosed block to the end", function()
+            assert.same({ 1, 2, 3 }, covered({ "a", "```lua", "x", "y" }))
+        end)
+
+        it("covers nothing in prose", function()
+            assert.same({}, covered({ "a", "", "b" }))
+        end)
+
+        it("covers only the window inside a block", function()
+            assert.same(
+                { 2, 3 },
+                covered({ "a", "```", "x", "y", "z", "```" }, 2, 3)
+            )
+        end)
+    end)
 end)

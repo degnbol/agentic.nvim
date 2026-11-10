@@ -1,4 +1,5 @@
 local MarkdownTable = require("agentic.utils.markdown_table")
+local Treesitter = require("agentic.utils.treesitter")
 
 --- Fitting text to a display width: hard-wrapping prose (code blocks left
 --- untouched), truncating to a column budget, abbreviating a count, and the
@@ -206,9 +207,9 @@ local function format_table(table_lines, width, measure)
     )
 end
 
---- Wrap a single prose line at word boundaries.
+--- Wrap one prose line at word boundaries.
 --- Returns the line unchanged if it fits within `width` (or `width` is not
---- positive), is blank, or looks like a code fence, table row or heading.
+--- positive), is blank, or is a table row or heading.
 --- @param line string
 --- @param width integer
 --- @return string[]
@@ -216,7 +217,6 @@ function M.wrap_single_line(line, width)
     if
         width <= 0
         or line:match("^%s*$")
-        or line:match("^%s*```")
         or is_table_line(line)
         or is_heading(line)
     then
@@ -262,17 +262,28 @@ function M.abbreviate_count(n)
     return string.format("%.1fk", n / 1000)
 end
 
+--- Whether `line` closes a fence opened by the delimiter run `opener`: up to 3
+--- leading spaces, a run of `opener`'s character at least as long, and nothing
+--- after it but whitespace.
+--- @param opener string Delimiter run of the opener, e.g. "```" or "~~~~"
+--- @param line string
+--- @return boolean
+function M.closes_fence(opener, line)
+    local indent, delim, rest =
+        line:match("^( *)(" .. vim.pesc(opener:sub(1, 1)) .. "+)(.*)$")
+    return delim ~= nil
+        and #indent <= 3
+        and #delim >= #opener
+        and rest:match("^%s*$") ~= nil
+end
+
 --- Find a fenced code block that is opened but never closed, and return the
 --- delimiter that would close it.
 ---
---- Follows the markdown rule rather than `wrap_prose`'s fence toggle, which is
---- deliberately lenient (see the comment in its loop) and flips on any ` ``` `
---- line. tree-sitter-markdown does not: a closer must use the opener's own
---- delimiter character, carry no info string, and be at least as long as the
---- opener — so a typed ` ```zsh ` line never closes an open fence. A backtick
---- opener's info string may not contain a backtick (a tilde opener's may).
---- Callers balancing buffer text against the parser need the parser's rule; the
---- lenient one disagrees in exactly the cases that matter.
+--- Follows the markdown rule as tree-sitter-markdown applies it outside any
+--- container: a closer must satisfy `closes_fence`, so a typed ` ```zsh ` line
+--- never closes an open fence. A backtick opener's info string may not
+--- contain a backtick (a tilde opener's may).
 --- @param lines string[]
 --- @return string|nil open_fence Delimiter run of the unterminated opener, nil when balanced
 --- @return integer|nil open_index 1-based index of that opener in `lines`
@@ -284,11 +295,7 @@ function M.unclosed_fence(lines)
         local indent, delim, rest = line:match("^( *)([`~]+)(.*)$")
         if delim and #indent <= 3 and #delim >= 3 then
             if open_fence then
-                if
-                    delim:sub(1, 1) == open_fence:sub(1, 1)
-                    and #delim >= #open_fence
-                    and rest:match("^%s*$")
-                then
+                if M.closes_fence(open_fence, line) then
                     open_fence, open_index = nil, nil
                 end
             elseif delim:sub(1, 1) == "~" or not rest:find("`", 1, true) then
@@ -325,20 +332,18 @@ end
 
 --- The rows inside `lines` when `lines` is exactly one backtick-fenced code
 --- block: the first row opens a backtick fence by `unclosed_fence`'s rule,
---- no row before the last closes it, and the last row is a bare backtick
---- run at least as long as the opener.
+--- no row before the last closes it, and the last row closes it
+--- (`closes_fence`).
 --- @param lines string[]
 --- @return string[]|nil inner nil when `lines` is not one fenced block
 function M.fenced_inner(lines)
     local opener, i_open =
         M.unclosed_fence(vim.list_slice(lines, 1, #lines - 1))
-    local closer = #lines >= 2 and lines[#lines]:match("^`+$")
     if
         i_open ~= 1
         or not opener
-        or not closer
         or opener:sub(1, 1) ~= "`"
-        or #closer < #opener
+        or not M.closes_fence(opener, lines[#lines])
     then
         return nil
     end
@@ -427,16 +432,25 @@ end
 --- @param lines string[]
 --- @param width integer Target width in columns
 --- @param measure agentic.utils.MarkdownTable.Measure
+--- @param code table<integer, true>|nil 1-based indices of the lines in `lines` that are code, or nil to parse `lines` as one markdown text
 --- @return string[] wrapped
 --- @return integer[] table_row_ends 1-based indices into `wrapped` of the last line of every table body row, in tables where some row wrapped
-function M.wrap_prose(lines, width, measure)
+function M.wrap_prose(lines, width, measure, code)
     if width <= 0 then
         return lines, {}
     end
 
+    if not code then
+        local parser = vim.treesitter.get_string_parser(
+            table.concat(lines, "\n"),
+            "markdown"
+        )
+        parser:parse()
+        code = Treesitter.code_block_rows(parser, 0, #lines - 1)
+    end
+
     local out = {}
     local table_row_ends = {} ---@type integer[]
-    local in_fence = false
     local in_math = false
     local table_buf = {} ---@type string[]
 
@@ -452,23 +466,18 @@ function M.wrap_prose(lines, width, measure)
         end
     end
 
-    for _, line in ipairs(lines) do
-        -- A ``` fence only toggles when we're not inside display math, and a
-        -- `$$` fence only toggles when we're not inside a code fence — so the
-        -- two block delimiters never corrupt each other's state. Everything
-        -- inside either block (including a stray ``` or `$$`) passes through
-        -- untouched; display math is authored pre-formatted and never re-wrapped.
-        local code_fence = line:match("^%s*```") and not in_math
-        local math_fence = is_math_fence(line) and not in_fence
-        if code_fence then
+    for i, line in ipairs(lines) do
+        -- Code rows and display math pass through untouched. Display math is
+        -- authored pre-formatted and never re-wrapped. A `$$` row toggles math
+        -- only outside code, so a `$$` in a code block never opens math.
+        if code[i] then
             flush_table()
-            in_fence = not in_fence
             out[#out + 1] = line
-        elseif math_fence then
+        elseif is_math_fence(line) then
             flush_table()
             in_math = not in_math
             out[#out + 1] = line
-        elseif in_fence or in_math then
+        elseif in_math then
             out[#out + 1] = line
         elseif is_table_line(line) then
             table_buf[#table_buf + 1] = line

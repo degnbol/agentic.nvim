@@ -1,6 +1,7 @@
 --- Treesitter helpers: the language of a file or an injection name,
 --- syntactic context for a snippet of one, the conceal the highlights
---- queries set in a buffer or a line of text, and query source edits.
+--- queries set in a buffer or a line of text, query source edits, and the
+--- nodes and code-block rows of a parsed tree.
 ---
 --- `highlight_map_in_context` parses a snippet "as if" it were spliced into
 --- a real file, so captures that depend on structural context (strings,
@@ -56,6 +57,55 @@ function M.resolve_lang(alias)
         end
     end
     return nil
+end
+
+--- 0-indexed last row a node covers.
+--- @param node TSNode
+--- @return integer
+function M.last_row(node)
+    local _, _, end_row, end_col = node:range()
+    -- An end column of 0 means the node stops before the first byte of that
+    -- row, so the row is not part of it.
+    return end_col == 0 and end_row - 1 or end_row
+end
+
+--- Nodes of the root tree of `parser` that `pattern` captures, on rows
+--- `first`..`last`.
+--- @param parser vim.treesitter.LanguageTree A parsed tree
+--- @param pattern string Query with one capture
+--- @param first integer 0-indexed
+--- @param last integer 0-indexed, inclusive
+--- @return TSNode[]
+function M.captures_in(parser, pattern, first, last)
+    local query = vim.treesitter.query.parse(parser:lang(), pattern)
+    local root = parser:trees()[1]:root()
+    local nodes = {} --- @type TSNode[]
+    for _, node in query:iter_captures(root, parser:source(), first, last + 1) do
+        if node:start() <= last and M.last_row(node) >= first then
+            table.insert(nodes, node)
+        end
+    end
+    return nodes
+end
+
+--- Rows in `first`..`last` that a `fenced_code_block` of the root tree of
+--- `parser` covers, its delimiter rows included. An unclosed block covers
+--- through the end of the text.
+--- @param parser vim.treesitter.LanguageTree A parsed markdown-grammar tree
+--- @param first integer 0-indexed
+--- @param last integer 0-indexed, inclusive
+--- @return table<integer, true> rows 1-based offsets from `first`: 1 is `first`
+function M.code_block_rows(parser, first, last)
+    local rows = {} --- @type table<integer, true>
+    local blocks =
+        M.captures_in(parser, "(fenced_code_block) @block", first, last)
+    for _, block in ipairs(blocks) do
+        local first_row = math.max(first, (block:start()))
+        for row = first_row, math.min(last, M.last_row(block)) do
+            rows[row - first + 1] = true
+        end
+    end
+    return rows
 end
 
 --- Whether a query `predicate` node is a `#set!` directive whose key, its

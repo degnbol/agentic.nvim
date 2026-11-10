@@ -143,9 +143,10 @@ the fence is set per kind:
 highlights). A `text` label names no parser, so it is never injected — an
 injected zsh diff can hang the editor (`ZshParseGuard`).
 
-**Downstream fence consumers must handle variable width.** Match `^\`+$`
-(any backtick-only line) instead of literal triple-backticks, and
-`^\`+<lang>$` for typed fences.
+**Downstream fence consumers never match a fixed backtick pattern.** Body rows
+can be delimiter-shaped. Use `FenceRows:marked` for zero-height delimiter rows
+in the chat, `Treesitter.code_block_rows` for rows inside a block, or
+`TextWrap.closes_fence` for the closer of a known opener.
 
 ## Body folding
 

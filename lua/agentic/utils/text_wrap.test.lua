@@ -581,6 +581,71 @@ describe("agentic.utils.TextWrap", function()
             end
         )
 
+        describe("code blocks", function()
+            local long = "the quick brown fox jumps over the lazy dog again"
+
+            it("keeps a shorter inner fence inside its block", function()
+                local lines = {
+                    "````markdown",
+                    "```",
+                    "inside " .. long,
+                    "```",
+                    "still inside " .. long,
+                    "````",
+                    "after " .. long,
+                }
+                local result = TextWrap.wrap_prose(lines, 40, strwidth)
+                assert.same(
+                    vim.list_slice(lines, 1, 6),
+                    vim.list_slice(result, 1, 6)
+                )
+                assert.is_true(#result > #lines)
+            end)
+
+            it("wraps prose after an odd count of inner fence rows", function()
+                local lines = {
+                    "````text",
+                    "```",
+                    "x",
+                    "````",
+                    "after " .. long,
+                }
+                local result = TextWrap.wrap_prose(lines, 40, strwidth)
+                assert.is_true(#result > #lines)
+            end)
+
+            it("leaves a tilde block's content", function()
+                local lines = { "~~~", "code " .. long, "~~~" }
+                assert.same(lines, TextWrap.wrap_prose(lines, 40, strwidth))
+            end)
+
+            it("leaves a fence under a list item indented 4", function()
+                local lines = {
+                    "- a",
+                    "",
+                    "  - b",
+                    "",
+                    "    ```lua",
+                    "    code " .. long,
+                    "    ```",
+                }
+                assert.same(lines, TextWrap.wrap_prose(lines, 40, strwidth))
+            end)
+
+            it("takes the code rows it is passed over a parse", function()
+                local lines = { "prose " .. long, "code " .. long }
+                local result =
+                    TextWrap.wrap_prose(lines, 40, strwidth, { [1] = true })
+                assert.equal(lines[1], result[1])
+                assert.is_true(#result > #lines)
+            end)
+
+            it("opens a block at a fence inside display math", function()
+                local lines = { "$$", "```", "x", "$$", "prose " .. long }
+                assert.same(lines, TextWrap.wrap_prose(lines, 40, strwidth))
+            end)
+        end)
+
         it("never wraps headings", function()
             local heading =
                 "## the quick brown fox jumps over the lazy dog and keeps running"
@@ -617,14 +682,6 @@ describe("agentic.utils.TextWrap", function()
             assert.same({ "" }, result)
         end)
 
-        it("skips code fence lines", function()
-            local result = TextWrap.wrap_single_line(
-                "```bash this is a very long fence line that exceeds the width",
-                20
-            )
-            assert.equal(1, #result)
-        end)
-
         it("skips table rows", function()
             local result = TextWrap.wrap_single_line(
                 "| column one content | column two content | column three |",
@@ -651,6 +708,31 @@ describe("agentic.utils.TextWrap", function()
                 end
             end
             assert.is_true(has_span, "math span was broken across sub-lines")
+        end)
+    end)
+
+    describe("closes_fence", function()
+        it("closes on an equal or longer run", function()
+            assert.is_true(TextWrap.closes_fence("```", "```"))
+            assert.is_true(TextWrap.closes_fence("```", "````  "))
+            assert.is_true(TextWrap.closes_fence("~~~", "   ~~~"))
+        end)
+
+        it("does not close on a shorter run", function()
+            assert.is_false(TextWrap.closes_fence("````", "```"))
+        end)
+
+        it("does not close on the other character", function()
+            assert.is_false(TextWrap.closes_fence("```", "~~~"))
+            assert.is_false(TextWrap.closes_fence("```", "```~"))
+        end)
+
+        it("does not close on an info string", function()
+            assert.is_false(TextWrap.closes_fence("```", "```zsh"))
+        end)
+
+        it("does not close indented 4", function()
+            assert.is_false(TextWrap.closes_fence("```", "    ```"))
         end)
     end)
 

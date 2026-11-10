@@ -108,6 +108,19 @@ describe("agentic.ui.MessageWriter", function()
         }
     end
 
+    --- Parse the buffer as the chat does, and show it at the chat's
+    --- 'conceallevel', so fence rows are zero height.
+    local function as_chat()
+        -- As bootstrap.lua registers it.
+        vim.treesitter.language.add("agentic", {
+            path = vim.api.nvim_get_runtime_file("parser/markdown.so", false)[1],
+            symbol_name = "markdown",
+        })
+        vim.treesitter.language.register("agentic", "AgenticChat")
+        vim.bo[bufnr].filetype = "AgenticChat"
+        vim.wo[winid].conceallevel = 2
+    end
+
     --- Every decoration sign in traversal order, `{ row, sign_text }` each.
     --- @return table[]
     local function rail()
@@ -225,6 +238,44 @@ describe("agentic.ui.MessageWriter", function()
 
         it("leaves a paragraph on one row at 0", function()
             assert.same({ PARAGRAPH }, write_paragraph())
+        end)
+
+        describe("while streaming code", function()
+            local CODE = "local x = " .. string.rep("a", 60)
+
+            before_each(function()
+                as_chat()
+                Config.windows.wrap_width = 40
+            end)
+
+            it("keeps a code row in an open fence on one row", function()
+                writer:write_message_chunk(make_message_update("```lua\n"))
+                writer:write_message_chunk(make_message_update(CODE))
+
+                assert.is_not_nil(row_of(CODE))
+            end)
+
+            it(
+                "keeps a code row reflowed from inside a list item's fence",
+                function()
+                    -- The blank inside the fence moves the reflow start past the
+                    -- 4-indented opener, so the next reflow sees no opener.
+                    for _, chunk in ipairs({
+                        "- a\n\n",
+                        "  - b\n\n",
+                        "    para\n\n",
+                        "    ```lua\n",
+                        "    x\n\n",
+                        "    " .. CODE .. "\n\n",
+                        "    ```\n\n",
+                    }) do
+                        writer:write_message_chunk(make_message_update(chunk))
+                    end
+                    writer:finalize_turn()
+
+                    assert.is_not_nil(row_of("    " .. CODE))
+                end
+            )
         end)
     end)
 
@@ -396,6 +447,7 @@ describe("agentic.ui.MessageWriter", function()
         end)
 
         it("closes a prompt fence inside the prompt region", function()
+            as_chat()
             writer:write_user_prompt("look at\n```lua\nx = 1")
 
             local lines = buffer_lines()
@@ -537,6 +589,7 @@ describe("agentic.ui.MessageWriter", function()
             -- The selected-code path: session_manager appends a fenced snippet,
             -- so the region's last buffer row is a closing ```. That row is
             -- concealed to zero height, so ╰─ has to sit on the last visible one.
+            as_chat()
             writer:write_user_prompt("check this", {
                 "```lua",
                 "x = 1",
@@ -646,6 +699,7 @@ describe("agentic.ui.MessageWriter", function()
             end)
 
             it("folds a longer body closed", function()
+                as_chat()
                 writer:write_notice({
                     glyph = GLYPH,
                     title = "t",
@@ -1946,15 +2000,50 @@ describe("agentic.ui.MessageWriter", function()
             assert.same({}, rail())
         end)
 
-        it("ends the rail above a trailing fence", function()
-            writer:write_message_chunk(
-                make_message_update("here:\n\n```lua\nx = 1\n```")
-            )
+        --- The text of the row the last region closes on, after streaming
+        --- `text` as one run.
+        --- @param text string
+        --- @return string|nil
+        local function closer_text(text)
+            writer:write_message_chunk(make_message_update(text))
             writer:finalize_turn()
-
             local row = closer_row()
-            assert.is_true(row ~= nil)
-            assert.equal("x = 1", buffer_lines()[row + 1])
+            return row and buffer_lines()[row + 1]
+        end
+
+        it("ends the rail above a trailing fence", function()
+            as_chat()
+            assert.equal("x = 1", closer_text("here:\n\n```lua\nx = 1\n```"))
+        end)
+
+        it("ends the rail on the closer at 'conceallevel' 0", function()
+            as_chat()
+            vim.wo[winid].conceallevel = 0
+            assert.equal("```", closer_text("here:\n\n```lua\nx = 1\n```"))
+        end)
+
+        it(
+            "ends the rail on a drawn inner fence row of a text block",
+            function()
+                as_chat()
+                assert.equal(
+                    "```",
+                    closer_text("one\n\ntwo\n\n````text\nx\n```\n````")
+                )
+            end
+        )
+
+        it("ends the rail above the closers of a markdown block", function()
+            as_chat()
+            assert.equal(
+                "y",
+                closer_text("one\n\ntwo\n\n````markdown\n```lua\ny\n```\n````")
+            )
+        end)
+
+        it("ends the rail above a tilde closer", function()
+            as_chat()
+            assert.equal("x", closer_text("one\n\ntwo\n\n~~~\nx\n~~~"))
         end)
 
         it("brackets the run a tool call interrupted", function()
