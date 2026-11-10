@@ -1,6 +1,6 @@
 ---
 name: session-lifecycle
-description: Session lifecycle races, epoch guard, cross-turn MessageWriter state, and header state pipeline. Use when editing SessionManager, ChatHistory, session creation, load (Path A) or re-create-from-history (Path B) paths, the _loading_saved/_session_epoch/destroyed guards, MessageWriter cross-turn flags (reset at turn boundary), ChatWidget header rendering, WindowDecoration, or vim.b[buf].agentic_header. Covers "session resume", "epoch guard", "MessageWriter cross-turn state", and "header state pipeline".
+description: Session lifecycle races, epoch guard, cross-turn MessageWriter state, and header state pipeline. Use when editing SessionManager, ChatHistory, session creation, load (Path A) or re-create-from-history (Path B) paths, the _pending_load/_load_state/_session_epoch/destroyed guards, the _prompt_pending counter or _turn_open, MessageWriter cross-turn flags (reset at turn boundary), ChatWidget header rendering, WindowDecoration, or vim.b[buf].agentic_header. Covers "session resume", "epoch guard", "MessageWriter cross-turn state", and "header state pipeline".
 ---
 
 # Session lifecycle
@@ -25,7 +25,7 @@ Two races leave a callback acting on a session that has moved on:
    synchronously when the instance already exists. The constructor wraps the
    inner logic in `vim.schedule`. When `load_acp_session()` is called immediately
    after construction (from `SessionResume.resume`), the deferred callback fires
-   after `_do_load_acp_session` — without the `_loading_saved` guard it would call
+   after `_do_load_acp_session` — without the `_load_state` guard it would call
    `new_session()`, replacing the loaded session.
 
 2. **Session destroyed while its `session/new` is in flight:** the unused
@@ -37,7 +37,9 @@ Two races leave a callback acting on a session that has moved on:
 
 **Guards:**
 
-- `_loading_saved` flag — prevents the deferred on-ready callback (race 1).
+- `_pending_load` / `_load_state` — on-ready starts no new session while
+  either is set (race 1). A session transition (`_advance_session_epoch`)
+  clears `_load_state`.
 - `_session_epoch` counter — monotonically incremented by `new_session()`,
   `_do_load_acp_session` and `_delete_session` (which ends a conversation with
   no `new_session` behind it). The `create_session` and `session/load`
@@ -47,13 +49,13 @@ Two races leave a callback acting on a session that has moved on:
   its callback cannot recover into a replaced conversation.
 - `destroyed` flag — set in `SessionManager:destroy`; `SessionRegistry.destroy`
   is a no-op once it is set. Checked at the top of the `create_session`
-  callback for race 2 (`destroy` advances neither the epoch nor
-  `_loading_saved`).
+  callback for race 2 (`destroy` advances neither the epoch nor the load
+  state).
 
 **Rules:**
 
-- Any code path that initiates a session transition must increment
-  `_session_epoch`. Any async callback that sets `self.session_id` must check
+- Any code path that initiates a session transition must call
+  `_advance_session_epoch`. Any async callback that sets `self.session_id` must check
   that its captured epoch matches `self._session_epoch`.
 - Any async callback on a SessionManager that writes to its buffers or the
   registry must check `self.destroyed` — the instance may have been
@@ -62,13 +64,18 @@ Two races leave a callback acting on a session that has moved on:
   `_apply_session_options` on success (as `new_session` does) —
   otherwise a loaded session has no config options.
 
-## The in-flight counter
+## Turn state: the in-flight counter and `_turn_open`
 
 `_prompt_pending` counts outstanding prompt callbacks. It gates no submit — the
 provider runs a mid-turn prompt as the next turn — only `_drain_queue`, which
 advances the queue one block per turn. The prompt callback reads it as "a turn is still
 streaming": it runs the turn boundary below but not the idle signals
 (`_set_generating(false)`, indicator, `_notify_attention`). An epoch mismatch runs neither.
+Whatever asks whether the writer's turn will still be finalized (`mid_turn`
+of `write_notice` and chat rows, history saves, side-record drains) reads
+`_turn_open`: a prompt's turn or a load's replay, each of which finalizes the
+writer when it ends. Not `is_generating`, the header's running state, which
+`stop_generation` and `_refresh` clear while the prompt callback is pending.
 
 ## Cross-turn state hazards in MessageWriter
 

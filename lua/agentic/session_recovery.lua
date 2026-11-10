@@ -441,7 +441,7 @@ function M._announce_reauth(sm, body)
         body = body,
         -- The OAuth round-trip is long enough for the user to have submitted
         -- again while it ran.
-        mid_turn = sm.is_generating,
+        mid_turn = sm:_turn_open(),
     })
 end
 

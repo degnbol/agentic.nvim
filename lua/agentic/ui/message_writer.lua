@@ -1791,7 +1791,7 @@ end
 --- @field body? string[] Already-formatted markdown lines placed under the heading, after `detail`
 --- @field fold_body? string[] Markdown lines placed prose-wrapped in a fence after `body`. Longer than one line, the fence is folded closed
 --- @field glyph_hl? string Highlight group for the sign; defaults to Theme's GLYPH_USER
---- @field mid_turn? boolean True when a turn is running. Decides whether the notice closes the turn — see write_notice.
+--- @field mid_turn? boolean True while a turn or replay that finalizes the writer at its own end is being written. Decides whether the notice closes the turn — see write_notice.
 --- @field id? string Id to find the notice by. Must be unique per writer
 
 --- Write a glyph-signed heading row that is not part of the agent's stream,

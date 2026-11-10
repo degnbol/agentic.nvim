@@ -4,6 +4,7 @@ local Deferred = require("tests.helpers.deferred")
 local spy = require("tests.helpers.spy")
 
 local Recovery = require("agentic.session_recovery")
+local SessionManager = require("agentic.session_manager")
 
 describe("agentic.session_recovery", function()
     describe("resolve_auth_method", function()
@@ -130,6 +131,9 @@ describe("agentic.session_recovery", function()
                 _session_epoch = 0,
                 _reauth_live_retry = false,
                 is_generating = false,
+                _prompt_pending = 0,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
                 agent = {
                     state = "ready",
                     auth_methods = methods,
@@ -741,7 +745,6 @@ describe("agentic.session_recovery", function()
 
     describe("prompts put back in the input", function()
         local ChatWidget = require("agentic.ui.chat_widget")
-        local SessionManager = require("agentic.session_manager")
         local UsageLimit = require("agentic.acp.usage_limit")
         local Config = require("agentic.config")
         local MiniTest = require("mini.test")

@@ -16,7 +16,7 @@ GrantCommand.__index = GrantCommand
 --- @param permission_manager agentic.ui.PermissionManager Holds the grant scopes
 --- @param message_writer agentic.ui.MessageWriter Chat the notices go to
 --- @param get_cwd fun(): string Session cwd; `.`, `root` and relative arguments resolve against it
---- @param is_mid_turn fun(): boolean True while a turn is running
+--- @param is_mid_turn fun(): boolean The `mid_turn` of a notice written now
 --- @return agentic.GrantCommand
 function GrantCommand:new(
     permission_manager,

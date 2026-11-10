@@ -71,11 +71,23 @@ function P.invoke_hook(hook_name, data)
     end
 end
 
+--- How the replay of a session/load in flight is handled:
+--- - `loading`: its replay arrives and is written as it comes.
+--- - `holding`: the session file rendered the chat, and the replay is held.
+--- - `dropping`: the held replay was given up. The rest of it is dropped
+---   until the load ends or a turn starts.
+--- @alias agentic.SessionManager.LoadState "loading"|"holding"|"dropping"
+
+--- @class agentic.SessionManager.PendingLoad
+--- @field session_id string
+--- @field cwd? string Working directory of the session. Nil for the one its file records, else the editor's
+--- @field model? string Model id to apply after the load succeeds
+
 --- @class agentic.SessionManager
 --- @field id integer Monotonic identity, unique for the editor's lifetime. Names the session's buffers
 --- @field session_id? string
 --- @field _is_first_message boolean Whether this is the first message in the session, used to add system info only once
---- @field is_generating boolean
+--- @field is_generating boolean The running state the chat header shows
 --- @field widget agentic.ui.ChatWidget
 --- @field agent agentic.acp.ACPClient
 --- @field main_view agentic.ui.AgentView The chat's. Its response boundary is never reset: every session starts with the writer's prose run closed and history ending on a user message, where a stale verdict writes no break
@@ -96,12 +108,9 @@ end
 --- @field _thought_response_id? string `messageId` of the main agent's last thought chunk
 --- @field _title_user_set? boolean Set once the user picks a title via /rename; blocks the provider's auto-summary from overriding it
 --- @field _history_to_send? agentic.ui.ChatHistory History whose messages to prepend on next prompt submit, as a text transcript (the history prefix)
---- @field _loading_saved boolean True while a load of a saved session is deferred or in flight. Stops the constructor's on-ready from starting a new session
 --- @field _session_epoch integer Monotonic counter incremented on each new_session/load; guards stale create_session callbacks
---- @field _pending_load_session_id? string Deferred session/load until agent is ready
---- @field _pending_load_cwd? string CWD for the deferred session/load
+--- @field _pending_load? agentic.SessionManager.PendingLoad A session/load deferred until the agent is ready
 --- @field _cwd string Working directory of the ACP session. Also selects the project folder of its session file
---- @field _pending_load_model? string Model id to apply after session/load succeeds
 --- @field _usage? agentic.ui.InfoPanel.Usage
 --- @field _name? string The provider's name for the session as last shown
 --- @field _available_commands? agentic.acp.AvailableCommand[] The provider's last advertised slash commands; nil before the first advertisement
@@ -110,9 +119,8 @@ end
 --- @field _draining_queue? boolean A queued block is being taken; guards _drain_queue against re-entry
 --- @field _prompt_pending integer Prompt callbacks still outstanding (the in_flight gate)
 --- @field _continue_mark? integer Queued-region tag of the automatic "continue"
---- @field _loading? boolean A session/load RPC is in flight
---- @field _replay_hold? agentic.SessionManager.HeldUpdate[] Conversation updates of a session/load replay, held until the load completes
---- @field _replay_dropped? boolean A held replay was abandoned: its remaining updates are dropped until the load completes or a turn starts
+--- @field _load_state? agentic.SessionManager.LoadState How the replay of a session/load in flight is handled. Nil with no load, or once its replay was given up. Set only through `_set_load_state`
+--- @field _replay_hold? agentic.SessionManager.HeldUpdate[] Conversation updates of a session/load replay, held until the load completes. Set exactly while `_load_state` is `holding`
 --- @field _reauth_live_retry boolean Set when a re-login was answered by keeping the live session, cleared by the next successful turn; a re-login while still set restarts the provider subprocess instead
 --- @field _transient_attempt number Consecutive silent retries of transient server errors (0 = none this chain)
 --- @field _checktime_scheduled boolean Coalesces rapid checktime calls into one deferred check
@@ -206,7 +214,11 @@ end
 function SessionManager:_persist_history(history)
     -- Not delegated to `ChatHistory:save`, which reports the missing id as an
     -- error. Reaching here before a session exists is expected.
-    if not history.session_id or self._loading or not history:has_prompt() then
+    if
+        not history.session_id
+        or self:_replaying()
+        or not history:has_prompt()
+    then
         return
     end
 
@@ -237,7 +249,9 @@ function SessionManager:_sync_modified(history)
     if history ~= self.chat_history then
         return
     end
-    local unsaved = history.dirty and not self._loading and history:has_prompt()
+    local unsaved = history.dirty
+        and not self:_replaying()
+        and history:has_prompt()
     -- Nil once the widget is destroyed.
     local chat = self.widget.buf_nrs.agent
     if chat and vim.api.nvim_buf_is_valid(chat) then
@@ -255,6 +269,29 @@ function SessionManager:_set_prompt_pending(count)
     self:_sync_modified(self.chat_history)
 end
 
+--- Set the load state, and with it the replay hold (a new empty one for
+--- `holding`, else nil) and the chat's `modified` flag.
+--- @param state agentic.SessionManager.LoadState|nil
+function SessionManager:_set_load_state(state)
+    self._load_state = state
+    self._replay_hold = state == "holding" and {} or nil
+    self:_sync_modified(self.chat_history)
+end
+
+--- Whether a session/load's replay of past work is still arriving.
+--- @return boolean
+function SessionManager:_replaying()
+    return self._load_state == "loading" or self._load_state == "holding"
+end
+
+--- Whether a prompt's turn or a load's replay is still arriving, whose own
+--- end will finalize the writer. A turn no prompt started (such as one a
+--- received message started) is not counted.
+--- @return boolean
+function SessionManager:_turn_open()
+    return self._prompt_pending > 0 or self:_replaying()
+end
+
 --- Set `is_generating` and show it in the chat header.
 --- @param generating boolean
 function SessionManager:_set_generating(generating)
@@ -262,13 +299,13 @@ function SessionManager:_set_generating(generating)
     self.widget:set_running(generating)
 end
 
---- Handle a mutation of `history`. With no turn in flight the change is
---- written at once. Mid-turn only the chat's `modified` flag follows it, and
---- the turn-end save writes it.
+--- Handle a mutation of `history`. With no turn open the change is written
+--- at once. Otherwise only the chat's `modified` flag follows it, and the
+--- turn's end writes it.
 --- @param history agentic.ui.ChatHistory
 function SessionManager:_history_changed(history)
     -- A session/load writes once, at its end.
-    if self._prompt_pending == 0 and not self._loading then
+    if not self:_turn_open() then
         self:_persist_history(history)
     else
         self:_sync_modified(history)
@@ -296,7 +333,6 @@ function SessionManager:new(provider)
         session_id = nil,
         _is_first_message = true,
         is_generating = false,
-        _loading_saved = false,
         _session_epoch = 0,
         _cwd = vim.fn.getcwd(),
         destroyed = false,
@@ -316,17 +352,16 @@ function SessionManager:new(provider)
                 return
             end
 
-            if self._pending_load_session_id then
+            local pending = self._pending_load
+            if pending then
                 -- Deferred load_acp_session: agent is now ready
-                --- @type string
-                local sid = self._pending_load_session_id
-                local pending_cwd = self._pending_load_cwd
-                local pending_model = self._pending_load_model
-                self._pending_load_session_id = nil
-                self._pending_load_cwd = nil
-                self._pending_load_model = nil
-                self:_do_load_acp_session(sid, pending_cwd, pending_model)
-            elseif not self._loading_saved then
+                self._pending_load = nil
+                self:_do_load_acp_session(
+                    pending.session_id,
+                    pending.cwd,
+                    pending.model
+                )
+            elseif not self._load_state then
                 -- Skip auto-new_session while a load is in flight
                 self:new_session({ keep_cwd = true })
             end
@@ -381,7 +416,7 @@ function SessionManager:new(provider)
             return self._cwd
         end,
         function()
-            return self.is_generating
+            return self:_turn_open()
         end
     )
     self.permission_manager.on_hidden = function(badge_bufnr, anchor_bufnr)
@@ -812,7 +847,7 @@ function SessionManager:_write_session()
         )
         return
     end
-    if self._loading then
+    if self:_replaying() then
         Logger.notify(
             "The session is still loading from its file, so there is nothing to write",
             vim.log.levels.WARN
@@ -954,7 +989,7 @@ end
 --- @param row agentic.ui.ChatHistory.SessionMessage
 function SessionManager:_write_chat_row(row)
     -- A load replays a running conversation.
-    local mid_turn = self._prompt_pending > 0 or self._loading
+    local mid_turn = self:_turn_open()
     SessionResume.write_row(self.message_writer, row, mid_turn, function(id)
         return self._subagents:buffer_name(id)
     end)
@@ -1051,8 +1086,10 @@ function SessionManager:_on_agent_chunk(update, source_session_id)
             starts_thinking = message_id ~= self._thought_response_id
             self._thought_response_id = message_id
         end
-        local starts_unprompted = starts_thinking and self._prompt_pending == 0
-        if (starts_response or starts_unprompted) and not self._loading then
+        if
+            not self:_replaying()
+            and (starts_response or (starts_thinking and not self:_turn_open()))
+        then
             self:_drain_side_records()
         end
     end
@@ -1100,7 +1137,7 @@ function SessionManager:_on_session_update(update, source_session_id)
         self._subagents:update(
             update,
             source_session_id --[[@as string]],
-            self._loading == true
+            self:_replaying()
         )
     elseif update.sessionUpdate == "session_message" then
         self._subagents:message(update, source_session_id --[[@as string]])
@@ -1197,12 +1234,12 @@ function SessionManager:_refresh()
     -- a session/load that never completes would otherwise defer every later
     -- submit with no way back, and unwedging that is what this function is for.
     self:_set_prompt_pending(0)
-    self._loading = false
     -- The rest of a held replay would otherwise render below the file and save
     -- as duplicates. A later load adds what the dropped part held.
-    if self._replay_hold then
-        self._replay_hold = nil
-        self._replay_dropped = true
+    if self._load_state == "holding" then
+        self:_set_load_state("dropping")
+    elseif self._load_state == "loading" then
+        self:_set_load_state(nil)
     end
     -- A subagent the provider never reports as ended holds the chat modified.
     self._subagents:close_all({ state = "unknown" })
@@ -1239,7 +1276,7 @@ function SessionManager:_display_context_usage()
         glyph = Glyphs.COMMAND.context,
         title = title,
         body = body,
-        mid_turn = self.is_generating,
+        mid_turn = self:_turn_open(),
     })
 end
 
@@ -1258,7 +1295,7 @@ function SessionManager:_rename_session(new_title)
     self.message_writer:write_notice({
         glyph = Glyphs.COMMAND.rename,
         title = trimmed,
-        mid_turn = self.is_generating,
+        mid_turn = self:_turn_open(),
     })
 
     -- Persist the updated title
@@ -1431,21 +1468,21 @@ function SessionManager:_build_handlers()
     }
 end
 
---- Append an update to `_replay_hold` while a replay is held, or drop it while
---- `_replay_dropped` is set.
+--- Append an update to `_replay_hold` while `holding`, or drop it while
+--- `dropping`.
 --- @param kind "on_session_update"|"on_tool_call"|"on_tool_call_update" The handler that got it
 --- @param update table
 --- @param source_session_id string|nil
 --- @return boolean taken False when the update is neither held nor dropped
 function SessionManager:_take_replay_update(kind, update, source_session_id)
-    if self._replay_hold then
+    if self._load_state == "holding" then
         table.insert(
             self._replay_hold,
             { kind = kind, args = { update, source_session_id } }
         )
         return true
     end
-    return self._replay_dropped == true
+    return self._load_state == "dropping"
 end
 
 --- The sequence entry of one held replay update. Nil when the update makes no
@@ -1574,7 +1611,7 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
         self._subagents:note_task(child_id, task_id)
         self._subagents:read_record(child_id)
         agent_key = self._subagents:agent_key(child_id)
-    elseif self._prompt_pending == 0 and not self._loading then
+    elseif not self:_turn_open() then
         -- Records already recorded go above a turn no prompt started, which
         -- can open with a tool call. Drain before taking the held fields:
         -- the drain can add to them.
@@ -1664,7 +1701,7 @@ end
 --- `end` or a blank line.
 --- @param tool_call_id string
 function SessionManager:_try_record_edit_range(tool_call_id)
-    if not tool_call_id or self._loading then
+    if not tool_call_id or self:_replaying() then
         return
     end
     if self.permission_manager:has_edit_range(tool_call_id) then
@@ -1877,7 +1914,7 @@ function SessionManager:_refresh_name()
         self.message_writer:write_notice({
             glyph = Glyphs.COMMAND.agents,
             title = name,
-            mid_turn = self.is_generating,
+            mid_turn = self:_turn_open(),
         })
     end
     self:render_info()
@@ -2514,7 +2551,7 @@ function SessionManager:_notice_model_switched(model_id)
         glyph = Glyphs.COMMAND.model,
         title = options:model_title(name, model_id),
         body = body,
-        mid_turn = self.is_generating,
+        mid_turn = self:_turn_open(),
     })
 end
 
@@ -2536,7 +2573,7 @@ function SessionManager:_notice_mode_switched(mode_id)
         glyph = Glyphs.KIND.switch_mode,
         title = mode and mode.name or mode_id,
         body = body,
-        mid_turn = self.is_generating,
+        mid_turn = self:_turn_open(),
     })
 end
 
@@ -2546,7 +2583,7 @@ function SessionManager:_notice_thought_level_switched(value)
     self.message_writer:write_notice({
         glyph = Glyphs.COMMAND.effort,
         title = self.config_options:current_thought_level_label() or value,
-        mid_turn = self.is_generating,
+        mid_turn = self:_turn_open(),
     })
 end
 
@@ -2657,10 +2694,12 @@ end
 --- limit still holds and a lift will drain the queue.
 --- @alias agentic.OnReturned fun(reason: agentic.ReturnReason, held: boolean|nil)
 
---- What a held user prompt waits on, as a phrase, for each reason that holds
---- one.
+--- The defer reasons that hold a prompt the user sends, each as a phrase.
+--- `in_flight` and `usage_limited` hold only the queue's automatic drain:
+--- the provider runs a mid-turn prompt as its next turn, and the provider,
+--- not the plugin's view of the limit, decides whether the limit still holds.
 --- @type table<agentic.SubmitDeferReason, string>
-local HOLD_CAUSE = {
+local SUBMIT_HOLDS = {
     loading = "the session is still loading",
     not_ready = "no session yet",
 }
@@ -2683,7 +2722,7 @@ function SessionManager:_submit_defer_reason(prompt)
     end
     -- session_id is assigned before the session/load RPC, so the readiness
     -- check below reads clear while a session is still being replayed.
-    if self._loading then
+    if self:_replaying() then
         return "loading"
     end
     if not (self.session_id and self.agent and self.agent.state == "ready") then
@@ -2738,7 +2777,7 @@ end
 --- @return boolean dispatched
 function SessionManager:_handle_input_submit(input_text, opts)
     opts = opts or {}
-    if self:_submit_hold_reason(input_text) then
+    if SUBMIT_HOLDS[self:_submit_defer_reason(input_text)] then
         if not opts.from_buffer then
             self:_queue_input(input_text)
         end
@@ -2759,20 +2798,6 @@ function SessionManager:_queue_input(text, opts)
     return self.widget.input_dispatch:queue_paragraph(text, opts)
 end
 
---- Why the gate holds back a prompt the user sends, or nil if it goes out.
---- Neither a turn in flight nor the usage limit holds one: the provider runs
---- a mid-turn prompt as the next turn, and the provider, not the plugin's
---- view of the limit, decides whether the limit still holds.
---- @param prompt string
---- @return agentic.SubmitDeferReason|nil
-function SessionManager:_submit_hold_reason(prompt)
-    local reason = self:_submit_defer_reason(prompt)
-    if reason == "in_flight" or reason == "usage_limited" then
-        return nil
-    end
-    return reason
-end
-
 --- Send a prompt to the main agent on the user's behalf, apart from their
 --- own turns. It passes the submit gate, but carries none of the pending
 --- context, title, history prefix or system info of a user submit, and
@@ -2781,11 +2806,11 @@ end
 --- @param on_returned agentic.OnReturned|nil Called when the turn returns the prompt
 --- @return string|nil held_cause Why the prompt was held, as a phrase; nil when sent
 function SessionManager:_relay(instruction, on_returned)
-    local reason = self:_submit_hold_reason(instruction)
-    if not reason then
+    local held_cause = SUBMIT_HOLDS[self:_submit_defer_reason(instruction)]
+    if not held_cause then
         self:_send_user_prompt(instruction, {}, {}, on_returned)
     end
-    return reason and HOLD_CAUSE[reason]
+    return held_cause
 end
 
 --- Supersede the current session generation, so callbacks still in flight for
@@ -2796,17 +2821,15 @@ end
 --- and their decrements are refused from now on, so nothing else would ever
 --- bring the counter back down. A load or a re-create from history leaves
 --- `_cancel_session` unrun.
---- The same holds for the load gate and replay hold of a load the refused
---- callback would have ended, and for `is_generating`, which the refused
---- prompt callback would have cleared.
+--- The same holds for the load state of a load the refused callback would
+--- have ended, and for `is_generating`, which the refused prompt callback
+--- would have cleared. The usage limit is the provider account's, and stays.
 function SessionManager:_advance_session_epoch()
     self._session_epoch = self._session_epoch + 1
     self._subagents:forget()
     self:_set_prompt_pending(0)
     self:_set_generating(false)
-    self._loading = false
-    self._replay_hold = nil
-    self._replay_dropped = nil
+    self:_set_load_state(nil)
 end
 
 --- Stop the running turn without ending the session. Safe when nothing is
@@ -3255,7 +3278,9 @@ function SessionManager:_dispatch_turn(prompt, user_msg, on_returned)
 
     -- What arrives from here on answers this turn, not a replay `_refresh`
     -- abandoned.
-    self._replay_dropped = nil
+    if self._load_state == "dropping" then
+        self:_set_load_state(nil)
+    end
 
     self:_set_generating(true)
 
@@ -3617,10 +3642,8 @@ function SessionManager:load_acp_session(session_id, cwd, model)
         self:_do_load_acp_session(session_id, cwd, model)
     else
         -- Agent still starting — defer until on_ready fires
-        self._loading_saved = true
-        self._pending_load_session_id = session_id
-        self._pending_load_cwd = cwd
-        self._pending_load_model = model
+        self._pending_load =
+            { session_id = session_id, cwd = cwd, model = model }
     end
 end
 
@@ -3630,11 +3653,18 @@ end
 ---   the cwd recorded in the saved session file, else vim.fn.getcwd().
 --- @param model? string Model id to reapply after load (queued until options arrive).
 function SessionManager:_do_load_acp_session(session_id, cwd, model)
-    -- `_loading_saved` stops the constructor's deferred new_session, the epoch
+    local saved_data = ChatHistory.read_saved(session_id)
+    local saved_history = saved_data and ChatHistory.from_data(saved_data)
+    -- The file renders the chat and the replay adds only what comes after the
+    -- file's end. Without `loadSession` the load fails at once, and the
+    -- fallback renders the file.
+    local from_file = saved_history ~= nil
+        and self.agent.agent_capabilities.loadSession == true
+
+    -- The load state stops the constructor's deferred new_session, the epoch
     -- rejects an in-flight one.
-    self._loading_saved = true
     self:_advance_session_epoch()
-    self._loading = true
+    self:_set_load_state(from_file and "holding" or "loading")
     local epoch = self._session_epoch
 
     -- Clean up the old session's UI state and subscriber, but do NOT send
@@ -3651,13 +3681,6 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     self.status_indicator:start("busy")
 
     self.session_id = session_id
-    local saved_data = ChatHistory.read_saved(session_id)
-    local saved_history = saved_data and ChatHistory.from_data(saved_data)
-    -- The file renders the chat and the replay adds only what comes after the
-    -- file's end. Without `loadSession` the load fails at once, and the
-    -- fallback renders the file.
-    local from_file = saved_history ~= nil
-        and self.agent.agent_capabilities.loadSession == true
     if not from_file then
         self.chat_history.session_id = session_id
         self.chat_history.timestamp = os.time()
@@ -3683,7 +3706,6 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
         --- @cast saved_history agentic.ui.ChatHistory
         self:_install_history(saved_history)
         self:_render_history()
-        self._replay_hold = {}
     end
 
     self.agent:load_session(
@@ -3720,31 +3742,22 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                         vim.log.levels.WARN
                     )
                 end
-                self._loading_saved = false
-                self._loading = false
-                self._replay_hold = nil
-                self._replay_dropped = nil
+                self:_set_load_state(nil)
                 -- With `from_file` the same object as `self.chat_history`.
                 self:_new_session_after_failed_load(session_id, saved_history)
                 return
             end
 
-            if from_file then
-                -- Set unless `_refresh` dropped it.
+            -- Not `holding` once `_refresh` dropped the hold.
+            if self._load_state == "holding" then
                 local hold = self._replay_hold --[[@as agentic.SessionManager.HeldUpdate[] ]]
-                self._replay_hold = nil
-                if self._replay_dropped then
-                    self._replay_dropped = nil
-                else
-                    -- With `_loading` still set: the tail's edits are on disk
-                    -- already, so `_try_record_edit_range` must skip them.
-                    self:_dispatch_replay_tail(hold)
-                end
+                -- Still replaying: the tail's edits are on disk already, so
+                -- `_try_record_edit_range` must skip them.
+                self:_set_load_state("loading")
+                self:_dispatch_replay_tail(hold)
             end
-            self._loading_saved = false
-            self._loading = false
+            self:_set_load_state(nil)
             self.status_indicator:stop()
-            self:_sync_modified(self.chat_history)
 
             if not from_file then
                 -- After the replay, whose spawns made the transcripts they
@@ -3777,11 +3790,13 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                             or self.agent.provider_name
                     ),
                 },
+                -- A turn sent after `_refresh` dropped the hold can still run.
+                mid_turn = self:_turn_open(),
             })
             self:_reapply_model(model)
             self:_refresh_name()
 
-            -- The only drain on this path: `_loading_saved` keeps the
+            -- The only drain on this path: the load state keeps the
             -- constructor's on-ready from running new_session, and
             -- replace_with_history does not run. Placed after the welcome
             -- write, never at the top of the callback — the error branch
@@ -3884,20 +3899,11 @@ function SessionManager:_reset_conversation()
 end
 
 --- Cancel the ACP session on the provider and reset the conversation like
---- `_reset_conversation`. Also clears the load gate.
+--- `_reset_conversation`.
 function SessionManager:_cancel_session()
     if self.session_id then
         self.agent:cancel_session(self.session_id)
     end
-    -- Every gate state but the usage limit is per-session, so /new recovers a
-    -- wedged one. /new is exempt from the gate precisely so it stays
-    -- reachable to do this. The usage limit is the provider account's, and
-    -- /new does not clear it. The in-flight counter is released by
-    -- _advance_session_epoch instead, which also covers the load and
-    -- re-create paths that never reach here.
-    self._loading = false
-    self._replay_hold = nil
-    self._replay_dropped = nil
     self:_reset_conversation()
 end
 

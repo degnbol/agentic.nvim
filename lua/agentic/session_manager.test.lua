@@ -59,6 +59,17 @@ local function with_subagents(session)
     return session
 end
 
+--- Give a fake session the turn predicates of `SessionManager`, with no
+--- prompt in flight unless it already counts one.
+--- @param session agentic.SessionManager
+--- @return agentic.SessionManager session
+local function with_turn_state(session)
+    session._prompt_pending = session._prompt_pending or 0
+    session._replaying = SessionManager._replaying
+    session._turn_open = SessionManager._turn_open
+    return session
+end
+
 describe("agentic.SessionManager", function()
     describe("_on_session_update: current_mode_update", function()
         --- @type TestStub
@@ -283,6 +294,8 @@ describe("agentic.SessionManager", function()
                 },
                 _sync_history_context = function() end,
                 _persist_history = SessionManager._persist_history,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
                 _history_changed = SessionManager._history_changed,
                 _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
@@ -355,6 +368,8 @@ describe("agentic.SessionManager", function()
                 _update_chat_header = function() end,
                 chat_history = ChatHistory:new(),
                 _sync_modified = SessionManager._sync_modified,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
             with_subagents(session)
@@ -411,6 +426,8 @@ describe("agentic.SessionManager", function()
                     _update_chat_header = function() end,
                     chat_history = ChatHistory:new(),
                     _sync_modified = SessionManager._sync_modified,
+                    _replaying = SessionManager._replaying,
+                    _turn_open = SessionManager._turn_open,
                     _set_prompt_pending = SessionManager._set_prompt_pending,
                 } --[[@as agentic.SessionManager]]
                 with_subagents(session)
@@ -477,6 +494,8 @@ describe("agentic.SessionManager", function()
                 _update_chat_header = update_chat_header or noop,
                 chat_history = ChatHistory:new(),
                 _sync_modified = SessionManager._sync_modified,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]])
         end
@@ -520,13 +539,13 @@ describe("agentic.SessionManager", function()
             assert.spy(session.status_indicator.stop).was.called(1)
         end)
 
-        it("keeps the load gate", function()
+        it("keeps the load state", function()
             local session = make_session()
-            session._loading = true
+            session._load_state = "loading"
 
             session:_reset_conversation()
 
-            assert.is_true(session._loading)
+            assert.equal("loading", session._load_state)
         end)
 
         it("renders the info panel without the usage", function()
@@ -630,7 +649,7 @@ describe("agentic.SessionManager", function()
         -- /new is exempt from the deferral gate precisely so it stays
         -- reachable to unwedge one. A load that never completes would
         -- otherwise defer every submit into the fresh session.
-        it("opens every session gate on reset (/new, /clear)", function()
+        it("opens every session gate on /new", function()
             local SlashCommands = require("agentic.acp.slash_commands")
             local stubs = {
                 spy.stub(SlashCommands, "setCommands"),
@@ -641,8 +660,8 @@ describe("agentic.SessionManager", function()
             local session = {
                 session_id = nil, -- skip the cancel/clear-content block
                 agent = { state = "ready", usage_limit = limit },
-                _loading = true,
-                _prompt_pending = 0,
+                _load_state = "loading",
+                _session_epoch = 0,
                 permission_manager = {
                     clear = function() end,
                 },
@@ -661,13 +680,18 @@ describe("agentic.SessionManager", function()
                 chat_history = ChatHistory:new(),
                 _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
+                _set_load_state = SessionManager._set_load_state,
+                _advance_session_epoch = SessionManager._advance_session_epoch,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
             } --[[@as agentic.SessionManager]]
-            with_subagents(session)
+            with_turn_state(with_subagents(session))
 
+            -- As `new_session` runs them.
             session:_cancel_session()
+            assert.equal("loading", session._load_state)
+            session:_advance_session_epoch()
 
-            assert.is_false(session._loading)
+            assert.is_nil(session._load_state)
             -- Only the fresh session's own readiness is left to wait on.
             assert.equal("not_ready", session:_submit_defer_reason("hello"))
             -- The usage limit is the provider account's.
@@ -679,7 +703,7 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
-    describe("_do_load_acp_session: _loading_saved flag", function()
+    describe("_do_load_acp_session: load state", function()
         --- @type TestStub
         local schedule_stub
         --- @type TestStub
@@ -695,7 +719,6 @@ describe("agentic.SessionManager", function()
             captured_load_cb = nil
             return with_subagents({
                 session_id = nil,
-                _loading_saved = false,
                 _session_epoch = 0,
                 _is_first_message = true,
                 agent = {
@@ -771,6 +794,9 @@ describe("agentic.SessionManager", function()
                 _render_history = noop,
                 _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
+                _set_load_state = SessionManager._set_load_state,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
                 _build_handlers = SessionManager._build_handlers,
                 _grant_command = { apply_defaults = noop },
                 _on_session_update = noop,
@@ -798,22 +824,29 @@ describe("agentic.SessionManager", function()
             Config.sessions.storage_path = original_storage_path
         end)
 
-        it(
-            "sets _loading_saved = true immediately to block deferred new_session",
-            function()
-                local session = make_load_session()
+        it("defers a load until the agent is ready", function()
+            local session = make_load_session()
+            session.agent.agent_capabilities = nil
+            session.load_acp_session = SessionManager.load_acp_session
 
-                -- Simulate: agent.load_session does NOT call callback yet
-                session.agent.load_session = function()
-                    -- pending — callback not invoked
-                end
+            session:load_acp_session("test-session-id", "/tmp", "m")
 
-                session:_do_load_acp_session("test-session-id", "/tmp")
+            assert.same({
+                session_id = "test-session-id",
+                cwd = "/tmp",
+                model = "m",
+            }, session._pending_load)
+            assert.is_nil(session._load_state)
+            assert.is_nil(captured_load_cb)
+        end)
 
-                -- _loading_saved must be true while load is in flight
-                assert.is_true(session._loading_saved)
-            end
-        )
+        it("enters a load state while the load is in flight", function()
+            local session = make_load_session()
+
+            session:_do_load_acp_session("test-session-id", "/tmp")
+
+            assert.equal("loading", session._load_state)
+        end)
 
         it("clears the outgoing session's permission state", function()
             local session = make_load_session()
@@ -838,7 +871,7 @@ describe("agentic.SessionManager", function()
 
                 session:_do_load_acp_session("test-session-id", "/tmp")
 
-                assert.is_true(session._loading)
+                assert.equal("loading", session._load_state)
             end)
 
             it("takes the title of the saved file", function()
@@ -906,7 +939,7 @@ describe("agentic.SessionManager", function()
             )
         end
 
-        it("clears _loading_saved on successful load", function()
+        it("ends the load state on successful load", function()
             local session = make_load_session()
 
             session:_do_load_acp_session("test-session-id", "/tmp")
@@ -915,7 +948,7 @@ describe("agentic.SessionManager", function()
             -- Simulate successful completion
             captured_load_cb(nil, nil)
 
-            assert.is_false(session._loading_saved)
+            assert.is_nil(session._load_state)
         end)
 
         it("takes legacy models from the load result", function()
@@ -970,7 +1003,7 @@ describe("agentic.SessionManager", function()
             assert.same({ "notice", "reapply saved" }, order)
         end)
 
-        it("clears _loading_saved on failed load", function()
+        it("ends the load state on failed load", function()
             local session = make_load_session()
             local notify_stub = spy.stub(Logger, "notify")
 
@@ -983,7 +1016,7 @@ describe("agentic.SessionManager", function()
             -- Simulate failure
             captured_load_cb(nil, { message = "not found" })
 
-            assert.is_false(session._loading_saved)
+            assert.is_nil(session._load_state)
             notify_stub:revert()
         end)
 
@@ -998,12 +1031,10 @@ describe("agentic.SessionManager", function()
 
             session:_do_load_acp_session("test-session-id", "/tmp")
 
-            assert.is_true(session._loading)
             assert.equal("loading", session:_submit_defer_reason("hello"))
 
             captured_load_cb(nil, nil)
 
-            assert.is_false(session._loading)
             assert.is_nil(session:_submit_defer_reason("hello"))
         end)
 
@@ -1073,19 +1104,7 @@ describe("agentic.SessionManager", function()
             assert.equal("test-session-id", fallback.calls[1][2])
             assert.equal("hi", fallback.calls[1][3].messages[1].text)
             assert.spy(render).was.called(0)
-            assert.is_nil(session._replay_hold)
-        end)
-
-        it("clears the load gate when the load fails", function()
-            local session = make_load_session()
-            local notify_stub = spy.stub(Logger, "notify")
-            session._new_session_after_failed_load = function() end
-
-            session:_do_load_acp_session("test-session-id", "/tmp")
-            captured_load_cb(nil, { message = "not found" })
-
-            assert.is_false(session._loading)
-            notify_stub:revert()
+            assert.is_nil(session._load_state)
         end)
 
         -- The success branch is the only drain on this path, and the failure
@@ -1166,13 +1185,13 @@ describe("agentic.SessionManager", function()
                 assert.equal(2, session._session_epoch)
                 assert.equal("loaded-sid-aaa", session.session_id)
 
-                -- Step 3: load completes, _loading_saved cleared
+                -- Step 3: load completes, its load state ends
                 assert.is_not_nil(captured_load_cb)
                 captured_load_cb(nil, nil) -- success
-                assert.is_false(session._loading_saved)
+                assert.is_nil(session._load_state)
 
                 -- Step 4: stale create_session response arrives AFTER load
-                -- This is the race: _loading_saved=false, but epoch mismatch
+                -- This is the race: no load state, but epoch mismatch
                 captured_create_cb({ sessionId = "stale-new-sid-bbb" }, nil)
 
                 -- session_id must NOT have been overwritten
@@ -1478,6 +1497,9 @@ describe("agentic.SessionManager", function()
                 },
                 announce_model_loaded = SessionManager.announce_model_loaded,
                 _notice_model_switched = SessionManager._notice_model_switched,
+                _prompt_pending = 0,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
             } --[[@as agentic.SessionManager]]
             session.main_view = fake_main_view(session)
             return session, write_spy, notice_spy
@@ -1537,11 +1559,11 @@ describe("agentic.SessionManager", function()
             )
         end)
 
-        it("takes the notice level from the generating state", function()
+        it("takes the notice level from the open turn", function()
             local session, _, notice_spy = make_session({
                 ["m"] = { value = "m", name = "M" },
             })
-            session.is_generating = true
+            session._prompt_pending = 1
 
             session:_notice_model_switched("m")
 
@@ -1767,6 +1789,38 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
+    describe("_rename_session", function()
+        --- @param fields table Turn state of the session
+        --- @return agentic.ui.MessageWriter.Notice
+        local function notice_for(fields)
+            local notice_spy = spy.new(function() end)
+            local session = with_turn_state(vim.tbl_extend("force", {
+                is_generating = false,
+                chat_history = ChatHistory:new(),
+                widget = { set_chat_title = function() end },
+                message_writer = { write_notice = notice_spy },
+                _persist_history = function() end,
+                _rename_session = SessionManager._rename_session,
+            }, fields) --[[@as agentic.SessionManager]])
+
+            session:_rename_session("renamed")
+            return notice_spy.calls[1][2]
+        end
+
+        it("leaves a load's replay open", function()
+            assert.is_true(notice_for({ _load_state = "loading" }).mid_turn)
+        end)
+
+        -- `stop_generation` clears `is_generating` before the callback runs.
+        it("leaves a stopped turn open until its callback", function()
+            assert.is_true(notice_for({ _prompt_pending = 1 }).mid_turn)
+        end)
+
+        it("ends the turn between turns", function()
+            assert.is_false(notice_for({}).mid_turn)
+        end)
+    end)
+
     describe("_refresh_name", function()
         --- @param name string|nil The provider's name for the session
         local function make_session(name)
@@ -1781,6 +1835,9 @@ describe("agentic.SessionManager", function()
                 message_writer = { write_notice = spy.new(function() end) },
                 render_info = spy.new(function() end),
                 _refresh_name = SessionManager._refresh_name,
+                _prompt_pending = 0,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
             }
             return session
         end
@@ -1863,6 +1920,9 @@ describe("agentic.SessionManager", function()
                 _set_session_option = SessionManager._set_session_option,
                 render_info = function() end,
                 _notice_mode_switched = SessionManager._notice_mode_switched,
+                _prompt_pending = 0,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
             } --[[@as agentic.SessionManager]]
             return session, notice_spy
         end
@@ -2063,6 +2123,9 @@ describe("agentic.SessionManager", function()
                 _set_session_option = SessionManager._set_session_option,
                 _handle_thought_level_change = SessionManager._handle_thought_level_change,
                 _notice_thought_level_switched = SessionManager._notice_thought_level_switched,
+                _prompt_pending = 0,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
             } --[[@as agentic.SessionManager]]
             return session, notice_spy
         end
@@ -2128,6 +2191,9 @@ describe("agentic.SessionManager", function()
                     end,
                 },
                 _display_context_usage = SessionManager._display_context_usage,
+                _prompt_pending = 0,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
             } --[[@as agentic.SessionManager]]
 
             session:_display_context_usage()
@@ -2514,6 +2580,8 @@ describe("agentic.SessionManager", function()
                     captured_on_created = opts.on_created
                 end),
                 _sync_modified = SessionManager._sync_modified,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 switch_provider = SessionManager.switch_provider,
             } --[[@as agentic.SessionManager]]
@@ -3555,6 +3623,8 @@ describe("agentic.SessionManager", function()
                 },
                 _view_for = SessionManager._view_for,
                 _try_record_edit_range = SessionManager._try_record_edit_range,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
             } --[[@as agentic.SessionManager]]
             with_subagents(session)
             return session, recorded
@@ -3671,7 +3741,6 @@ describe("agentic.SessionManager", function()
                 code_selection = { is_empty = empty },
                 diagnostics_list = { is_empty = empty },
                 _handle_input_submit = SessionManager._handle_input_submit,
-                _submit_hold_reason = SessionManager._submit_hold_reason,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _send_user_prompt = SessionManager._send_user_prompt,
                 _dispatch_turn = SessionManager._dispatch_turn,
@@ -3681,6 +3750,8 @@ describe("agentic.SessionManager", function()
                 config_options = { current_model_id = noop },
                 _sync_history_context = SessionManager._sync_history_context,
                 _persist_history = SessionManager._persist_history,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
                 _history_changed = SessionManager._history_changed,
                 _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
@@ -3864,7 +3935,6 @@ describe("agentic.SessionManager", function()
                 diagnostics_list = { is_empty = empty },
                 _ring_bell = noop,
                 _handle_input_submit = SessionManager._handle_input_submit,
-                _submit_hold_reason = SessionManager._submit_hold_reason,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _send_user_prompt = SessionManager._send_user_prompt,
                 _dispatch_turn = SessionManager._dispatch_turn,
@@ -3878,6 +3948,8 @@ describe("agentic.SessionManager", function()
                 config_options = { current_model_id = noop },
                 _sync_history_context = SessionManager._sync_history_context,
                 _persist_history = SessionManager._persist_history,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
                 _history_changed = SessionManager._history_changed,
                 _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
@@ -4317,7 +4389,7 @@ describe("agentic.SessionManager", function()
 
                 it("returns the cause of a held relay", function()
                     local session = refusing_session({ stopReason = "refusal" })
-                    session._loading = true
+                    session._load_state = "loading"
 
                     assert.equal(
                         "the session is still loading",
@@ -5150,11 +5222,12 @@ describe("agentic.SessionManager", function()
                 _delete_session = delete_spy,
                 _dispatch_turn = dispatch_spy,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
                 _run_local_command = SessionManager._run_local_command,
                 _drain_queue = SessionManager._drain_queue,
                 _truncate_queue = SessionManager._truncate_queue,
                 _handle_input_submit = SessionManager._handle_input_submit,
-                _submit_hold_reason = SessionManager._submit_hold_reason,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _send_user_prompt = SessionManager._send_user_prompt,
             } --[[@as agentic.SessionManager]]
@@ -5291,6 +5364,8 @@ describe("agentic.SessionManager", function()
                 },
                 _prompt_pending = 0,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
             } --[[@as agentic.SessionManager]]
         end
 
@@ -5306,7 +5381,7 @@ describe("agentic.SessionManager", function()
 
         it("defers while a session/load is in flight", function()
             local session = ready_session()
-            session._loading = true
+            session._load_state = "loading"
             assert.equal("loading", session:_submit_defer_reason("hello"))
         end)
 
@@ -5361,10 +5436,13 @@ describe("agentic.SessionManager", function()
                 },
                 session_id = "s-1",
                 _advance_session_epoch = SessionManager._advance_session_epoch,
+                _set_load_state = SessionManager._set_load_state,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _set_generating = function() end,
                 _sync_modified = function() end,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
             } --[[@as agentic.SessionManager]]
             with_subagents(session)
 
@@ -5384,6 +5462,7 @@ describe("agentic.SessionManager", function()
                 is_generating = true,
                 widget = { set_running = running },
                 _advance_session_epoch = SessionManager._advance_session_epoch,
+                _set_load_state = SessionManager._set_load_state,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _set_generating = SessionManager._set_generating,
                 _sync_modified = function() end,
@@ -5394,6 +5473,120 @@ describe("agentic.SessionManager", function()
 
             assert.is_false(session.is_generating)
             assert.is_false(running.calls[1][2])
+        end)
+
+        -- The refused load callback is what would have ended it, and the
+        -- reconnect's on-ready starts no session while it is set.
+        it("ends the outgoing load", function()
+            local session = {
+                _session_epoch = 0,
+                _load_state = "holding",
+                _replay_hold = {},
+                widget = { set_running = function() end },
+                _advance_session_epoch = SessionManager._advance_session_epoch,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _set_generating = SessionManager._set_generating,
+                _set_load_state = SessionManager._set_load_state,
+                _sync_modified = function() end,
+            } --[[@as agentic.SessionManager]]
+            with_subagents(session)
+
+            session:_advance_session_epoch()
+
+            assert.is_nil(session._load_state)
+            assert.is_nil(session._replay_hold)
+        end)
+    end)
+
+    describe("_set_load_state", function()
+        --- @type integer
+        local chat
+
+        before_each(function()
+            -- Not a scratch buffer: `nofile` keeps `modified` false.
+            chat = vim.api.nvim_create_buf(false, false)
+        end)
+
+        after_each(function()
+            vim.api.nvim_buf_delete(chat, { force = true })
+        end)
+
+        --- A session whose history holds an unsaved prompt.
+        --- @return agentic.SessionManager
+        local function make_session()
+            local history = ChatHistory:new()
+            history:add_message({ type = "user", text = "hi" })
+            return with_turn_state(with_subagents({
+                chat_history = history,
+                widget = { buf_nrs = { agent = chat } },
+                _set_load_state = SessionManager._set_load_state,
+                _sync_modified = SessionManager._sync_modified,
+            } --[[@as agentic.SessionManager]]))
+        end
+
+        it("holds a replay only while holding", function()
+            local session = make_session()
+            for _, case in ipairs({
+                { state = "holding", hold = {} },
+                { state = "loading", hold = nil },
+                { state = "dropping", hold = nil },
+                { state = nil, hold = nil },
+            }) do
+                session:_set_load_state(case.state)
+                assert.same(case.hold, session._replay_hold)
+            end
+        end)
+
+        -- A history a load is filling counts as saved.
+        it("resyncs the chat's modified flag", function()
+            local session = make_session()
+
+            session:_set_load_state("loading")
+            assert.is_false(vim.bo[chat].modified)
+
+            session:_set_load_state(nil)
+            assert.is_true(vim.bo[chat].modified)
+        end)
+    end)
+
+    describe("_refresh", function()
+        --- @param load_state agentic.SessionManager.LoadState|nil
+        --- @return agentic.SessionManager
+        local function make_session(load_state)
+            local noop = function() end
+            local session = with_turn_state(with_subagents({
+                is_generating = false,
+                _load_state = load_state,
+                _replay_hold = load_state == "holding" and {} or nil,
+                widget = {},
+                message_writer = { reset_turn_state = noop },
+                _refresh = SessionManager._refresh,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _set_load_state = SessionManager._set_load_state,
+                _take_replay_update = SessionManager._take_replay_update,
+                _sync_modified = noop,
+            } --[[@as agentic.SessionManager]]))
+            return session
+        end
+
+        it("drops the rest of a held replay", function()
+            local session = make_session("holding")
+
+            session:_refresh()
+
+            assert.equal("dropping", session._load_state)
+            assert.is_true(
+                session:_take_replay_update("on_session_update", {}, nil)
+            )
+            assert.is_nil(session._replay_hold)
+        end)
+
+        it("ends a load that holds no replay", function()
+            local session = make_session("loading")
+
+            session:_refresh()
+
+            assert.is_nil(session._load_state)
         end)
     end)
 
@@ -5474,6 +5667,8 @@ describe("agentic.SessionManager", function()
                 _update_chat_header = function() end,
                 chat_history = ChatHistory:new(),
                 _sync_modified = SessionManager._sync_modified,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
             with_subagents(session)
@@ -5535,7 +5730,6 @@ describe("agentic.SessionManager", function()
                 chat_history = ChatHistory:new(),
                 status_indicator = { reposition = noop, start = noop },
                 _held_tool_call_updates = {},
-                _loading = false,
                 _drain_side_records = noop,
                 _drain_subagent_side_records = noop,
                 _drain_side_records_of = SessionManager._drain_side_records_of,
@@ -5545,6 +5739,9 @@ describe("agentic.SessionManager", function()
                 _try_record_edit_range = noop,
                 _record_file_op = noop,
                 _on_tool_call = SessionManager._on_tool_call,
+                _prompt_pending = 0,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
                 _on_tool_call_update = SessionManager._on_tool_call_update,
                 _on_permission_decided = SessionManager._on_permission_decided,
                 _sync_job_stop = SessionManager._sync_job_stop,
@@ -6441,8 +6638,9 @@ describe("agentic.SessionManager", function()
                     table.insert(sink.queued, text)
                 end,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
                 _handle_input_submit = SessionManager._handle_input_submit,
-                _submit_hold_reason = SessionManager._submit_hold_reason,
             }
             --- @type agentic.SessionManager
             local typed = session
@@ -6482,7 +6680,7 @@ describe("agentic.SessionManager", function()
                     sm.session_id = nil
                 end,
                 loading = function(sm)
-                    sm._loading = true
+                    sm._load_state = "loading"
                 end,
             }
             for _, close_gate in pairs(gates) do
@@ -6624,12 +6822,13 @@ describe("agentic.SessionManager", function()
                 _rename_session = rename_spy,
                 _dispatch_turn = dispatch_spy,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
                 _run_local_command = SessionManager._run_local_command,
                 _drain_queue = SessionManager._drain_queue,
                 _truncate_queue = SessionManager._truncate_queue,
                 _confirm_queued_command = SessionManager._confirm_queued_command,
                 _handle_input_submit = SessionManager._handle_input_submit,
-                _submit_hold_reason = SessionManager._submit_hold_reason,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _send_user_prompt = SessionManager._send_user_prompt,
             } --[[@as agentic.SessionManager]]
@@ -7112,6 +7311,8 @@ describe("agentic.SessionManager", function()
                 config_options = { current_model_id = function() end },
                 _sync_history_context = SessionManager._sync_history_context,
                 _persist_history = SessionManager._persist_history,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
                 _sync_modified = SessionManager._sync_modified,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]])
@@ -7308,7 +7509,7 @@ describe("agentic.SessionManager", function()
         end)
 
         it("does not drain while the session loads", function()
-            session._loading = true
+            session._load_state = "loading"
             session:_on_session_update(chunk("X", "first"))
             session:_on_session_update(chunk("Y", "reply"))
 

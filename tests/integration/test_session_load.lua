@@ -403,7 +403,7 @@ _G.replay_tail()
 
         assert.equal(0, count(child.lua_get("_G.chat()"), "next prompt"))
         assert.equal(0, child.lua_get("_G.saves"))
-        assert.is_true(child.lua_get("_G.s._replay_dropped == nil"))
+        assert.is_true(child.lua_get([[_G.s._load_state ~= "dropping"]]))
     end)
 
     it("shows a turn sent after a refresh during the hold", function()
@@ -416,6 +416,30 @@ _G.agent("live reply")
         child.flush()
 
         assert.equal(1, count(child.lua_get("_G.chat()"), "live reply"))
+        assert.is_true(child.lua_get("_G.s._load_state == nil"))
+    end)
+
+    it("ends a load that a turn after a refresh outlived", function()
+        child.lua([[
+_G.s:_do_load_acp_session("sid-x", "/tmp")
+_G.s:_refresh()
+_G.s:_send_synthetic_prompt("go on")
+_G.replay_tail()
+]])
+        child.flush()
+        child.lua([[
+local write_notice = _G.s.message_writer.write_notice
+_G.s.message_writer.write_notice = function(writer, notice)
+    _G.resume_mid_turn = notice.mid_turn
+    return write_notice(writer, notice)
+end
+_G.load_cb({}, nil)
+]])
+        child.flush()
+
+        assert.equal(1, count(child.lua_get("_G.chat()"), "next prompt"))
+        -- The turn is still running and finalizes the writer itself.
+        assert.is_true(child.lua_get("_G.resume_mid_turn"))
     end)
 
     it("ends the hold when a new session supersedes the load", function()
@@ -425,7 +449,7 @@ _G.s:new_session({ history = require("agentic.ui.chat_history"):new() })
 ]])
 
         assert.is_true(child.lua_get("_G.s._replay_hold == nil"))
-        assert.is_false(child.lua_get("_G.s._loading"))
+        assert.is_true(child.lua_get("_G.s._load_state == nil"))
     end)
 
     it(

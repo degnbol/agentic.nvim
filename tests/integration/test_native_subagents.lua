@@ -2295,7 +2295,7 @@ _G.update("root", {
 
     it("a load does not drain", function()
         child.lua([[
-_G.s._loading = true
+_G.s._load_state = "loading"
 _G.receive()
 _G.update("root", {
     sessionUpdate = "agent_thought_chunk",

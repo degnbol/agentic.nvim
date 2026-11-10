@@ -36,7 +36,7 @@ it, and read it at render.
 
 Pre-edit facts are recorded in `_try_record_edit_range`
 (`session_manager.lua:2040`). It skips `completed`/`failed` (disk is post-edit)
-and `self._loading` (the session/load replay sends past edits as `pending`
+and `self:_replaying()` (the session/load replay sends past edits as `pending`
 while disk is post-edit). The new recorder needs the same two skips.
 
 It must run *before* the writer call, not after it like
@@ -93,5 +93,5 @@ status-only branch is necessary.
   `status = "completed"` and `file_existed_before = false` (the restore shape)
   folds closed.
 - `session_manager`: the flag is `false` for an absent path, `true` for an
-  existing one, unset for an empty `argument`, unset during `_loading`, and set
+  existing one, unset for an empty `argument`, unset during `self:_replaying()`, and set
   on the message before the writer receives it.

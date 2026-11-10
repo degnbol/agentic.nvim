@@ -50,7 +50,7 @@ end
     --- answer shown once and queued for the first prompt.
     local function assert_carried()
         assert.equal("sid-new", child.lua_get("_G.s.session_id"))
-        assert.is_false(child.lua_get("_G.s._loading_saved"))
+        assert.is_true(child.lua_get("_G.s._load_state == nil"))
         assert.equal(1, child.lua_get([[_G.count_in_chat("saved question")]]))
         assert.equal(1, child.lua_get([[_G.count_in_chat("saved answer")]]))
         assert.equal(2, child.lua_get("#_G.s._history_to_send.messages"))
@@ -69,6 +69,31 @@ _G.new_cb({ sessionId = "sid-new" }, nil)
         child.flush()
 
         assert_carried()
+    end)
+
+    it("restart_session mid-load leaves the unsaved chat modified", function()
+        child.lua([[
+_G.s:_do_load_acp_session("sid-none", "/tmp")
+_G.s.chat_history:add_message(_G.msg("user", "saved question"))
+_G.s:restart_session()
+]])
+
+        assert.is_true(
+            child.lua_get("vim.bo[_G.s.widget.buf_nrs.agent].modified")
+        )
+    end)
+
+    it("a reconnect after /new mid-load starts a session", function()
+        child.lua([[
+_G.s:_do_load_acp_session("sid-none", "/tmp")
+_G.s:new_session({ quiet_welcome = true })
+_G.new_cb({ sessionId = "sid-new" }, nil)
+_G.sent = {}
+_G.s.agent._on_ready(_G.s.agent)
+]])
+        child.flush()
+
+        assert.same({ "session/new" }, child.lua_get("_G.sent"))
     end)
 
     it("a failed load replaces its partial replay with the file", function()
