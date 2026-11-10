@@ -352,10 +352,6 @@ end
 --- spaces, a run of at least 3 backticks or tildes, and (for backticks) no
 --- backtick in the info string. A closer, having no info string, always
 --- qualifies.
----
---- The markdown highlights query sets `conceal_lines` on these, so at
---- conceallevel=2 the row is zero-height and anything anchored to it — a sign,
---- a fold marker — never renders.
 --- @param line string
 --- @return boolean
 function M.is_fence_delimiter(line)

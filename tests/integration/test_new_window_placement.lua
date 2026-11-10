@@ -1,9 +1,7 @@
 local assert = require("tests.helpers.assert")
 local Child = require("tests.helpers.child")
 
--- A new chat window draws once at 'conceallevel' 0 and then takes its level
--- back, which collapses the fence rows; these check where it is placed then.
-describe("First draw of a new chat window", function()
+describe("Placement of a new chat window", function()
     local child = Child:new()
 
     before_each(function()
@@ -32,7 +30,7 @@ vim.cmd("normal! G")
         child.stop()
     end)
 
-    --- Let the first draw, the restore and the scroll it schedules land.
+    --- Let the scroll a new window schedules land.
     local function settle()
         child.flush()
         vim.uv.sleep(50)
@@ -88,7 +86,16 @@ math.max(0, vim.api.nvim_win_get_height(_G.new) - vim.api.nvim_win_text_height(_
     it("a split of a following window fills it to the end", function()
         split("vsplit")
 
-        assert.equal(2, child.lua_get("vim.wo[_G.new].conceallevel"))
+        assert.is_false(user_controlled())
+        assert.is_true(shows_last_line())
+        assert.equal(bottom_padding(), empty_rows())
+    end)
+
+    it("a split at level 0 fills it to the end", function()
+        child.lua([[vim.wo[_G.win].conceallevel = 0]])
+
+        split("split")
+
         assert.is_false(user_controlled())
         assert.is_true(shows_last_line())
         assert.equal(bottom_padding(), empty_rows())
@@ -104,7 +111,6 @@ _G.new = vim.api.nvim_get_current_win()
         child.lua([[vim.api.nvim_win_set_buf(_G.new, _G.chat)]])
         settle()
 
-        assert.equal(2, child.lua_get("vim.wo[_G.new].conceallevel"))
         assert.is_false(user_controlled())
         assert.is_true(shows_last_line())
         assert.equal(bottom_padding(), empty_rows())
@@ -149,15 +155,6 @@ vim.fn.getwininfo(_G.new)[1].topline <= 100
         before_each(function()
             child.type_keys("150G")
             child.flush()
-            child.lua([[
-local writer = _G.s.message_writer
-local original = writer.on_row_heights_changed
-writer.on_row_heights_changed = function(self, winid)
-    _G.topline_before = vim.fn.getwininfo(winid)[1].topline
-    original(self, winid)
-    _G.topline_after = vim.fn.getwininfo(winid)[1].topline
-end
-]])
         end)
 
         it("stays in user control", function()
@@ -166,14 +163,22 @@ end
             assert.is_true(user_controlled())
         end)
 
+        --- Screen rows above the topline of `winid`: a topline on a
+        --- zero-height row and the row after it are the same view.
+        --- @param winid string Lua expression for the window
+        --- @return integer
+        local function rows_above(winid)
+            return child.lua_get(([[
+vim.api.nvim_win_text_height(%s, {
+    end_row = vim.fn.getwininfo(%s)[1].topline - 2,
+}).all
+]]):format(winid, winid))
+        end
+
         it("keeps its topline", function()
             split("vsplit")
 
-            assert.is_not_nil(child.lua_get("_G.topline_before"))
-            assert.equal(
-                child.lua_get("_G.topline_before"),
-                child.lua_get("_G.topline_after")
-            )
+            assert.equal(rows_above("_G.win"), rows_above("_G.new"))
         end)
 
         it("in a new tab follows", function()

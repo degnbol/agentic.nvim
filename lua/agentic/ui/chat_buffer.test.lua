@@ -1,7 +1,6 @@
+--- @diagnostic disable: invisible
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
-local MiniTest = require("mini.test")
-local AfterDraw = require("agentic.utils.after_draw")
 local Config = require("agentic.config")
 local ChatBuffer = require("agentic.ui.chat_buffer")
 local Treesitter = require("agentic.utils.treesitter")
@@ -67,98 +66,57 @@ describe("agentic.ui.ChatBuffer", function()
         end)
     end)
 
-    describe("defer_conceal", function()
+    describe("start", function()
         local bufnr
-        local winid
-        --- @type TestStub
-        local once_stub
-        --- @type fun()[]
-        local after_draw
+        local group
 
         before_each(function()
-            after_draw = {}
-            once_stub = spy.stub(AfterDraw, "once")
-            once_stub:invokes(function(_, fn)
-                table.insert(after_draw, fn)
-            end)
-            bufnr = vim.api.nvim_create_buf(false, true)
-            winid = vim.api.nvim_open_win(bufnr, false, {
-                relative = "editor",
-                row = 0,
-                col = 0,
-                width = 10,
-                height = 2,
+            -- As bootstrap.lua registers it.
+            vim.treesitter.language.add("agentic", {
+                path = vim.api.nvim_get_runtime_file(
+                    "parser/markdown.so",
+                    false
+                )[1],
+                symbol_name = "markdown",
             })
-            vim.wo[winid].conceallevel = 3
+            vim.treesitter.language.register("agentic", "AgenticChat")
+            -- As a user config that starts treesitter on every filetype.
+            group = vim.api.nvim_create_augroup("chat_buffer_test", {})
+            vim.api.nvim_create_autocmd("FileType", {
+                group = group,
+                pattern = "AgenticChat",
+                callback = function(args)
+                    vim.treesitter.start(args.buf)
+                end,
+            })
+            bufnr = vim.api.nvim_create_buf(false, true)
+            vim.bo[bufnr].filetype = "AgenticChat"
         end)
 
         after_each(function()
-            once_stub:revert()
-            if vim.api.nvim_win_is_valid(winid) then
-                vim.api.nvim_win_close(winid, true)
-            end
+            vim.api.nvim_del_augroup_by_id(group)
             vim.api.nvim_buf_delete(bufnr, { force = true })
         end)
 
-        local function draw()
-            for _, fn in ipairs(after_draw) do
-                fn()
-            end
-            after_draw = {}
-        end
+        it("replaces a highlighter that hides rows itself", function()
+            assert.is_true(
+                vim.treesitter.highlighter.active[bufnr]._conceal_line == true
+            )
 
-        it("sets level 0 and restores the level after a draw", function()
-            local restored = spy.new(function() end)
-            ChatBuffer.defer_conceal(winid, restored --[[@as fun()]])
-            assert.equal(0, vim.wo[winid].conceallevel)
-            assert.equal(0, restored.call_count)
+            ChatBuffer.start(bufnr)
 
-            draw()
-
-            assert.equal(3, vim.wo[winid].conceallevel)
-            assert.equal(1, restored.call_count)
-            assert.is_nil(vim.w[winid].agentic_conceallevel)
+            local highlighter = vim.treesitter.highlighter.active[bufnr]
+            assert.is_not_nil(highlighter)
+            assert.is_false(highlighter._conceal_line == true)
         end)
 
-        it("does nothing at levels 0 and 1", function()
-            for _, level in ipairs({ 0, 1 }) do
-                vim.wo[winid].conceallevel = level
-                ChatBuffer.defer_conceal(winid, function() end)
-                assert.equal(level, vim.wo[winid].conceallevel)
-            end
-            assert.equal(0, once_stub.call_count)
-        end)
+        it("keeps its highlighter through a later start", function()
+            ChatBuffer.start(bufnr)
+            local highlighter = vim.treesitter.highlighter.active[bufnr]
 
-        it("does nothing while a deferral waits", function()
-            ChatBuffer.defer_conceal(winid, function() end)
-            ChatBuffer.defer_conceal(winid, function() end)
+            vim.treesitter.start(bufnr)
 
-            assert.equal(1, once_stub.call_count)
-            draw()
-            assert.equal(3, vim.wo[winid].conceallevel)
-        end)
-
-        it("leaves a window that shows another buffer by then", function()
-            local restored = spy.new(function() end)
-            ChatBuffer.defer_conceal(winid, restored --[[@as fun()]])
-            local other = vim.api.nvim_create_buf(false, true)
-            MiniTest.finally(function()
-                vim.api.nvim_buf_delete(other, { force = true })
-            end)
-            vim.api.nvim_win_set_buf(winid, other)
-            vim.wo[winid].conceallevel = 0
-
-            draw()
-
-            assert.equal(0, vim.wo[winid].conceallevel)
-            assert.equal(0, restored.call_count)
-            assert.is_nil(vim.w[winid].agentic_conceallevel)
-        end)
-
-        it("conceallevel reads the saved level during a deferral", function()
-            ChatBuffer.defer_conceal(winid, function() end)
-
-            assert.equal(3, ChatBuffer.conceallevel(bufnr))
+            assert.equal(highlighter, vim.treesitter.highlighter.active[bufnr])
         end)
     end)
 

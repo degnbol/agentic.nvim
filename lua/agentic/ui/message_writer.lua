@@ -4,6 +4,7 @@ local ChatBuffer = require("agentic.ui.chat_buffer")
 local Config = require("agentic.config")
 local ErrorReport = require("agentic.acp.error_report")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
+local FenceRows = require("agentic.ui.fence_rows")
 local FileSystem = require("agentic.utils.file_system")
 local Folds = require("agentic.ui.folds")
 local Glyphs = require("agentic.glyphs")
@@ -213,6 +214,7 @@ end
 --- @field _thought_run? string Thinking streamed since the last flush, held back until the run ends because its fence has to reach the buffer in one write (see `flush_thought_run`). Dropped rather than rendered when the widget closes mid-run; the text is in `chat_history`.
 --- @field _rebuild_armed boolean True while a ModeChanged autocmd waits for insert mode to end to rebuild the chat windows' folds. Guards against arming a second one.
 --- @field _augroup integer The writer's autocmd group, deleted with the buffer
+--- @field _fence_rows agentic.ui.FenceRows The buffer's zero-height fence rows, brought up to date by each `_own_edit`
 --- @field _replay_held table<integer, true> Windows that started showing the buffer in insert mode, whose `replay_folds` waits for the rebuild
 --- @field _scroll_owed boolean True from a write's `_schedule_follow` until a scroll discharges it: `_schedule_follow`'s callback on the non-fold path, `flush_pending_fold_ops` on the fold path. The callback's skip branch leaves it set, so a scroll deferred to the fold-close (or to the BufWinEnter retry when no window exists yet) rides along with its pending fold. In insert mode the callback scrolls anyway and still leaves it set.
 --- @field _scroll_callback_queued? boolean Per-tick coalescing guard — true while a deferred scroll callback is queued this tick. Only prevents double-queuing; says nothing about whether the scroll happens.
@@ -276,6 +278,7 @@ function MessageWriter:reset()
     self._has_last_position = false
     self:reset_turn_state()
     vim.api.nvim_buf_clear_namespace(self.bufnr, -1, 0, -1)
+    self._fence_rows:invalidate()
 end
 
 --- @param bufnr integer
@@ -309,6 +312,7 @@ function MessageWriter:new(bufnr)
         _pending_fold_ops = {},
         _fold_states = {},
         _notices = {},
+        _fence_rows = FenceRows:new(bufnr),
     }, self)
 
     -- Listen for the user's scrolls and cursor motions. WinScrolled is not
@@ -392,9 +396,6 @@ function MessageWriter:new(bufnr)
         callback = function()
             local winid = vim.api.nvim_get_current_win()
             if vim.api.nvim_win_get_buf(winid) == bufnr then
-                ChatBuffer.defer_conceal(winid, function()
-                    instance:on_row_heights_changed(winid)
-                end)
                 instance:on_window_shown(winid)
                 instance:replay_folds(winid)
             end
@@ -504,8 +505,10 @@ end
 --- Take in `winid`, a new window split from one that shows the buffer. It
 --- takes the mode of the window it was split from, as vim copies that
 --- window's view into it. A window with no such source (`:tab split`)
---- follows. Public so the autocmd closure can reach it without tripping
---- LuaLS's invisible-field check.
+--- follows. In user control it keeps its topline. Following, it is placed as
+--- a window that newly shows the buffer (`_follow_from_top`), as the split
+--- changed the height it has to fill. Public so the autocmd closure can reach
+--- it without tripping LuaLS's invisible-field check.
 --- @param winid integer The new window
 function MessageWriter:on_window_split(winid)
     local source = vim.fn.win_getid(vim.fn.winnr("#"))
@@ -516,19 +519,8 @@ function MessageWriter:on_window_split(winid)
     then
         self._user_controlled[winid] = self._user_controlled[source]
     end
-    ChatBuffer.defer_conceal(winid, function()
-        self:on_row_heights_changed(winid)
-    end)
-end
-
---- Place `winid` again after its row heights changed. In user control it
---- keeps its topline. Following, it is placed as a window that newly shows
---- the buffer (`_follow_from_top`). Public so the closure can reach it
---- without tripping LuaLS's invisible-field check.
---- @param winid integer A window showing the buffer
-function MessageWriter:on_row_heights_changed(winid)
     if self._user_controlled[winid] then
-        -- The change in rows is then no motion.
+        -- The new window's view is then no motion.
         self:_own_change(function() end)
         return
     end
@@ -838,6 +830,8 @@ function MessageWriter:_own_edit(fn)
         if vim.api.nvim_buf_is_valid(self.bufnr) then
             vim.bo[self.bufnr].modified = was_modified
         end
+        -- Before the view is measured.
+        self._fence_rows:sync()
         return written
     end)
     if
@@ -912,7 +906,7 @@ end
 --- that draws the corner where it can be seen.
 ---
 --- A trailing blank row has nothing to close over, and a fence delimiter is
---- concealed to zero height (`TextWrap.is_fence_delimiter`), so a corner
+--- concealed to zero height (`agentic.ui.FenceRows`), so a corner
 --- anchored on either is at best detached from the region's last content and at
 --- worst never drawn, leaving the region to read as unterminated. A prompt ends
 --- on a delimiter whenever it carries selected code, or whenever `close_fence`

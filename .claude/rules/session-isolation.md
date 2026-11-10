@@ -17,12 +17,10 @@ of any tab.
   maps, commands) resolve their session with `SessionRegistry.current()`,
   `get_or_create()` when they may start one, or `create()` when they always
   start one.
-- No module-level shared state for per-session runtime data. Exceptions:
+- No module-level shared state for per-session runtime data. Exception:
   `InputDispatch`'s bufnr-keyed `_dispatches` registry ('operatorfunc' takes
   only a named function, so the operator resolves its dispatch from the
-  current buffer), and `AfterDraw`'s window-keyed `pending` registry (a
-  decoration provider is one per namespace, so one registry serves every
-  session).
+  current buffer).
 - Namespaces are global, extmarks are buffer-scoped — module-level `nvim_create_namespace` is fine
 - Highlight groups defined once globally in `lua/agentic/theme.lua`
 - Keymaps and autocommands must be buffer-local, except where buffer scoping

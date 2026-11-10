@@ -51,6 +51,18 @@ describe("agentic.ui.ToolCallLayout", function()
         path_stub:revert()
     end)
 
+    describe("base_lang", function()
+        it("strips each fold marker", function()
+            assert.equal("console", Layout.base_lang("console-fold"))
+            assert.equal("zsh", Layout.base_lang("zsh-foldnext"))
+            assert.equal("bash", Layout.base_lang("bash-foldfence"))
+        end)
+
+        it("keeps a word without a fold marker", function()
+            assert.equal("markdown", Layout.base_lang("markdown"))
+        end)
+    end)
+
     describe("context-aware diff highlights", function()
         it(
             "tags edits inside a multi-line string with a string capture",

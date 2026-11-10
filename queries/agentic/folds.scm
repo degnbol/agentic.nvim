@@ -18,7 +18,7 @@
 ; Do NOT `; inherits: markdown`: its (section) folds would fold prose.
 ;
 ; Fold the `code_fence_content` node, NOT the whole `fenced_code_block`: the
-; fence delimiters carry conceal_lines metadata (markdown highlights query), so
+; fence delimiter rows are zero-height (`agentic.ui.FenceRows`), so
 ; a fold whose first line is the opening delimiter renders zero-height when
 ; closed — hiding the foldtext. Folding the body only keeps the fold's first
 ; line on real (visible) content.

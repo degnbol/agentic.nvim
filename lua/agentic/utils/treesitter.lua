@@ -1,6 +1,6 @@
---- Treesitter helpers: the language of a file, syntactic context for a
---- snippet of one, and the conceal the highlights queries set in a buffer
---- or a line of text.
+--- Treesitter helpers: the language of a file or an injection name,
+--- syntactic context for a snippet of one, the conceal the highlights
+--- queries set in a buffer or a line of text, and query source edits.
 ---
 --- `highlight_map_in_context` parses a snippet "as if" it were spliced into
 --- a real file, so captures that depend on structural context (strings,
@@ -24,6 +24,90 @@ local ZshParseGuard = require("agentic.utils.zsh_parse_guard")
 function M.language_for_path(file_path, contents)
     local ft = vim.filetype.match({ filename = file_path, contents = contents })
     return ft and vim.treesitter.language.get_lang(ft) or ""
+end
+
+--- @type table<string, boolean>
+local has_parser = {}
+
+--- Language that an injection of language name `alias` gets, as `resolve_lang`
+--- in $VIMRUNTIME/lua/vim/treesitter/languagetree.lua resolves it: the
+--- normalised name when it has a parser, else the language of the filetype of
+--- that name when it has a parser. Parser presence is cached per name, as in
+--- core, so a parser added later is not seen.
+--- @param alias string
+--- @return string|nil lang nil when no parser resolves
+function M.resolve_lang(alias)
+    local name = (alias:gsub("%s+", ""):lower():gsub("%-", "_"))
+    if name:match("[%w_]+") ~= name then
+        return nil
+    end
+    for _, lang in ipairs({ name, vim.treesitter.language.get_lang(name) }) do
+        if has_parser[lang] == nil then
+            -- Core's test: a parser that exists, without loading it.
+            has_parser[lang] = vim._ts_has_language(lang)
+                or #vim.api.nvim_get_runtime_file(
+                        "parser/" .. lang .. ".*",
+                        false
+                    )
+                    > 0
+        end
+        if has_parser[lang] then
+            return lang
+        end
+    end
+    return nil
+end
+
+--- Whether a query `predicate` node is a `#set!` directive whose key, its
+--- first parameter after an optional capture, is `key`.
+--- @param predicate TSNode
+--- @param source string
+--- @param key string
+--- @return boolean
+local function is_set_of(predicate, source, key)
+    --- Text of the first named node in `field`. The `name` field also holds
+    --- the anonymous `#`.
+    --- @param field string
+    --- @return string|nil
+    local function field_text(field)
+        for _, node in ipairs(predicate:field(field)) do
+            if node:named() then
+                return vim.treesitter.get_node_text(node, source)
+            end
+        end
+    end
+    if field_text("name") ~= "set" or field_text("type") ~= "!" then
+        return false
+    end
+    local parameters = predicate:field("parameters")[1]
+    for parameter in parameters:iter_children() do
+        if parameter:named() and parameter:type() ~= "capture" then
+            return vim.treesitter.get_node_text(parameter, source) == key
+        end
+    end
+    return false
+end
+
+--- Query source `text` without its `conceal_lines` directives:
+--- `(#set! conceal_lines "")` and the capture form
+--- `(#set! @c conceal_lines "")`.
+--- @param text string
+--- @return string
+function M.strip_conceal_lines(text)
+    local root =
+        vim.treesitter.get_string_parser(text, "query"):parse()[1]:root()
+    local predicates = vim.treesitter.query.parse("query", "(predicate) @p")
+    local kept = {} --- @type string[]
+    local from = 0
+    for _, node in predicates:iter_captures(root, text) do
+        if is_set_of(node, text, "conceal_lines") then
+            local _, _, start_byte, _, _, end_byte = node:range(true)
+            table.insert(kept, text:sub(from + 1, start_byte))
+            from = end_byte
+        end
+    end
+    table.insert(kept, text:sub(from + 1))
+    return table.concat(kept)
 end
 
 --- Parse `new_lines` spliced into the surrounding file content, then extract
@@ -184,7 +268,8 @@ local function trees_with_highlights(language_tree, srow, erow)
 end
 
 --- Trees the active treesitter highlighter of `bufnr` draws on rows
---- srow..erow-1, in its drawing order, each with its highlights query.
+--- srow..erow-1, in its drawing order, each with its language's highlights
+--- query file (`vim.treesitter.query.get`), not the highlighter's own query.
 --- Returns {} when no highlighter is active on the buffer.
 --- @param bufnr integer
 --- @param srow integer

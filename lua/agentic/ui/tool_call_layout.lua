@@ -263,6 +263,19 @@ end
 --- @type table<string, string>
 local FOLD_THROUGH_MARKERS = { next = "-foldnext", fence = "-foldfence" }
 
+--- Fence info-string `word` without its fold marker suffix (`-fold`,
+--- `-foldnext` or `-foldfence`).
+--- @param word string
+--- @return string
+function M.base_lang(word)
+    for _, marker in pairs(FOLD_THROUGH_MARKERS) do
+        if vim.endswith(word, marker) then
+            return word:sub(1, -#marker - 1)
+        end
+    end
+    return (word:gsub("%-fold$", ""))
+end
+
 --- Place sections in order, fence each one that has a `lang` with
 --- `TextWrap.safe_fence(section.rows)`, shift every index by the section's
 --- first content row (after the opening fence; also the fold anchor), and

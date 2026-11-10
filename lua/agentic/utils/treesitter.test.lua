@@ -12,6 +12,68 @@ local function has_parser(lang)
 end
 
 describe("Treesitter", function()
+    describe("strip_conceal_lines", function()
+        it("removes conceal_lines directives in both forms", function()
+            local text = table.concat({
+                '((a) @x (#set! conceal "") (#set! conceal_lines ""))',
+                '((b) @y (#set! @y conceal_lines ""))',
+                "((c) @z (#set! priority 1))",
+            }, "\n")
+            assert.equal(
+                table.concat({
+                    '((a) @x (#set! conceal "") )',
+                    "((b) @y )",
+                    "((c) @z (#set! priority 1))",
+                }, "\n"),
+                Treesitter.strip_conceal_lines(text)
+            )
+        end)
+
+        it("leaves a markdown query with no conceal_lines", function()
+            local text = table.concat(
+                vim.tbl_map(function(path)
+                    return table.concat(vim.fn.readfile(path), "\n")
+                end, vim.treesitter.query.get_files(
+                    "markdown",
+                    "highlights"
+                )),
+                "\n"
+            )
+            assert.is_true(
+                vim.treesitter.query.parse("markdown", text).has_conceal_line
+            )
+            local stripped = vim.treesitter.query.parse(
+                "markdown",
+                Treesitter.strip_conceal_lines(text)
+            )
+            assert.is_false(stripped.has_conceal_line == true)
+        end)
+    end)
+
+    describe("resolve_lang", function()
+        it("lowercases the name", function()
+            assert.equal("markdown", Treesitter.resolve_lang("Markdown"))
+        end)
+
+        it("resolves a filetype registered to a language", function()
+            assert.is_nil(Treesitter.resolve_lang("pandoc"))
+            vim.treesitter.language.register("markdown", "pandoc")
+            assert.equal("markdown", Treesitter.resolve_lang("pandoc"))
+        end)
+
+        it("is nil for a name with no parser", function()
+            assert.is_nil(Treesitter.resolve_lang("md"))
+            assert.is_nil(Treesitter.resolve_lang(""))
+        end)
+
+        it("keeps a language name", function()
+            if not has_parser("zsh") then
+                return
+            end
+            assert.equal("zsh", Treesitter.resolve_lang("zsh"))
+        end)
+    end)
+
     describe("language_for_path", function()
         it("maps a known extension to its parser name", function()
             assert.equal(Treesitter.language_for_path("foo.py"), "python")

@@ -1,5 +1,5 @@
--- Trackpad scroll workaround: at conceallevel=2, treesitter's conceal_lines
--- makes fenced_code_block_delimiter lines (```) zero-height. Combined with
+-- Trackpad scroll workaround: at conceallevel=2, fence delimiter lines (```)
+-- are zero-height (`agentic.ui.FenceRows`). Combined with
 -- concealcursor="n", the cursor on such a line is in an invalid visual state
 -- that blocks all further scrolling. Fix: skip past zero-height lines both
 -- before scrolling (unstick) and after (prevent re-sticking).

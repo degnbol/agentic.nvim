@@ -1,3 +1,5 @@
+local DirtyRows = require("agentic.utils.dirty_rows")
+local Intervals = require("agentic.utils.intervals")
 local MarkdownGuard = require("agentic.utils.markdown_guard")
 local TextWrap = require("agentic.utils.text_wrap")
 
@@ -50,9 +52,7 @@ local M = {}
 --- @class agentic.ui.Folds.State
 --- @field levels string[] Foldexpr value per 1-indexed line
 --- @field skip table<integer, integer> By 1-indexed first line of a fold, the fence rows it holds that the foldtext count leaves out: 2 for one ending at a `@fold.end` capture, 1 for one ending at a `@fold.fence` capture
---- @field parser? vim.treesitter.LanguageTree Parser the callbacks are registered on
---- @field dirty_first? integer First 1-indexed row whose level is unknown
---- @field dirty_last? integer Last 1-indexed row whose level is unknown
+--- @field dirty agentic.utils.DirtyRows Rows whose level is unknown
 
 -- Not a field of `M`: `v:lua.require(…).foldexpr()` converts the module to a
 -- Vimscript dict on every call, and a parser in it fails the conversion.
@@ -221,17 +221,7 @@ local function stamp(bufnr, state, first, last)
     end
 end
 
---- Widen the dirty range to include rows `first`..`last`.
---- @param state agentic.ui.Folds.State
---- @param first integer 1-indexed
---- @param last integer 1-indexed, inclusive
-local function mark_dirty(state, first, last)
-    state.dirty_first = math.min(state.dirty_first or first, first)
-    state.dirty_last = math.max(state.dirty_last or last, last)
-end
-
---- Make `state.levels` `line_count` rows long, new rows at `"0"`, and clamp
---- the dirty range to those rows.
+--- Make `state.levels` `line_count` rows long, new rows at `"0"`.
 --- @param state agentic.ui.Folds.State
 --- @param line_count integer
 local function fit(state, line_count)
@@ -241,17 +231,11 @@ local function fit(state, line_count)
     for row = #state.levels, line_count + 1, -1 do
         state.levels[row] = nil
     end
-    if state.dirty_first then
-        state.dirty_last = math.min(state.dirty_last, line_count)
-        state.dirty_first = math.min(state.dirty_first, state.dirty_last)
-    end
 end
 
---- Apply one `on_bytes` edit: shift the levels, `skip` entries and dirty
---- range below the replaced rows by the edit's line delta, put `"0"` in the
---- new rows, drop the replaced rows' `skip` entries, and mark dirty every
---- row the new text touches, its end row included: a `set_text` changes part
---- of that row, and a `set_lines` ends at column 0 of the row after it.
+--- Apply one `on_bytes` edit: shift the levels and `skip` entries below the
+--- replaced rows by the edit's line delta, put `"0"` in the new rows, and
+--- drop the replaced rows' `skip` entries.
 --- @param bufnr integer
 --- @param state agentic.ui.Folds.State
 --- @param start_row integer `on_bytes` start row, 0-indexed
@@ -296,41 +280,15 @@ local function splice(bufnr, state, start_row, old_rows, new_rows)
         end
     end
     state.skip = skip
-    if state.dirty_first then
-        state.dirty_first = moved(state.dirty_first)
-        state.dirty_last = moved(state.dirty_last)
-    end
 
-    mark_dirty(state, start_row + 1, start_row + new_rows + 1)
     -- `on_bytes` reports an append with `start_row` one past the last line,
     -- and a delete of the only line leaves one line (measured), so the row
     -- arithmetic above can miss the line count.
     fit(state, vim.api.nvim_buf_line_count(bufnr))
 end
 
---- From now on, mark each range of `parser`'s root tree that changes dirty in
---- `state`, for as long as `parser` is `state.parser`.
---- @param state agentic.ui.Folds.State
---- @param parser vim.treesitter.LanguageTree
-local function watch(state, parser)
-    parser:register_cbs({
-        --- @param changes Range6[]
-        on_changedtree = function(changes)
-            -- Callbacks cannot be unregistered.
-            if state.parser ~= parser then
-                return
-            end
-            for _, range in ipairs(changes) do
-                local first = range[1] + 1
-                mark_dirty(state, first, math.max(first, last_row(range)))
-            end
-        end,
-        -- Not recursive: a change in an injected tree changes no level.
-    }, false)
-end
-
 --- State of `bufnr`, created on first use with the full levels and attached
---- to the buffer and its parser, or nil when the buffer has no parser.
+--- to the buffer, or nil when the buffer has no parser.
 --- @param bufnr integer
 --- @return agentic.ui.Folds.State|nil
 local function state_of(bufnr)
@@ -343,10 +301,12 @@ local function state_of(bufnr)
         return nil
     end
 
+    -- Levels before the watch starts, so their root parse is not reported
+    -- as a change.
     local levels, skip = M.levels(bufnr)
     --- @type agentic.ui.Folds.State
-    local state = { levels = levels, skip = skip, parser = parser }
-    watch(state, parser)
+    local state =
+        { levels = levels, skip = skip, dirty = DirtyRows.watch(bufnr) }
     local attached = vim.api.nvim_buf_attach(bufnr, false, {
         on_bytes = function(
             _,
@@ -364,12 +324,9 @@ local function state_of(bufnr)
         end,
         on_reload = function(_, buf)
             state.skip = {}
-            local line_count = vim.api.nvim_buf_line_count(buf)
-            fit(state, line_count)
-            mark_dirty(state, 1, line_count)
+            fit(state, vim.api.nvim_buf_line_count(buf))
         end,
         on_detach = function(_, buf)
-            state.parser = nil
             states[buf] = nil
         end,
     })
@@ -378,32 +335,14 @@ local function state_of(bufnr)
     return state
 end
 
---- Recompute the levels and `skip` entries of `state` over its dirty rows,
---- widened to the outermost footprints around them before and after the
---- edits, and clear the dirty range. A parser other than `state.parser` is
---- watched instead and all levels are recomputed, so a parser replaced
---- without an edit takes effect at the next edit.
---- @param bufnr integer
---- @param state agentic.ui.Folds.State
-local function refresh(bufnr, state)
-    local parser = vim.treesitter.get_parser(bufnr, nil, { error = false })
-    if not parser or parser ~= state.parser then
-        state.parser = parser
-        if parser then
-            watch(state, parser)
-        end
-        state.levels, state.skip = M.levels(bufnr)
-        state.dirty_first, state.dirty_last = nil, nil
-        return
-    end
-
-    -- Fires `on_changedtree`, which widens the dirty range.
-    parser:parse()
-    local levels = state.levels
-    local first, last = state.dirty_first, state.dirty_last
-    assert(first and last, "no dirty rows to refresh")
-    last = math.min(last, #levels)
-    state.dirty_first, state.dirty_last = nil, nil
+--- Rows `first`..`last` widened to the outermost footprints around them in
+--- `levels`.
+--- @param levels string[] Foldexpr value per 1-indexed line
+--- @param first integer 1-indexed
+--- @param last integer 1-indexed, inclusive
+--- @return integer first 1-indexed
+--- @return integer last 1-indexed, inclusive
+local function outermost_span(levels, first, last)
     -- Up from a row in a fold to its outermost fold's first row, then the
     -- fence row above that.
     if levels[first - 1] and levels[first - 1] ~= "0" then
@@ -425,8 +364,22 @@ local function refresh(bufnr, state)
     do
         last = last + 1
     end
+    return first, last
+end
 
-    stamp(bufnr, state, first, last)
+--- Recompute the levels and `skip` entries of `state` over `spans`, each
+--- widened to the outermost footprints around it before and after the edits.
+--- @param bufnr integer
+--- @param state agentic.ui.Folds.State
+--- @param spans [integer, integer][] 0-indexed inclusive rows
+local function refresh(bufnr, state, spans)
+    -- Widened by the levels before the edits, so all before any stamp.
+    local widened = vim.tbl_map(function(span)
+        return { outermost_span(state.levels, span[1] + 1, span[2] + 1) }
+    end, spans)
+    for _, span in ipairs(Intervals.union(widened)) do
+        stamp(bufnr, state, span[1], span[2])
+    end
 end
 
 --- 'foldexpr' for the chat buffer. See the module docstring for why the levels
@@ -438,8 +391,9 @@ function M.foldexpr()
     if not state then
         return "0"
     end
-    if state.dirty_first then
-        refresh(bufnr, state)
+    local spans = state.dirty:take()
+    if spans then
+        refresh(bufnr, state, spans)
     end
     return state.levels[vim.v.lnum] or "0"
 end
