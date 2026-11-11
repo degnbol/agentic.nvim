@@ -147,16 +147,8 @@ local FILE_SCOPED_KINDS = {
     move = true,
 }
 
---- Per-kind identity fields used to build allow_always/reject_always cache
---- keys. Listed in priority order; the first non-empty value is taken
---- (handles cross-adapter casing like `file_path` vs `filePath`). Keyed on
---- the permission request's own kind, an ACP protocol kind: adapter-minted
---- kinds such as `SubAgent` never reach the lookup.
----
---- Kinds absent from this table fall back to the hybrid path in
---- `_build_cache_key`: cache by the whole `rawInput` minus
---- `CACHE_NOISE_FIELDS`. That lets unknown / provider-specific kinds
---- (e.g. `"other"`) still scope correctly without per-tool maintenance.
+--- Identity fields of an allow_always/reject_always cache key, per ACP
+--- protocol kind: the request's own kind, never an adapter-minted one.
 --- @type table<string, string[]>
 local CACHE_KEY_FIELDS = {
     edit = { "file_path", "filePath", "path" },
