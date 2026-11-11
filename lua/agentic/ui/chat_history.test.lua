@@ -1672,4 +1672,291 @@ describe("ChatHistory", function()
             assert.equal(vim.log.levels.WARN, notify_stub.calls[1][2])
         end)
     end)
+
+    describe("forks", function()
+        --- @param text string
+        --- @param synthetic boolean|nil
+        --- @return agentic.ui.ChatHistory.UserMessage
+        local function user(text, synthetic)
+            return {
+                type = "user",
+                text = text,
+                timestamp = 0,
+                provider_name = "p",
+                synthetic = synthetic,
+            }
+        end
+
+        --- @param text string
+        --- @param response_id string|nil
+        --- @return agentic.ui.ChatHistory.AgentMessage
+        local function agent(text, response_id)
+            return {
+                type = "agent",
+                text = text,
+                provider_name = "p",
+                response_id = response_id,
+            }
+        end
+
+        --- @param direction "to"|"from"
+        --- @param session_id string
+        --- @return agentic.ui.ChatHistory.ForkLink
+        local function link(direction, session_id)
+            return {
+                type = "fork_link",
+                direction = direction,
+                session_id = session_id,
+                cwd = "/c",
+                title = "t",
+            }
+        end
+
+        describe("append_agent_text response ids", function()
+            it("keeps the last id across a merge", function()
+                local history = ChatHistory:new()
+                history:append_agent_text(agent("a", "r1"))
+                history:append_agent_text(agent("b", "r2"), true)
+
+                assert.equal(1, #history.messages)
+                assert.equal("r2", history.messages[1].response_id)
+            end)
+
+            it("keeps the earlier id when the chunk has none", function()
+                local history = ChatHistory:new()
+                history:append_agent_text(agent("a", "r1"))
+                history:append_agent_text(agent("b"))
+
+                assert.equal("r1", history.messages[1].response_id)
+            end)
+        end)
+
+        it("clear_response_ids removes every id, leaving dirty", function()
+            local history = history_of({
+                user("q"),
+                agent("a", "r1"),
+                {
+                    type = "thought",
+                    text = "t",
+                    provider_name = "p",
+                    response_id = "r2",
+                },
+            })
+            history.dirty = false
+
+            history:clear_response_ids()
+
+            assert.is_nil(history.messages[2].response_id)
+            assert.is_nil(history.messages[3].response_id)
+            assert.is_false(history.dirty)
+        end)
+
+        describe("copy_prefix", function()
+            it("copies the first messages without links", function()
+                local source = history_of({
+                    user("q1"),
+                    link("to", "sid-other"),
+                    agent("a1", "r1"),
+                    user("q2"),
+                })
+                source:add_message({
+                    type = "agent",
+                    text = "child",
+                    provider_name = "p",
+                    agent_key = "task",
+                })
+                source.subagents = { child = { task_id = "task" } }
+                source.title = "Title"
+                source.provider = "claude-agent-acp"
+                source.model = "m"
+                source.provider_version = "1.0"
+                source.session_id = "sid-src"
+                source.file_activity = { ops = {}, last_viewed_seq = 0 }
+
+                local copy = source:copy_prefix(3)
+
+                assert.same({ user("q1"), agent("a1", "r1") }, copy.messages)
+                assert.is_false(rawequal(source.messages[1], copy.messages[1]))
+                assert.same({}, copy.subagent_messages)
+                assert.same({}, copy.subagents)
+                assert.is_nil(copy.file_activity)
+                assert.equal("", copy.title)
+                assert.is_nil(copy.session_id)
+                assert.equal("claude-agent-acp", copy.provider)
+                assert.equal("m", copy.model)
+                assert.equal("1.0", copy.provider_version)
+                assert.is_true(copy.dirty)
+                assert.equal(4, #source.messages)
+                assert.equal(1, #source.subagent_messages)
+            end)
+
+            it("of none is empty", function()
+                assert.same(
+                    {},
+                    history_of({ user("q") }):copy_prefix(0).messages
+                )
+            end)
+        end)
+
+        describe("fork_point", function()
+            it("is the id of a trailing agent message", function()
+                assert.equal(
+                    "r1",
+                    history_of({ user("q"), agent("a", "r1") }):fork_point()
+                )
+            end)
+
+            it("skips trailing side records and links", function()
+                local history = history_of({
+                    user("q"),
+                    agent("a", "r1"),
+                    { type = "side_records", records = {} },
+                    link("from", "sid-src"),
+                })
+
+                assert.equal("r1", history:fork_point())
+            end)
+
+            it("is nil when a tool call comes after the response", function()
+                local history = history_of({
+                    user("q"),
+                    agent("a", "r1"),
+                    {
+                        type = "tool_call",
+                        tool_call_id = "tc",
+                        status = "failed",
+                    },
+                })
+
+                assert.is_nil(history:fork_point())
+            end)
+
+            it("is nil when a received message comes after it", function()
+                local history = history_of({
+                    user("q"),
+                    agent("a", "r1"),
+                    {
+                        type = "session_message",
+                        message_id = "m",
+                        view = "received",
+                        kind = "result",
+                        text = "r",
+                    },
+                })
+
+                assert.is_nil(history:fork_point())
+            end)
+
+            it("is nil when the last response has no id", function()
+                assert.is_nil(
+                    history_of({ user("q"), agent("a") }):fork_point()
+                )
+            end)
+
+            it("is nil for an empty history", function()
+                assert.is_nil(ChatHistory:new():fork_point())
+            end)
+        end)
+
+        it("next_prompt skips synthetic prompts", function()
+            local typed = user("typed")
+            local history = history_of({
+                user("q"),
+                agent("a"),
+                user("continue", true),
+                typed,
+            })
+
+            assert.equal(typed, history:next_prompt(1))
+            assert.is_nil(history:next_prompt(4))
+        end)
+
+        it("index_of finds a message by identity", function()
+            local first = user("q")
+            local history = history_of({ first, agent("a") })
+
+            assert.equal(1, history:index_of(first))
+            assert.is_nil(history:index_of(user("q")))
+        end)
+
+        it("render_start is the last from link, else 1", function()
+            assert.equal(1, ChatHistory.render_start({ user("q") }))
+            assert.equal(
+                1,
+                ChatHistory.render_start({ user("q"), link("to", "x") })
+            )
+            assert.equal(
+                3,
+                ChatHistory.render_start({
+                    link("from", "a"),
+                    user("q"),
+                    link("from", "b"),
+                    user("r"),
+                })
+            )
+        end)
+
+        it("insert_message inserts at the index and sets dirty", function()
+            local history = history_of({ user("q"), agent("a") })
+            history.dirty = false
+
+            history:insert_message(2, link("to", "x"))
+
+            assert.equal("fork_link", history.messages[2].type)
+            assert.equal("agent", history.messages[3].type)
+            assert.is_true(history.dirty)
+        end)
+
+        describe("a fork link", function()
+            local function linked()
+                return history_of({
+                    link("from", "sid-src"),
+                    user("q"),
+                    link("to", "sid-fork"),
+                    agent("a"),
+                })
+            end
+
+            it("is not in the history prefix", function()
+                local prompt = {}
+                linked():prepend_history_messages(prompt)
+
+                assert.same({
+                    { type = "text", text = "User: q" },
+                    { type = "text", text = "Assistant: a" },
+                }, prompt)
+            end)
+
+            it("is not a prompt", function()
+                assert.is_false(
+                    history_of({ link("from", "sid-src") }):has_prompt()
+                )
+            end)
+
+            it("is not a sequence entry", function()
+                assert.same({
+                    { key = "prompt:q", starts = true },
+                    { starts = false },
+                }, linked():sequence_entries())
+            end)
+
+            it("starts the prompt count of the session list", function()
+                use_disk()
+                local history = history_of({
+                    user("hidden"),
+                    link("from", "sid-src"),
+                    user("shown"),
+                })
+                history.session_id = "sid-fork"
+                assert.is_nil(history:save(TEST_CWD))
+
+                local sessions = {}
+                ChatHistory.list_sessions(TEST_CWD, function(result)
+                    sessions = result
+                end)
+
+                assert.equal(1, sessions[1].prompt_count)
+            end)
+        end)
+    end)
 end)

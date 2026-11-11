@@ -1764,6 +1764,44 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             assert.is_true(built_before_send)
         end)
 
+        it("forks with the fork point merged into the session meta", function()
+            local adapter = wired_adapter({})
+            adapter.agent_capabilities = { sessionCapabilities = { fork = {} } }
+            adapter.provider_config.allowed_tools = nil
+            local params
+            local stored
+            function adapter:_send_request(_method, sent_params, callback)
+                params = sent_params
+                callback({ sessionId = "s-2" }, nil)
+            end
+
+            adapter:fork_session("s-1", "/tmp", "msg_1", {}, function()
+                stored = adapter._transcript_readers["s-2"] ~= nil
+            end)
+
+            assert.same(
+                { version = 1, messageId = "msg_1" },
+                params._meta.jetbrains.air.fork
+            )
+            assert.truthy(params._meta.claudeCode.options)
+            assert.is_true(stored)
+        end)
+
+        it("builds the fork's reader before session/fork is sent", function()
+            local new = spy.on(ClaudeTranscriptReader, "new")
+            local adapter = wired_adapter({})
+            adapter.agent_capabilities = { sessionCapabilities = { fork = {} } }
+            local built_before_send
+            function adapter:_send_request()
+                built_before_send = new.call_count == 1
+            end
+
+            adapter:fork_session("s-1", "/tmp", "msg_1", {}, function() end)
+            new:revert()
+
+            assert.is_true(built_before_send)
+        end)
+
         it("drops the reader on unsubscribe", function()
             local adapter =
                 wired_adapter({ ["session/new"] = { sessionId = "s-1" } })

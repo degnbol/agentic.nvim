@@ -98,8 +98,8 @@ end
 --- goes on top of the input in `bufnr` and the context panels it consumed are
 --- attached again. The provider keeps the refused message in its conversation, so the
 --- history prefix and system info it carried are not sent again. Writes what
---- was returned and the number of drafted prompts to the chat. No-op once the
---- widget is destroyed.
+--- was returned, the fork key that leaves the refused prompt behind, and the
+--- number of drafted prompts to the chat. No-op once the widget is destroyed.
 --- @param sm agentic.SessionManager
 --- @param text string The refused prompt as the user wrote it
 --- @param consumed agentic.SessionManager.PanelContext What the prompt took from the context panels
@@ -118,8 +118,8 @@ function M.restore_refused_prompt(sm, text, consumed, bufnr)
     )
     reattach_context(sm, consumed)
 
-    local key = Config.keymaps.widget.switch_model
-    if type(key) == "string" and key ~= "" then
+    local key = BufHelpers.first_key(Config.keymaps.widget.switch_model)
+    if key then
         sm.message_writer:write_error_action(
             string.format(
                 "Prompt returned to the input. Switch model with [%s] to send it again.",
@@ -128,6 +128,15 @@ function M.restore_refused_prompt(sm, text, consumed, bufnr)
         )
     else
         sm.message_writer:write_error_action("Prompt returned to the input.")
+    end
+    local fork_key = BufHelpers.first_key(Config.keymaps.agent.fork)
+    if fork_key then
+        sm.message_writer:write_error_action(
+            string.format(
+                "The refused prompt stays in this session. Fork before it with [%s] on its turn.",
+                fork_key
+            )
+        )
     end
     if count > 0 then
         sm.message_writer:write_error_action(

@@ -190,6 +190,23 @@ describe("SessionResume", function()
             assert.truthy(vim.tbl_contains(lines, "Hello world"))
         end)
 
+        it("starts at the last from link", function()
+            local lines = SessionResume.format_preview({
+                { type = "user", text = "hidden" },
+                {
+                    type = "fork_link",
+                    direction = "from",
+                    session_id = "sid-src",
+                    cwd = "/c",
+                    title = "t",
+                },
+                { type = "user", text = "shown" },
+            })
+
+            assert.is_false(vim.tbl_contains(lines, "hidden"))
+            assert.truthy(vim.tbl_contains(lines, "shown"))
+        end)
+
         it("skips a synthetic prompt", function()
             assert.same(
                 {},
@@ -423,7 +440,7 @@ describe("SessionResume", function()
 
             assert.equal("codex-acp", session_registry_stub.calls[1][1])
             assert.same(
-                { session, "sid-x", "/p", "m1", n = 4 },
+                { session, "sid-x", "/p", "m1", nil, n = 5 },
                 session.load_acp_session.calls[1]
             )
             assert.equal(mods, session.widget.show.calls[1][2])
@@ -469,7 +486,7 @@ describe("SessionResume", function()
 
             assert.equal("codex-acp", session_registry_stub.calls[1][1])
             assert.same(
-                { session, "sid-x", "/saved", "m-saved", n = 4 },
+                { session, "sid-x", "/saved", "m-saved", nil, n = 5 },
                 session.load_acp_session.calls[1]
             )
         end)
@@ -501,6 +518,43 @@ describe("SessionResume", function()
             assert.equal(
                 vim.uv.fs_realpath(dir),
                 vim.uv.fs_realpath(vim.fn.getcwd())
+            )
+        end)
+    end)
+
+    describe("resume on_shown", function()
+        it("runs at once for an open session", function()
+            local open_session = create_mock_session()
+            open_session_stub:returns(open_session)
+            local shown = spy.new(function() end)
+
+            SessionResume.resume(
+                { session_id = "sid-x" },
+                nil,
+                shown --[[@as fun(session: agentic.SessionManager)]]
+            )
+
+            assert.same(
+                { open_session, vim.api.nvim_get_current_win(), n = 2 },
+                shown.calls[1]
+            )
+        end)
+
+        it("goes with the load of a session not open", function()
+            local session = create_mock_session()
+            session_registry_stub:returns(session)
+            local shown = spy.new(function() end)
+
+            SessionResume.resume(
+                { session_id = "sid-x", cwd = "/p" },
+                nil,
+                shown --[[@as fun(session: agentic.SessionManager, winid: integer)]]
+            )
+            session.load_acp_session.calls[1][5](session)
+
+            assert.same(
+                { session, vim.api.nvim_get_current_win(), n = 2 },
+                shown.calls[1]
             )
         end)
     end)
@@ -624,6 +678,40 @@ describe("SessionResume", function()
             )
 
             assert.equal("skeptic", write_prompt_spy.calls[1][4])
+        end)
+
+        it("writes links and gives each prompt its message", function()
+            local write_prompt_spy = spy.new(function() end)
+            local write_link_spy = spy.new(function() end)
+            local writer = {
+                write_user_prompt = write_prompt_spy,
+                write_fork_link = write_link_spy,
+                flush_thought_run = function() end,
+            }
+            --- @type agentic.ui.ChatHistory.ForkLink
+            local link = {
+                type = "fork_link",
+                direction = "from",
+                session_id = "sid-src",
+                cwd = "/c",
+                title = "t",
+            }
+            --- @type agentic.ui.ChatHistory.UserMessage
+            local prompt = {
+                type = "user",
+                text = "Hello",
+                timestamp = 0,
+                provider_name = "p",
+            }
+
+            SessionResume.replay_messages(
+                writer --[[@as agentic.ui.MessageWriter]],
+                { link, prompt },
+                no_buffer
+            )
+
+            assert.same({ writer, link, n = 2 }, write_link_spy.calls[1])
+            assert.equal(prompt, write_prompt_spy.calls[1][5])
         end)
 
         it("replays user and agent messages", function()

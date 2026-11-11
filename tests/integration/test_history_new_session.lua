@@ -71,6 +71,25 @@ _G.new_cb({ sessionId = "sid-new" }, nil)
         assert_carried()
     end)
 
+    it("restart_session leaves a saved chat with response ids clean", function()
+        child.lua([[
+_G.s.session_id = "sid-old"
+_G.s.chat_history.session_id = "sid-old"
+_G.s.chat_history:add_message(_G.msg("user", "saved question"))
+local answer = _G.msg("agent", "saved answer")
+answer.response_id = "r1"
+_G.s.chat_history:add_message(answer)
+_G.s.chat_history.dirty = false
+_G.s:restart_session()
+_G.new_cb({ sessionId = "sid-new" }, nil)
+]])
+        child.flush()
+
+        assert.is_false(
+            child.lua_get("vim.bo[_G.s.widget.buf_nrs.agent].modified")
+        )
+    end)
+
     it("restart_session mid-load leaves the unsaved chat modified", function()
         child.lua([[
 _G.s:_do_load_acp_session("sid-none", "/tmp")

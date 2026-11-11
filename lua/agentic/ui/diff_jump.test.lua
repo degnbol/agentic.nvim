@@ -1,6 +1,7 @@
 local MiniTest = require("mini.test")
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
+local Logger = require("agentic.utils.logger")
 
 describe("diff_jump", function()
     --- @type agentic.ui.DiffJump
@@ -417,5 +418,77 @@ describe("diff_jump", function()
             }, open_stub.calls[1][1])
             assert.equal("edit", open_stub.calls[1][2])
         end)
+
+        --- A buffer with goto-file keys whose `open_at` records each call
+        --- and returns `opens`.
+        --- @param opens boolean
+        --- @return integer bufnr
+        --- @return table[] calls `{ row, mods }` per call
+        local function with_open_at(opens)
+            local bufnr = vim.api.nvim_create_buf(false, true)
+            vim.api.nvim_set_current_buf(bufnr)
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "a", "b" })
+            local calls = {}
+            DiffJump.set_goto_file_keymaps(
+                bufnr,
+                --- @diagnostic disable-next-line: missing-fields
+                { tool_call_blocks = {} },
+                function(row, mods)
+                    table.insert(calls, { row, mods })
+                    return opens
+                end
+            )
+            MiniTest.finally(function()
+                vim.api.nvim_buf_delete(bufnr, { force = true })
+            end)
+            vim.api.nvim_win_set_cursor(0, { 2, 0 })
+            return bufnr, calls
+        end
+
+        it("tries open_at first and stops when it opened", function()
+            local bufnr, calls = with_open_at(true)
+            local notify_stub = spy.stub(Logger, "notify")
+            MiniTest.finally(function()
+                notify_stub:revert()
+            end)
+
+            vim.api.nvim_feedkeys("gf", "mx", false)
+
+            assert.same({ { 1, {} } }, calls)
+            assert.equal(bufnr, vim.api.nvim_get_current_buf())
+            assert.equal(0, notify_stub.call_count)
+        end)
+
+        it("passes the split and tab modifiers", function()
+            local _, calls = with_open_at(true)
+
+            vim.api.nvim_feedkeys(vim.keycode("<C-w>f"), "mx", false)
+            vim.api.nvim_feedkeys(vim.keycode("<C-w><C-f>"), "mx", false)
+            vim.api.nvim_feedkeys(vim.keycode("<C-w>gf"), "mx", false)
+
+            local tab = vim.api.nvim_tabpage_get_number(
+                vim.api.nvim_get_current_tabpage()
+            )
+            assert.same({ horizontal = true }, calls[1][2])
+            assert.same({ horizontal = true }, calls[2][2])
+            assert.same({ tab = tab }, calls[3][2])
+        end)
+
+        it(
+            "falls through to the native key when open_at opens nothing",
+            function()
+                local _, calls = with_open_at(false)
+                local notify_stub = spy.stub(Logger, "notify")
+                MiniTest.finally(function()
+                    notify_stub:revert()
+                end)
+
+                vim.api.nvim_feedkeys("gf", "mx", false)
+
+                assert.equal(1, #calls)
+                -- The native `gf` fails on "b", which names no file.
+                assert.equal(1, notify_stub.call_count)
+            end
+        )
     end)
 end)

@@ -52,13 +52,15 @@ function SessionResume.build_items(sessions, opts)
     return items
 end
 
---- Format a session's messages as preview lines for the picker. Synthetic
+--- Format a session's messages as preview lines for the picker, from the
+--- first message its chat shows (`ChatHistory.render_start`). Synthetic
 --- prompts are skipped.
 --- @param messages agentic.ui.ChatHistory.Message[]
 --- @return string[]
 function SessionResume.format_preview(messages)
     local lines = {}
-    for _, msg in ipairs(messages) do
+    local shown = vim.list_slice(messages, ChatHistory.render_start(messages))
+    for _, msg in ipairs(shown) do
         if msg.type == "user" and not msg.synthetic then
             table.insert(lines, "## You")
             for line in msg.text:gmatch("[^\n]+") do
@@ -148,10 +150,14 @@ end
 --- A provider that is not configured warns and uses the default provider.
 --- @param ref agentic.ui.ChatHistory.SessionRef
 --- @param mods vim.api.keyset.cmd_mods|nil A split or tab modifier shows the chat in a new window
-function SessionResume.resume(ref, mods)
+--- @param on_shown fun(session: agentic.SessionManager, winid: integer)|nil Runs once the chat shows the session, with the window it was shown in: at once for an open session, else when the load ends
+function SessionResume.resume(ref, mods, on_shown)
     local open_session = SessionRegistry.session_for_acp_id(ref.session_id)
     if open_session then
         open_session.widget:show(mods, SessionRegistry.target_win())
+        if on_shown then
+            on_shown(open_session, vim.api.nvim_get_current_win())
+        end
         return
     end
 
@@ -187,8 +193,20 @@ function SessionResume.resume(ref, mods)
             vim.log.levels.WARN
         )
     end
-    session:load_acp_session(ref.session_id, cwd, model)
+    --- @type integer
+    local shown_win
+    session:load_acp_session(
+        ref.session_id,
+        cwd,
+        model,
+        on_shown
+            and function(loaded)
+                on_shown(loaded, shown_win)
+            end
+    )
     session.widget:show(mods, SessionRegistry.target_win())
+    -- `show` focuses the window it shows the chat in.
+    shown_win = vim.api.nvim_get_current_win()
 end
 
 --- Saved sessions of all projects whose id starts with `query`, else whose
@@ -407,14 +425,15 @@ function SessionResume.write_row(writer, row, mid_turn, buffer_name)
     })
 end
 
---- Replay stored messages to the UI. Synthetic prompts are skipped.
+--- Replay stored messages to the UI. Synthetic prompts are skipped. Each
+--- prompt's message is its payload in the writer.
 --- @param writer agentic.ui.MessageWriter
 --- @param messages agentic.ui.ChatHistory.Message[]
 --- @param buffer_name fun(session_id: string): string|nil Name of a session's buffer, nil when it has none
 function SessionResume.replay_messages(writer, messages, buffer_name)
     for _, msg in ipairs(messages) do
         if msg.type == "user" and not msg.synthetic then
-            writer:write_user_prompt(msg.text, nil, msg.author)
+            writer:write_user_prompt(msg.text, nil, msg.author, msg)
         elseif msg.type == "agent" then
             local agent_message = ACPPayloads.generate_agent_message(msg.text)
             writer:write_message(agent_message)
@@ -434,6 +453,8 @@ function SessionResume.replay_messages(writer, messages, buffer_name)
             SessionResume.write_row(writer, msg, true, buffer_name)
         elseif msg.type == "side_records" then
             SideRecords.write(writer, msg.records)
+        elseif msg.type == "fork_link" then
+            writer:write_fork_link(msg)
         end
     end
     -- Neither caller finalizes the turn, so a history ending on a thought would

@@ -643,10 +643,27 @@ What the queue bindings dispatch, and when, is in |agentic-queue|.
     Key    Mode    Description ~
     `[[`     n       Previous prompt or notice
     `]]`     n       Next prompt or notice
+    `<localLeader>F`
+             n       Fork before this turn (`fork`), chat only
     `a A i I o O gi gI p P`
              n       Run in the input (`to_input`)
 
 `[[` and `]]` also move between the rows of a subagent transcript.
+
+                                                                *agentic-fork*
+`fork` opens a new chat that changes the turn at the cursor: it holds the
+conversation before the prompt at or above the cursor, and that prompt is
+its draft. On a link row, that is the turn above it. Above the chat's first
+prompt, the new chat has no draft and holds only the conversation the chat
+was forked with, if any. With `<C-w>` before the key it opens in a split,
+with `<C-w>g` in a tab, as |CTRL-W_f| and |CTRL-W_gf| open a file.
+
+The new chat continues on the model of the changed prompt. A provider
+without a native fork gets the conversation as text with the first prompt.
+
+Each chat gets a link row to the other: the original above the changed
+prompt, the fork at its top. On a link row, |gf|, |CTRL-W_f| and
+|CTRL-W_gf| open the other chat at its link row.
 
 On `/skill` in the chat, the transcripts, the input and the todos, |gf|,
 |CTRL-W_f| and |CTRL-W_gf| open that skill's SKILL.md. On a diff row where

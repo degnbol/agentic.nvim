@@ -153,6 +153,8 @@ Glyphs.AUTHOR = {
 
 Glyphs.PROVIDER = "󰚥"
 Glyphs.RESUME = "󰁯"
+--- nf-md-directions_fork: the link row between a chat and its fork.
+Glyphs.FORK = "󰙁"
 Glyphs.AUTH = "󰍂"
 Glyphs.INFO = "󰋼"
 

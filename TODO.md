@@ -312,7 +312,7 @@ so typing them in the input buffer runs the TUI flow via the LLM.
   interactive I/O that doesn't map to the ACP chat stream. The session
   info panel (`:h agentic-info-panel`) covers the runtime-state subset.
 
-- **`/diff`, `/rewind`, `/branch`, `/teleport`**: provider-level features
+- **`/diff`, `/teleport`**: provider-level features
   or conversation-state primitives not exposed through ACP.
 
 ### Gutter identity glyphs
@@ -628,14 +628,6 @@ Claude hook system is complicated right now. I have made a lib/ and there's many
 There is a fair bit of regex. I wonder if a move to treesitter could improve the code.
 There might be a nice abstraction split with parsing logic and all the lib work moved into this repo, while tiny config patterns utilising the parsing code lives in personal nvim config.
 If that would make the config explode, then a better option might be to consider treesitter for ~/dotfiles/config/claude/hooks/ instead of for here.
-
-## Rewind
-
-A useful Claude CLI feature is /rewind where a menu allows for selecting a previous prompt and rewinds the agent to that point in the conversation.
-If this feature is available through the ACP. If so, we can make a UI version, where we have a keymap that rewinds to where the cursor is placed in chat.
-
-The glyph 󰋚 (nf-md-history) is reserved for this as `Glyphs.COMMAND.rewind`
-(`lua/agentic/glyphs.lua`).
 
 ### Queue message: the overlooked-question risk
 

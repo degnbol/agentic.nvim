@@ -36,8 +36,10 @@ Buffer-wide rules:
   everything else. Content the client learns of after later output is written,
   such as records read from the CLI transcript, goes beneath the item it
   belongs to and below anything already placed there
-  (`MessageWriter:_resolve_anchor`, `_insert_after`). Only
-  content whose item is not in the buffer goes at the end.
+  (`MessageWriter:_resolve_anchor`, `_insert_after`). In the source chat
+  of a fork, the link goes above the prompt the fork changes, where the
+  fork starts (`SessionManager:add_fork_link`). Only content whose item is
+  not in the buffer goes at the end.
 
 ## Heading levels
 

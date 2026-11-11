@@ -180,22 +180,76 @@ function ClaudeAgentACPAdapter:capability_meta()
     return { ["subagent-transcript"] = true, terminal_output = true }
 end
 
---- Creates a session and opens a transcript reader for it.
---- @param cwd string
---- @param handlers agentic.acp.ClientHandlers
---- @param callback fun(result: agentic.acp.SessionCreationResponse|nil, err: agentic.acp.ACPError|nil)
-function ClaudeAgentACPAdapter:create_session(cwd, handlers, callback)
-    -- Built before the request: the reader keeps only records from its
-    -- construction on, and the CLI writes SessionStart's before the bridge
-    -- answers `session/new`.
+--- A response callback that opens a transcript reader for the session the
+--- response names, then calls `callback`. The reader is built now, so call
+--- this before sending the request: a reader keeps only records from its
+--- construction on.
+--- @generic R : { sessionId?: string }
+--- @param callback fun(result: R|nil, err: agentic.acp.ACPError|nil)
+--- @return fun(result: R|nil, err: agentic.acp.ACPError|nil)
+function ClaudeAgentACPAdapter:_with_transcript_reader(callback)
     local reader = ClaudeTranscriptReader:new()
-    ACPClient.create_session(self, cwd, handlers, function(result, err)
+    return function(result, err)
         -- Before the callback, which may unsubscribe the session at once.
         if result and result.sessionId then
             self._transcript_readers[result.sessionId] = reader
         end
         callback(result, err)
-    end)
+    end
+end
+
+--- Creates a session and opens a transcript reader for it.
+--- @param cwd string
+--- @param handlers agentic.acp.ClientHandlers
+--- @param callback fun(result: agentic.acp.SessionCreationResponse|nil, err: agentic.acp.ACPError|nil)
+function ClaudeAgentACPAdapter:create_session(cwd, handlers, callback)
+    -- The CLI writes SessionStart's records before the bridge answers
+    -- `session/new`.
+    ACPClient.create_session(
+        self,
+        cwd,
+        handlers,
+        self:_with_transcript_reader(callback)
+    )
+end
+
+--- claude-agent-acp's fork point (`forkPoint` in its `fork-session.js`): the
+--- copy keeps the transcript up to the last entry of the response.
+--- @param response_id string
+--- @return table meta
+function ClaudeAgentACPAdapter:fork_point_meta(response_id)
+    return {
+        jetbrains = {
+            air = { fork = { version = 1, messageId = response_id } },
+        },
+    }
+end
+
+--- Forks a session and opens a transcript reader for the fork.
+--- @param session_id string
+--- @param cwd string
+--- @param response_id string
+--- @param handlers agentic.acp.ClientHandlers
+--- @param callback fun(result: agentic.acp.ForkSessionResponse|nil, err: agentic.acp.ACPError|nil)
+function ClaudeAgentACPAdapter:fork_session(
+    session_id,
+    cwd,
+    response_id,
+    handlers,
+    callback
+)
+    -- The copied entries keep their older timestamps, so the reader skips
+    -- them. Those stamped with the fork time carry no records: the last
+    -- copied entry is a response the fork point ends on, and
+    -- `content-replacement` and `custom-title` entries are no record kind.
+    ACPClient.fork_session(
+        self,
+        session_id,
+        cwd,
+        response_id,
+        handlers,
+        self:_with_transcript_reader(callback)
+    )
 end
 
 --- Loads a session and opens a transcript reader for it. The CLI resumes the

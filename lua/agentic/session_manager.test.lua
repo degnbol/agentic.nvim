@@ -711,6 +711,7 @@ describe("agentic.SessionManager", function()
                 _set_load_state = SessionManager._set_load_state,
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
+                _busy_reason = SessionManager._busy_reason,
             } --[[@as agentic.SessionManager]]
             with_turn_state(with_subagents(session))
 
@@ -806,6 +807,9 @@ describe("agentic.SessionManager", function()
                 _withdraw_auto_continue = noop,
                 _do_load_acp_session = SessionManager._do_load_acp_session,
                 _apply_session_options = SessionManager._apply_session_options,
+                _adopt_session = SessionManager._adopt_session,
+                _session_changed = SessionManager._session_changed,
+                _set_initial_mode = SessionManager._set_initial_mode,
                 _reapply_model = SessionManager._reapply_model,
                 announce_model_loaded = SessionManager.announce_model_loaded,
                 _advance_session_epoch = SessionManager._advance_session_epoch,
@@ -1056,6 +1060,7 @@ describe("agentic.SessionManager", function()
             session.agent.state = "ready"
             session.agent.usage_limit = UsageLimit:new(function() end)
             session._submit_defer_reason = SessionManager._submit_defer_reason
+            session._busy_reason = SessionManager._busy_reason
 
             session:_do_load_acp_session("test-session-id", "/tmp")
 
@@ -3836,6 +3841,7 @@ describe("agentic.SessionManager", function()
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _drain_queue = SessionManager._drain_queue,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
+                _busy_reason = SessionManager._busy_reason,
                 _prompt_pending = 0,
             } --[[@as agentic.SessionManager]]))
         end
@@ -4036,6 +4042,7 @@ describe("agentic.SessionManager", function()
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _drain_queue = SessionManager._drain_queue,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
+                _busy_reason = SessionManager._busy_reason,
                 _prompt_pending = 0,
             } --[[@as agentic.SessionManager]])
             with_events(session)
@@ -5478,6 +5485,7 @@ describe("agentic.SessionManager", function()
                 _delete_session = delete_spy,
                 _dispatch_turn = dispatch_spy,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
+                _busy_reason = SessionManager._busy_reason,
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
                 _run_local_command = SessionManager._run_local_command,
@@ -5486,6 +5494,7 @@ describe("agentic.SessionManager", function()
                 _handle_input_submit = SessionManager._handle_input_submit,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _send_user_prompt = SessionManager._send_user_prompt,
+                config_options = { current_model_id = noop },
             } --[[@as agentic.SessionManager]]
             with_commands(session)
         end)
@@ -5661,6 +5670,7 @@ describe("agentic.SessionManager", function()
                 },
                 _prompt_pending = 0,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
+                _busy_reason = SessionManager._busy_reason,
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
             } --[[@as agentic.SessionManager]]
@@ -5738,6 +5748,7 @@ describe("agentic.SessionManager", function()
                 _set_generating = function() end,
                 _sync_modified = function() end,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
+                _busy_reason = SessionManager._busy_reason,
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
             } --[[@as agentic.SessionManager]]
@@ -6936,6 +6947,7 @@ describe("agentic.SessionManager", function()
                     table.insert(sink.queued, text)
                 end,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
+                _busy_reason = SessionManager._busy_reason,
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
                 _handle_input_submit = SessionManager._handle_input_submit,
@@ -7120,6 +7132,7 @@ describe("agentic.SessionManager", function()
                 _rename_session = rename_spy,
                 _dispatch_turn = dispatch_spy,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
+                _busy_reason = SessionManager._busy_reason,
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
                 _run_local_command = SessionManager._run_local_command,
@@ -7129,6 +7142,7 @@ describe("agentic.SessionManager", function()
                 _handle_input_submit = SessionManager._handle_input_submit,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _send_user_prompt = SessionManager._send_user_prompt,
+                config_options = { current_model_id = noop },
             } --[[@as agentic.SessionManager]]
             with_commands(session)
         end)

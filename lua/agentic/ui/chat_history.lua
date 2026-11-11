@@ -12,12 +12,14 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field provider_name string
 --- @field synthetic? boolean Sent by the plugin, not typed. Kept as a session/load alignment key; every rendering of the history skips it, so a replay reads the response as one continuous turn
 --- @field author? string Who wrote the prompt when not the user, a key of `Glyphs.AUTHOR`
+--- @field model? string The model the prompt was sent with. Absent on files saved before it was recorded and on prompts from a session/load replay
 
 --- @class agentic.ui.ChatHistory.AgentMessage
 --- @field type "agent"
 --- @field provider_name string
 --- @field text string Agent response text (concatenated chunks)
 --- @field agent_key? string Key of the subagent that owns the message: its task id, else its child session id while that is unknown
+--- @field response_id? string `messageId` of the last model response whose text the message holds, in the current ACP session. Absent when the provider sends none, on files saved before it was recorded, and on messages carried over from an earlier ACP session
 
 --- @class agentic.ui.ChatHistory.ThoughtMessage : agentic.ui.ChatHistory.AgentMessage
 --- @field type "thought"
@@ -57,6 +59,15 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field type "side_records"
 --- @field records agentic.acp.SideRecord[]
 
+--- A link to the other chat of a fork. The plugin's own: no provider
+--- transcript holds it.
+--- @class agentic.ui.ChatHistory.ForkLink
+--- @field type "fork_link"
+--- @field direction "to"|"from" A fork this session made, or the session this one was forked from
+--- @field session_id string The other session
+--- @field cwd string Working directory of the other session
+--- @field title string The other chat's title when the link was made, else the first 8 characters of `session_id`
+
 --- @alias agentic.ui.ChatHistory.Message
 --- | agentic.ui.ChatHistory.UserMessage
 --- | agentic.ui.ChatHistory.AgentMessage
@@ -65,6 +76,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- | agentic.ui.ChatHistory.SessionMessage
 --- | agentic.ui.ChatHistory.SubagentEnd
 --- | agentic.ui.ChatHistory.SideRecordsMessage
+--- | agentic.ui.ChatHistory.ForkLink
 
 --- The id, working directory, provider and model of a session.
 --- @class agentic.ui.ChatHistory.SessionRef
@@ -224,21 +236,117 @@ function ChatHistory:add_message(msg)
     self.dirty = true
 end
 
+--- Insert `msg` into the main history at `index`.
+--- @param index integer
+--- @param msg agentic.ui.ChatHistory.Message
+function ChatHistory:insert_message(index, msg)
+    table.insert(self.messages, index, msg)
+    self.dirty = true
+end
+
+--- The position of `message` in the main history.
+--- @param message agentic.ui.ChatHistory.Message
+--- @return integer|nil index Nil when the main history does not hold it
+function ChatHistory:index_of(message)
+    for i, msg in ipairs(self.messages) do
+        if msg == message then
+            return i
+        end
+    end
+    return nil
+end
+
 --- Remove `message` and every message after it, when `message` is in the
 --- main history.
 --- @param message agentic.ui.ChatHistory.Message
 --- @return boolean removed
 function ChatHistory:truncate_from(message)
-    for i, msg in ipairs(self.messages) do
-        if msg == message then
-            for j = #self.messages, i, -1 do
-                self.messages[j] = nil
-            end
-            self.dirty = true
-            return true
+    local i = self:index_of(message)
+    if not i then
+        return false
+    end
+    for j = #self.messages, i, -1 do
+        self.messages[j] = nil
+    end
+    self.dirty = true
+    return true
+end
+
+--- The first prompt the user sent after position `index` of the main
+--- history.
+--- @param index integer
+--- @return agentic.ui.ChatHistory.UserMessage|nil
+function ChatHistory:next_prompt(index)
+    for i = index + 1, #self.messages do
+        local msg = self.messages[i]
+        if msg.type == "user" and not msg.synthetic then
+            return msg
         end
     end
-    return false
+    return nil
+end
+
+--- The index of the first message a chat shows of `messages`: the last
+--- `from` fork link, else 1. What comes before the link is the conversation
+--- the session was forked with.
+--- @param messages agentic.ui.ChatHistory.Message[]
+--- @return integer
+function ChatHistory.render_start(messages)
+    for i = #messages, 1, -1 do
+        local msg = messages[i]
+        if msg.type == "fork_link" and msg.direction == "from" then
+            return i
+        end
+    end
+    return 1
+end
+
+--- A new unsaved history holding copies of the first `count` main messages,
+--- without their fork links, and the source's provider, model and provider
+--- version. It has no title, session id, subagents or file tally.
+--- @param count integer
+--- @return agentic.ui.ChatHistory
+function ChatHistory:copy_prefix(count)
+    local copy = ChatHistory:new()
+    for i = 1, count do
+        local msg = self.messages[i]
+        if msg.type ~= "fork_link" then
+            table.insert(copy.messages, vim.deepcopy(msg))
+        end
+    end
+    copy.provider = self.provider
+    copy.model = self.model
+    copy.provider_version = self.provider_version
+    copy.dirty = true
+    return copy
+end
+
+--- The response to end a provider's copy of the main history on: the
+--- `response_id` of the last message other than side records and fork
+--- links, when that message is an agent message or a thought.
+--- @return string|nil response_id
+function ChatHistory:fork_point()
+    for i = #self.messages, 1, -1 do
+        local msg = self.messages[i]
+        if msg.type ~= "side_records" and msg.type ~= "fork_link" then
+            if msg.type == "agent" or msg.type == "thought" then
+                return msg.response_id
+            end
+            return nil
+        end
+    end
+    return nil
+end
+
+--- Remove `response_id` from every message. Leaves `dirty` as it is: an id
+--- names a response of one ACP session, so a file holding it is not behind
+--- a history without it.
+function ChatHistory:clear_response_ids()
+    for _, list in ipairs({ self.messages, self.subagent_messages }) do
+        for _, msg in ipairs(list) do
+            msg.response_id = nil
+        end
+    end
 end
 
 --- Whether the history holds a prompt the user sent.
@@ -289,8 +397,9 @@ function ChatHistory:messages_for_agent(agent_key)
 end
 
 --- Append text to the same agent's last message (same `agent_key`)
---- when it has the same type, or add a new message.
---- @param msg { type: "agent"|"thought", text: string, provider_name: string, agent_key?: string }
+--- when it has the same type, or add a new message. A merge keeps the
+--- last message's `response_id` when `msg` has none.
+--- @param msg { type: "agent"|"thought", text: string, provider_name: string, agent_key?: string, response_id?: string }
 --- @param starts_response boolean|nil `msg.text` starts a new model response, so a merge into the last message puts a blank line before it
 function ChatHistory:append_agent_text(msg, starts_response)
     local list = self:_list_for(msg)
@@ -309,6 +418,7 @@ function ChatHistory:append_agent_text(msg, starts_response)
             text = TextWrap.paragraph_break(text, trailing_newlines)
         end
         last.text = last.text .. text
+        last.response_id = msg.response_id or last.response_id
     else
         table.insert(list, msg)
     end
@@ -428,23 +538,38 @@ function ChatHistory:session_label(session_id)
     return block and block.subagent and block.subagent.label or "main agent"
 end
 
---- One sequence entry per main-chat message, in order. Tool calls, prompts
---- and session message rows are keyed and start a tail. A synthetic prompt is
---- keyed but does not start one. Agent and thought rows have no key.
+--- One sequence entry per main-chat message but fork links, in order. Tool
+--- calls, prompts and session message rows are keyed and start a tail. A
+--- synthetic prompt is keyed but does not start one. Other rows have no key.
+---
+--- A fork link gives no entry: no replay holds it, and an unkeyed entry
+--- after the file's last keyed one would hide where the file ends.
 --- @return agentic.utils.SequenceTail.Entry[]
 function ChatHistory:sequence_entries()
-    return vim.tbl_map(function(msg)
+    local entries = {} --- @type agentic.utils.SequenceTail.Entry[]
+    for _, msg in ipairs(self.messages) do
         if msg.type == "tool_call" then
             -- `tostring`: the field is optional, and a row without an id
             -- matches nothing.
-            return { key = "tool:" .. tostring(msg.tool_call_id), starts = true }
+            table.insert(
+                entries,
+                { key = "tool:" .. tostring(msg.tool_call_id), starts = true }
+            )
         elseif msg.type == "user" then
-            return { key = "prompt:" .. msg.text, starts = not msg.synthetic }
+            table.insert(
+                entries,
+                { key = "prompt:" .. msg.text, starts = not msg.synthetic }
+            )
         elseif msg.type == "session_message" then
-            return { key = "message:" .. msg.message_id, starts = true }
+            table.insert(
+                entries,
+                { key = "message:" .. msg.message_id, starts = true }
+            )
+        elseif msg.type ~= "fork_link" then
+            table.insert(entries, { starts = false })
         end
-        return { starts = false }
-    end, self.messages)
+    end
+    return entries
 end
 
 --- Prepend the main chat's messages to `prompt` as a text transcript (ACP
@@ -648,11 +773,11 @@ local function read_sessions_from_folder(folder)
             local parsed, err = FileSystem.read_json(file_path)
             if parsed then
                 local prompt_count = 0
-                if parsed.messages then
-                    for _, msg in ipairs(parsed.messages) do
-                        if msg.type == "user" and not msg.synthetic then
-                            prompt_count = prompt_count + 1
-                        end
+                local messages = parsed.messages or {}
+                for i = ChatHistory.render_start(messages), #messages do
+                    local msg = messages[i]
+                    if msg.type == "user" and not msg.synthetic then
+                        prompt_count = prompt_count + 1
                     end
                 end
                 table.insert(sessions, {

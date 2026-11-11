@@ -39,18 +39,21 @@ Two races leave a callback acting on a session that has moved on:
 
 - `_pending_load` / `_load_state` — on-ready starts no new session while
   either is set (race 1). A session transition (`_advance_session_epoch`)
-  clears `_load_state`.
+  clears `_load_state`. Checked after `_pending_load`, `_pending_fork` makes
+  on-ready start a fork (`_do_start_fork`) instead; `fork_at_cursor` sets it
+  on the new manager before the deferred on-ready runs.
 - `_session_epoch` counter — monotonically incremented by `new_session()`,
-  `_do_load_acp_session` and `_delete_session` (which ends a conversation with
-  no `new_session` behind it). The `create_session` and `session/load`
-  callbacks capture the epoch at call time and reject a response that a
-  later transition superseded (e.g. `/new` during a load). Long-running
-  side flows capture it too: `run_login` holds the epoch across the login so
-  its callback cannot recover into a replaced conversation.
+  `_do_load_acp_session`, `_do_start_fork` (before `session/fork`) and
+  `_delete_session` (which ends a conversation with no `new_session` behind
+  it). The `create_session`, `session/load` and `session/fork` callbacks
+  capture the epoch at call time and reject a response that a later
+  transition superseded (e.g. `/new` during a load). Long-running side flows
+  capture it too: `run_login` holds the epoch across the login so its
+  callback cannot recover into a replaced conversation.
 - `destroyed` flag — set in `SessionManager:destroy`; `SessionRegistry.destroy`
-  is a no-op once it is set. Checked at the top of the `create_session`
-  callback for race 2 (`destroy` advances neither the epoch nor the load
-  state).
+  is a no-op once it is set. Checked at the top of the `create_session` and
+  `session/fork` callbacks for race 2 (`destroy` advances neither the epoch
+  nor the load state).
 
 **Rules:**
 

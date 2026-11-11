@@ -162,6 +162,17 @@ function ACPClient:_subscribe(session_id, handlers)
     self.subscribers[session_id] = handlers
 end
 
+--- Route this session's notifications to `handlers`, and record the
+--- directories its skill names resolve against. `unsubscribe` undoes it.
+--- @param session_id string
+--- @param handlers agentic.acp.ClientHandlers
+--- @param cwd string Working directory of the session
+--- @param additional_dirs string[] Directories the session may reach beyond its cwd
+function ACPClient:_attach_session(session_id, handlers, cwd, additional_dirs)
+    self:_subscribe(session_id, handlers)
+    self._session_roots[session_id] = SkillPath.roots(cwd, additional_dirs)
+end
+
 --- Stop routing this session's notifications, and drop the per-session state
 --- that exists only to serve them. Every caller that abandons a session goes
 --- through here, so the parallel maps cannot drift apart.
@@ -326,6 +337,15 @@ end
 --- @param _additional_dirs string[] Directories the session may reach beyond its cwd
 --- @return table|nil meta
 function ACPClient:session_meta(_additional_dirs)
+    return nil
+end
+
+--- The `_meta` that tells the agent to end a `session/fork` copy after the
+--- model response `response_id`. ACP defines no fork point, so the default
+--- is nil: the provider cannot cut a fork.
+--- @param _response_id string `messageId` of the response
+--- @return table|nil meta
+function ACPClient:fork_point_meta(_response_id)
     return nil
 end
 
@@ -1366,9 +1386,12 @@ function ACPClient:create_session(cwd, handlers, callback)
         end
 
         if result.sessionId then
-            self:_subscribe(result.sessionId, handlers)
-            self._session_roots[result.sessionId] =
-                SkillPath.roots(cwd, additional_dirs)
+            self:_attach_session(
+                result.sessionId,
+                handlers,
+                cwd,
+                additional_dirs
+            )
         end
 
         --- @cast result agentic.acp.SessionCreationResponse
@@ -1405,14 +1428,13 @@ function ACPClient:load_session(
         return
     end
 
-    self:_subscribe(session_id, handlers)
     self._loading_sessions[session_id] = true
 
     local additional_dirs =
         PermissionRules.get_additional_directories(self:claude_config_dir())
     -- Before the request: the bridge replays the session's tool calls as
     -- notifications, which must not outrun the roots they resolve against.
-    self._session_roots[session_id] = SkillPath.roots(cwd, additional_dirs)
+    self:_attach_session(session_id, handlers, cwd, additional_dirs)
 
     self:_send_request("session/load", {
         sessionId = session_id,
@@ -1425,6 +1447,76 @@ function ACPClient:load_session(
             self:unsubscribe(session_id)
         end
         callback(result, err)
+    end)
+end
+
+--- Whether the agent can fork a session cut after the response
+--- `response_id`: it advertises `session/fork` and the provider has a fork
+--- point (`fork_point_meta`).
+--- @param response_id string
+--- @return boolean
+function ACPClient:can_fork(response_id)
+    local session_caps = self.agent_capabilities
+        and self.agent_capabilities.sessionCapabilities
+    return session_caps ~= nil
+        and session_caps.fork ~= nil
+        and self:fork_point_meta(response_id) ~= nil
+end
+
+--- Send `session/fork` for `session_id`, the copy cut after the response
+--- `response_id`, and subscribe `handlers` to the new session. Sends nothing
+--- when `can_fork(response_id)` is false, and `callback` gets an error.
+--- @param session_id string
+--- @param cwd string Working directory of the new session
+--- @param response_id string
+--- @param handlers agentic.acp.ClientHandlers
+--- @param callback fun(result: agentic.acp.ForkSessionResponse|nil, err: agentic.acp.ACPError|nil)
+function ACPClient:fork_session(
+    session_id,
+    cwd,
+    response_id,
+    handlers,
+    callback
+)
+    if not self:can_fork(response_id) then
+        -- Scheduled like every response callback, so no caller sees its
+        -- callback run before `fork_session` returns.
+        vim.schedule(function()
+            callback(nil, {
+                code = self.ERROR_CODES.PROTOCOL_ERROR,
+                message = "Agent cannot fork sessions at a response",
+            })
+        end)
+        return
+    end
+
+    local additional_dirs =
+        PermissionRules.get_additional_directories(self:claude_config_dir())
+
+    self:_send_request("session/fork", {
+        sessionId = session_id,
+        cwd = cwd,
+        mcpServers = {},
+        _meta = vim.tbl_deep_extend(
+            "force",
+            self:session_meta(additional_dirs) or {},
+            self:fork_point_meta(response_id) --[[@as table]]
+        ),
+    }, function(result, err)
+        if err or not (result and result.sessionId) then
+            callback(
+                nil,
+                err
+                    or self:__create_error(
+                        self.ERROR_CODES.PROTOCOL_ERROR,
+                        "Failed to fork session: missing result"
+                    )
+            )
+            return
+        end
+        self:_attach_session(result.sessionId, handlers, cwd, additional_dirs)
+        --- @cast result agentic.acp.ForkSessionResponse
+        callback(result, nil)
     end)
 end
 

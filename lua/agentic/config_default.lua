@@ -337,6 +337,11 @@ local ConfigDefault = {
             prev_prompt = "[[",
             next_prompt = "]]",
 
+            --- Chat only. Fork the conversation before the turn at the cursor
+            --- into a new chat, with that turn's prompt as its draft.
+            --- `<C-w>` before the key opens it in a split, `<C-w>g` in a tab.
+            fork = "<localLeader>F",
+
             --- Normal-mode keys that move to this buffer's input, then run
             --- there as typed, at the input's own cursor. Also bound in the
             --- panels.

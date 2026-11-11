@@ -39,7 +39,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @class agentic.acp.AgentCapabilities
 --- @field loadSession boolean
 --- @field promptCapabilities agentic.acp.PromptCapabilities
---- @field sessionCapabilities? { close?: table }
+--- @field sessionCapabilities? { close?: table, fork?: table }
 
 --- @class agentic.acp.PromptCapabilities
 --- @field image boolean
@@ -208,6 +208,11 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field sessionId string
 --- @field modes? agentic.acp.ModesInfo
 --- @field models? agentic.acp.ModelsInfo
+--- @field configOptions? agentic.acp.ConfigOption[]
+
+--- @class agentic.acp.ForkSessionResponse
+--- @field sessionId string
+--- @field modes? agentic.acp.ModesInfo
 --- @field configOptions? agentic.acp.ConfigOption[]
 
 --- @class agentic.acp.ResponseRaw

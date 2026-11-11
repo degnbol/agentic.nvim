@@ -749,17 +749,23 @@ describe("agentic.session_recovery", function()
         local Config = require("agentic.config")
         local MiniTest = require("mini.test")
         local original_key
+        local original_fork_key
         local last_owner_id = 9000
         --- @type agentic.SessionManager.PanelContext
         local NO_CONTEXT = { selections = {}, files = {}, diagnostics = {} }
+        local FORK_ACTION =
+            "The refused prompt stays in this session. Fork before it with [<F>] on its turn."
 
         before_each(function()
             original_key = Config.keymaps.widget.switch_model
+            original_fork_key = Config.keymaps.agent.fork
             Config.keymaps.widget.switch_model = "<M>"
+            Config.keymaps.agent.fork = { { "<F>", mode = "n" }, "<G>" }
         end)
 
         after_each(function()
             Config.keymaps.widget.switch_model = original_key
+            Config.keymaps.agent.fork = original_fork_key
         end)
 
         --- A session over a real widget whose input holds `lines`, each
@@ -1066,6 +1072,7 @@ describe("agentic.session_recovery", function()
                 assert.is_nil(session._continue_mark)
                 assert.same({
                     "Prompt returned to the input. Switch model with [<M>] to send it again.",
+                    FORK_ACTION,
                     "2 queued prompt(s) left as draft.",
                 }, sink.actions)
             end)
@@ -1079,7 +1086,7 @@ describe("agentic.session_recovery", function()
                 assert.same({ "refused", "", "held" }, input_lines(session))
                 assert.equal(
                     "1 queued prompt(s) left as draft.",
-                    sink.actions[2]
+                    sink.actions[3]
                 )
             end)
 
@@ -1110,7 +1117,21 @@ describe("agentic.session_recovery", function()
 
                 Recovery.restore_refused_prompt(session, "refused", NO_CONTEXT)
 
-                assert.same({ "Prompt returned to the input." }, sink.actions)
+                assert.same(
+                    { "Prompt returned to the input.", FORK_ACTION },
+                    sink.actions
+                )
+            end)
+
+            it("names no fork key when forking has none", function()
+                Config.keymaps.agent.fork = ""
+                local session, sink = make_session({}, {})
+
+                Recovery.restore_refused_prompt(session, "refused", NO_CONTEXT)
+
+                assert.same({
+                    "Prompt returned to the input. Switch model with [<M>] to send it again.",
+                }, sink.actions)
             end)
         end)
     end)

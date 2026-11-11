@@ -210,6 +210,27 @@ describe("ClaudeTranscriptReader", function()
         return reader
     end
 
+    it("drains nothing from a forked transcript", function()
+        -- A fork copies the source's entries with their own times, and stamps
+        -- the last response and the closing title with the fork time.
+        local reader = reader_at(transcript)
+        append({
+            injected("c-0", nil, "copied context", BEFORE),
+            prompt("u-1", "c-0", "question", BEFORE),
+            transcript_entry("assistant", "a-1", "u-1", {
+                message = { content = { { type = "text", text = "answer" } } },
+            }),
+            {
+                type = "custom-title",
+                customTitle = "Title (fork)",
+                sessionId = SESSION_ID,
+                timestamp = AFTER,
+            },
+        })
+
+        assert.same({}, reader:drain())
+    end)
+
     it("keeps records from a given time on", function()
         append({
             injected("c-0", nil, "before", BEFORE),

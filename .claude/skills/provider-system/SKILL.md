@@ -448,15 +448,17 @@ There are two paths that use this asymmetry differently:
   the provider replays its own history via `session/update`
   notifications. `_history_to_send` is *not* set. Used by
   `SessionResume.resume`. Path B when the load fails (an agent without
-  `loadSession` fails it at once) and the session file is readable.
+  `loadSession` fails it at once) and the session file is readable. A fork
+  the provider can cut sends ACP `session/fork` instead (`_do_start_fork`);
+  as here, the provider holds the conversation.
 - **Path B — re-create from history: `new_session({ history })`.** Used by
-  Path A's fallback and `restart_session` (both through
-  `replace_with_history`, which also replays the saved messages into the
-  chat buffer), a provider switch, and `renew_session`
-  (`session_recovery.lua`: same client, new ACP session) after a usage
-  limit, and for every session on a client that `restart_client` restarts
-  after a re-login. `new_session` stashes the history on
-  `self._history_to_send`.
+  Path A's fallback, `restart_session` and a fork the provider does not
+  cut (`_start_fork_from_history`) (all through `replace_with_history`,
+  which also replays the saved messages into the chat buffer), a provider
+  switch, and `renew_session` (`session_recovery.lua`: same client, new ACP
+  session) after a usage limit, and for every session on a client that
+  `restart_client` restarts after a re-login. `new_session` stashes the
+  history on `self._history_to_send`.
   On the first `send_prompt`, `ChatHistory.prepend_history_messages`
   (`ui/chat_history.lua`) injects them as text Content blocks
   (`"User: …"`, `"Assistant: …"`, `"Assistant (thinking): …"`, `"Tool

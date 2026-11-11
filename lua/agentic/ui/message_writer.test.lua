@@ -6929,6 +6929,295 @@ describe("agentic.ui.MessageWriter", function()
             )
         end)
     end)
+
+    describe("prompt payloads", function()
+        it(
+            "finds the nearest prompt with a payload at or above a row",
+            function()
+                local first, second = { "first" }, { "second" }
+                writer:write_user_prompt("one", nil, nil, first)
+                writer:write_message_chunk(make_message_update("answer"))
+                writer:write_notice({
+                    glyph = "x",
+                    title = "notice",
+                    mid_turn = true,
+                })
+                writer:write_notice({
+                    glyph = "x",
+                    title = "tagged",
+                    id = "n1",
+                    mid_turn = true,
+                })
+                writer:write_user_prompt("two", nil, nil, second)
+                writer:write_message_chunk(make_message_update("more"))
+
+                local two = row_of("## two") - 1
+                assert.same(
+                    { payload = first, row = 0 },
+                    writer:prompt_payload_at(row_of("## tagged") - 1)
+                )
+                assert.same(
+                    { payload = first, row = 0 },
+                    writer:prompt_payload_at(0)
+                )
+                assert.same(
+                    { payload = second, row = two },
+                    writer:prompt_payload_at(two)
+                )
+                assert.same(
+                    { payload = second, row = two },
+                    writer:prompt_payload_at(row_of("more") - 1)
+                )
+            end
+        )
+
+        it("is nil above the first prompt and for row -1", function()
+            writer:write_notice({ glyph = "x", title = "notice" })
+            writer:write_user_prompt("one", nil, nil, {})
+
+            assert.is_nil(writer:prompt_payload_at(0))
+            assert.is_nil(writer:prompt_payload_at(-1))
+        end)
+
+        it("skips a prompt without a payload", function()
+            local payload = {}
+            writer:write_user_prompt("one", nil, nil, payload)
+            writer:write_user_prompt("two")
+
+            assert.equal(
+                payload,
+                writer:prompt_payload_at(row_of("## two") - 1).payload
+            )
+        end)
+
+        it("is forgotten by reset", function()
+            local payload = {}
+            writer:write_user_prompt("one", nil, nil, payload)
+            writer:reset()
+
+            assert.is_nil(writer:prompt_payload_at(0))
+            assert.is_nil(writer:prompt_mark_of(payload))
+        end)
+
+        it("prompt_mark_of finds the heading mark of a payload", function()
+            local payload = {}
+            writer:write_user_prompt("one")
+            writer:write_user_prompt("two", nil, nil, payload)
+
+            local mark = writer:prompt_mark_of(payload) --[[@as integer]]
+            assert.equal(
+                row_of("## two") - 1,
+                vim.api.nvim_buf_get_extmark_by_id(
+                    bufnr,
+                    MessageWriter.NS_USER_ACTIONS,
+                    mark,
+                    {}
+                )[1]
+            )
+            assert.is_nil(writer:prompt_mark_of({}))
+        end)
+    end)
+
+    describe("write_fork_link", function()
+        --- @param session_id string
+        --- @return agentic.ui.ChatHistory.ForkLink
+        local function link(session_id)
+            return {
+                type = "fork_link",
+                direction = "to",
+                session_id = session_id,
+                cwd = "/c",
+                title = "Other",
+            }
+        end
+
+        local function buffer_lines()
+            return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        end
+
+        --- Rows of the marks in NS_USER_ACTIONS.
+        --- @return integer[]
+        local function action_rows()
+            return vim.tbl_map(
+                function(mark)
+                    return mark[2]
+                end,
+                vim.api.nvim_buf_get_extmarks(
+                    bufnr,
+                    MessageWriter.NS_USER_ACTIONS,
+                    0,
+                    -1,
+                    {}
+                )
+            )
+        end
+
+        it("appends a link at the end without a mark", function()
+            writer:write_user_prompt("one")
+            writer:write_fork_link(link("sid-other-123"))
+
+            assert.same({
+                "## one",
+                "",
+                "## Other",
+                "Forked to sid-othe",
+                "",
+            }, buffer_lines())
+            assert.equal("fork:sid-other-123", writer:notice_at(3))
+            assert.equal(2, writer:notice_row("fork:sid-other-123"))
+        end)
+
+        it("names the source of a from link", function()
+            local from = link("sid-src-12345")
+            from.direction = "from"
+            writer:write_fork_link(from)
+
+            assert.equal("Forked from sid-src-", buffer_lines()[2])
+        end)
+
+        --- Write a turn: prompt `text` with `payload`, and a reply.
+        local function turn(text, payload, reply)
+            writer:write_user_prompt(text, nil, nil, payload)
+            writer:write_message_chunk(make_message_update(reply))
+            writer:finalize_turn()
+        end
+
+        it("puts the row above a prompt heading", function()
+            local first, second = {}, {}
+            turn("one", first, "a1\n\nmore")
+            turn("two\nbody", second, "a2")
+            local two = row_of("## two") - 1
+            local fence_marks_before =
+                #vim.api.nvim_buf_get_extmarks(bufnr, -1, { two, 0 }, -1, {})
+
+            writer:write_fork_link(link("sid-x"), writer:prompt_mark_of(second))
+
+            assert.equal("## Other", buffer_lines()[two + 1])
+            assert.equal("Forked to sid-x", buffer_lines()[two + 2])
+            assert.equal("", buffer_lines()[two + 3])
+            assert.equal("## two", buffer_lines()[two + 4])
+            -- The prompt keeps its mark, sign and payload.
+            assert.same(
+                { payload = second, row = two + 3 },
+                writer:prompt_payload_at(two + 3)
+            )
+            assert.same(
+                { payload = first, row = 0 },
+                writer:prompt_payload_at(two + 2)
+            )
+            assert.same({ 0, two, two + 3 }, action_rows())
+            assert.equal(
+                Glyphs.PROMPT .. " ",
+                vim.api.nvim_buf_get_extmarks(
+                    bufnr,
+                    MessageWriter.NS_USER_ACTIONS,
+                    { two + 3, 0 },
+                    { two + 3, 0 },
+                    { details = true }
+                )[1][4].sign_text
+            )
+            assert.equal("fork:sid-x", writer:notice_at(two + 1))
+            assert.equal(two, writer:notice_row("fork:sid-x"))
+            -- Every mark below moved with its row: none was lost.
+            assert.equal(
+                fence_marks_before,
+                #vim.api.nvim_buf_get_extmarks(
+                    bufnr,
+                    -1,
+                    { two + 3, 0 },
+                    -1,
+                    {}
+                )
+            )
+            assert_one_sign_per_row()
+        end)
+
+        it("works on row 0", function()
+            local payload = {}
+            turn("one", payload, "a")
+
+            writer:write_fork_link(
+                link("sid-x"),
+                writer:prompt_mark_of(payload)
+            )
+
+            assert.same(
+                { "## Other", "Forked to sid-x", "", "## one" },
+                vim.list_slice(buffer_lines(), 1, 4)
+            )
+            assert.same(
+                { payload = payload, row = 3 },
+                writer:prompt_payload_at(3)
+            )
+            assert.is_nil(writer:prompt_payload_at(2))
+            assert.same({ 0, 3 }, action_rows())
+        end)
+
+        it("does not grow a dim range that ends above", function()
+            local payload = {}
+            writer:write_notice({ glyph = "x", title = "t", detail = "dim" })
+            writer:write_user_prompt("one", nil, nil, payload)
+            local before = dim_ranges()
+
+            writer:write_fork_link(
+                link("sid-x"),
+                writer:prompt_mark_of(payload)
+            )
+
+            -- The notice's own detail row, then the link's.
+            assert.same({ before[1], { 4, 5 } }, dim_ranges())
+        end)
+
+        it("keeps the prompt anchor on the prompt", function()
+            local payload = {}
+            writer:write_user_prompt("one", nil, nil, payload)
+            writer:write_fork_link(
+                link("sid-x"),
+                writer:prompt_mark_of(payload)
+            )
+            writer:write_loaded_file({ path = "/tmp/f", after_prompt = true })
+
+            local lines = buffer_lines()
+            assert.equal("## one", lines[4])
+            assert.equal("", lines[5])
+            assert.truthy(lines[6]:find("/tmp/f", 1, true))
+        end)
+
+        it("leaves a prose run below unbroken and the turn open", function()
+            local payload = {}
+            writer:write_user_prompt("one", nil, nil, payload)
+            writer:write_message_chunk(make_message_update("alpha\n\nbe"))
+            local finalize = spy.on(writer, "finalize_turn")
+            MiniTest.finally(function()
+                finalize:revert()
+            end)
+
+            writer:write_fork_link(
+                link("sid-x"),
+                writer:prompt_mark_of(payload)
+            )
+            writer:write_message_chunk(make_message_update("ta"))
+            writer:finalize_turn()
+
+            assert.equal(1, finalize.call_count)
+            local lines = buffer_lines()
+            assert.equal("## one", lines[4])
+            assert.truthy(vim.tbl_contains(lines, "beta"))
+            assert.is_nil(row_of("be"))
+            assert_one_sign_per_row()
+        end)
+
+        it("does not finalize the turn at the end either", function()
+            local finalize = spy.on(writer, "finalize_turn")
+            MiniTest.finally(function()
+                finalize:revert()
+            end)
+
+            writer:write_fork_link(link("sid-x"))
+
+            assert.equal(0, finalize.call_count)
+        end)
+    end)
 end)
 
 describe("agentic.ui.MessageWriter wrapped table rows", function()

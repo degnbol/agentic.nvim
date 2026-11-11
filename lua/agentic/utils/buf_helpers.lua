@@ -174,6 +174,61 @@ function BufHelpers.multi_keymap_set(
     end
 end
 
+--- Where a key opens something: in a window placed by command modifiers, or
+--- in a new tab after the current tabpage.
+--- @class agentic.utils.BufHelpers.Placement
+--- @field mods? vim.api.keyset.cmd_mods
+--- @field new_tab? boolean
+
+--- The command modifiers of `placement`, with the current tabpage as it is
+--- at the call.
+--- @param placement agentic.utils.BufHelpers.Placement
+--- @return vim.api.keyset.cmd_mods
+function BufHelpers.placement_mods(placement)
+    if placement.new_tab then
+        return { tab = vim.api.nvim_tabpage_get_number(0) }
+    end
+    return vim.deepcopy(placement.mods or {})
+end
+
+--- `keymaps` with `prefix` before each key, in the same form. A disabled
+--- value (`is_keymap_disabled`) stays as it is.
+--- @param keymaps agentic.UserConfig.KeymapValue|nil
+--- @param prefix string
+--- @return agentic.UserConfig.KeymapValue|nil
+function BufHelpers.prefix_keymaps(keymaps, prefix)
+    if BufHelpers.is_keymap_disabled(keymaps) then
+        return keymaps
+    end
+    --- @cast keymaps -nil
+    if type(keymaps) == "string" then
+        return prefix .. keymaps
+    end
+    return vim.tbl_map(function(key)
+        if type(key) == "table" then
+            local entry = vim.deepcopy(key)
+            entry[1] = prefix .. entry[1]
+            return entry
+        end
+        return prefix .. key
+    end, keymaps)
+end
+
+--- The first key of `keymaps`: the string, or the first entry of a list.
+--- @param keymaps agentic.UserConfig.KeymapValue|nil
+--- @return string|nil key Nil for a disabled value (`is_keymap_disabled`)
+function BufHelpers.first_key(keymaps)
+    if BufHelpers.is_keymap_disabled(keymaps) then
+        return nil
+    end
+    --- @cast keymaps -nil
+    if type(keymaps) == "string" then
+        return keymaps
+    end
+    local first = keymaps[1]
+    return type(first) == "table" and first[1] or first --[[@as string]]
+end
+
 --- Bind `keymaps` on `bufnr` to focus `input_win()`, then feed the pressed
 --- key there with its count and register, remapped. No-op when `input_win()`
 --- returns nil.

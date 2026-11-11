@@ -1111,6 +1111,125 @@ describe("agentic.acp.ACPClient", function()
         end)
     end)
 
+    describe("fork_session", function()
+        --- @type tests.helpers.Deferred
+        local deferred
+
+        before_each(function()
+            deferred = Deferred.capture()
+        end)
+
+        after_each(function()
+            deferred.revert()
+        end)
+
+        --- A client recording what it sends, whose provider can cut a fork
+        --- unless `meta` is false.
+        --- @param capabilities table|nil `agent_capabilities`
+        --- @param meta boolean|nil
+        --- @return agentic.acp.ACPClient client
+        --- @return { method: string, params: table, cb: function }[] sent
+        local function make_client(capabilities, meta)
+            local sent = {}
+            local client = setmetatable({
+                agent_capabilities = capabilities,
+                provider_config = {},
+                subscribers = {},
+                _session_roots = {},
+                _children = {},
+                _tool_call_kinds = ToolCallKinds:new(),
+            }, { __index = ACPClient }) --[[@as agentic.acp.ACPClient]]
+            client._send_request = function(_self, method, params, cb)
+                table.insert(
+                    sent,
+                    { method = method, params = params, cb = cb }
+                )
+            end
+            if meta ~= false then
+                client.fork_point_meta = function(_self, response_id)
+                    return { cut = response_id }
+                end
+            end
+            return client, sent
+        end
+
+        local CAN_FORK = { sessionCapabilities = { fork = {} } }
+
+        --- Fork `s1` at `r1` and return what the callback got.
+        --- @param client agentic.acp.ACPClient
+        --- @return table got `{ result, err }` once called, else empty
+        local function fork(client)
+            local got = {}
+            client:fork_session("s1", "/p", "r1", {}, function(result, err)
+                got.result, got.err, got.called = result, err, true
+            end)
+            return got
+        end
+
+        it("sends nothing and errors without the capability", function()
+            local client, sent = make_client({ loadSession = true })
+
+            assert.is_false(client:can_fork("r1"))
+            local got = fork(client)
+            deferred.drain()
+
+            assert.equal(0, #sent)
+            assert.is_true(got.called)
+            assert.is_nil(got.result)
+            assert.truthy(got.err)
+        end)
+
+        it("sends nothing and errors without fork point meta", function()
+            local client, sent = make_client(CAN_FORK, false)
+
+            assert.is_false(client:can_fork("r1"))
+            local got = fork(client)
+            deferred.drain()
+
+            assert.equal(0, #sent)
+            assert.truthy(got.err)
+        end)
+
+        it("cuts after the response and subscribes the new id", function()
+            local client, sent = make_client(CAN_FORK)
+            local handlers = {}
+
+            assert.is_true(client:can_fork("r1"))
+            local got = {}
+            client:fork_session(
+                "s1",
+                "/p",
+                "r1",
+                handlers,
+                function(result, err)
+                    got = { result = result, err = err }
+                end
+            )
+
+            assert.equal(1, #sent)
+            assert.equal("session/fork", sent[1].method)
+            assert.equal("s1", sent[1].params.sessionId)
+            assert.equal("/p", sent[1].params.cwd)
+            assert.same({ cut = "r1" }, sent[1].params._meta)
+            sent[1].cb({ sessionId = "s2" }, nil)
+
+            assert.equal(handlers, client.subscribers.s2)
+            assert.truthy(client._session_roots.s2)
+            assert.same({ sessionId = "s2" }, got.result)
+            assert.is_nil(got.err)
+        end)
+
+        it("passes an error on and subscribes nothing", function()
+            local client, sent = make_client(CAN_FORK)
+            local got = fork(client)
+
+            sent[1].cb(nil, { code = -32602, message = "bad id" })
+
+            assert.same({}, client.subscribers)
+            assert.equal(-32602, got.err.code)
+        end)
+    end)
+
     describe("terminal_auth_invocation", function()
         --- @param provider_config table
         --- @return agentic.acp.ACPClient

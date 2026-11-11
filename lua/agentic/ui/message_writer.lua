@@ -237,6 +237,7 @@ end
 --- @field _fold_states table<integer, boolean> Applied fold ops, anchor extmark id in NS_FOLD_ANCHORS -> open. Replayed in each window that starts showing the buffer (see `replay_folds`).
 --- @field _pending_section_break? boolean Set by `_mark_section_break` when a tool call interrupts a prose run mid-turn; makes the next prose chunk or collapsed region appended at the end emit the empty `###` boundary that closes the interrupting section. Cleared by that write and at the turn boundary.
 --- @field _notices table<string, { mark: integer, height: integer }> Notice id -> the heading's mark in NS_USER_ACTIONS, and the number of rows of heading and body
+--- @field _prompt_payloads table<integer, any> Prompt heading mark in NS_USER_ACTIONS -> the payload `write_user_prompt` was given
 --- @field _prompt_anchor? agentic.ui.MessageWriter.Placed What was placed beneath the last prompt
 --- @field _last_compaction_id? string Tool call id of the last compaction's block
 --- @field _end_rows? agentic.ui.MessageWriter.Placed The row group last appended at the end of the buffer, which the next appended row joins while nothing has been written after it
@@ -259,8 +260,8 @@ local NS_ANCHORS = vim.api.nvim_create_namespace("agentic_anchors")
 
 --- Forget everything written to the buffer, for a buffer whose text is gone
 --- or about to be rewritten whole: the tool call trackers, the anchors, the
---- notice ids, the pending fold ops, the per-turn state, and every extmark in
---- the buffer.
+--- notice ids, the prompt payloads, the pending fold ops, the per-turn state,
+--- and every extmark in the buffer.
 ---
 --- Emptying or reloading a buffer collapses extmarks onto row 0 rather than
 --- deleting them, so a tracker or mark surviving its text resolves to the top
@@ -276,6 +277,7 @@ function MessageWriter:reset()
     self._pending_fold_ops = {}
     self._fold_states = {}
     self._notices = {}
+    self._prompt_payloads = {}
     self._has_last_position = false
     self:reset_turn_state()
     vim.api.nvim_buf_clear_namespace(self.bufnr, -1, 0, -1)
@@ -313,6 +315,7 @@ function MessageWriter:new(bufnr)
         _pending_fold_ops = {},
         _fold_states = {},
         _notices = {},
+        _prompt_payloads = {},
         _fence_rows = FenceRows:new(bufnr),
     }, self)
 
@@ -637,6 +640,24 @@ function MessageWriter:go_to_bottom(winid)
             -- empty rows below it.
             vim.cmd("normal! Gzb")
         end)
+    end)
+end
+
+--- Put `winid`, while it shows the buffer, in user control with its cursor on
+--- `row`, so later writes do not scroll it away.
+--- @param winid integer
+--- @param row integer 0-indexed
+function MessageWriter:show_row_to_user(winid, row)
+    if
+        not vim.api.nvim_win_is_valid(winid)
+        or vim.api.nvim_win_get_buf(winid) ~= self.bufnr
+    then
+        return
+    end
+    self._user_controlled[winid] = true
+    self._newly_shown[winid] = nil
+    self:_own_change(function()
+        vim.api.nvim_win_set_cursor(winid, { row + 1, 0 })
     end)
 end
 
@@ -1717,7 +1738,8 @@ end
 --- @param extra_lines string[]|nil Display-only lines appended after the prompt
 ---        body (selected code / referenced files / diagnostics)
 --- @param author string|nil Who wrote the prompt, a key of `Glyphs.AUTHOR`; nil for the user
-function MessageWriter:write_user_prompt(text, extra_lines, author)
+--- @param payload any Value attached to the prompt heading. Nil attaches none
+function MessageWriter:write_user_prompt(text, extra_lines, author, payload)
     self:flush_thought_run()
 
     local lines = prompt_heading_lines(text)
@@ -1750,7 +1772,7 @@ function MessageWriter:write_user_prompt(text, extra_lines, author)
         local heading_row = vim.api.nvim_buf_line_count(bufnr) - #flat - 1
 
         -- The sign rides on the marker itself, so there is no separate scan.
-        vim.api.nvim_buf_set_extmark(
+        local mark = vim.api.nvim_buf_set_extmark(
             bufnr,
             MessageWriter.NS_USER_ACTIONS,
             heading_row,
@@ -1761,6 +1783,7 @@ function MessageWriter:write_user_prompt(text, extra_lines, author)
                 sign_hl_group = Theme.HL_GROUPS.GLYPH_USER,
             }
         )
+        self._prompt_payloads[mark] = payload
 
         render_region_rail(
             bufnr,
@@ -1801,6 +1824,94 @@ end
 --- @field mid_turn? boolean True while a turn or replay that finalizes the writer at its own end is being written. Decides whether the notice closes the turn — see write_notice.
 --- @field id? string Id to find the notice by. Must be unique per writer
 
+--- The rows of a notice and where its folded body sits in them.
+--- @class agentic.ui.MessageWriter.NoticeLayout
+--- @field lines string[] Heading and body, without a trailing blank
+--- @field fold_offset? integer 0-indexed offset of the fenced body's first row in `lines`; nil without a fenced body
+--- @field fold_rows integer Rows of the fenced body
+--- @field table_row_ends integer[] Rows of the fenced body that end a wrapped table row (`_wrap_prose`)
+
+--- The rows of a notice.
+--- @param notice agentic.ui.MessageWriter.Notice
+--- @return agentic.ui.MessageWriter.NoticeLayout
+function MessageWriter:_notice_layout(notice)
+    -- Never wrapped or truncated: an ATX heading has to stay on one row, and
+    -- the title is the notice's whole record of the command — for `/grant` the
+    -- part that would be cut is the scope path it exists to report. Under
+    -- `nowrap`, a title wider than the chat window runs past its edge and is
+    -- reached by scrolling horizontally.
+    local lines = { "## " .. notice.title, notice.detail }
+    vim.list_extend(lines, notice.body or {})
+    local fold_body, table_row_ends = self:_wrap_prose(notice.fold_body or {})
+    --- @type integer|nil
+    local fold_offset
+    if #fold_body > 0 then
+        -- Fenced even as one line, so no markdown in it can open a block that
+        -- outlives the notice.
+        local fence = TextWrap.safe_fence(fold_body)
+        table.insert(lines, fence .. "markdown-fold")
+        fold_offset = #lines
+        vim.list_extend(lines, fold_body)
+        table.insert(lines, fence)
+    end
+    --- @type agentic.ui.MessageWriter.NoticeLayout
+    local layout = {
+        lines = lines,
+        fold_offset = fold_offset,
+        fold_rows = #fold_body,
+        table_row_ends = table_row_ends,
+    }
+    return layout
+end
+
+--- Decorate a notice whose rows are in the buffer from `heading_row` on: the
+--- heading's mark in NS_USER_ACTIONS with its sign, the id, the dimmed
+--- detail, the folded body and the rail. Raw: the caller runs it inside
+--- `_own_edit`.
+--- @param heading_row integer 0-indexed
+--- @param notice agentic.ui.MessageWriter.Notice
+--- @param layout agentic.ui.MessageWriter.NoticeLayout The notice's `_notice_layout`
+function MessageWriter:_decorate_notice(heading_row, notice, layout)
+    local bufnr = self.bufnr
+    local mark = vim.api.nvim_buf_set_extmark(
+        bufnr,
+        MessageWriter.NS_USER_ACTIONS,
+        heading_row,
+        0,
+        {
+            right_gravity = false,
+            sign_text = notice.glyph .. " ",
+            sign_hl_group = notice.glyph_hl or Theme.HL_GROUPS.GLYPH_USER,
+        }
+    )
+    if notice.id then
+        self._notices[notice.id] = { mark = mark, height = #layout.lines }
+    end
+
+    if notice.detail then
+        Renderer.set_dim_range(bufnr, heading_row + 1, heading_row + 1)
+    end
+    local fold_offset = layout.fold_offset
+    if fold_offset then
+        mark_table_row_ends(
+            bufnr,
+            heading_row + fold_offset,
+            layout.table_row_ends
+        )
+    end
+    -- Vim cannot close a one-line fold.
+    if fold_offset and layout.fold_rows > 1 then
+        self:_queue_fold(heading_row + fold_offset, false)
+    end
+
+    render_region_rail(
+        bufnr,
+        self._fence_rows,
+        heading_row,
+        heading_row + #layout.lines - 1
+    )
+end
+
 --- Write a glyph-signed heading row that is not part of the agent's stream,
 --- such as the result of a locally-handled command.
 ---
@@ -1820,31 +1931,13 @@ end
 --- `mid_turn` decides only the turn boundary. Between turns the notice
 --- finalizes; mid-turn it must NOT, since finalizing resets cross-turn state
 --- the running turn still needs.
----
 --- @param notice agentic.ui.MessageWriter.Notice
 function MessageWriter:write_notice(notice)
     self:flush_thought_run()
 
-    -- Never wrapped or truncated: an ATX heading has to stay on one row, and
-    -- the title is the notice's whole record of the command — for `/grant` the
-    -- part that would be cut is the scope path it exists to report. Under
-    -- `nowrap`, a title wider than the chat window runs past its edge and is
-    -- reached by scrolling horizontally.
-    local lines = { "## " .. notice.title, notice.detail }
-    vim.list_extend(lines, notice.body or {})
-    local fold_body, table_row_ends = self:_wrap_prose(notice.fold_body or {})
-    --- @type integer|nil 0-indexed offset of the fenced body's first row in `lines`
-    local fold_offset
-    if #fold_body > 0 then
-        -- Fenced even as one line, so no markdown in it can open a block that
-        -- outlives the notice.
-        local fence = TextWrap.safe_fence(fold_body)
-        table.insert(lines, fence .. "markdown-fold")
-        fold_offset = #lines
-        vim.list_extend(lines, fold_body)
-        table.insert(lines, fence)
-    end
-    table.insert(lines, "")
+    local layout = self:_notice_layout(notice)
+    -- The trailing blank belongs to no notice.
+    local lines = vim.list_extend(vim.list_extend({}, layout.lines), { "" })
 
     -- A notice ends the prose run it interrupts: without this the viewport
     -- stays anchored to the pre-notice prose, since the re-pin check only
@@ -1864,44 +1957,7 @@ function MessageWriter:write_notice(notice)
         -- Computed AFTER the append: on an empty buffer _append_lines replaces
         -- row 0 rather than appending, so a pre-capture would be off by one.
         local heading_row = vim.api.nvim_buf_line_count(bufnr) - #lines
-
-        local mark = vim.api.nvim_buf_set_extmark(
-            bufnr,
-            MessageWriter.NS_USER_ACTIONS,
-            heading_row,
-            0,
-            {
-                right_gravity = false,
-                sign_text = notice.glyph .. " ",
-                sign_hl_group = notice.glyph_hl or Theme.HL_GROUPS.GLYPH_USER,
-            }
-        )
-        if notice.id then
-            -- The trailing blank belongs to no notice.
-            self._notices[notice.id] = { mark = mark, height = #lines - 1 }
-        end
-
-        if notice.detail then
-            Renderer.set_dim_range(bufnr, heading_row + 1, heading_row + 1)
-        end
-        if fold_offset then
-            mark_table_row_ends(
-                bufnr,
-                heading_row + fold_offset,
-                table_row_ends
-            )
-        end
-        -- Vim cannot close a one-line fold.
-        if fold_offset and #fold_body > 1 then
-            self:_queue_fold(heading_row + fold_offset, false)
-        end
-
-        render_region_rail(
-            bufnr,
-            self._fence_rows,
-            heading_row,
-            heading_row + #lines - 1
-        )
+        self:_decorate_notice(heading_row, notice, layout)
     end)
 
     -- No section break to request: a `##` heading already closes whatever
@@ -1945,6 +2001,108 @@ function MessageWriter:notice_at(row)
             and row < heading_row + notice.height
         then
             return id
+        end
+    end
+    return nil
+end
+
+--- Extmark option keys that `write_user_prompt` sets on a prompt heading
+--- mark.
+local PROMPT_MARK_KEYS = { "right_gravity", "sign_text", "sign_hl_group" }
+
+--- Start of the notice id of a fork link, followed by the other session's id.
+MessageWriter.FORK_NOTICE = "fork:"
+
+--- Write a link to the other chat of a fork as a notice with id
+--- `FORK_NOTICE .. link.session_id`: at the end, or above the prompt heading
+--- `before_mark` marks. Never ends a turn: the link can be written while one
+--- runs.
+--- @param link agentic.ui.ChatHistory.ForkLink
+--- @param before_mark integer|nil A prompt heading mark in NS_USER_ACTIONS
+function MessageWriter:write_fork_link(link, before_mark)
+    --- @type agentic.ui.MessageWriter.Notice
+    local notice = {
+        glyph = Glyphs.FORK,
+        title = link.title,
+        detail = string.format(
+            "Forked %s %s",
+            link.direction,
+            link.session_id:sub(1, 8)
+        ),
+        id = MessageWriter.FORK_NOTICE .. link.session_id,
+        mid_turn = true,
+    }
+    if not before_mark then
+        self:write_notice(notice)
+        return
+    end
+
+    local layout = self:_notice_layout(notice)
+    local lines = vim.list_extend(vim.list_extend({}, layout.lines), { "" })
+    self:_schedule_follow()
+    self:_own_edit(function(bufnr)
+        local mark = vim.api.nvim_buf_get_extmark_by_id(
+            bufnr,
+            MessageWriter.NS_USER_ACTIONS,
+            before_mark,
+            { details = true }
+        )
+        local row = mark[1]
+        if not row then
+            return
+        end
+        vim.api.nvim_buf_set_lines(bufnr, row, row, false, lines)
+        self:_shift_prose_rows_below(row, #lines)
+        -- The heading mark has left gravity, so it stayed on the first row
+        -- inserted. Range ends at the row, such as a dim range above, stay
+        -- there too, which leaves them where they were.
+        local opts = { id = before_mark }
+        for _, key in ipairs(PROMPT_MARK_KEYS) do
+            opts[key] = mark[3][key]
+        end
+        vim.api.nvim_buf_set_extmark(
+            bufnr,
+            MessageWriter.NS_USER_ACTIONS,
+            row + #lines,
+            0,
+            opts
+        )
+        self:_decorate_notice(row, notice, layout)
+    end)
+end
+
+--- The nearest prompt heading at or above `row` that was written with a
+--- payload, and its row.
+--- @param row integer 0-indexed
+--- @return { payload: any, row: integer }|nil
+function MessageWriter:prompt_payload_at(row)
+    if row < 0 then
+        return nil
+    end
+    -- From the end of `row` back to the buffer start.
+    local marks = vim.api.nvim_buf_get_extmarks(
+        self.bufnr,
+        MessageWriter.NS_USER_ACTIONS,
+        { row, -1 },
+        0,
+        {}
+    )
+    for _, mark in ipairs(marks) do
+        local payload = self._prompt_payloads[mark[1]]
+        if payload ~= nil then
+            return { payload = payload, row = mark[2] }
+        end
+    end
+    return nil
+end
+
+--- The prompt heading mark written with `payload`.
+--- @param payload any
+--- @return integer|nil mark In NS_USER_ACTIONS
+function MessageWriter:prompt_mark_of(payload)
+    for mark, value in pairs(self._prompt_payloads) do
+        if value == payload then
+            return mark
         end
     end
     return nil

@@ -28,6 +28,7 @@ local InfoPanel = require("agentic.ui.info_panel")
 local Json = require("agentic.utils.json")
 local Listeners = require("agentic.utils.listeners")
 local Logger = require("agentic.utils.logger")
+local MessageWriter = require("agentic.ui.message_writer")
 local PromptBlocks = require("agentic.utils.prompt_blocks")
 local Recovery = require("agentic.session_recovery")
 local SessionRegistry = require("agentic.session_registry")
@@ -43,6 +44,8 @@ local WindowDecoration = require("agentic.ui.window_decoration")
 
 --- @class agentic._SessionManagerPrivate
 local P = {}
+
+local FORK_NOTICE = MessageWriter.FORK_NOTICE
 
 --- Tool call kinds that mutate files on disk.
 --- When these complete, buffers must be reloaded via checktime.
@@ -84,6 +87,19 @@ end
 --- @field session_id string
 --- @field cwd? string Working directory of the session. Nil for the one its file records, else the editor's
 --- @field model? string Model id to apply after the load succeeds
+--- @field on_shown? fun(session: agentic.SessionManager) Runs once the chat shows the loaded conversation
+
+--- What a fork starts from, every value taken when the fork is asked for:
+--- the source can be destroyed or move to another session before the fork
+--- starts.
+--- @class agentic.SessionManager.ForkStart
+--- @field source_id string ACP session id of the source
+--- @field source_cwd string
+--- @field source_title string
+--- @field history agentic.ui.ChatHistory The conversation the fork starts with
+--- @field before? agentic.ui.ChatHistory.UserMessage The source's prompt the fork leaves out, above which the source gets its link
+--- @field model? string
+--- @field mode? string
 
 --- @class agentic.SessionManager
 --- @field id integer Monotonic identity, unique for the editor's lifetime. Names the session's buffers
@@ -112,6 +128,7 @@ end
 --- @field _history_to_send? agentic.ui.ChatHistory History whose messages to prepend on next prompt submit, as a text transcript (the history prefix)
 --- @field _session_epoch integer Monotonic counter incremented on each new_session/load; guards stale create_session callbacks
 --- @field _pending_load? agentic.SessionManager.PendingLoad A session/load deferred until the agent is ready
+--- @field _pending_fork? agentic.SessionManager.ForkStart A fork the constructor's on-ready starts instead of a new session
 --- @field _cwd string Working directory of the ACP session. Also selects the project folder of its session file
 --- @field _usage? agentic.ui.InfoPanel.Usage
 --- @field _name? string The provider's name for the session as last shown
@@ -368,8 +385,13 @@ function SessionManager:new(provider)
                 self:_do_load_acp_session(
                     pending.session_id,
                     pending.cwd,
-                    pending.model
+                    pending.model,
+                    pending.on_shown
                 )
+            elseif self._pending_fork then
+                local fork = self._pending_fork --[[@as agentic.SessionManager.ForkStart]]
+                self._pending_fork = nil
+                self:_do_start_fork(fork)
             elseif not self._load_state then
                 -- Skip auto-new_session while a load is in flight
                 self:new_session({ keep_cwd = true })
@@ -539,16 +561,111 @@ end
 
 --- Bind the session's own buffer-local maps (the widget binds its own) to a
 --- buffer of this session, and give a chat-style buffer the 'tagfunc' that
---- links the rows of a message (`TAGFUNC`).
+--- links the rows of a message (`TAGFUNC`). In the chat, `gf` and its window
+--- variants also open the other chat of a fork link, and the fork keys fork.
 --- @param bufnr integer
 --- @param writer agentic.ui.MessageWriter|nil The writer of a chat-style buffer, whose diffs `gf` jumps into
 function SessionManager:_setup_session_buf(bufnr, writer)
     self.config_options:bind_keymaps(bufnr)
     self:_bind_owner_keymaps(bufnr)
-    if writer then
-        DiffJump.set_goto_file_keymaps(bufnr, writer)
-        vim.bo[bufnr].tagfunc = SessionManager.TAGFUNC
+    if not writer then
+        return
     end
+    vim.bo[bufnr].tagfunc = SessionManager.TAGFUNC
+    if writer ~= self.message_writer then
+        DiffJump.set_goto_file_keymaps(bufnr, writer)
+        return
+    end
+    DiffJump.set_goto_file_keymaps(bufnr, writer, function(row, mods)
+        return self:_open_fork_link(row, mods)
+    end)
+    self:_bind_fork_keymaps(bufnr)
+end
+
+--- Bind each key of `Config.keymaps.agent.fork` in `bufnr` to fork at the
+--- cursor, and with `<C-w>` or `<C-w>g` before it, to fork into a split or a
+--- tab, as `gf`, `<C-w>f` and `<C-w>gf` open a file.
+--- @param bufnr integer
+function SessionManager:_bind_fork_keymaps(bufnr)
+    local keys = Config.keymaps.agent.fork
+    --- @type { prefix: string, placement: agentic.utils.BufHelpers.Placement }[]
+    local variants = {
+        { prefix = "", placement = {} },
+        { prefix = "<C-w>", placement = { mods = { horizontal = true } } },
+        { prefix = "<C-w>g", placement = { new_tab = true } },
+    }
+    for _, variant in ipairs(variants) do
+        BufHelpers.multi_keymap_set(
+            BufHelpers.prefix_keymaps(keys, variant.prefix),
+            bufnr,
+            function()
+                self:fork_at_cursor(
+                    BufHelpers.placement_mods(variant.placement)
+                )
+            end,
+            { desc = "Agentic: Fork before this turn" }
+        )
+    end
+end
+
+--- Open the other chat of the fork link at `row` of the chat, placed by
+--- `mods`, with the cursor on its link back to this chat.
+--- @param row integer 0-indexed
+--- @param mods vim.api.keyset.cmd_mods
+--- @return boolean opened False when `row` holds no fork link
+function SessionManager:_open_fork_link(row, mods)
+    local link = self:_fork_link_at(row)
+    if not link then
+        return false
+    end
+    local own_id = self.session_id
+    SessionResume.resume(
+        { session_id = link.session_id, cwd = link.cwd },
+        mods,
+        function(session, winid)
+            local link_row = own_id
+                and session.message_writer:notice_row(FORK_NOTICE .. own_id)
+            if link_row then
+                session.message_writer:show_row_to_user(winid, link_row)
+            end
+        end
+    )
+    return true
+end
+
+--- The fork link of the notice at `row` of the chat.
+--- @param row integer 0-indexed
+--- @return agentic.ui.ChatHistory.ForkLink|nil
+function SessionManager:_fork_link_at(row)
+    local id = self.message_writer:notice_at(row)
+    if not (id and vim.startswith(id, FORK_NOTICE)) then
+        return nil
+    end
+    local session_id = id:sub(#FORK_NOTICE + 1)
+    for _, msg in ipairs(self.chat_history.messages) do
+        if msg.type == "fork_link" and msg.session_id == session_id then
+            return msg
+        end
+    end
+    return nil
+end
+
+--- Insert `link` above the prompt `before`: in the history, and in the chat
+--- when the chat shows that prompt. Nothing when the history no longer holds
+--- `before`.
+--- @param link agentic.ui.ChatHistory.ForkLink
+--- @param before agentic.ui.ChatHistory.UserMessage
+function SessionManager:add_fork_link(link, before)
+    local index = self.chat_history:index_of(before)
+    if not index then
+        return
+    end
+    self.chat_history:insert_message(index, link)
+    local mark = self.message_writer:prompt_mark_of(before)
+    if mark then
+        self.message_writer:write_fork_link(link, mark)
+    end
+    self:_history_changed(self.chat_history)
 end
 
 --- Bind the session's maps and those of the panel's owner in a panel buffer.
@@ -661,6 +778,10 @@ function SessionManager:_tagfunc(pattern, flags)
         local writer = self:_writer_of_buf(current)
         local row = vim.api.nvim_win_get_cursor(0)[1] - 1
         name = writer and writer:notice_at(row)
+        -- A fork link is followed with `gf`, not as a tag.
+        if name and vim.startswith(name, FORK_NOTICE) then
+            name = nil
+        end
         if writer and not name then
             local block = DiffJump.find_block_at_row(
                 current,
@@ -921,7 +1042,7 @@ function SessionManager:_reload_chat()
     self.main_view:restart()
     SessionResume.replay_messages(
         self.message_writer,
-        self.chat_history.messages,
+        self:_rendered_messages(),
         function(id)
             return self._subagents:buffer_name(id)
         end
@@ -1105,6 +1226,9 @@ function SessionManager:_on_agent_chunk(update, source_session_id)
             text = chunk.content.text,
             provider_name = self.agent.provider_config.name,
             agent_key = child_id and self._subagents:agent_key(child_id),
+            -- A fork is cut only after a main-agent response.
+            response_id = not child_id and Json.present(update.messageId)
+                or nil,
         }, starts_response)
         -- Subagent text is never written per chunk, even outside a turn
         -- (see `_on_tool_call_update`).
@@ -1152,13 +1276,15 @@ function SessionManager:_on_session_update(update, source_session_id)
             and not self.agent:subagent_task_id(update)
             and ACPPayloads.is_prompt_text(text)
         then
-            self.message_writer:write_user_prompt(text)
-            self.chat_history:add_message({
+            --- @type agentic.ui.ChatHistory.UserMessage
+            local user_msg = {
                 type = "user",
                 text = text,
                 timestamp = os.time(),
                 provider_name = self.agent.provider_config.name,
-            })
+            }
+            self.message_writer:write_user_prompt(text, nil, nil, user_msg)
+            self.chat_history:add_message(user_msg)
             self:_history_changed(self.chat_history)
         end
     elseif update.sessionUpdate == "available_commands_update" then
@@ -2748,6 +2874,22 @@ function SessionManager:_submit_defer_reason(prompt)
     if parse_local_command(prompt) then
         return nil
     end
+    local busy = self:_busy_reason()
+    if busy then
+        return busy
+    end
+    if self.agent.usage_limit:holds_drain() then
+        return "usage_limited"
+    end
+    return nil
+end
+
+--- Why the session cannot take a turn of its own right now, or nil if it
+--- can: `loading` while a session/load replays, `not_ready` without a
+--- session or a ready agent, `in_flight` while a prompt's callback is
+--- outstanding.
+--- @return "loading"|"not_ready"|"in_flight"|nil
+function SessionManager:_busy_reason()
     -- session_id is assigned before the session/load RPC, so the readiness
     -- check below reads clear while a session is still being replayed.
     if self:_replaying() then
@@ -2755,9 +2897,6 @@ function SessionManager:_submit_defer_reason(prompt)
     end
     if not (self.session_id and self.agent and self.agent.state == "ready") then
         return "not_ready"
-    end
-    if self.agent.usage_limit:holds_drain() then
-        return "usage_limited"
     end
     -- Not is_generating: stop_generation and _refresh both clear that flag
     -- while the prompt callback is still pending, so a drain gated on it would
@@ -3263,8 +3402,6 @@ function SessionManager:_send_user_prompt(
         text = input_text,
     })
 
-    self.message_writer:write_user_prompt(input_text, extra_lines, author)
-
     --- @type agentic.ui.ChatHistory.UserMessage
     local user_msg = {
         type = "user",
@@ -3272,7 +3409,14 @@ function SessionManager:_send_user_prompt(
         timestamp = os.time(),
         provider_name = self.agent.provider_config.name,
         author = author,
+        model = self.config_options:current_model_id(),
     }
+    self.message_writer:write_user_prompt(
+        input_text,
+        extra_lines,
+        author,
+        user_msg
+    )
     self.chat_history:add_message(user_msg)
     self:_history_changed(self.chat_history)
 
@@ -3556,18 +3700,63 @@ function SessionManager:_dispatch_turn(prompt, user_msg, on_returned)
     end)
 end
 
+--- Make the just-created ACP session `session_id` this session's: take its
+--- id, clear the name, give the history its id and a new creation time,
+--- apply the grant defaults, announce the change, and apply and show the
+--- mode and model options of `response`.
+--- @param session_id string
+--- @param response table The session/new or session/fork result
+--- @param continued boolean The conversation carries on in the new session
+function SessionManager:_adopt_session(session_id, response, continued)
+    self.session_id = session_id
+    -- The name was the old session's.
+    self._name = nil
+    self.chat_history.session_id = session_id
+    self.chat_history.timestamp = os.time()
+    self:_session_changed(session_id, continued)
+    self:_apply_session_options(response)
+    self:render_info()
+end
+
+--- Start the session `session_id` on the grant defaults, fire
+--- `AgenticSessionChanged` and emit `session_changed`.
+--- @param session_id string
+--- @param continued boolean The conversation carries on in the new session
+function SessionManager:_session_changed(session_id, continued)
+    self._grant_command:apply_defaults()
+    vim.api.nvim_exec_autocmds("User", {
+        pattern = "AgenticSessionChanged",
+        data = { session_id = session_id },
+    })
+    self:_emit("session_changed", { continued = continued })
+end
+
+--- Switch the session to `mode_id` once, when the provider offers it and it
+--- is not the current mode.
+--- @param mode_id string|nil
+function SessionManager:_set_initial_mode(mode_id)
+    self.config_options:set_initial_mode(mode_id, function(mode, is_legacy)
+        self:_handle_mode_change(mode, is_legacy)
+    end)
+end
+
 --- Create a new ACP session. Without `history`, first cancel the current
 --- session and keep its selected model. With `history`, carry that
 --- conversation into the new session: it becomes the session's history under
 --- the new id and timestamp, and its messages are prepended to the next
 --- submit. The agent's session is empty, so that is the only way they reach
---- the agent.
---- @param opts {history?: agentic.ui.ChatHistory, keep_cwd?: boolean, quiet_welcome?: boolean, on_created?: fun()}|nil `keep_cwd` keeps the session's working directory instead of taking the editor cwd. `history` implies it
+--- the agent, and the history's response ids, which name responses of
+--- another session, are cleared.
+--- @param opts {history?: agentic.ui.ChatHistory, keep_cwd?: boolean, quiet_welcome?: boolean, on_created?: fun(), mode?: string}|nil `keep_cwd` keeps the session's working directory instead of taking the editor cwd. `history` implies it. `mode` replaces the provider's `default_mode`
 function SessionManager:new_session(opts)
     opts = opts or {}
     local history = opts.history
     local quiet_welcome = opts.quiet_welcome or false
     local on_created = opts.on_created
+
+    if history then
+        history:clear_response_ids()
+    end
 
     -- Preserve the user-selected model across /new and /clear. The provider's
     -- session/new response carries its default configOptions, which would
@@ -3635,36 +3824,22 @@ function SessionManager:new_session(opts)
 
         if history then
             self.chat_history = history
-            self._history_to_send = history
+            if history:has_prompt() then
+                self._history_to_send = history
+            end
             -- Its `dirty` stands: the new id has no file yet, but nothing is
             -- lost unless the history is unsaved under the id it was saved by.
             self:_sync_modified(history)
         end
-        self.session_id = response.sessionId
-        -- The name was the old session's.
-        self._name = nil
-        self.chat_history.session_id = response.sessionId
-        self.chat_history.timestamp = os.time()
-        self._grant_command:apply_defaults()
-        vim.api.nvim_exec_autocmds("User", {
-            pattern = "AgenticSessionChanged",
-            data = { session_id = response.sessionId },
-        })
-        self:_emit("session_changed", { continued = history ~= nil })
-
-        self:_apply_session_options(response)
+        self:_adopt_session(response.sessionId, response, history ~= nil)
 
         if preserved_model then
             self.config_options:set_pending_initial_model(preserved_model)
         end
 
-        self.config_options:set_initial_mode(
-            self.agent.provider_config.default_mode,
-            function(mode, is_legacy)
-                self:_handle_mode_change(mode, is_legacy)
-            end
+        self:_set_initial_mode(
+            opts.mode or self.agent.provider_config.default_mode
         )
-        self:render_info()
 
         self._is_first_message = true
 
@@ -3714,14 +3889,19 @@ end
 --- @param cwd? string Original working directory for the session.
 ---   When nil, the cwd recorded in the saved session file, else vim.fn.getcwd().
 --- @param model? string Model id saved with the session, applied after load
-function SessionManager:load_acp_session(session_id, cwd, model)
+--- @param on_shown? fun(session: agentic.SessionManager) Runs once the chat shows the loaded conversation, or the saved one when the load fails
+function SessionManager:load_acp_session(session_id, cwd, model, on_shown)
     if self.agent and self.agent.agent_capabilities then
         -- Agent is already initialised, load immediately
-        self:_do_load_acp_session(session_id, cwd, model)
+        self:_do_load_acp_session(session_id, cwd, model, on_shown)
     else
         -- Agent still starting — defer until on_ready fires
-        self._pending_load =
-            { session_id = session_id, cwd = cwd, model = model }
+        self._pending_load = {
+            session_id = session_id,
+            cwd = cwd,
+            model = model,
+            on_shown = on_shown,
+        }
     end
 end
 
@@ -3730,7 +3910,8 @@ end
 --- @param cwd? string Original working directory for the session. When nil,
 ---   the cwd recorded in the saved session file, else vim.fn.getcwd().
 --- @param model? string Model id to reapply after load (queued until options arrive).
-function SessionManager:_do_load_acp_session(session_id, cwd, model)
+--- @param on_shown? fun(session: agentic.SessionManager) See `load_acp_session`
+function SessionManager:_do_load_acp_session(session_id, cwd, model, on_shown)
     local saved_data = ChatHistory.read_saved(session_id)
     local saved_history = saved_data and ChatHistory.from_data(saved_data)
     -- The file renders the chat and the replay adds only what comes after the
@@ -3766,12 +3947,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
     self._cwd = cwd and FileSystem.canonical_path(cwd)
         or saved_data and saved_data.cwd
         or vim.fn.getcwd()
-    self._grant_command:apply_defaults()
-    vim.api.nvim_exec_autocmds("User", {
-        pattern = "AgenticSessionChanged",
-        data = { session_id = session_id },
-    })
-    self:_emit("session_changed", { continued = false })
+    self:_session_changed(session_id, false)
 
     local handlers = self:_build_handlers()
 
@@ -3823,7 +3999,11 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                 end
                 self:_set_load_state(nil)
                 -- With `from_file` the same object as `self.chat_history`.
-                self:_new_session_after_failed_load(session_id, saved_history)
+                self:_new_session_after_failed_load(
+                    session_id,
+                    saved_history,
+                    on_shown
+                )
                 return
             end
 
@@ -3872,6 +4052,9 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
                 -- A turn sent after `_refresh` dropped the hold can still run.
                 mid_turn = self:_turn_open(),
             })
+            if on_shown then
+                on_shown(self)
+            end
             self:_reapply_model(model)
             self:_refresh_name()
 
@@ -3896,7 +4079,12 @@ end
 --- directory.
 --- @param session_id string
 --- @param history agentic.ui.ChatHistory|nil The session's file, nil when it could not be read
-function SessionManager:_new_session_after_failed_load(session_id, history)
+--- @param on_shown fun(session: agentic.SessionManager)|nil Runs once the chat shows `history`
+function SessionManager:_new_session_after_failed_load(
+    session_id,
+    history,
+    on_shown
+)
     -- What the replay wrote. Context the user added meanwhile stays. Clearing
     -- the failed id keeps `new_session` from sending `session/cancel` for it.
     self.session_id = nil
@@ -3914,7 +4102,11 @@ function SessionManager:_new_session_after_failed_load(session_id, history)
         self:new_session({ keep_cwd = true })
         return
     end
-    self:replace_with_history(history)
+    self:replace_with_history(history, {
+        on_created = on_shown and function()
+            on_shown(self)
+        end,
+    })
 end
 
 --- Wipe the conversation out of the chat panels: their text, the region signs
@@ -4133,17 +4325,23 @@ end
 --- created, replay the messages into the chat and put the session back on its
 --- model. The history is sent with the first prompt.
 --- @param history agentic.ui.ChatHistory
---- @param opts {model?: string}|nil `model` overrides the model saved in `history`
+--- @param opts {model?: string, mode?: string, quiet_welcome?: boolean, on_created?: fun()}|nil `model` overrides the model saved in `history`. `mode`, `quiet_welcome` and `on_created` go to `new_session`, with `on_created` run after the replay
 function SessionManager:replace_with_history(history, opts)
-    local model = opts and opts.model or history.model
+    opts = opts or {}
+    local model = opts.model or history.model
     self:clear_chat()
     -- Held while session/new is in flight, and kept if it fails.
     self:_install_history(history)
     self:new_session({
         history = history,
+        mode = opts.mode,
+        quiet_welcome = opts.quiet_welcome,
         on_created = function()
             self:_render_history()
             self:_reapply_model(model)
+            if opts.on_created then
+                opts.on_created()
+            end
         end,
     })
 end
@@ -4169,19 +4367,29 @@ function SessionManager:_install_history(history)
     end
 end
 
---- Render `self.chat_history`: the subagent transcripts, then the messages.
+--- Render `self.chat_history`: the subagent transcripts, then the messages
+--- the chat shows.
 function SessionManager:_render_history()
     -- The history's own messages, not `_history_to_send`: adding the
     -- transcripts points the blocks at their new names in the history.
     self._subagents:add_history_transcripts()
     SessionResume.replay_messages(
         self.message_writer,
-        self.chat_history.messages,
+        self:_rendered_messages(),
         function(id)
             return self._subagents:buffer_name(id)
         end
     )
     self.status_indicator:reposition()
+end
+
+--- The messages of the history the chat shows: those from
+--- `ChatHistory.render_start` on. A fork's copied conversation is in its
+--- source's chat.
+--- @return agentic.ui.ChatHistory.Message[]
+function SessionManager:_rendered_messages()
+    local messages = self.chat_history.messages
+    return vim.list_slice(messages, ChatHistory.render_start(messages))
 end
 
 --- Restart the current session: cancel it and re-create it from chat history.
@@ -4198,6 +4406,186 @@ function SessionManager:restart_session()
     local model = self.config_options:current_model_id()
     self:_cancel_session()
     self:replace_with_history(saved_history, { model = model })
+end
+
+--- Why a fork cannot be taken now, as a phrase.
+--- @type table<"loading"|"not_ready"|"in_flight", string>
+local FORK_HOLDS = {
+    loading = SUBMIT_HOLDS.loading,
+    not_ready = SUBMIT_HOLDS.not_ready,
+    in_flight = "a turn is running",
+}
+
+--- Fork the conversation into a new chat that changes the turn the cursor
+--- is in: the new chat holds the conversation before the prompt at or above
+--- the cursor, with that prompt as its draft. Above the chat's first prompt
+--- it holds what the chat does not show, with no draft. A prompt the history
+--- no longer holds gives way to the one above it. Warns instead while the
+--- session is busy.
+--- @param mods vim.api.keyset.cmd_mods|nil A split or tab modifier shows the new chat in a new window
+function SessionManager:fork_at_cursor(mods)
+    local reason = self:_busy_reason()
+    -- A turn that a received message started has no pending prompt.
+    if not reason and self.status_indicator:is_active() then
+        reason = "in_flight"
+    end
+    if reason then
+        Logger.notify(
+            "Cannot fork: " .. FORK_HOLDS[reason],
+            vim.log.levels.WARN
+        )
+        return
+    end
+
+    local history = self.chat_history
+    local writer = self.message_writer
+    local target =
+        writer:prompt_payload_at(vim.api.nvim_win_get_cursor(0)[1] - 1)
+    while target and not history:index_of(target.payload) do
+        target = writer:prompt_payload_at(target.row - 1)
+    end
+    --- @type agentic.ui.ChatHistory.UserMessage|nil
+    local prompt = target and target.payload
+    local count = (
+        prompt and history:index_of(prompt)
+        or ChatHistory.render_start(history.messages)
+    ) - 1
+
+    local prefix = history:copy_prefix(count)
+    if history.title ~= "" then
+        prefix:set_title(history.title .. " (fork)")
+    end
+
+    local new = SessionRegistry.create(self.agent.provider_name)
+    if not new then
+        return
+    end
+    -- Before the constructor's deferred on-ready runs.
+    new._pending_fork = {
+        source_id = self.session_id --[[@as string]],
+        source_cwd = self._cwd,
+        source_title = history.title,
+        history = prefix,
+        before = prompt or history:next_prompt(count),
+        model = prompt and prompt.model
+            or self.config_options:current_model_id(),
+        mode = self.config_options:current_mode_id(),
+    }
+    new._cwd = self._cwd
+    if prompt then
+        new.widget:panel_buf("input")
+        new.widget.input_dispatch:prepend_draft(prompt.text)
+    end
+    new.widget:show(mods, SessionRegistry.target_win())
+end
+
+--- Start the session of a fork. A fork holding no prompt is a new session
+--- without links. Otherwise the fork's history gets its link to the source,
+--- and the provider cuts its own copy of the conversation where it can
+--- (`ACPClient:can_fork`); else, or when the cut fails, the history is sent
+--- as text with the first prompt.
+--- @param fork agentic.SessionManager.ForkStart
+function SessionManager:_do_start_fork(fork)
+    local history = fork.history
+    if not history:has_prompt() then
+        if fork.model then
+            self.config_options:set_pending_initial_model(fork.model)
+        end
+        self:new_session({ keep_cwd = true, mode = fork.mode })
+        return
+    end
+
+    --- @type agentic.ui.ChatHistory.ForkLink
+    local link = {
+        type = "fork_link",
+        direction = "from",
+        session_id = fork.source_id,
+        cwd = fork.source_cwd,
+        title = fork.source_title ~= "" and fork.source_title
+            or fork.source_id:sub(1, 8),
+    }
+    history:add_message(link)
+
+    local point = history:fork_point()
+    if not (point and self.agent:can_fork(point)) then
+        self:_start_fork_from_history(fork)
+        return
+    end
+
+    self:_install_history(history)
+    self.status_indicator:start("busy")
+    self:_advance_session_epoch()
+    local epoch = self._session_epoch
+    self.agent:fork_session(
+        fork.source_id,
+        self._cwd,
+        point,
+        self:_build_handlers(),
+        function(result, err)
+            if self.destroyed or epoch ~= self._session_epoch then
+                if result then
+                    self.agent:unsubscribe(result.sessionId)
+                end
+                return
+            end
+            self.status_indicator:stop()
+            if err or not result then
+                local message = "session/fork failed: "
+                    .. (err and err.message or "no result")
+                    .. " — sending the history with the first prompt"
+                -- A response stopped before the provider recorded it.
+                if err and err.code == ACPClient.ERROR_CODES.INVALID_PARAMS then
+                    Logger.debug(message)
+                else
+                    Logger.notify(message, vim.log.levels.WARN)
+                end
+                self:_start_fork_from_history(fork)
+                return
+            end
+
+            -- Not continued: the new manager has no earlier conversation.
+            self:_adopt_session(result.sessionId, result, false)
+            self:_set_initial_mode(fork.mode)
+            self:_render_history()
+            self:_started_fork(fork)
+            self:_reapply_model(fork.model)
+            self:_refresh_name()
+            self:_drain_queue()
+        end
+    )
+end
+
+--- Start the session of a fork with its history sent as text with the first
+--- prompt.
+--- @param fork agentic.SessionManager.ForkStart
+function SessionManager:_start_fork_from_history(fork)
+    self:replace_with_history(fork.history, {
+        model = fork.model,
+        mode = fork.mode,
+        quiet_welcome = true,
+        on_created = function()
+            self:_started_fork(fork)
+        end,
+    })
+end
+
+--- Save the history of this fork, and give its source, when a chat has the
+--- source session open, the link to this fork above `fork.before`.
+--- @param fork agentic.SessionManager.ForkStart
+function SessionManager:_started_fork(fork)
+    self:_history_changed(self.chat_history)
+    local source = SessionRegistry.session_for_acp_id(fork.source_id)
+    if not (source and fork.before) then
+        return
+    end
+    local title = self.chat_history.title
+    source:add_fork_link({
+        type = "fork_link",
+        direction = "to",
+        session_id = self.session_id --[[@as string]],
+        cwd = self._cwd,
+        title = title ~= "" and title or self.session_id:sub(1, 8),
+    }, fork.before)
 end
 
 return SessionManager
