@@ -378,8 +378,8 @@ every kind it can mint needs a `Glyphs.KIND` entry.
 ### Tool kind casing varies by provider
 
 The ACP schema spells kinds in lowercase (`"read"`, `"search"`, `"execute"`,
-…), and most providers follow that. opencode emits capitalised kinds
-(`"Read"`, `"Search"`), which render correctly because every kind lookup
+…), and the bridges follow that, but adapter-minted kinds are capitalised
+(`"WebSearch"`, `"SubAgent"`). They render correctly because every kind lookup
 in the chat goes through `AcpKind.normalise`, but a case-sensitive lookup
 (e.g. of `"Read"` in `auto_approve_kinds`) silently misses. The vocabulary
 itself is `AcpKind.PROTOCOL_KINDS`, which is also how a consumer tells a
@@ -388,6 +388,20 @@ bridge-assigned kind from an adapter-minted one (see `strip_kind_prefix` in
 lookup, or compose a table that includes both casings. The chat is not a
 reliable signal that the right `kind` arrived — normalising hides the
 difference.
+
+### opencode kind remapping
+
+opencode sends several tools as `kind: "other"` (global `acp` skill →
+`references/opencode.md` § Tool kinds). `OpenCodeACPAdapter:__handle_tool_call`
+re-kinds them by `title`:
+
+| `title` / field                   | Adapter `kind` |
+| --------------------------------- | -------------- |
+| `list`                            | `search`       |
+| `websearch`, `google_search`      | `WebSearch`    |
+| `task`, or `rawInput.subagent_type` | `SubAgent`   |
+| `skill`                           | `Skill`        |
+| `todowrite`                       | `TodoWrite`    |
 
 ### Subagents are child sessions (claude-agent-acp)
 
