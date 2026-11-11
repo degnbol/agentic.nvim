@@ -4393,32 +4393,17 @@ function SessionManager:restart_session()
     self:replace_with_history(saved_history, { model = model })
 end
 
---- Why a fork cannot be taken now, as a phrase.
---- @type table<"loading"|"not_ready"|"in_flight", string>
-local FORK_HOLDS = {
-    loading = SUBMIT_HOLDS.loading,
-    not_ready = SUBMIT_HOLDS.not_ready,
-    in_flight = "a turn is running",
-}
-
 --- Fork the conversation into a new chat that changes the turn the cursor
 --- is in: the new chat holds the conversation before the prompt at or above
 --- the cursor, with that prompt as its draft. Above the chat's first prompt
 --- it holds what the chat does not show, with no draft. A prompt the history
 --- no longer holds gives way to the one above it. Warns instead while the
---- session is busy.
+--- session loads or is not ready. Works during a running turn.
 --- @param mods vim.api.keyset.cmd_mods|nil A split or tab modifier shows the new chat in a new window
 function SessionManager:fork_at_cursor(mods)
-    local reason = self:_busy_reason()
-    -- A turn that a received message started has no pending prompt.
-    if not reason and self.status_indicator:is_active() then
-        reason = "in_flight"
-    end
-    if reason then
-        Logger.notify(
-            "Cannot fork: " .. FORK_HOLDS[reason],
-            vim.log.levels.WARN
-        )
+    local hold = SUBMIT_HOLDS[self:_busy_reason()]
+    if hold then
+        Logger.notify("Cannot fork: " .. hold, vim.log.levels.WARN)
         return
     end
 
@@ -4518,7 +4503,8 @@ function SessionManager:_do_start_fork(fork)
                 local message = "session/fork failed: "
                     .. (err and err.message or "no result")
                     .. " — sending the history with the first prompt"
-                -- A response stopped before the provider recorded it.
+                -- A response the provider has not recorded: one stopped
+                -- early, or one still streaming.
                 if err and err.code == ACPClient.ERROR_CODES.INVALID_PARAMS then
                     Logger.debug(message)
                 else

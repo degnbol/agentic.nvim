@@ -242,9 +242,51 @@ end
         assert.equal(4, child.lua_get("#_G.s.chat_history.messages"))
     end)
 
-    it("refuses while a turn runs", function()
+    it("forks while a turn runs", function()
         child.lua([[
 _G.s._prompt_pending = 1
+_G.s.status_indicator:start("thinking")
+]])
+        fork_natively()
+
+        assert_forked()
+    end)
+
+    it("keeps a running turn's output below its forked prompt", function()
+        child.lua([[
+_G.s:_handle_input_submit("third question")
+_G.update = _G.s:_build_handlers().on_session_update
+_G.update({
+    sessionUpdate = "agent_message_chunk",
+    content = { type = "text", text = "early part" },
+})
+]])
+        child.flush()
+        child.lua([[_G.fork_at("early part")]])
+        child.flush()
+        child.lua([[
+_G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)
+]])
+        child.flush()
+        child.lua([[
+_G.update({
+    sessionUpdate = "agent_message_chunk",
+    content = { type = "text", text = " late part" },
+})
+]])
+        child.flush()
+
+        local link = child.lua_get([[_G.row_of(_G.s, "## Src (fork)")]])
+        local prompt = child.lua_get([[_G.row_of(_G.s, "## third question")]])
+        local answer =
+            child.lua_get([[_G.row_of(_G.s, "early part late part")]])
+        assert.is_true(link < prompt)
+        assert.is_true(prompt < answer)
+    end)
+
+    it("refuses while the agent is not ready", function()
+        child.lua([[
+_G.agent.state = "disconnected"
 _G.fork_at("second answer")
 ]])
         child.flush()
@@ -255,15 +297,6 @@ _G.fork_at("second answer")
             child.lua_get("vim.log.levels.WARN"),
             child.lua_get("_G.notes[1].level")
         )
-    end)
-
-    it("refuses during a turn a received message started", function()
-        child.lua([[
-_G.s.status_indicator:start("thinking")
-_G.fork_at("second answer")
-]])
-
-        absent("_G.f")
     end)
 
     it("takes the turn above a prompt the history no longer holds", function()
