@@ -231,6 +231,53 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
         end)
     end)
 
+    describe("an unfinished call", function()
+        --- The bridge's update closing a call the turn ended without a result for.
+        --- @param text string
+        --- @return agentic.ui.MessageWriter.ToolCallBase
+        local function unfinished(text)
+            local adapter = make_adapter()
+            adapter.provider_config.name = "Claude Agent ACP"
+            return adapter:__build_tool_call_update({
+                toolCallId = "tc-1",
+                status = "failed",
+                content = {
+                    {
+                        type = "content",
+                        content = { type = "text", text = text },
+                    },
+                },
+            })
+        end
+
+        it("marks the line for a call stopped before it ran", function()
+            local text = "Claude stopped this tool call before it ran."
+            local msg = unfinished(text)
+
+            assert.is_nil(msg.body)
+            assert.same({
+                from = "Claude Agent ACP",
+                text = text,
+                wrong_if_interrupted = true,
+            }, msg.provider_note)
+        end)
+
+        it("moves the other lines to a provider note", function()
+            for _, text in ipairs({
+                "The turn was cancelled before this tool call returned a result.",
+                "Claude ended the turn without returning a result for this tool.",
+            }) do
+                local msg = unfinished(text)
+
+                assert.is_nil(msg.body)
+                assert.same(
+                    { from = "Claude Agent ACP", text = text },
+                    msg.provider_note
+                )
+            end
+        end)
+    end)
+
     describe("rejection", function()
         --- The bridge's update for a call the CLI denied before it ran.
         --- @param claude_code agentic.acp.ClaudeCodeMeta|nil extra fields

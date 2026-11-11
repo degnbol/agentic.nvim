@@ -144,6 +144,13 @@ end
 --- @field mode agentic.ui.MessageWriter.SubagentMode
 --- @field confirmed boolean `mode` comes from the SDK's record of the spawn rather than a prediction
 
+--- A line the provider process wrote about a call itself, neither tool output
+--- nor agent text.
+--- @class agentic.ui.MessageWriter.ProviderNote
+--- @field from string Display name of the provider
+--- @field text string
+--- @field wrong_if_interrupted? boolean The text is wrong when an interrupt ended the call (`ended_as`), so it is not shown then
+
 --- @class agentic.ui.MessageWriter.ToolCallBase
 --- @field tool_call_id string
 --- @field status agentic.ui.ToolCallStatus
@@ -171,6 +178,7 @@ end
 --- @field stopped_job_id? string `background_job_id` of the job this call stops
 --- @field stopped_job_output_file? string `output_file` of the job this call stops
 --- @field stopped_by? string Tool call id of the call that stopped this call's background job
+--- @field provider_note? agentic.ui.MessageWriter.ProviderNote
 
 --- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
 --- @field kind agentic.acp.ToolKind

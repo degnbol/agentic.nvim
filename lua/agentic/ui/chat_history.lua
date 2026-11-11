@@ -497,6 +497,7 @@ local TOOL_CALL_FIELDS = {
     "stopped_job_id",
     "stopped_job_output_file",
     "stopped_by",
+    "provider_note",
 }
 
 --- The `TOOL_CALL_FIELDS` of `source`, sharing its values.

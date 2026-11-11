@@ -475,6 +475,17 @@ local function output_rows(data)
     return trimmed ~= "" and vim.split(trimmed, "\n", { plain = true }) or nil
 end
 
+--- Bodies the bridge itself writes for a call that had no result when the
+--- turn ended, each mapped to whether it is wrong after an interrupt. The
+--- first comes for a call that never ran and says Claude stopped it, which
+--- an interrupt did instead.
+--- @type table<string, boolean>
+local UNFINISHED_BODIES = {
+    ["Claude stopped this tool call before it ran."] = true,
+    ["The turn was cancelled before this tool call returned a result."] = false,
+    ["Claude ended the turn without returning a result for this tool."] = false,
+}
+
 --- Intercept mode-switching tools at the initial tool_call level before the
 --- base class renders the body (which contains internal instructions).
 --- @protected
@@ -544,6 +555,16 @@ function ClaudeAgentACPAdapter:__build_tool_call_update(update, session_id)
         body = self:extract_content_body(update),
     }
     if update.status == "failed" then
+        local only_row = message.body and #message.body == 1 and message.body[1]
+            or nil
+        if only_row and UNFINISHED_BODIES[only_row] ~= nil then
+            message.body = nil
+            message.provider_note = {
+                from = self.provider_config.name,
+                text = only_row,
+                wrong_if_interrupted = UNFINISHED_BODIES[only_row] or nil,
+            }
+        end
         local reason = self:extract_failure_reason(update.rawOutput)
         message.failure_reason = reason
             and ClaudeUtils.unwrap_tool_use_error(reason)

@@ -1065,6 +1065,14 @@ function M.build(block, wrap_width, measure)
         body = (BODIES[call.kind] or generic_body)(call)
     end
     vim.list_extend(sections, body)
+    local note = block.provider_note
+    if
+        note
+        and not (note.wrong_if_interrupted and block.ended_as == "interrupted")
+    then
+        -- Named and unfenced, so it cannot read as output or agent text.
+        table.insert(sections, comment_rows({ note.from .. ": " .. note.text }))
+    end
 
     local layout = assemble(sections)
     if call.diff and #call.diff.hunks > 0 then

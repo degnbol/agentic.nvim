@@ -853,6 +853,63 @@ describe("agentic.ui.ToolCallLayout", function()
         end)
     end)
 
+    it("ends the body on the provider note as Comment", function()
+        --- @type agentic.ui.MessageWriter.ToolCallBlock
+        local block = {
+            tool_call_id = "tc-note",
+            status = "failed",
+            kind = "execute",
+            argument = "ls",
+            body = { "partial output" },
+            provider_note = { from = "Claude Agent ACP", text = "No result." },
+        }
+
+        local layout = Layout.build(block, 80, strwidth)
+
+        local note_row = #layout.lines - 1
+        assert.equal("Claude Agent ACP: No result.", layout.lines[note_row])
+        assert.equal("```", layout.lines[note_row - 1])
+        assert.equal("partial output", layout.lines[note_row - 2])
+        assert.same(
+            { type = "comment", line_index = note_row - 1 },
+            layout.highlights[#layout.highlights]
+        )
+    end)
+
+    it("hides a provider note wrong after an interrupt", function()
+        --- @param ended_as string|nil
+        --- @return string[] lines
+        local function lines(ended_as)
+            --- @type agentic.ui.MessageWriter.ToolCallBlock
+            local block = {
+                tool_call_id = "tc-note",
+                status = "failed",
+                kind = "execute",
+                argument = "ls",
+                ended_as = ended_as,
+                provider_note = {
+                    from = "Claude Agent ACP",
+                    text = "Claude stopped this.",
+                    wrong_if_interrupted = true,
+                },
+            }
+            return Layout.build(block, 80, strwidth).lines
+        end
+
+        assert.is_false(
+            vim.tbl_contains(
+                lines("interrupted"),
+                "Claude Agent ACP: Claude stopped this."
+            )
+        )
+        assert.is_true(
+            vim.tbl_contains(
+                lines(nil),
+                "Claude Agent ACP: Claude stopped this."
+            )
+        )
+    end)
+
     describe("taskstop", function()
         --- @param output_file string|nil
         --- @param failure_reason string[]|nil
