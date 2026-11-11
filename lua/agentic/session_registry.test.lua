@@ -1,6 +1,7 @@
 ---@diagnostic disable: assign-type-mismatch, need-check-nil, undefined-field, duplicate-set-field
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
+local MiniTest = require("mini.test")
 
 describe("agentic.SessionRegistry", function()
     --- @type agentic.SessionRegistry
@@ -203,6 +204,46 @@ describe("agentic.SessionRegistry", function()
 
             assert.is_nil(SessionRegistry.create())
             assert.same({}, SessionRegistry.by_id)
+        end)
+    end)
+
+    describe("on_create", function()
+        it("runs each listener on a registered session", function()
+            local seen = {}
+            local unsubscribe = SessionRegistry.on_create(function(session)
+                table.insert(seen, {
+                    session = session,
+                    registered = SessionRegistry.by_id[session.id] == session,
+                })
+            end)
+            MiniTest.finally(unsubscribe)
+
+            local session = SessionRegistry.create()
+
+            assert.same({ { session = session, registered = true } }, seen)
+        end)
+
+        it("stops after unsubscribe", function()
+            local listener = spy.new(function() end)
+            SessionRegistry.on_create(listener --[[@as function]])()
+
+            SessionRegistry.create()
+
+            assert.equal(0, listener.call_count)
+        end)
+
+        it("runs no listener when creation fails", function()
+            local listener = spy.new(function() end)
+            MiniTest.finally(
+                SessionRegistry.on_create(listener --[[@as function]])
+            )
+            session_manager_mock.new = function()
+                return nil
+            end
+
+            SessionRegistry.create()
+
+            assert.equal(0, listener.call_count)
         end)
     end)
 

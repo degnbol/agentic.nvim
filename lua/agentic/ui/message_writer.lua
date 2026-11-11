@@ -1692,9 +1692,15 @@ end
 --- word carries more than the marker does, and the same word gets the same
 --- glyph whether the provider or `SessionManager` answers it — a local
 --- command's notice takes its sign from the same table.
+--- A prompt with an author takes `Glyphs.AUTHOR[author]` instead.
 --- @param text string Raw prompt text
+--- @param author string|nil Key of `Glyphs.AUTHOR`; nil for the user
 --- @return string sign
-local function prompt_sign(text)
+local function prompt_sign(text, author)
+    if author then
+        -- A saved row can name an author no longer registered.
+        return (Glyphs.AUTHOR[author] or Glyphs.PROMPT) .. " "
+    end
     local word = PromptBlocks.command(text)
     if not word then
         return Glyphs.PROMPT .. " "
@@ -1710,7 +1716,8 @@ end
 --- @param text string Raw prompt text (first line becomes the `## ` heading)
 --- @param extra_lines string[]|nil Display-only lines appended after the prompt
 ---        body (selected code / referenced files / diagnostics)
-function MessageWriter:write_user_prompt(text, extra_lines)
+--- @param author string|nil Who wrote the prompt, a key of `Glyphs.AUTHOR`; nil for the user
+function MessageWriter:write_user_prompt(text, extra_lines, author)
     self:flush_thought_run()
 
     local lines = prompt_heading_lines(text)
@@ -1750,7 +1757,7 @@ function MessageWriter:write_user_prompt(text, extra_lines)
             0,
             {
                 right_gravity = false,
-                sign_text = prompt_sign(text),
+                sign_text = prompt_sign(text, author),
                 sign_hl_group = Theme.HL_GROUPS.GLYPH_USER,
             }
         )

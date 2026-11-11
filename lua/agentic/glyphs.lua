@@ -144,6 +144,13 @@ Glyphs.ERROR = "󰅚"
 --- accidental collisions.
 Glyphs.PROMPT = "❯"
 
+--- Identity of a prompt the plugin sent on behalf of someone other than the
+--- user, keyed by author. Replaces `PROMPT` on the prompt's heading row.
+--- @type table<string, string>
+Glyphs.AUTHOR = {
+    skeptic = "󰗑", -- nf-md-scale_balance
+}
+
 Glyphs.PROVIDER = "󰚥"
 Glyphs.RESUME = "󰁯"
 Glyphs.AUTH = "󰍂"

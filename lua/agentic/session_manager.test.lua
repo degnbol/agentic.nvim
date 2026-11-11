@@ -12,6 +12,7 @@ local Config = require("agentic.config")
 local Deferred = require("tests.helpers.deferred")
 local Budget = require("agentic.budget")
 local Glyphs = require("agentic.glyphs")
+local Listeners = require("agentic.utils.listeners")
 local Logger = require("agentic.utils.logger")
 local MiniTest = require("mini.test")
 local SessionManager = require("agentic.session_manager")
@@ -67,6 +68,33 @@ local function with_turn_state(session)
     session._prompt_pending = session._prompt_pending or 0
     session._replaying = SessionManager._replaying
     session._turn_open = SessionManager._turn_open
+    return session
+end
+
+--- Give a fake session the event methods of `SessionManager` and no listener.
+--- @param session agentic.SessionManager
+--- @return agentic.SessionManager session
+local function with_events(session)
+    session._listeners = {
+        turn_end = Listeners:new(),
+        session_changed = Listeners:new(),
+        destroy = Listeners:new(),
+    }
+    session.on = SessionManager.on
+    session._emit = SessionManager._emit
+    return session
+end
+
+--- Give a fake session the local command methods of `SessionManager`
+--- (`_command_*`) it does not define itself.
+--- @param session agentic.SessionManager
+--- @return agentic.SessionManager session
+local function with_commands(session)
+    for key, value in pairs(SessionManager) do
+        if key:find("^_command_") and session[key] == nil then
+            session[key] = value
+        end
+    end
     return session
 end
 
@@ -717,7 +745,7 @@ describe("agentic.SessionManager", function()
         local function make_load_session()
             local noop = function() end
             captured_load_cb = nil
-            return with_subagents({
+            return with_events(with_subagents({
                 session_id = nil,
                 _session_epoch = 0,
                 _is_first_message = true,
@@ -802,7 +830,7 @@ describe("agentic.SessionManager", function()
                 _on_session_update = noop,
                 _on_tool_call = noop,
                 _on_tool_call_update = noop,
-            } --[[@as agentic.SessionManager]])
+            } --[[@as agentic.SessionManager]]))
         end
 
         local original_storage_path
@@ -1225,6 +1253,57 @@ describe("agentic.SessionManager", function()
 
             assert.equal("restored-sid", session.session_id)
             assert.is_true(created)
+        end)
+
+        describe("session_changed event", function()
+            --- The `continued` of each `session_changed` of `session`, with
+            --- the session id it had then.
+            --- @param session agentic.SessionManager
+            --- @return table[]
+            local function changes(session)
+                local events = {}
+                session:on("session_changed", function(this, data)
+                    table.insert(events, { this.session_id, data.continued })
+                end)
+                return events
+            end
+
+            it("fires on a load, not continued", function()
+                local session = make_load_session()
+                local events = changes(session)
+
+                session:_do_load_acp_session("test-session-id", "/tmp")
+
+                assert.same({ { "test-session-id", false } }, events)
+            end)
+
+            it(
+                "fires on a session created, continued with a history",
+                function()
+                    local session = make_load_session()
+                    local create_cbs = {}
+                    session.agent.create_session = function(_self, _cwd, _h, cb)
+                        table.insert(create_cbs, cb)
+                    end
+                    session.new_session = SessionManager.new_session
+                    session.config_options.set_initial_mode = function() end
+                    session.agent.provider_config = {}
+                    local events = changes(session)
+
+                    session:new_session({ quiet_welcome = true })
+                    create_cbs[1]({ sessionId = "fresh" }, nil)
+                    session:new_session({
+                        history = ChatHistory:new(),
+                        quiet_welcome = true,
+                    })
+                    create_cbs[2]({ sessionId = "restored" }, nil)
+
+                    assert.same(
+                        { { "fresh", false }, { "restored", true } },
+                        events
+                    )
+                end
+            )
         end)
 
         describe("session cwd after an editor cwd change", function()
@@ -3669,7 +3748,7 @@ describe("agentic.SessionManager", function()
             local empty = function()
                 return true
             end
-            return with_subagents({
+            return with_events(with_subagents({
                 session_id = "s-1",
                 id = 1,
                 is_generating = false,
@@ -3758,7 +3837,7 @@ describe("agentic.SessionManager", function()
                 _drain_queue = SessionManager._drain_queue,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _prompt_pending = 0,
-            } --[[@as agentic.SessionManager]])
+            } --[[@as agentic.SessionManager]]))
         end
 
         it("calls _ring_bell on response complete", function()
@@ -3937,6 +4016,8 @@ describe("agentic.SessionManager", function()
                 _handle_input_submit = SessionManager._handle_input_submit,
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _send_user_prompt = SessionManager._send_user_prompt,
+                _relay = SessionManager._relay,
+                send_from = SessionManager.send_from,
                 _dispatch_turn = SessionManager._dispatch_turn,
                 _set_generating = SessionManager._set_generating,
                 _send_synthetic_prompt = function(this, text)
@@ -3957,6 +4038,7 @@ describe("agentic.SessionManager", function()
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _prompt_pending = 0,
             } --[[@as agentic.SessionManager]])
+            with_events(session)
             session.agent.usage_limit = UsageLimit:new(function() end)
             -- A running subagent.
             session._subagents._agents.c1 = {
@@ -4404,6 +4486,180 @@ describe("agentic.SessionManager", function()
 
                     assert.is_nil(session:_relay("hi", nil))
                 end)
+            end)
+        end)
+
+        describe("send_from", function()
+            local original_hooks
+
+            before_each(function()
+                original_hooks = Config.hooks
+            end)
+
+            after_each(function()
+                Config.hooks = original_hooks
+            end)
+
+            it("records and signs the prompt with its author", function()
+                local sink = {}
+                local session = make_session(nil, nil, sink)
+                local signs = {}
+                session.message_writer.write_user_prompt = function(
+                    _self,
+                    text,
+                    _extra,
+                    author
+                )
+                    table.insert(signs, { text, author })
+                end
+
+                assert.is_nil(session:send_from("skeptic", "check"))
+
+                assert.same({ { "check", "skeptic" } }, signs)
+                assert.equal("skeptic", sink.history[1].author)
+                assert.equal("check", sink.prompts[1][1].text)
+            end)
+
+            it("runs no on_prompt_submit hook", function()
+                local submits = {}
+                Config.hooks = {
+                    on_prompt_submit = function(data)
+                        table.insert(submits, data.prompt)
+                    end,
+                }
+                local session = make_session(nil, nil, {})
+
+                session:send_from("skeptic", "check")
+                session:_relay("relayed", nil)
+
+                assert.same({ "relayed" }, submits)
+            end)
+
+            it("returns the cause of a held prompt", function()
+                local session = make_session(nil, nil, {})
+                session._load_state = "loading"
+
+                assert.equal(
+                    "the session is still loading",
+                    session:send_from("skeptic", "check")
+                )
+            end)
+
+            it("holds a prompt during a usage limit", function()
+                local sink = {}
+                local session = make_session(nil, nil, sink)
+                session.agent.usage_limit.resets_at = os.time() + 600
+
+                assert.equal(
+                    "the usage limit holds",
+                    session:send_from("skeptic", "check")
+                )
+                assert.same({}, sink.prompts)
+            end)
+        end)
+
+        describe("turn_end event", function()
+            --- The `turn_end` data a session's listener receives.
+            --- @param session agentic.SessionManager
+            --- @return agentic.SessionEventData[]
+            local function turn_ends(session)
+                local events = {}
+                session:on("turn_end", function(this, data)
+                    assert.equal(session, this)
+                    table.insert(events, data)
+                end)
+                return events
+            end
+
+            it("carries the prompt row and the stop reason", function()
+                local sink = {}
+                local session = make_session(nil, nil, sink)
+                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                    cb({ stopReason = "max_tokens" }, nil)
+                end
+                local events = turn_ends(session)
+
+                session:_handle_input_submit("hello")
+
+                assert.equal(1, #events)
+                assert.equal(sink.history[1], events[1].user_msg)
+                assert.equal("max_tokens", events[1].stop_reason)
+            end)
+
+            it("reads a response without a stop reason as end_turn", function()
+                local session = make_session(nil, nil, {})
+                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                    cb({}, nil)
+                end
+                local events = turn_ends(session)
+
+                session:_handle_input_submit("hello")
+
+                assert.equal("end_turn", events[1].stop_reason)
+            end)
+
+            it("has no stop reason after an error", function()
+                local session = make_session(nil, { message = "boom" }, {})
+                local events = turn_ends(session)
+
+                session:_handle_input_submit("hello")
+
+                assert.equal(1, #events)
+                assert.is_nil(events[1].stop_reason)
+            end)
+
+            it(
+                "fires once for a turn retried after a transient error",
+                function()
+                    local original = Config.auto_retry_on_transient_error
+                    Config.auto_retry_on_transient_error = true
+                    MiniTest.finally(function()
+                        Config.auto_retry_on_transient_error = original
+                    end)
+                    local transient = {
+                        message = "boom",
+                        data = { errorKind = "server_error" },
+                    }
+                    local session = make_session(nil, nil, {})
+                    local sent = 0
+                    session.agent.send_prompt = function(_self, _sid, _p, cb)
+                        sent = sent + 1
+                        cb(
+                            { stopReason = "end_turn" },
+                            sent == 1 and transient or nil
+                        )
+                    end
+                    local events = turn_ends(session)
+
+                    session:_handle_input_submit("hello")
+
+                    assert.equal(2, sent)
+                    assert.equal(1, #events)
+                    assert.equal("end_turn", events[1].stop_reason)
+                end
+            )
+
+            it("does not fire for a local command", function()
+                local session = make_session(nil, nil, {})
+                session._run_local_command = function() end
+                local events = turn_ends(session)
+
+                session:_handle_input_submit("/context")
+
+                assert.equal(0, #events)
+            end)
+
+            it("stops after unsubscribe", function()
+                local session = make_session(nil, nil, {})
+                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                    cb({ stopReason = "end_turn" }, nil)
+                end
+                local listener = spy.new(function() end)
+                session:on("turn_end", listener --[[@as function]])()
+
+                session:_handle_input_submit("hello")
+
+                assert.equal(0, listener.call_count)
             end)
         end)
 
@@ -5231,6 +5487,7 @@ describe("agentic.SessionManager", function()
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _send_user_prompt = SessionManager._send_user_prompt,
             } --[[@as agentic.SessionManager]]
+            with_commands(session)
         end)
 
         --- Submit each text and return how many reached the provider untouched.
@@ -5245,6 +5502,46 @@ describe("agentic.SessionManager", function()
             assert.equal(0, delete_spy.call_count)
             return dispatch_spy.call_count
         end
+
+        describe("register_local_command", function()
+            local runs = {}
+            SessionManager.register_local_command("probe-cmd", {
+                takes_arg = true,
+                description = "Probe",
+                run = function(this, arg)
+                    table.insert(runs, { this, arg })
+                end,
+            })
+
+            before_each(function()
+                runs = {}
+            end)
+
+            it("runs on the session with its argument", function()
+                session:_handle_input_submit("/probe-cmd deep")
+                session:_handle_input_submit("/probe-cmd")
+
+                assert.same({ { session, "deep" }, { session } }, runs)
+                assert.equal(0, dispatch_spy.call_count)
+            end)
+
+            it("adds its completion item", function()
+                local SlashCommands = require("agentic.acp.slash_commands")
+                local bufnr = vim.api.nvim_create_buf(false, true)
+                MiniTest.finally(function()
+                    vim.api.nvim_buf_delete(bufnr, { force = true })
+                end)
+
+                SlashCommands.setCommands(bufnr, {})
+
+                local words = vim.tbl_map(function(cmd)
+                    return cmd.word
+                end, require("agentic.states").getSlashCommands(
+                    bufnr
+                ))
+                assert.is_true(vim.tbl_contains(words, "probe-cmd"))
+            end)
+        end)
 
         it(
             "sends a word merely starting with a command name as prose",
@@ -6834,6 +7131,7 @@ describe("agentic.SessionManager", function()
                 _handle_input_submit_inner = SessionManager._handle_input_submit_inner,
                 _send_user_prompt = SessionManager._send_user_prompt,
             } --[[@as agentic.SessionManager]]
+            with_commands(session)
         end)
 
         after_each(function()
@@ -7725,6 +8023,32 @@ describe("agentic.SessionManager", function()
 
             assert.equal(1, tails[1].stop.call_count)
             assert.same({ { "row" }, false }, shown()[2])
+        end)
+    end)
+
+    describe("destroy event", function()
+        it("fires before the session tears anything down", function()
+            local order = {}
+            local session = with_events({
+                destroyed = false,
+                agent = {},
+                _cancel_session = function()
+                    table.insert(order, "cancel")
+                end,
+                widget = {
+                    destroy = function()
+                        table.insert(order, "widget")
+                    end,
+                },
+                destroy = SessionManager.destroy,
+            } --[[@as agentic.SessionManager]])
+            session:on("destroy", function(this)
+                table.insert(order, this.destroyed and "late" or "listener")
+            end)
+
+            session:destroy()
+
+            assert.same({ "listener", "cancel", "widget" }, order)
         end)
     end)
 end)

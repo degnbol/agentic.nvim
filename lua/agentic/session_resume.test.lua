@@ -610,6 +610,22 @@ describe("SessionResume", function()
             assert.equal(0, write_prompt_spy.call_count)
         end)
 
+        it("keeps a prompt's author", function()
+            local write_prompt_spy = spy.new(function() end)
+            local writer = {
+                write_user_prompt = write_prompt_spy,
+                flush_thought_run = function() end,
+            }
+
+            SessionResume.replay_messages(
+                writer --[[@as agentic.ui.MessageWriter]],
+                { { type = "user", text = "check", author = "skeptic" } },
+                no_buffer
+            )
+
+            assert.equal("skeptic", write_prompt_spy.calls[1][4])
+        end)
+
         it("replays user and agent messages", function()
             local write_message_spy = spy.new(function() end)
             local write_prompt_spy = spy.new(function() end)

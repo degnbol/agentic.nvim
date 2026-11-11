@@ -127,6 +127,26 @@ describe("agentic.acp.SlashCommands", function()
         end)
     end)
 
+    describe("register_builtin", function()
+        it("adds a builtin every later list carries", function()
+            SlashCommands.register_builtin("probe", "Probe things")
+
+            SlashCommands.setCommands(bufnr, {})
+            local first = by_name(States.getSlashCommands(0))
+            SlashCommands.setCommands(bufnr, {
+                { name = "probe", description = "Provider probe" },
+            })
+            local overridden = by_name(States.getSlashCommands(0))
+            SlashCommands.setCommands(bufnr, {})
+            local again = by_name(States.getSlashCommands(0))
+
+            assert.equal("Probe things", first.probe.menu)
+            assert.equal("Provider probe", overridden.probe.menu)
+            -- A provider's override does not remove the builtin for later lists.
+            assert.equal("Probe things", again.probe.menu)
+        end)
+    end)
+
     describe("instance management", function()
         it("allows independent commands per buffer instance", function()
             local bufnr2 = vim.api.nvim_create_buf(false, true)

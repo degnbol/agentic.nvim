@@ -7,7 +7,7 @@ local Logger = require("agentic.utils.logger")
 
 --- Process-wide initialization: treesitter languages, the edge conceal
 --- decoration provider, global autocmds, image paste, signal handlers, the
---- shared budget file.
+--- skeptic extension, the shared budget file.
 --- @class agentic.Bootstrap
 local Bootstrap = {}
 
@@ -177,6 +177,9 @@ function Bootstrap.ensure()
         wrap_paste()
     end
     trap_signals()
+    -- Required here, not at the top: it requires the session manager, which
+    -- requires this module.
+    require("agentic.skeptic").setup()
     Budget.start(
         vim.fs.joinpath(
             vim.fn.stdpath("cache") --[[@as string]],

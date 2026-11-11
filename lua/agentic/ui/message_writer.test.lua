@@ -512,6 +512,12 @@ describe("agentic.ui.MessageWriter", function()
             assert.equal(Glyphs.COMMAND.compact .. " ", marker_sign())
         end)
 
+        it("marks an authored prompt with its author's glyph", function()
+            writer:write_user_prompt("/compact", nil, "skeptic")
+
+            assert.equal(Glyphs.AUTHOR.skeptic .. " ", marker_sign())
+        end)
+
         it("falls back for a command word with no glyph", function()
             writer:write_user_prompt("/vendor-specific-thing")
 

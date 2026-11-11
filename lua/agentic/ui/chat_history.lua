@@ -11,6 +11,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field timestamp integer Unix timestamp when message was sent
 --- @field provider_name string
 --- @field synthetic? boolean Sent by the plugin, not typed. Kept as a session/load alignment key; every rendering of the history skips it, so a replay reads the response as one continuous turn
+--- @field author? string Who wrote the prompt when not the user, a key of `Glyphs.AUTHOR`
 
 --- @class agentic.ui.ChatHistory.AgentMessage
 --- @field type "agent"
@@ -453,7 +454,12 @@ function ChatHistory:prepend_history_messages(prompt)
     for _, msg in ipairs(self.messages) do
         -- Convert stored messages to ACP Content format
         if msg.type == "user" and not msg.synthetic then
-            table.insert(prompt, { type = "text", text = "User: " .. msg.text })
+            local author = msg.author
+                and (msg.author:sub(1, 1):upper() .. msg.author:sub(2))
+            table.insert(
+                prompt,
+                { type = "text", text = (author or "User") .. ": " .. msg.text }
+            )
         elseif msg.type == "agent" then
             table.insert(
                 prompt,

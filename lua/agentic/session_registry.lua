@@ -1,6 +1,10 @@
 local Logger = require("agentic.utils.logger")
 local Config = require("agentic.config")
 local ACPHealth = require("agentic.acp.acp_health")
+local Listeners = require("agentic.utils.listeners")
+
+--- Extension registration, not per-session state.
+local created = Listeners:new()
 
 --- @class agentic.SessionRegistry
 --- @field by_id table<integer, agentic.SessionManager> Live sessions by `SessionManager.id`. Removed only by `destroy`
@@ -62,8 +66,16 @@ function SessionRegistry.create(provider)
     if session then
         SessionRegistry.by_id[session.id] = session
         SessionRegistry.set_active(session)
+        created:call(session)
     end
     return session
+end
+
+--- Run `listener` for each session `create` makes, after registration.
+--- @param listener fun(session: agentic.SessionManager)
+--- @return fun() unsubscribe
+function SessionRegistry.on_create(listener)
+    return created:add(listener)
 end
 
 --- `current()`, else `create()`.

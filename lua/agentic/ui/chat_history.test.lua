@@ -418,6 +418,23 @@ describe("ChatHistory", function()
             assert.same({ { type = "text", text = "User: go" } }, prompt)
         end)
 
+        it("names an authored prompt by its author", function()
+            local prompt = {}
+            history_of({
+                {
+                    type = "user",
+                    text = "check this",
+                    timestamp = 0,
+                    provider_name = "p",
+                    author = "skeptic",
+                },
+            }):prepend_history_messages(prompt)
+            assert.same(
+                { { type = "text", text = "Skeptic: check this" } },
+                prompt
+            )
+        end)
+
         it("sends nothing for side records", function()
             local prompt = {}
             history_of({

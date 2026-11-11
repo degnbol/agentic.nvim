@@ -25,6 +25,7 @@ local GrantCommand = require("agentic.grant_command")
 local GrantSafety = require("agentic.utils.grant_safety")
 local InfoPanel = require("agentic.ui.info_panel")
 local Json = require("agentic.utils.json")
+local Listeners = require("agentic.utils.listeners")
 local Logger = require("agentic.utils.logger")
 local PromptBlocks = require("agentic.utils.prompt_blocks")
 local Recovery = require("agentic.session_recovery")
@@ -124,6 +125,8 @@ end
 --- @field _reauth_live_retry boolean Set when a re-login was answered by keeping the live session, cleared by the next successful turn; a re-login while still set restarts the provider subprocess instead
 --- @field _transient_attempt number Consecutive silent retries of transient server errors (0 = none this chain)
 --- @field _checktime_scheduled boolean Coalesces rapid checktime calls into one deferred check
+--- @field extensions table<string, any> Per-session state of extensions, keyed by extension name
+--- @field _listeners table<agentic.SessionEvent, agentic.utils.Listeners>
 local SessionManager = {}
 SessionManager.__index = SessionManager
 
@@ -344,6 +347,12 @@ function SessionManager:new(provider)
         _checktime_scheduled = false,
         _output_tails = {},
         _held_tool_call_updates = {},
+        extensions = {},
+        _listeners = {
+            turn_end = Listeners:new(),
+            session_changed = Listeners:new(),
+            destroy = Listeners:new(),
+        },
     }, self)
 
     local agent = AgentInstance.get_instance(provider, function(_client)
@@ -2551,6 +2560,50 @@ function SessionManager:_notice_thought_level_switched(value)
     })
 end
 
+--- `/new` and `/clear`: start a fresh session, named `arg` unless empty.
+--- @param arg string
+function SessionManager:_command_new(arg)
+    -- Resetting locally avoids a race: the agent might not send an
+    -- identifiable response to act on. /clear through ACP doesn't
+    -- actually reset provider context, so it is handled as /new.
+    local on_created
+    if arg ~= "" then
+        -- An argument names the fresh session, as /rename names the
+        -- current one.
+        on_created = function()
+            self:_rename_session(arg)
+        end
+    end
+    self:new_session({ on_created = on_created })
+end
+
+--- `/rename`: rename the session to `arg`, or show the usage when empty.
+--- @param arg string
+function SessionManager:_command_rename(arg)
+    if arg == "" then
+        self.message_writer:write_message(
+            ACPPayloads.generate_agent_message("Usage: `/rename <new name>`")
+        )
+        self:_finalize_turn()
+        return
+    end
+    self:_rename_session(arg)
+end
+
+--- `/grant`. See `GrantCommand:run`.
+--- @param arg string
+--- @param on_done fun()|nil
+function SessionManager:_command_grant(arg, on_done)
+    self._grant_command:run(arg, on_done)
+end
+
+--- `/login`. See `Recovery.login`.
+--- @param arg string
+--- @param on_done fun()|nil
+function SessionManager:_command_login(arg, on_done)
+    Recovery.login(self, arg, on_done --[[@as fun()]])
+end
+
 --- Commands answered entirely in the client, with no provider round-trip.
 ---
 --- Keyed by the exact command word, which carries the word boundary
@@ -2558,8 +2611,8 @@ end
 --- `/new/data/f.csv` are prose because neither yields the word `new`.
 ---
 --- `takes_arg = false` rejects any argument, so `/context foo` reaches the
---- provider as prose. For the rest, `_run_local_command` decides what an empty
---- argument means.
+--- provider as prose. For the rest, the command's method decides what an
+--- empty argument means.
 ---
 --- `async` means the command can return with a dialog still open, so the
 --- sequencer must wait for its `on_done` before dispatching the next block
@@ -2571,15 +2624,55 @@ end
 --- Pasted notes, changelogs and transcripts quote them as examples — this
 --- repo's own `TODO.md` and `doc/agentic.txt` do. See
 --- `_confirm_queued_command`.
---- @type table<string, { takes_arg: boolean, async: boolean, session_ending: boolean }>
+---
+--- `method` names the `SessionManager` method that runs the command, called
+--- with the argument ("" for none) and the `async` commands' `on_done`.
+--- @type table<string, { takes_arg: boolean, async: boolean, session_ending: boolean, method: string }>
 local LOCAL_COMMANDS = {
-    new = { takes_arg = true, async = false, session_ending = true },
-    clear = { takes_arg = true, async = false, session_ending = true },
-    context = { takes_arg = false, async = false, session_ending = false },
-    rename = { takes_arg = true, async = false, session_ending = false },
-    grant = { takes_arg = true, async = true, session_ending = false },
-    login = { takes_arg = true, async = true, session_ending = false },
-    delete = { takes_arg = false, async = false, session_ending = true },
+    new = {
+        takes_arg = true,
+        async = false,
+        session_ending = true,
+        method = "_command_new",
+    },
+    clear = {
+        takes_arg = true,
+        async = false,
+        session_ending = true,
+        method = "_command_new",
+    },
+    -- ACP providers don't emit context info over the protocol, so this
+    -- shows the last known usage_update locally.
+    context = {
+        takes_arg = false,
+        async = false,
+        session_ending = false,
+        method = "_display_context_usage",
+    },
+    rename = {
+        takes_arg = true,
+        async = false,
+        session_ending = false,
+        method = "_command_rename",
+    },
+    grant = {
+        takes_arg = true,
+        async = true,
+        session_ending = false,
+        method = "_command_grant",
+    },
+    login = {
+        takes_arg = true,
+        async = true,
+        session_ending = false,
+        method = "_command_login",
+    },
+    delete = {
+        takes_arg = false,
+        async = false,
+        session_ending = true,
+        method = "_delete_session",
+    },
 }
 
 --- Read a block's text as a local command word and its argument, or nil when
@@ -2611,41 +2704,25 @@ end
 --- @param on_done? fun() Called by the `async` commands when their dialog
 ---   resolves. The rest are finished when this returns.
 function SessionManager:_run_local_command(word, arg, on_done)
-    if word == "new" or word == "clear" then
-        -- Resetting locally avoids a race: the agent might not send an
-        -- identifiable response to act on. /clear through ACP doesn't
-        -- actually reset provider context, so it is handled as /new.
-        local on_created
-        if arg ~= "" then
-            -- An argument names the fresh session, as /rename names the
-            -- current one.
-            on_created = function()
-                self:_rename_session(arg)
-            end
-        end
-        self:new_session({ on_created = on_created })
-    elseif word == "context" then
-        -- ACP providers don't emit context info over the protocol, so this
-        -- shows the last known usage_update locally.
-        self:_display_context_usage()
-    elseif word == "rename" then
-        if arg == "" then
-            self.message_writer:write_message(
-                ACPPayloads.generate_agent_message(
-                    "Usage: `/rename <new name>`"
-                )
-            )
-            self:_finalize_turn()
-            return
-        end
-        self:_rename_session(arg)
-    elseif word == "grant" then
-        self._grant_command:run(arg, on_done)
-    elseif word == "login" then
-        Recovery.login(self, arg, on_done --[[@as fun()]])
-    elseif word == "delete" then
-        self:_delete_session()
+    self[LOCAL_COMMANDS[word].method](self, arg, on_done)
+end
+
+--- Add a synchronous local slash command, which ends no session, and its
+--- completion item.
+--- @param name string Command word without the leading `/`
+--- @param spec { takes_arg: boolean, description: string, run: fun(session: agentic.SessionManager, arg: string|nil) } `run` gets nil for no argument
+function SessionManager.register_local_command(name, spec)
+    local method = "_command_" .. name
+    SessionManager[method] = function(self, arg)
+        spec.run(self, arg ~= "" and arg or nil)
     end
+    LOCAL_COMMANDS[name] = {
+        takes_arg = spec.takes_arg,
+        async = false,
+        session_ending = false,
+        method = method,
+    }
+    SlashCommands.register_builtin(name, spec.description)
 end
 
 --- @alias agentic.SubmitDeferReason "usage_limited"|"in_flight"|"loading"|"not_ready"
@@ -2762,19 +2839,65 @@ function SessionManager:_queue_input(text, opts)
     return self.widget.input_dispatch:queue_paragraph(text, opts)
 end
 
---- Send a prompt to the main agent on the user's behalf, apart from their
---- own turns. It passes the submit gate, but carries none of the pending
+--- Send a prompt to the main agent on the user's behalf, or as `author`,
+--- apart from the user's own turns. It passes the submit gate, but carries none of the pending
 --- context, title, history prefix or system info of a user submit, and
 --- clears no idle state, todo panel or user control. A held relay is not kept.
 --- @param instruction string
 --- @param on_returned agentic.OnReturned|nil Called when the turn returns the prompt
+--- @param author string|nil Who wrote the prompt, a key of `Glyphs.AUTHOR`; nil for the user
 --- @return string|nil held_cause Why the prompt was held, as a phrase; nil when sent
-function SessionManager:_relay(instruction, on_returned)
+function SessionManager:_relay(instruction, on_returned, author)
     local held_cause = SUBMIT_HOLDS[self:_submit_defer_reason(instruction)]
     if not held_cause then
-        self:_send_user_prompt(instruction, {}, {}, on_returned)
+        self:_send_user_prompt(instruction, {}, {}, on_returned, author)
     end
     return held_cause
+end
+
+--- Send `text` as a prompt written by `author`, not the user. The prompt sign
+--- and the history row carry `author`, and the `on_prompt_submit` hook does
+--- not run. A prompt the submit gate or the usage limit holds is dropped, not
+--- queued.
+--- @param author string A key of `Glyphs.AUTHOR`
+--- @param text string
+--- @return string|nil held_cause Why the prompt was held, as a phrase; nil when sent
+function SessionManager:send_from(author, text)
+    if self:_submit_defer_reason(text) == "usage_limited" then
+        return "the usage limit holds"
+    end
+    return self:_relay(text, nil, author)
+end
+
+--- @alias agentic.SessionEvent "turn_end"|"session_changed"|"destroy"
+
+--- @class agentic.SessionEventData
+--- @field user_msg? agentic.ui.ChatHistory.UserMessage turn_end: the turn's prompt row; nil for a synthetic prompt
+--- @field stop_reason? string turn_end: the provider's stop reason; nil when the turn ended in an error
+--- @field continued? boolean session_changed: true when the conversation carries on in the new session (a re-create from history), false for a fresh session or a load
+
+--- Run `listener` on `event` of this session:
+--- - `turn_end`: a turn ended and is not being retried.
+--- - `session_changed`: the session has a new ACP session id.
+--- - `destroy`: the session is being destroyed, before it tears anything down.
+--- @param event agentic.SessionEvent
+--- @param listener fun(session: agentic.SessionManager, data: agentic.SessionEventData)
+--- @return fun() unsubscribe
+function SessionManager:on(event, listener)
+    return self._listeners[event]:add(listener)
+end
+
+--- Run the listeners of `event`.
+--- @param event agentic.SessionEvent
+--- @param data agentic.SessionEventData
+function SessionManager:_emit(event, data)
+    self._listeners[event]:call(self, data)
+end
+
+--- Working directory of the ACP session.
+--- @return string
+function SessionManager:cwd()
+    return self._cwd
 end
 
 --- Supersede the current session generation, so callbacks still in flight for
@@ -3140,18 +3263,20 @@ end
 --- @param prompt agentic.acp.Content[] Blocks to send ahead of the text. The text block is appended to it
 --- @param extra_lines string[] Display-only lines below the prompt in the chat
 --- @param on_returned agentic.OnReturned|nil Called when the turn returns the prompt
+--- @param author string|nil Who wrote the prompt, a key of `Glyphs.AUTHOR`; nil for the user, the only author the `on_prompt_submit` hook runs for
 function SessionManager:_send_user_prompt(
     input_text,
     prompt,
     extra_lines,
-    on_returned
+    on_returned,
+    author
 )
     table.insert(prompt, {
         type = "text",
         text = input_text,
     })
 
-    self.message_writer:write_user_prompt(input_text, extra_lines)
+    self.message_writer:write_user_prompt(input_text, extra_lines, author)
 
     --- @type agentic.ui.ChatHistory.UserMessage
     local user_msg = {
@@ -3159,14 +3284,17 @@ function SessionManager:_send_user_prompt(
         text = input_text,
         timestamp = os.time(),
         provider_name = self.agent.provider_config.name,
+        author = author,
     }
     self.chat_history:add_message(user_msg)
     self:_history_changed(self.chat_history)
 
-    P.invoke_hook("on_prompt_submit", {
-        prompt = input_text,
-        session_id = self.session_id,
-    })
+    if not author then
+        P.invoke_hook("on_prompt_submit", {
+            prompt = input_text,
+            session_id = self.session_id,
+        })
+    end
 
     self:_dispatch_turn(prompt, user_msg, on_returned)
 end
@@ -3379,10 +3507,11 @@ function SessionManager:_dispatch_turn(prompt, user_msg, on_returned)
         -- persisted. `stop_generation` reaches this callback two ways — the
         -- `session/cancel` it sends, and the outstanding permission request its
         -- `permission_manager:cancel_requests()` resolves with nil.
+        -- A response without a stop reason ends the turn as a normal Stop.
         local stop_reason = err and "error"
-            or type(response) == "table"
-                and Json.present(response.stopReason)
-        if stop_reason and stop_reason ~= "end_turn" then
+            or type(response) == "table" and Json.present(response.stopReason)
+            or "end_turn"
+        if stop_reason ~= "end_turn" then
             self:_end_open_tool_calls(
                 CanonicalToolCall.stop_reason_word(stop_reason)
             )
@@ -3408,6 +3537,10 @@ function SessionManager:_dispatch_turn(prompt, user_msg, on_returned)
                 success = err == nil,
                 error = err,
             })
+            self:_emit("turn_end", {
+                user_msg = user_msg,
+                stop_reason = not err and stop_reason or nil,
+            })
         end
 
         -- Persist on failure too: the user prompt is already in `chat_history`,
@@ -3425,14 +3558,7 @@ function SessionManager:_dispatch_turn(prompt, user_msg, on_returned)
             -- so deferred prompts wait up to MAX_TRANSIENT_RETRIES turns
             -- (one dispatch per Stop).
             Recovery.retry_after_transient_error(self)
-        elseif
-            err == nil
-            and (
-                type(response) ~= "table"
-                or response.stopReason == nil
-                or response.stopReason == "end_turn"
-            )
-        then
+        elseif stop_reason == "end_turn" then
             -- Only a normal Stop. `cancelled` is <C-c>, where the user is
             -- asking a question rather than queueing the next task; `refusal`,
             -- `max_tokens` and `max_turn_requests` all left the work unfinished,
@@ -3537,6 +3663,7 @@ function SessionManager:new_session(opts)
             pattern = "AgenticSessionChanged",
             data = { session_id = response.sessionId },
         })
+        self:_emit("session_changed", { continued = history ~= nil })
 
         self:_apply_session_options(response)
 
@@ -3657,6 +3784,7 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model)
         pattern = "AgenticSessionChanged",
         data = { session_id = session_id },
     })
+    self:_emit("session_changed", { continued = false })
 
     local handlers = self:_build_handlers()
 
@@ -4004,6 +4132,7 @@ function SessionManager:_handle_new_config_options(new_config_options)
 end
 
 function SessionManager:destroy()
+    self:_emit("destroy", {})
     self.destroyed = true
 
     Recovery.stop_login(self)

@@ -414,7 +414,7 @@ end
 function SessionResume.replay_messages(writer, messages, buffer_name)
     for _, msg in ipairs(messages) do
         if msg.type == "user" and not msg.synthetic then
-            writer:write_user_prompt(msg.text)
+            writer:write_user_prompt(msg.text, nil, msg.author)
         elseif msg.type == "agent" then
             local agent_message = ACPPayloads.generate_agent_message(msg.text)
             writer:write_message(agent_message)
