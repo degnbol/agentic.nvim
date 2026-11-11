@@ -1228,6 +1228,7 @@ end
 --- @class agentic.ui.MessageWriter.CollapsedRegionOpts
 --- @field titled? boolean The body's first row names it, and the foldtext leads with that row
 --- @field open? boolean Leave the fold open
+--- @field closed? boolean Close the fold even over a one-row body, which is otherwise left open
 --- @field undimmed? boolean Leave the body at normal brightness
 --- @field table_row_ends? integer[] 1-based indices into the body of lines to highlight as table row ends
 
@@ -1521,7 +1522,7 @@ end
 --- whose block was never rendered has nothing to sit under.
 ---
 --- An empty body writes nothing, even with a title. A one-row body is left
---- open, titled or not.
+--- open, titled or not, unless `opts.closed`.
 --- @param anchor agentic.acp.Anchor
 --- @param title string|nil First row of the region, above the body
 --- @param body string[] Already wrapped
@@ -1533,7 +1534,7 @@ function MessageWriter:_place_collapsed_region(anchor, title, body, sign, opts)
     end
     opts = vim.tbl_extend("force", opts, {
         titled = title ~= nil,
-        open = opts.open or #body == 1,
+        open = opts.open or (#body == 1 and not opts.closed),
     })
     if title then
         body = vim.list_extend({ title }, body)
@@ -1601,6 +1602,26 @@ function MessageWriter:write_discovered_skills(skills)
         Glyphs.KIND.skill .. " ",
         {}
     )
+end
+
+--- Append a dimmed row `title` signed with `glyph` that folds `body` beneath
+--- it, closed even over one body row, so it takes one row of the chat. An
+--- empty body leaves the title alone, unfolded. The body is wrapped as prose,
+--- the title is not. Does not end the turn.
+--- @param title string
+--- @param body string[]
+--- @param glyph string
+function MessageWriter:write_folded_row(title, body, glyph)
+    --- @type string|nil
+    local head = title
+    if #body == 0 then
+        head, body = nil, { title }
+    end
+    local wrapped, table_row_ends = self:_wrap_prose(body)
+    self:_place_collapsed_region({}, head, wrapped, glyph .. " ", {
+        closed = true,
+        table_row_ends = table_row_ends,
+    })
 end
 
 --- @class agentic.ui.MessageWriter.HookRow : agentic.acp.Anchor
@@ -3250,7 +3271,8 @@ end
 
 --- Give this writer's tool call blocks that have no final status yet an
 --- `ended_as`, and `status` when given. A block keeps the `ended_as` it has:
---- the first end of its run is the one that closed it.
+--- the first end of its run is the one that closed it. A subagent's launch
+--- block is left alone: its status reports the launch, not the run.
 --- @param ended_as string
 --- @param status? agentic.ui.ToolCallStatus nil keeps each block's own
 --- @return agentic.ui.MessageWriter.ToolCallBase[] updates The updates applied
@@ -3258,14 +3280,16 @@ function MessageWriter:stamp_open_calls(ended_as, status)
     local updates = {}
     for _, id in ipairs(self:nonfinal_tool_call_ids()) do
         local block = self.tool_call_blocks[id]
-        --- @type agentic.ui.MessageWriter.ToolCallBase
-        local update = {
-            tool_call_id = id,
-            status = status or block.status,
-            ended_as = block.ended_as or ended_as,
-        }
-        self:update_tool_call_block(update)
-        table.insert(updates, update)
+        if not block.subagent then
+            --- @type agentic.ui.MessageWriter.ToolCallBase
+            local update = {
+                tool_call_id = id,
+                status = status or block.status,
+                ended_as = block.ended_as or ended_as,
+            }
+            self:update_tool_call_block(update)
+            table.insert(updates, update)
+        end
     end
     return updates
 end

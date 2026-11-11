@@ -420,6 +420,14 @@ function ClaudeAgentACPAdapter:subagent_task_id(update)
     return vim.tbl_get(update, "_meta", "claudeCode", "parentToolUseId")
 end
 
+--- The bridge ids a launch's reply `<tool use id>:reply` (`launchReply` in
+--- claude-agent-acp's `native-subagents.js`).
+--- @param update agentic.acp.SessionMessage
+--- @return string|nil task_id
+function ClaudeAgentACPAdapter:launch_reply_task(update)
+    return ACPClient.strip_reply_suffix(update.messageId)
+end
+
 --- The compaction summary and the interrupt markers.
 --- @param text string
 --- @return boolean

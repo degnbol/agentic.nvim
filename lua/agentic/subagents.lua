@@ -397,7 +397,7 @@ function Subagents:read_record(child_id)
         mode = record.background and "background" or "blocking",
         confirmed = true,
     }) --[[@as agentic.ui.MessageWriter.SubagentInfo]]
-    self:_set_agent_info(child_id, subagent)
+    self:_merge_block_fields(child_id, { subagent = subagent })
     if agent.transcript then
         agent.transcript:set_header(subagent)
     end
@@ -420,13 +420,13 @@ function Subagents:read_records()
     end
 end
 
---- Give a subagent's block new identity and mode, in the history and in its
---- parent's view. A parent transcript that is not loaded renders it from the
---- history when it loads, and a wiped one is not made again. No-op for a
---- subagent without a block.
+--- Merge `fields` into a subagent's block, in the history and in its parent's
+--- view. A parent transcript that is not loaded renders it from the history
+--- when it loads, and a wiped one is not made again. No-op for a subagent
+--- without a block.
 --- @param child_id string
---- @param subagent agentic.ui.MessageWriter.SubagentInfo
-function Subagents:_set_agent_info(child_id, subagent)
+--- @param fields table `ToolCallBase` fields except `tool_call_id`
+function Subagents:_merge_block_fields(child_id, fields)
     local block = self:_agent_block(child_id)
     if not block then
         return
@@ -434,14 +434,24 @@ function Subagents:_set_agent_info(child_id, subagent)
     AgentView.merge_tool_call_fields(
         self:record_writer(block, false),
         self._host.history(),
-        { tool_call_id = child_id, subagent = subagent }
+        vim.tbl_extend("force", fields, { tool_call_id = child_id })
     )
     self._host.history_changed()
 end
 
+--- Settle a subagent's `pending` block `completed`: its launch is confirmed.
+--- A block settled already keeps its status.
+--- @param child_id string
+function Subagents:_settle_launch(child_id)
+    local block = self:_agent_block(child_id)
+    if block and block.status == "pending" then
+        self:_merge_block_fields(child_id, { status = "completed" })
+    end
+end
+
 --- Start a subagent the provider announced: its block in its parent's view
---- (the main chat for a child of the main agent), `completed` from the start
---- since it records the launch only, then its transcript, closed until the
+--- (the main chat for a child of the main agent), `pending` until the launch
+--- is confirmed, then its transcript, closed until the
 --- agent reports work.
 --- @param child_id string
 --- @param label string
@@ -475,7 +485,7 @@ function Subagents:_open_agent(child_id, label, parent_session_id, replayed)
     local block = {
         tool_call_id = child_id,
         kind = "SubAgent",
-        status = "completed",
+        status = "pending",
         argument = vim.api.nvim_buf_get_name(transcript.bufnr),
         subagent = subagent,
     }
@@ -523,11 +533,12 @@ local function end_word(state)
     return CanonicalToolCall.stop_reason_word(reason)
 end
 
---- End a subagent's work as `state` reports it: stop its indicator, end its
---- unfinished calls `failed` with the end's word unless it ended its turn or
---- the end is `unknown`, write an end row and show the end in the header. On
---- an ended agent, only a report with error text writes a row, holding that
---- text: the provider can report a failure a second time to add it.
+--- End a subagent's work as `state` reports it: settle its launch, stop its
+--- indicator, end its unfinished calls `failed` with the end's word unless it
+--- ended its turn or the end is `unknown`, write an end row and show the end
+--- in the header. On an ended agent, only a
+--- report with error text writes a row, holding that text: the provider can
+--- report a failure a second time to add it.
 --- @param child_id string
 --- @param state agentic.acp.SubagentWorkState
 function Subagents:end_agent(child_id, state)
@@ -540,6 +551,7 @@ function Subagents:end_agent(child_id, state)
         error = Json.present(vim.tbl_get(state, "error", "message")),
     }
     self._host.end_side_records(child_id)
+    self:_settle_launch(child_id)
     if not agent.open then
         if row.error then
             self:_write_row(child_id, row)
@@ -645,7 +657,7 @@ function Subagents:update(update, source_session_id, replayed)
         if block and block.subagent then
             local subagent =
                 vim.tbl_extend("force", block.subagent, { label = label }) --[[@as agentic.ui.MessageWriter.SubagentInfo]]
-            self:_set_agent_info(child_id, subagent)
+            self:_merge_block_fields(child_id, { subagent = subagent })
             if agent.transcript then
                 agent.transcript:set_header(subagent)
             end
@@ -731,7 +743,8 @@ end
 
 --- Show one view of a session message as a row in the buffer of the session
 --- it arrived on, tagged with the message id. A received view on a subagent
---- that is not a result is a delegation, whose id routes to the subagent.
+--- that is not a result is a delegation, whose id routes to the subagent. A
+--- launch's reply is marked `launch_reply` and settles its launch.
 --- @param update agentic.acp.SessionMessage
 --- @param source_session_id string The session it arrived on
 function Subagents:message(update, source_session_id)
@@ -772,6 +785,15 @@ function Subagents:message(update, source_session_id)
         recipient_session_id = recipient,
         text = table.concat(texts),
     }
+    -- By task id, not by sender: a resumed agent replies from a new child id.
+    local task_id = self._host.agent():launch_reply_task(update)
+    if task_id then
+        row.launch_reply = true
+        local launched = self._agent_by_task[task_id]
+        if launched then
+            self:_settle_launch(launched)
+        end
+    end
     if on_root then
         self._host.write_chat_row(row)
     else

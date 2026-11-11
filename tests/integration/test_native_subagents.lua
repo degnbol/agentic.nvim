@@ -157,6 +157,18 @@ _G.buf_sign_of = function(bufnr, title)
         end
     end
 end
+-- The region sign on the first row of a buffer that reads `text`.
+_G.row_sign_of = function(bufnr, text)
+    local R = require("agentic.ui.tool_call_renderer")
+    for i, line in ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)) do
+        if line == text then
+            local marks = vim.api.nvim_buf_get_extmarks(
+                bufnr, R.NS_DECORATIONS, { i - 1, 0 }, { i - 1, -1 }, { details = true }
+            )
+            return marks[1] and vim.trim(marks[1][4].sign_text)
+        end
+    end
+end
 -- Whether a transcript's working indicator is on its last line.
 _G.indicator_at_end = function(child_id)
     local transcript = _G.transcript(child_id)
@@ -213,7 +225,7 @@ describe("native subagent sessions", function()
     end)
 
     it(
-        "a launch writes a named transcript, a completed block and the prompt's link",
+        "a launch writes a named transcript, a pending block and the prompt's link",
         function()
             child.lua([[_G.spawn("aa11bb22cc33dd44", "find it")]])
 
@@ -230,7 +242,7 @@ describe("native subagent sessions", function()
                 child.lua_get([[_G.block("aa11bb22cc33dd44").kind]])
             )
             assert.equal(
-                "completed",
+                "pending",
                 child.lua_get([[_G.block("aa11bb22cc33dd44").status]])
             )
             assert.is_true(
@@ -331,14 +343,16 @@ _G.update("c1", {
             )
             assert.truthy(
                 child.lua_get([[_G.ttext("c1")]]):find(
-                    "## Found it.\n" .. child.lua_get([[_G.tname("c2")]]),
+                    "\nFound it.\n" .. child.lua_get([[_G.tname("c2")]]),
                     1,
                     true
                 )
             )
             assert.equal(
                 child.lua_get("_G.G.MESSAGE.result"),
-                child.lua_get([[_G.sign_of("c1", "Found it.")]])
+                child.lua_get(
+                    [[_G.row_sign_of(_G.transcript("c1").bufnr, "Found it.")]]
+                )
             )
         end
     )
@@ -507,7 +521,7 @@ _G.message("toolu_more", "root", "c1", "And docs.")
     end)
 
     it(
-        "a launch reply, seen by the parent only, is a result in the chat",
+        "a launch reply, seen by the parent only, settles the launch as one folded row",
         function()
             child.lua([[
 _G.spawn("c1")
@@ -517,14 +531,34 @@ _G.update("root", {
     content = { { type = "text", text = "All found." } },
 })
 ]])
+            child.flush()
 
+            local chat = child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]])
             assert.truthy(
-                child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]]):find(
-                    "## All found.\n" .. child.lua_get([[_G.tname("c1")]]),
+                chat:find(
+                    "\nAll found.\n" .. child.lua_get([[_G.tname("c1")]]),
                     1,
                     true
                 )
             )
+            assert.is_nil(chat:find("## All found.", 1, true))
+            assert.equal(
+                child.lua_get("_G.G.MESSAGE.result"),
+                child.lua_get(
+                    [[_G.row_sign_of(_G.s.widget.buf_nrs.agent, "All found.")]]
+                )
+            )
+            child.lua([[
+vim.api.nvim_set_current_win(_G.s.widget:home_win())
+for i, line in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
+    if line == "All found." then _G.reply_line = i end
+end
+]])
+            assert.equal(
+                child.lua_get("_G.reply_line"),
+                child.lua_get("vim.fn.foldclosed(_G.reply_line + 1)")
+            )
+            assert.equal("completed", child.lua_get([[_G.block("c1").status]]))
             assert.is_nil(
                 child.lua_get([[_G.ttext("c1")]]):find("All found.", 1, true)
             )
@@ -537,6 +571,7 @@ _G.update("root", {
                     sender_session_id = "c1",
                     recipient_session_id = "root",
                     text = "All found.",
+                    launch_reply = true,
                 },
                 child.lua_get(
                     [[_G.s.chat_history.messages[#_G.s.chat_history.messages] ]]
@@ -1596,7 +1631,8 @@ _G.mid_file = table.concat(vim.fn.readfile(
             local chat = child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]])
             local name = child.lua_get([[_G.block("c1").argument]])
             assert.equal(1, count(chat, "## Find it.\n" .. name))
-            assert.equal(1, count(chat, "## replayed reply\n" .. name))
+            assert.equal(1, count(chat, "\nreplayed reply\n" .. name))
+            assert.equal("completed", child.lua_get([[_G.block("c1").status]]))
             assert.same(
                 { "user", "tool_call", "session_message", "session_message" },
                 child.lua_get([[vim.tbl_map(function(m)
@@ -1606,9 +1642,11 @@ end, _G.s.chat_history.messages)]])
             child.lua([[
 vim.api.nvim_set_current_win(_G.s.widget:home_win())
 local name = _G.block("c1").argument
+-- The block's own row: the reply's folded row names the transcript too.
 for i, line in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
     if line == name then
         vim.api.nvim_win_set_cursor(0, { i, 3 })
+        break
     end
 end
 ]])

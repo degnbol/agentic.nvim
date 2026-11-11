@@ -1201,9 +1201,10 @@ A message between agents, the launch prompt included, has a row in the chat
 or transcript of each agent it joins. A message from another session, or a
 subagent's message to its parent, has a received row in the chat only. Each
 row holds the message: a heading, the buffer name of the other end under it,
-else the sender's name, and the rest folded closed. The launch prompt is
-headed by the subagent's description when it has one, any other message by
-its first sentence. The sign gives the kind:
+else the sender's name, and the rest folded closed. The provider's reply to a
+launch is one closed fold instead, led by its first sentence. The launch
+prompt is headed by the subagent's description when it has one, any other
+message by its first sentence. The sign gives the kind:
 
     Sign  Kind ~
     󰙓     Task: the first message to a subagent, or the first since its last
@@ -1218,7 +1219,8 @@ subagent that launched it, which records its launch:
     Line             Content ~
     Heading          `<mode> <type> · <name>`
     Name             The transcript's buffer name
-    Footer           `completed`
+    Footer           `pending`, then `completed` once the provider replies to
+                     the launch or the subagent ends
 
 The mode is `Background` or `Blocking`, with a `?` until the SDK's record
 of the spawn confirms it; the type shows once that record is read.
@@ -1248,8 +1250,8 @@ Some rows of the chat and the subagent transcripts are tags. Tags come back
 with a resumed session.
 
     Tag                  Defined at ~
-    Message id           Each row of a message between agents
-                         (|agentic-subagents|)
+    Message id           Each row of a message between agents, except the
+                         reply to a launch (|agentic-subagents|)
     Background job id    The block of the command the agent sent to the
                          background
 

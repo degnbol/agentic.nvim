@@ -27,7 +27,11 @@ local function make_host(history, overrides)
     }
     local host = vim.tbl_extend("force", {
         agent = function()
-            return {}
+            return {
+                launch_reply_task = function()
+                    return nil
+                end,
+            }
         end,
         history = function()
             return history
@@ -301,6 +305,143 @@ describe("agentic.Subagents", function()
             -- The delegation's message id became c1's task id, its key.
             local row = history:messages_for_agent("m1")[1]
             assert.equal("received", row.view)
+        end)
+    end)
+
+    describe("launch settling", function()
+        --- @type TestStub
+        local write_row_stub
+
+        before_each(function()
+            write_row_stub = spy.stub(SessionResume, "write_row")
+        end)
+
+        after_each(function()
+            write_row_stub:revert()
+        end)
+
+        --- Subagents with `c1`, launched by Task `toolu_1` from the root and
+        --- not working, its block `pending`, under an agent whose replies
+        --- are `<task id>:reply`.
+        --- @return agentic.Subagents subagents
+        --- @return agentic.ui.ChatHistory history
+        --- @return tests.SubagentsHostSpies spies
+        local function make_launched()
+            local history = ChatHistory:new()
+            history:add_message({
+                type = "tool_call",
+                tool_call_id = "c1",
+                kind = "SubAgent",
+                status = "pending",
+                subagent = { label = "x", mode = "blocking", confirmed = true },
+            })
+            local host, spies = make_host(history, {
+                agent = function()
+                    return {
+                        launch_reply_task = function(_, update)
+                            return update.messageId:match("^(.+):reply$")
+                        end,
+                    }
+                end,
+            })
+            local subagents = make_subagents(
+                host,
+                { writer = { tool_call_blocks = {} } } --[[@as agentic.ui.AgentView]]
+            )
+            subagents._agents.c1 = {
+                open = false,
+                record_read = true,
+                parent_session_id = "root",
+            }
+            subagents._agent_by_task.toolu_1 = "c1"
+            return subagents, history, spies
+        end
+
+        --- @param message_id string
+        --- @return agentic.acp.SessionMessage
+        local function result(message_id)
+            return {
+                sessionUpdate = "session_message",
+                messageId = message_id,
+                senderSessionId = "c1",
+                recipientSessionId = "root",
+                content = { { type = "text", text = "Found it." } },
+            }
+        end
+
+        it(
+            "settles the block on the launch's reply, and flags its row",
+            function()
+                local subagents, history, spies = make_launched()
+
+                subagents:message(result("toolu_1:reply"), "root")
+
+                assert.equal("completed", history:tool_call("c1").status)
+                local row = spies.write_chat_row.calls[1][1]
+                assert.equal("result", row.kind)
+                assert.is_true(row.launch_reply)
+            end
+        )
+
+        it("leaves the block pending on a hand-back", function()
+            local subagents, history, spies = make_launched()
+
+            subagents:message(result("toolu_h"), "root")
+
+            assert.equal("pending", history:tool_call("c1").status)
+            assert.is_nil(spies.write_chat_row.calls[1][1].launch_reply)
+        end)
+
+        it("settles the block at any end of an agent not open", function()
+            for _, state in ipairs({
+                { state = "idle", stopReason = "end_turn" },
+                { state = "unknown" },
+            }) do
+                local subagents, history = make_launched()
+
+                subagents:end_agent("c1", state)
+
+                assert.equal("completed", history:tool_call("c1").status)
+            end
+        end)
+
+        it("settles the block at a working agent's failed end", function()
+            local subagents, history = make_launched()
+            subagents._agents.c1.open = true
+            local transcript = {
+                view = {
+                    writer = {
+                        stamp_open_calls = function()
+                            return {}
+                        end,
+                    },
+                    status_indicator = {
+                        stop = function() end,
+                        reposition = function() end,
+                    },
+                },
+                set_running = function() end,
+                set_context = function() end,
+            }
+            subagents.transcript = function()
+                return transcript
+            end
+
+            subagents:end_agent("c1", { state = "failed" })
+
+            assert.equal("completed", history:tool_call("c1").status)
+        end)
+
+        it("settles once", function()
+            local subagents, history = make_launched()
+            local merge = spy.on(subagents, "_merge_block_fields")
+
+            subagents:message(result("toolu_1:reply"), "root")
+            subagents:end_agent("c1", { state = "unknown" })
+
+            assert.equal(1, merge.call_count)
+            assert.equal("completed", history:tool_call("c1").status)
+            merge:revert()
         end)
     end)
 

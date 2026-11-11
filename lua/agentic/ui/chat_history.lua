@@ -46,6 +46,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field recipient_session_id? string
 --- @field text string
 --- @field agent_key? string Key of the subagent that owns the row: its task id, else its child session id while that is unknown
+--- @field launch_reply? boolean A `result` that is the provider's reply to the launch of its sender
 
 --- The end of a subagent's run.
 --- @class agentic.ui.ChatHistory.SubagentEnd

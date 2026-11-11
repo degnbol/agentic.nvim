@@ -1447,6 +1447,42 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
+    describe("write_folded_row", function()
+        it("appends after a buffered thought run, closed", function()
+            writer:write_message_chunk(make_thought_update("pondering"))
+
+            writer:write_folded_row("Found it.", { "detail" }, "R")
+
+            assert.is_true(row_of("pondering") < row_of("Found it."))
+            assert.same(
+                { "Found it.", "detail" },
+                vim.api.nvim_buf_get_lines(
+                    bufnr,
+                    row_of("Found it.") - 1,
+                    row_of("Found it.") + 1,
+                    false
+                )
+            )
+            local ops = writer._pending_fold_ops
+            assert.is_false(ops[#ops].open)
+            local sign
+            for _, mark in ipairs(rail()) do
+                if mark[1] == row_of("Found it.") - 1 then
+                    sign = mark[2]
+                end
+            end
+            assert.equal("R ", sign)
+            assert_one_sign_per_row()
+        end)
+
+        it("writes a lone row without a fold", function()
+            writer:write_folded_row("Found it.", {}, "R")
+
+            assert.is_not_nil(row_of("Found it."))
+            assert.same({}, writer._pending_fold_ops)
+        end)
+    end)
+
     describe("loaded files and anchors", function()
         local function buffer_lines()
             return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
@@ -5417,6 +5453,25 @@ describe("agentic.ui.MessageWriter", function()
             local block = writer.tool_call_blocks.running
             assert.equal("pending", block.status)
             assert.equal("interrupted", block.ended_as)
+        end)
+
+        it("leaves a subagent's launch block alone", function()
+            local launch = make_tool_call_block("launch", "pending")
+            launch.kind = "SubAgent"
+            launch.subagent =
+                { label = "find it", mode = "blocking", confirmed = false }
+            writer:write_tool_call_block(launch)
+
+            local updates = writer:stamp_open_calls("max_tokens", "failed")
+
+            assert.same(
+                { "running" },
+                vim.tbl_map(function(update)
+                    return update.tool_call_id
+                end, updates)
+            )
+            assert.equal("pending", writer.tool_call_blocks.launch.status)
+            assert.is_nil(writer.tool_call_blocks.launch.ended_as)
         end)
 
         it("keeps a block's first end word", function()

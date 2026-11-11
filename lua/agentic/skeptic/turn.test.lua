@@ -232,6 +232,25 @@ describe("agentic.skeptic.Turn", function()
             )
             assert.same({}, Turn.collect(history, seen).reports)
         end)
+
+        it("takes a launch's reply as a result", function()
+            local history = history_of({
+                prompt("go"),
+                {
+                    type = "session_message",
+                    message_id = "toolu_1:reply",
+                    view = "received",
+                    kind = "result",
+                    launch_reply = true,
+                    text = "Found 3 files.",
+                },
+            })
+
+            assert.same(
+                { "Found 3 files." },
+                Turn.collect(history, fresh()).reports
+            )
+        end)
     end)
 
     describe("seen_before", function()

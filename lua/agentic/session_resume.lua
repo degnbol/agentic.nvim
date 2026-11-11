@@ -387,12 +387,13 @@ end
 --- with the glyph of its kind (`Glyphs.MESSAGE`), split into heading and body
 --- by `SessionResume.message_title`, with the other end's buffer name, else
 --- the sender's name, dimmed under the heading and the body folded, and
---- tagged with its message id. An end is signed with its state's status icon
---- when that is one cell wide, else `Glyphs.RUN_ENDED`, and holds the error
---- text, titled `SessionResume.end_state`.
+--- tagged with its message id. A launch's reply is instead one closed folded
+--- row: the title, over that name and the body. An end is signed with its
+--- state's status icon when that is one cell wide, else `Glyphs.RUN_ENDED`,
+--- and holds the error text, titled `SessionResume.end_state`.
 --- @param writer agentic.ui.MessageWriter
 --- @param row agentic.ui.ChatHistory.SessionMessage|agentic.ui.ChatHistory.SubagentEnd
---- @param mid_turn boolean The writer's turn is still running, so the notice must not finalize it
+--- @param mid_turn boolean The writer's turn is still running, so the row must not finalize it
 --- @param buffer_name fun(session_id: string): string|nil Name of a session's buffer, nil when it has none
 function SessionResume.write_row(writer, row, mid_turn, buffer_name)
     if row.type == "subagent_end" then
@@ -414,11 +415,20 @@ function SessionResume.write_row(writer, row, mid_turn, buffer_name)
     local title, rest = SessionResume.message_title(row.text, row.summary)
     local peer = row.view == "sent" and row.recipient_session_id
         or row.sender_session_id
+    local detail = peer and buffer_name(peer) or row.sender_name
+    local glyph = Glyphs.MESSAGE[row.kind == "message" and row.view or row.kind]
+    if row.launch_reply then
+        writer:write_folded_row(title, vim.list_extend({ detail }, rest), glyph)
+        if not mid_turn then
+            writer:finalize_turn()
+        end
+        return
+    end
     writer:write_notice({
-        glyph = Glyphs.MESSAGE[row.kind == "message" and row.view or row.kind],
+        glyph = glyph,
         glyph_hl = Theme.HL_GROUPS.GLYPH_AGENT,
         title = title,
-        detail = peer and buffer_name(peer) or row.sender_name,
+        detail = detail,
         fold_body = rest,
         mid_turn = mid_turn,
         id = row.message_id,

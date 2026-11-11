@@ -1669,6 +1669,25 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             }))
         end)
 
+        it("reads a launch reply's task id from its message id", function()
+            local client = adapter()
+            --- @param message_id string
+            --- @return agentic.acp.SessionMessage
+            local function message(message_id)
+                return {
+                    sessionUpdate = "session_message",
+                    messageId = message_id,
+                }
+            end
+
+            assert.equal(
+                "toolu_1",
+                client:launch_reply_task(message("toolu_1:reply"))
+            )
+            assert.is_nil(client:launch_reply_task(message("toolu_1")))
+            assert.is_nil(client:launch_reply_task(message("toolu_1:reply:x")))
+        end)
+
         it(
             "names the compaction summary and interrupt marker replay-only",
             function()

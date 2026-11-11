@@ -955,6 +955,89 @@ describe("SessionResume", function()
             assert.is_nil(notices[2].detail)
         end)
 
+        describe("a launch's reply", function()
+            --- Calls `replay_messages` made to `write_folded_row` and
+            --- `write_notice` for `rows`.
+            --- @param rows agentic.ui.ChatHistory.Message[]
+            --- @param buffer_name fun(session_id: string): string|nil
+            --- @return TestSpy folded
+            --- @return TestSpy notice
+            local function replay(rows, buffer_name)
+                local folded = spy.new(function() end)
+                local notice = spy.new(function() end)
+                local writer = {
+                    write_folded_row = folded,
+                    write_notice = notice,
+                    flush_thought_run = function() end,
+                }
+                SessionResume.replay_messages(
+                    writer --[[@as agentic.ui.MessageWriter]],
+                    rows,
+                    buffer_name
+                )
+                return folded, notice
+            end
+
+            --- @param text string
+            --- @return agentic.ui.ChatHistory.SessionMessage
+            local function reply(text)
+                return {
+                    type = "session_message",
+                    message_id = "toolu_1:reply",
+                    kind = "result",
+                    view = "received",
+                    sender_session_id = "c1",
+                    recipient_session_id = "root",
+                    text = text,
+                    launch_reply = true,
+                }
+            end
+
+            it("replays as a folded row under the result glyph", function()
+                local folded, notice = replay(
+                    { reply("Found it.\nIn lib/.") },
+                    function()
+                        return "agentic://1/subagent/finder"
+                    end
+                )
+
+                assert.equal(0, notice.call_count)
+                assert.same({
+                    "Found it.",
+                    { "agentic://1/subagent/finder", "In lib/." },
+                    Glyphs.MESSAGE.result,
+                }, { unpack(folded.calls[1], 2, 4) })
+            end)
+
+            it("ends the turn only between turns", function()
+                for _, mid_turn in ipairs({ true, false }) do
+                    local finalize = spy.new(function() end)
+                    local writer = {
+                        write_folded_row = function() end,
+                        finalize_turn = finalize,
+                    }
+
+                    SessionResume.write_row(
+                        writer --[[@as agentic.ui.MessageWriter]],
+                        reply("Found it."),
+                        mid_turn,
+                        no_buffer
+                    )
+
+                    assert.equal(mid_turn and 0 or 1, finalize.call_count)
+                end
+            end)
+
+            it("leaves a result without the flag a notice", function()
+                local row = reply("Report: done.")
+                row.launch_reply = nil
+                local folded, notice = replay({ row }, no_buffer)
+
+                assert.equal(0, folded.call_count)
+                assert.equal(1, notice.call_count)
+            end)
+        end)
+
         it("titles an empty or fenced message by a placeholder", function()
             local notices = replayed_notices({
                 message_row("message", "sent", " \n"),

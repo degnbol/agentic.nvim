@@ -297,6 +297,22 @@ function ACPClient:subagent_task_id(_update)
     return nil
 end
 
+--- The task id of the launch a session message replies to. Nil by default: a
+--- launch's reply and a subagent's hand-back both go from child to parent,
+--- and only a provider's message ids can tell them apart.
+--- @param _update agentic.acp.SessionMessage
+--- @return string|nil task_id Nil when it is not a launch's reply
+function ACPClient:launch_reply_task(_update)
+    return nil
+end
+
+--- A message id without its `:reply` suffix.
+--- @param message_id string
+--- @return string|nil task_id Nil without the suffix
+function ACPClient.strip_reply_suffix(message_id)
+    return message_id:match("^(.+):reply$")
+end
+
 --- Whether a replayed prompt is one the provider adds itself during a
 --- session/load replay, not one the user sent.
 --- @param _text string
