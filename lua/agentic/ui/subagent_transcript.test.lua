@@ -203,6 +203,20 @@ describe("agentic.ui.SubagentTranscript", function()
         assert.equal(1, calls.on_wipeout)
     end)
 
+    it("can be destroyed from its wipeout", function()
+        local transcript = new_transcript("aa11bb22cc33dd44")
+        vim.api.nvim_create_autocmd("BufWipeout", {
+            buffer = transcript.bufnr,
+            callback = function()
+                transcript:destroy()
+            end,
+        })
+        assert.has_no_errors(function()
+            vim.cmd.bwipeout({ args = { transcript.bufnr }, bang = true })
+        end)
+        assert.equal("", vim.v.errmsg)
+    end)
+
     it("sets 'modified' only while loaded", function()
         local transcript = new_transcript("aa11bb22cc33dd44")
         transcript:set_modified(true)

@@ -1,6 +1,6 @@
 local assert = require("tests.helpers.assert")
 
-local Gate = require("agentic.skeptic.gate")
+local ReportingCriteria = require("agentic.skeptic.reporting_criteria")
 
 --- @param word agentic.skeptic.VerdictWord
 --- @param evidence string|nil
@@ -9,12 +9,12 @@ local function v(word, evidence)
     return { verdict = word, evidence = evidence or "" }
 end
 
-describe("agentic.skeptic.Gate", function()
+describe("agentic.skeptic.ReportingCriteria", function()
     local claims = { "c1", "c2", "c3" }
 
     describe("agree", function()
         it("forwards a claim every skeptic refuted", function()
-            local findings = Gate.findings(claims, {
+            local findings = ReportingCriteria.findings(claims, {
                 { v("refuted", "a:1"), v("refuted", "x"), v("supported") },
                 { v("refuted", "b:2"), v("unsure"), v("refuted", "y") },
             }, "agree")
@@ -26,20 +26,23 @@ describe("agentic.skeptic.Gate", function()
         end)
 
         it("forwards nothing when a skeptic gave no verdicts", function()
-            local findings =
-                Gate.findings(claims, { { v("refuted", "a") }, false }, "agree")
+            local findings = ReportingCriteria.findings(
+                claims,
+                { { v("refuted", "a") }, false },
+                "agree"
+            )
 
             assert.same({}, findings)
         end)
 
         it("forwards nothing without skeptics", function()
-            assert.same({}, Gate.findings(claims, {}, "agree"))
+            assert.same({}, ReportingCriteria.findings(claims, {}, "agree"))
         end)
     end)
 
     describe("either", function()
         it("forwards a claim any skeptic refuted with evidence", function()
-            local findings = Gate.findings(claims, {
+            local findings = ReportingCriteria.findings(claims, {
                 { v("refuted"), v("refuted", "x"), v("supported") },
                 false,
             }, "either")

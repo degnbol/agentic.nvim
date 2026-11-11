@@ -463,6 +463,61 @@ describe("agentic.BackgroundSession", function()
             assert.same({ "bg-1" }, client.closes)
         end)
 
+        --- A session whose `on_destroy` calls are recorded.
+        --- @return agentic.BackgroundSession session
+        --- @return { err: string|nil, ready: boolean }[] ends
+        local function recorded_session()
+            local ends = {}
+            local session = new_session({
+                on_destroy = function(err, ready)
+                    table.insert(ends, { err = err, ready = ready })
+                end,
+            }) --[[@as agentic.BackgroundSession]]
+            return session, ends
+        end
+
+        it("calls on_destroy once, after the pending prompts", function()
+            local events = {}
+            local session = new_session({
+                on_destroy = function()
+                    table.insert(events, "destroyed")
+                end,
+            }) --[[@as agentic.BackgroundSession]]
+            session:prompt("hi", function(_, err)
+                table.insert(events, err)
+            end)
+            session:destroy()
+            session:destroy()
+            assert.same({ "closed", "destroyed" }, events)
+        end)
+
+        it("gives on_destroy no error for destroy()", function()
+            local session, ends = recorded_session()
+            create()
+            session:destroy()
+            assert.same({ { ready = true } }, ends)
+        end)
+
+        it("gives on_destroy no error for a wiped transcript", function()
+            local session, ends = recorded_session()
+            create()
+            vim.api.nvim_buf_delete(session.bufnr, { force = true })
+            assert.same({ { ready = true } }, ends)
+        end)
+
+        it("gives on_destroy the error of a failed start", function()
+            local _, ends = recorded_session()
+            timers[1].fn()
+            assert.same({ { err = "timeout", ready = false } }, ends)
+        end)
+
+        it("gives on_destroy an error on disconnect", function()
+            local _, ends = recorded_session()
+            create()
+            client.handlers.on_disconnect()
+            assert.same({ { err = "disconnected", ready = true } }, ends)
+        end)
+
         it("answers a pending prompt with closed on disconnect", function()
             local session = new_session() --[[@as agentic.BackgroundSession]]
             create()

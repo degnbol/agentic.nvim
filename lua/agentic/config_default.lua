@@ -592,7 +592,7 @@ local ConfigDefault = {
     --- `text_model.url`. `:h agentic-skeptic`
     --- @class agentic.UserConfig.Skeptic
     --- @field enabled boolean On in every new session; `/skeptic on|off` sets one session
-    --- @field gate "agree"|"either" Forward a claim when every skeptic refutes it, or when any skeptic refutes it with evidence
+    --- @field reporting_criteria "agree"|"either" Forward a claim when every skeptic refutes it, or when any skeptic refutes it with evidence
     --- @field extractor { model: string } The `text_model` model that extracts claims
     --- @field skeptics agentic.UserConfig.SkepticModel[]
     --- @field turn_timeout_ms integer Per skeptic turn, and for a skeptic session to become ready
@@ -600,7 +600,7 @@ local ConfigDefault = {
     --- @field prompts table<string, string> Overrides of the prompt texts, keyed `extract`, `verify`, `deliver` or `refusal`
     skeptic = {
         enabled = false,
-        gate = "agree",
+        reporting_criteria = "agree",
         extractor = { model = "deepseek-v4.1-flash" },
         skeptics = {
             { provider = "opencode-acp", model = "litellm/glm-5.3" },

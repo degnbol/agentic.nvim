@@ -5,9 +5,9 @@
 local BackgroundSession = require("agentic.background_session")
 local Claims = require("agentic.skeptic.claims")
 local Config = require("agentic.config")
-local Gate = require("agentic.skeptic.gate")
 local Logger = require("agentic.utils.logger")
 local Prompts = require("agentic.skeptic.prompts")
+local ReportingCriteria = require("agentic.skeptic.reporting_criteria")
 local SessionManager = require("agentic.session_manager")
 local SessionRegistry = require("agentic.session_registry")
 local TextModel = require("agentic.utils.text_model")
@@ -36,6 +36,7 @@ end
 --- One skeptic agent.
 --- @class agentic.skeptic.Agent
 --- @field label string
+--- @field spec agentic.UserConfig.SkepticModel
 --- @field session agentic.BackgroundSession
 
 --- The skeptic of one main session, `session.extensions.skeptic`.
@@ -98,32 +99,81 @@ function Skeptic:enable()
         )
         return
     end
+    self._enabled = true
+    for _, spec in ipairs(Config.skeptic.skeptics) do
+        self:_start(spec)
+    end
+    self:_off_without_agents()
+end
+
+--- Turn the skeptic off, with a notify, when it has no agent.
+function Skeptic:_off_without_agents()
+    if #self._agents == 0 then
+        Logger.notify("Skeptic off: no skeptic agent", vim.log.levels.WARN)
+        self:disable()
+    end
+end
+
+--- Start a skeptic agent for `spec` and add it to the agents. Nothing is
+--- added, with a notify, when its session cannot be made.
+--- @param spec agentic.UserConfig.SkepticModel
+function Skeptic:_start(spec)
     local session = self._session
     local cfg = Config.skeptic
-    for _, spec in ipairs(cfg.skeptics) do
-        local label = "skeptic " .. spec.model:match("[^/]+$")
-        local background = BackgroundSession:new({
-            provider = spec.provider,
-            model = spec.model,
-            label = label,
-            cwd = session:cwd(),
-            widget = session.widget,
-            get_config_dir = function()
-                return session.agent:claude_config_dir()
-            end,
-            turn_timeout_ms = cfg.turn_timeout_ms,
-            max_refusals = cfg.max_refusals,
-            refusal_text = Prompts.text("refusal"),
-        })
-        if background then
-            table.insert(self._agents, { label = label, session = background })
+    local label = "skeptic " .. spec.model:match("[^/]+$")
+    -- Set before `on_destroy` can run: `new` destroys the session only
+    -- asynchronously.
+    --- @type agentic.skeptic.Agent
+    local agent
+    local background = BackgroundSession:new({
+        provider = spec.provider,
+        model = spec.model,
+        label = label,
+        cwd = session:cwd(),
+        widget = session.widget,
+        get_config_dir = function()
+            return session.agent:claude_config_dir()
+        end,
+        turn_timeout_ms = cfg.turn_timeout_ms,
+        max_refusals = cfg.max_refusals,
+        refusal_text = Prompts.text("refusal"),
+        on_destroy = function(err, ready)
+            self:_on_agent_destroyed(agent, err, ready)
+        end,
+    })
+    if background then
+        agent = { label = label, spec = spec, session = background }
+        table.insert(self._agents, agent)
+    end
+end
+
+--- On the next tick, remove `agent` from the agents. With `err`, replace it
+--- with a new agent from its spec when it was `ready`, else notify `err` as
+--- a failed start. Then turn the skeptic off, with a notify, when no agent
+--- is left. A no-op for an agent already removed.
+--- @param agent agentic.skeptic.Agent
+--- @param err string|nil See `agentic.BackgroundSession.Opts.on_destroy`
+--- @param ready boolean
+function Skeptic:_on_agent_destroyed(agent, err, ready)
+    vim.schedule(function()
+        local i = vim.iter(ipairs(self._agents)):find(function(_, a)
+            return a == agent
+        end)
+        -- `disable` removes the agents before it destroys them.
+        if not i then
+            return
         end
-    end
-    if #self._agents == 0 then
-        Logger.notify("Skeptic: no skeptic agent started", vim.log.levels.WARN)
-        return
-    end
-    self._enabled = true
+        table.remove(self._agents, i)
+        if err and ready then
+            self:_start(agent.spec)
+        elseif err then
+            Logger.notify(
+                ("Skeptic %q failed to start: %s"):format(agent.label, err),
+                vim.log.levels.WARN
+            )
+        end
+        self:_off_without_agents()
+    end)
 end
 
 --- Stop the skeptic agents and drop the running check, held deliveries and
@@ -141,13 +191,7 @@ function Skeptic:disable()
     end
 end
 
---- Start the skeptic agents again.
-function Skeptic:restart()
-    self:disable()
-    self:enable()
-end
-
---- Run `/skeptic`: `on`, `off` or `restart`; no argument reports the state.
+--- Run `/skeptic`: `on` or `off`, or report the state without an argument.
 --- @param arg string|nil
 function Skeptic:command(arg)
     if arg == nil then
@@ -159,10 +203,8 @@ function Skeptic:command(arg)
         self:enable()
     elseif arg == "off" then
         self:disable()
-    elseif arg == "restart" then
-        self:restart()
     else
-        Logger.notify("Usage: /skeptic [on|off|restart]", vim.log.levels.WARN)
+        Logger.notify("Usage: /skeptic [on|off]", vim.log.levels.WARN)
     end
 end
 
@@ -188,7 +230,8 @@ function Skeptic:_on_session_changed(continued)
     self._held = {}
     self._carried = nil
     if self._enabled then
-        self:restart()
+        self:disable()
+        self:enable()
     else
         self:_drop_check()
     end
@@ -275,8 +318,11 @@ function Skeptic:_check(turn)
                     end
                 end
             end
-            local findings =
-                Gate.findings(claims, per_skeptic, Config.skeptic.gate)
+            local findings = ReportingCriteria.findings(
+                claims,
+                per_skeptic,
+                Config.skeptic.reporting_criteria
+            )
             if #findings > 0 then
                 self:_deliver(deliver_text(findings))
             end
@@ -357,7 +403,7 @@ M.Skeptic = Skeptic
 function M.setup()
     SessionManager.register_local_command("skeptic", {
         takes_arg = true,
-        description = "Background skeptics: /skeptic [on|off|restart]; no argument reports the state",
+        description = "Background skeptics: /skeptic [on|off]; no argument reports the state",
         run = function(session, arg)
             session.extensions.skeptic:command(arg)
         end,

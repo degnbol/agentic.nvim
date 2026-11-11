@@ -178,11 +178,14 @@ function SubagentTranscript:unload()
     vim.cmd.bunload({ args = { tostring(self.bufnr) }, bang = true })
 end
 
---- Wipe the buffer. Its autocmds no longer reach the handlers.
+--- Wipe the buffer, unless it is already destroyed or being wiped. Its
+--- autocmds no longer reach the handlers.
 function SubagentTranscript:destroy()
+    local was_destroyed = self._destroyed
     self._destroyed = true
     self.view.status_indicator:stop()
-    if vim.api.nvim_buf_is_valid(self.bufnr) then
+    -- A buffer stays valid during its BufWipeout, and deleting it then is E937.
+    if not was_destroyed and vim.api.nvim_buf_is_valid(self.bufnr) then
         vim.api.nvim_buf_delete(self.bufnr, { force = true })
     end
 end

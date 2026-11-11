@@ -753,7 +753,7 @@ and appear in slash-command completion.
                        |agentic-config-acp_providers|) or the only method,
                        else asks. A login already running is stopped.
                        Takes the place of a provider's own `/login`.
-    `/skeptic [on|off|restart]`
+    `/skeptic [on|off]`
                        Background claim checks. See |agentic-skeptic|.
 
 A command line dispatches as its own prompt; see |agentic-queue|.
@@ -1260,13 +1260,15 @@ a call that stops a background job, it jumps to that job's block.
 9.9 SKEPTIC                                                  *agentic-skeptic*
 
 After each turn that ends normally, skeptic agents on other models check the
-claims the main agent made in it, read-only. Claims the skeptics refute,
-as `gate` sets, go to the main agent as one prompt marked with the skeptic's
-sign. A skeptic's prompt is not checked again. A stopped or failed turn is
-checked with the next turn that ends normally.
+claims the main agent made in it, read-only. Claims the skeptics refute, as
+`reporting_criteria` sets, go to the main agent as one prompt marked with the
+skeptic's sign. A skeptic's prompt is not checked again. A stopped or failed
+turn is checked with the next turn that ends normally.
 
-Each skeptic has a transcript, opened like a subagent's
-(|agentic-subagents|).
+Each skeptic has a transcript, opened like a subagent's (|agentic-subagents|).
+A skeptic agent whose provider disconnects is started again; one that fails
+to start is dropped, with a notify. With no skeptic agent left, the skeptic
+turns off.
 
 Requires:
 - `text_model.url`, for the model that extracts the claims.
@@ -1274,24 +1276,23 @@ Requires:
 
     `/skeptic`           Report whether the skeptic is on.
     `/skeptic on|off`    Turn it on or off for the session.
-    `/skeptic restart`   Start the skeptic agents again.
 
 `skeptic` table:
-    `enabled`          boolean (default: false)
+    `enabled`             boolean (default: false)
         On in every new session.
-    `gate`             "agree" | "either" (default: "agree")
+    `reporting_criteria`  "agree" | "either" (default: "agree")
         "agree" forwards a claim every skeptic refuted, "either" one any
         skeptic refuted with evidence.
-    `extractor`        table (default: `{ model = "deepseek-v4.1-flash" }`)
+    `extractor`           table (default: `{ model = "deepseek-v4.1-flash" }`)
         `model` is the `text_model` model that extracts the claims.
-    `skeptics`         table[]
+    `skeptics`            table[]
         One `{ provider = "opencode-acp", model = "..." }` per skeptic.
         Default: `litellm/glm-5.3` and `litellm/kimi-k3`.
-    `turn_timeout_ms`  integer (default: 300000)
+    `turn_timeout_ms`     integer (default: 300000)
         Per skeptic turn, and for a skeptic to start.
-    `max_refusals`     integer (default: 3)
+    `max_refusals`        integer (default: 3)
         Refusal prompts per check before a skeptic gives up.
-    `prompts`          table (default: `{}`)
+    `prompts`             table (default: `{}`)
         Texts that replace the defaults in `lua/agentic/skeptic/prompts.lua`,
         keyed `extract`, `verify`, `deliver` or `refusal`.
 

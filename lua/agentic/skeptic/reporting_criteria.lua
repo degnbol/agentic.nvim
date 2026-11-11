@@ -1,17 +1,17 @@
---- Which claims the skeptics' verdicts refute, by a gate rule.
+--- Which claims the skeptics' verdicts refute, by the reporting criteria.
 
 --- @class agentic.skeptic.Finding
 --- @field claim string
 --- @field evidence string[] The non-empty evidence of each skeptic that refuted it
 
---- @class agentic.skeptic.Gate
+--- @class agentic.skeptic.ReportingCriteria
 local M = {}
 
---- Whether the verdicts on one claim meet `gate`.
+--- Whether the verdicts on one claim meet `criteria`.
 --- @param verdicts (agentic.skeptic.Verdict|false)[] One per skeptic; false for a skeptic with no verdict on it
---- @param gate "agree"|"either"
+--- @param criteria "agree"|"either"
 --- @return boolean
-local function passes(verdicts, gate)
+local function passes(verdicts, criteria)
     local n_refuted, n_with_evidence = 0, 0
     for _, verdict in ipairs(verdicts) do
         if verdict and verdict.verdict == "refuted" then
@@ -21,26 +21,26 @@ local function passes(verdicts, gate)
             end
         end
     end
-    if gate == "agree" then
+    if criteria == "agree" then
         return n_refuted > 0 and n_refuted == #verdicts
     end
     return n_with_evidence > 0
 end
 
---- The claims whose verdicts meet `gate`: `"agree"` when every skeptic
+--- The claims whose verdicts meet `criteria`: `"agree"` when every skeptic
 --- refuted the claim, `"either"` when any skeptic refuted it with evidence.
 --- @param claims string[] Numbered by position
 --- @param per_skeptic (table<integer, agentic.skeptic.Verdict>|false)[] Each skeptic's verdicts by claim number; false for a skeptic that gave none
---- @param gate "agree"|"either"
+--- @param criteria "agree"|"either"
 --- @return agentic.skeptic.Finding[]
-function M.findings(claims, per_skeptic, gate)
+function M.findings(claims, per_skeptic, criteria)
     --- @type agentic.skeptic.Finding[]
     local findings = {}
     for i, claim in ipairs(claims) do
         local verdicts = vim.tbl_map(function(skeptic_verdicts)
             return skeptic_verdicts and skeptic_verdicts[i] or false
         end, per_skeptic)
-        if passes(verdicts, gate) then
+        if passes(verdicts, criteria) then
             local evidence = {}
             for _, verdict in ipairs(verdicts) do
                 if

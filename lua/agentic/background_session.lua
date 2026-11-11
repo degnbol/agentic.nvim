@@ -53,6 +53,7 @@ end
 --- @field turn_timeout_ms integer Per turn, and for the session to become ready
 --- @field max_refusals integer Refusal prompts per `prompt` call before it gives up
 --- @field refusal_text string `string.format` pattern; `%s` receives the reason lines
+--- @field on_destroy? fun(err: string|nil, ready: boolean) Called once, after the destroy. `err` is the error of a failed start, "disconnected" when the provider process went away, else nil. `ready` is whether the session had become ready.
 
 --- `err` is a fixed word, a stop reason word (`CanonicalToolCall.stop_reason_word`) or an error message.
 --- @alias agentic.BackgroundSession.OnDone fun(text: string|nil, err: "timeout"|"refused"|"closed"|"interrupted"|string|nil)
@@ -209,7 +210,7 @@ function BackgroundSession:_fail_start(err)
     for _, job in ipairs(jobs) do
         job.on_done(nil, err)
     end
-    self:destroy()
+    self:_destroy(err)
 end
 
 function BackgroundSession:_open_transcript()
@@ -317,7 +318,7 @@ function BackgroundSession:_handlers()
             end
         end,
         on_disconnect = function()
-            self:destroy()
+            self:_destroy("disconnected")
         end,
     }
 end
@@ -636,6 +637,12 @@ end
 --- Close the session and wipe its transcript. Every pending `prompt` call
 --- gets "closed".
 function BackgroundSession:destroy()
+    self:_destroy(nil)
+end
+
+--- `destroy`, passing `err` to `on_destroy`.
+--- @param err string|nil
+function BackgroundSession:_destroy(err)
     if self._destroyed then
         return
     end
@@ -654,6 +661,9 @@ function BackgroundSession:destroy()
     end
     if self._transcript then
         self._transcript:destroy()
+    end
+    if self._opts.on_destroy then
+        self._opts.on_destroy(err, self._ready)
     end
 end
 

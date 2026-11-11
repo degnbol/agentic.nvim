@@ -6,6 +6,7 @@ local BackgroundSession = require("agentic.background_session")
 local ChatHistory = require("agentic.ui.chat_history")
 local Claims = require("agentic.skeptic.claims")
 local Config = require("agentic.config")
+local deferred_helper = require("tests.helpers.deferred")
 local Listeners = require("agentic.utils.listeners")
 local Logger = require("agentic.utils.logger")
 local MiniTest = require("mini.test")
@@ -134,6 +135,13 @@ describe("agentic.skeptic.Skeptic", function()
                 for _, p in ipairs(self.prompts) do
                     p.on_done(nil, "closed")
                 end
+                opts.on_destroy(nil, true)
+            end
+            --- End the session by itself with `err`, as one that was
+            --- `ready` or not.
+            function agent:fail(err, ready)
+                self.destroyed = true
+                opts.on_destroy(err, ready)
             end
             table.insert(agents, agent)
             return agent
@@ -245,7 +253,7 @@ describe("agentic.skeptic.Skeptic", function()
         assert.is_nil(text:find("y is 1", 1, true))
     end)
 
-    it("sends nothing when no claim passes the gate", function()
+    it("sends nothing when no claim meets the reporting criteria", function()
         local _, session = enabled_skeptic()
         end_turn(session, add_prompt(session, "go"))
         extracts[1].on_done({ "a" }, nil)
@@ -434,6 +442,104 @@ describe("agentic.skeptic.Skeptic", function()
         assert.equal(0, #extracts)
     end)
 
+    describe("an agent that stops", function()
+        --- @type tests.helpers.Deferred
+        local deferred
+
+        before_each(function()
+            deferred = deferred_helper.capture()
+        end)
+
+        after_each(function()
+            deferred.revert()
+        end)
+
+        it("is started again with the same spec", function()
+            local skeptic = enabled_skeptic()
+            local stopped = agents[1]
+
+            stopped:fail("disconnected", true)
+            deferred.drain()
+
+            assert.equal(3, #agents)
+            assert.equal(stopped.opts.model, agents[3].opts.model)
+            assert.same(
+                { agents[2], agents[3] },
+                vim.tbl_map(function(agent)
+                    return agent.session
+                end, skeptic._agents)
+            )
+        end)
+
+        it("is dropped when closed, as by a wiped transcript", function()
+            local skeptic = enabled_skeptic()
+
+            agents[1]:destroy()
+            deferred.drain()
+
+            assert.equal(2, #agents)
+            assert.same(
+                { agents[2] },
+                vim.tbl_map(function(agent)
+                    return agent.session
+                end, skeptic._agents)
+            )
+            assert.is_true(skeptic._enabled)
+        end)
+
+        it("is not started again after off", function()
+            local skeptic = enabled_skeptic()
+
+            skeptic:disable()
+            deferred.drain()
+
+            assert.equal(2, #agents)
+            assert.equal(0, #skeptic._agents)
+        end)
+
+        it("is dropped, with a notify, when it failed to start", function()
+            local skeptic = enabled_skeptic()
+
+            agents[1]:fail("unknown model", false)
+            deferred.drain()
+
+            assert.equal(2, #agents)
+            assert.same(
+                { agents[2] },
+                vim.tbl_map(function(agent)
+                    return agent.session
+                end, skeptic._agents)
+            )
+            assert.truthy(
+                notify_stub.calls[1][1]:find("unknown model", 1, true)
+            )
+            assert.is_true(skeptic._enabled)
+        end)
+
+        it("turns the skeptic off when every agent failed to start", function()
+            local skeptic = enabled_skeptic()
+
+            agents[1]:fail("timeout", false)
+            agents[2]:fail("timeout", false)
+            deferred.drain()
+
+            assert.is_false(skeptic._enabled)
+            assert.equal(3, notify_stub.call_count)
+        end)
+
+        it("turns the skeptic off when none can start again", function()
+            local skeptic = enabled_skeptic()
+            background_stub:returns(nil)
+
+            agents[1]:fail("disconnected", true)
+            agents[2]:fail("disconnected", true)
+            deferred.drain()
+
+            assert.is_false(skeptic._enabled)
+            assert.equal(1, notify_stub.call_count)
+        end)
+    end)
+
     describe("session_changed", function()
         --- A skeptic whose session checked claim `a`, then changed to a
         --- history of an old exchange and a new prompt.
@@ -520,17 +626,21 @@ describe("agentic.skeptic.Skeptic", function()
     end)
 
     describe("command", function()
-        it("turns on, off and restarts", function()
+        it("turns on and off", function()
             local skeptic = Skeptic:new(fake_session())
 
             skeptic:command("on")
             assert.is_true(skeptic._enabled)
-            skeptic:command("restart")
-            assert.is_true(skeptic._enabled)
-            assert.is_true(agents[1].destroyed)
-            assert.equal(4, #agents)
             skeptic:command("off")
             assert.is_false(skeptic._enabled)
+        end)
+
+        it("gives the usage for another argument", function()
+            local skeptic = Skeptic:new(fake_session())
+
+            skeptic:command("restart")
+
+            assert.equal("Usage: /skeptic [on|off]", notify_stub.calls[1][1])
         end)
 
         it("reports the state without an argument", function()
