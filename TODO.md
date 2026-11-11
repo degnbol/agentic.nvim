@@ -13,9 +13,6 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 **Session log:**
 1. P3 [`PERF-append-session-log.md`](notes/PERF-append-session-log.md)
 
-**Session gate state**
-1. P2 [`REFACTOR-session-gate-state.md`](notes/REFACTOR-session-gate-state.md)
-
 **Chat writer**
 1. P3 [`REFACTOR-prose-run-rows.md`](notes/REFACTOR-prose-run-rows.md)
 2. P3 [`REFACTOR-tool-block-rows.md`](notes/REFACTOR-tool-block-rows.md)
@@ -31,13 +28,34 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 1. P2 [`FEAT-auto-mode-integration.md`](notes/FEAT-auto-mode-integration.md)
 2. P1 [`FIX-auto-mode-fix.md`](notes/FIX-auto-mode-fix.md), which extends it
 
+**Shell walk** (1 and 2 in either order; 3 needs both)
+1. P3 [`REFACTOR-leaf-classification.md`](notes/REFACTOR-leaf-classification.md)
+2. P3 [`REFACTOR-redirect-effect.md`](notes/REFACTOR-redirect-effect.md)
+3. P3 [`REFACTOR-one-shell-walk.md`](notes/REFACTOR-one-shell-walk.md)
+
+**Subagent buffers**
+1. P3 [`REFACTOR-subagent-shared-keys.md`](notes/REFACTOR-subagent-shared-keys.md)
+2. P3 [`FEAT-per-agent-file-activity.md`](notes/FEAT-per-agent-file-activity.md):
+   binds its key in the shared-keys method
+
 **No ordering:**
 - P1 [`FIX-gemini-permission-handler.md`](notes/FIX-gemini-permission-handler.md)
-- P3 [`REFACTOR-leaf-classification.md`](notes/REFACTOR-leaf-classification.md)
 - P3 [`REFACTOR-grant-target.md`](notes/REFACTOR-grant-target.md)
-- P3 [`REFACTOR-redirect-effect.md`](notes/REFACTOR-redirect-effect.md)
+- P3 [`REFACTOR-substitution-word.md`](notes/REFACTOR-substitution-word.md)
+- P3 [`REFACTOR-redirect-expansions.md`](notes/REFACTOR-redirect-expansions.md)
 - P3 [`REFACTOR-acp-tool-call-builders.md`](notes/REFACTOR-acp-tool-call-builders.md)
-- P3 [`REFACTOR-view-field-apply.md`](notes/REFACTOR-view-field-apply.md)
+- P3 [`REFACTOR-option-selector.md`](notes/REFACTOR-option-selector.md)
+  (shares code with `FIX-model-selector-order.md`; either first)
+- P3 [`REFACTOR-show-session-opts.md`](notes/REFACTOR-show-session-opts.md)
+- P3 [`REFACTOR-file-scan-result.md`](notes/REFACTOR-file-scan-result.md)
+- P3 [`REFACTOR-slash-command-items.md`](notes/REFACTOR-slash-command-items.md)
+- P3 [`REFACTOR-agent-chunk-filter.md`](notes/REFACTOR-agent-chunk-filter.md)
+- P3 [`REFACTOR-chat-replay.md`](notes/REFACTOR-chat-replay.md)
+- P3 [`REFACTOR-tool-call-record-lookup.md`](notes/REFACTOR-tool-call-record-lookup.md)
+  (shares code with `REFACTOR-agent-scoped-lookups.md`; either first)
+- P3 [`REFACTOR-session-list-order.md`](notes/REFACTOR-session-list-order.md)
+- P3 [`REFACTOR-preview-message-sections.md`](notes/REFACTOR-preview-message-sections.md)
+- P3 [`REFACTOR-ansi-parse-copies.md`](notes/REFACTOR-ansi-parse-copies.md)
 - P3 [`REFACTOR-agent-config-lookup.md`](notes/REFACTOR-agent-config-lookup.md)
 - P3 [`REFACTOR-agent-scoped-lookups.md`](notes/REFACTOR-agent-scoped-lookups.md)
 - P3 [`REFACTOR-return-prompt.md`](notes/REFACTOR-return-prompt.md)
@@ -219,6 +237,11 @@ monthly spend limit:
 
 On the hook path the overflow returns undecided, so the auto-mode classifier
 decides: [`notes/bug-matcher-depth-overflow.md`](notes/bug-matcher-depth-overflow.md).
+
+### A background or piped write lists its grant cause twice
+
+`echo a > /tmp/f & echo b` gives two `grant /tmp/f` causes:
+[`notes/bug-duplicate-unordered-effect.md`](notes/bug-duplicate-unordered-effect.md).
 
 ### `ExitWorktree` renders as an unrecognised tool
 
@@ -652,6 +675,12 @@ so a read-only tmux entry is unsound until `ask` can catch them.
 
 Still open: a spinner mode for a background job, since it currently shows as if
 the agent stopped its turn (which I suppose it did, so we also don't want to lie.)
+
+### context polling
+
+Maybe have a way for an agent to check how much context it's used so it can 
+know not to start new work after 200k but aim to wrap up and write handover, 
+plans, etc. instead.
 
 ## Auto-allow non-zsh
 
