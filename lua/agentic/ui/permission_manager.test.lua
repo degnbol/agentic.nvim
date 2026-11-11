@@ -719,6 +719,19 @@ describe("agentic.ui.PermissionManager", function()
             )
         end)
 
+        it("keys a subagent call on its whole input", function()
+            --- @param prompt string
+            --- @return string|nil
+            local function key(prompt)
+                return pm:_build_cache_key({
+                    toolCallId = "tc-think",
+                    kind = "think",
+                    rawInput = { agent = "general", prompt = prompt },
+                })
+            end
+            assert.are_not.equal(key("a"), key("b"))
+        end)
+
         describe("a command filled in from the tracker", function()
             --- A permission request for tool call `id` on wire kind `kind`.
             --- @param id string

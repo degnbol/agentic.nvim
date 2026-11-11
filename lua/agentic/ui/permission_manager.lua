@@ -149,7 +149,9 @@ local FILE_SCOPED_KINDS = {
 
 --- Per-kind identity fields used to build allow_always/reject_always cache
 --- keys. Listed in priority order; the first non-empty value is taken
---- (handles cross-adapter casing like `file_path` vs `filePath`).
+--- (handles cross-adapter casing like `file_path` vs `filePath`). Keyed on
+--- the permission request's own kind, an ACP protocol kind: adapter-minted
+--- kinds such as `SubAgent` never reach the lookup.
 ---
 --- Kinds absent from this table fall back to the hybrid path in
 --- `_build_cache_key`: cache by the whole `rawInput` minus
@@ -164,10 +166,6 @@ local CACHE_KEY_FIELDS = {
     move = { "file_path", "filePath", "path" },
     execute = { "command" },
     fetch = { "url" },
-    WebSearch = { "query" },
-    SlashCommand = { "command", "name" },
-    SubAgent = { "subagent_type" },
-    Skill = { "skill" },
     switch_mode = { "mode" },
 }
 
