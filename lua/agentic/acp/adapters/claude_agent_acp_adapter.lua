@@ -735,11 +735,7 @@ function ClaudeAgentACPAdapter:__apply_list_agents_result(message)
     message.body = rest
 end
 
---- Enrich a tool-call message from claude-agent-acp's rawInput fields (file
---- path, read range, fetch/subagent/skill/slash-command remaps, search
---- pattern, execute description, and the field a minted kind heads with).
---- Shared by the initial `tool_call` and follow-up `tool_call_update` paths —
---- see `__build_tool_call_message` for why the tool_call path needs it too.
+--- Enrich a tool-call message from claude-agent-acp's rawInput fields.
 --- The edit diff is deliberately not built here; see `__apply_edit_diff`.
 --- @protected
 --- @param message agentic.ui.MessageWriter.ToolCallBase

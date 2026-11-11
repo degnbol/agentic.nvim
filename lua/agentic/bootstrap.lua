@@ -145,7 +145,6 @@ end
 
 --- Stop all agent processes on SIGTERM and SIGINT.
 local function trap_signals()
-    -- Setup signal handlers for graceful shutdown
     local sigterm_handler = vim.uv.new_signal()
     if sigterm_handler then
         vim.uv.signal_start(sigterm_handler, "sigterm", function(_sigName)

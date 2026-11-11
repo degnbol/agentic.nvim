@@ -60,7 +60,6 @@ function M.create_file_content(path)
 
     local mime = FileSystem.IMAGE_MIMES[ext]
 
-    -- It's an image file
     if mime then
         --- @type agentic.acp.ImageContent
         local content = {
@@ -75,7 +74,6 @@ function M.create_file_content(path)
 
     mime = FileSystem.AUDIO_MIMES[ext]
 
-    -- It's an audio file
     if mime then
         --- @type agentic.acp.AudioContent
         local content = {

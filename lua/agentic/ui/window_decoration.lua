@@ -121,19 +121,16 @@ function WindowDecoration.set_header_fact(bufnr, fact, value)
 end
 
 --- Resolves the final header text applying user customization
---- Returns the header text and an error message if user function failed
 --- @param dynamic_header agentic.ui.ChatWidget.HeaderParts Runtime header parts
 --- @param window_name string Window name for Config.headers lookup and error messages
 --- @return string|nil header_text The resolved header text or nil for empty
 --- @return string|nil error_message Error message if user function failed
 local function resolve_header_text(dynamic_header, window_name)
     local user_header = Config.headers and Config.headers[window_name]
-    -- No user customization: use default parts
     if user_header == nil then
         return concat_header_parts(dynamic_header), nil
     end
 
-    -- User function: call it and validate return
     if type(user_header) == "function" then
         local ok, result = pcall(user_header, dynamic_header)
         if not ok then
@@ -158,13 +155,11 @@ local function resolve_header_text(dynamic_header, window_name)
         return result, nil
     end
 
-    -- User table: merge with dynamic header
     if type(user_header) == "table" then
         local merged = vim.tbl_extend("force", dynamic_header, user_header) --[[@as agentic.ui.ChatWidget.HeaderParts]]
         return concat_header_parts(merged), nil
     end
 
-    -- Invalid type: warn and use default
     return concat_header_parts(dynamic_header),
         string.format(
             "Header for '%s' must be function|table|nil, got %s",

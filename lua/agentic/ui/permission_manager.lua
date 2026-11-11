@@ -10,8 +10,6 @@ local PermissionRules = require("agentic.utils.permission_rules")
 local GrantSafety = require("agentic.utils.grant_safety")
 
 --- Highlights washing the non-known-safe parts of an execute permission prompt.
---- Module-level (shared id across tabs) but cleared per-buffer, so each tab's
---- manager only ever touches its own chat buffer.
 local NS_PERMISSION_HIGHLIGHT =
     vim.api.nvim_create_namespace("agentic_permission_highlight")
 
@@ -196,7 +194,7 @@ end
 ---
 --- Two paths:
 --- 1. Known kinds (`CACHE_KEY_FIELDS`): key on the kind's identity fields
----    (file_path / command / url / query / ...). Common case.
+---    (file_path / command / url / mode). Common case.
 --- 2. Unknown kinds: hybrid — key on the whole `rawInput` minus
 ---    `CACHE_NOISE_FIELDS`. Lets new / provider-specific kinds (e.g.
 ---    `"other"`) still scope per call without per-tool maintenance.
@@ -636,11 +634,10 @@ function PermissionManager:_bash_effects_clear(effects)
     return true
 end
 
---- Build a `KindArgs` for one path: stat, tracked-state, hunks, edit range,
---- Claude-owned ranges, and the tmp and directory flags. write/create/edit
---- follow a symlink, so their file state is read from `real`. delete and
---- move (source and destination) act on the link itself, so theirs is read
---- from `orig`. Git state comes from the repo holding that file.
+--- Build a `KindArgs` for one path. write/create/edit follow a symlink, so
+--- their file state is read from `real`. delete and move (source and
+--- destination) act on the link itself, so theirs is read from `orig`. Git
+--- state comes from the repo holding that file.
 --- @param kind string Normalised tool kind acting on the path
 --- @param orig string Absolute, normalised path
 --- @param real string Resolved `orig`, symlinked parents included
@@ -930,10 +927,9 @@ function PermissionManager:decide(kind, tool_call, diff, cwd)
     return verdict
 end
 
---- Record the pre-edit position of an Edit tool call. Called from
---- SessionManager on the initial `tool_call` notification, before the SDK
---- has applied the edit to disk. `start_line` is the 1-based line where
---- `old_string` begins — the same line where `new_string` will land.
+--- Record the pre-edit position of an Edit tool call, before the edit
+--- reaches disk. `start_line` is the line where `old_string` begins — the
+--- same line where `new_string` will land.
 --- @param tool_call_id string
 --- @param path string Absolute file path
 --- @param start_line integer 1-based
@@ -978,8 +974,6 @@ function PermissionManager:drop_pending_edit(tool_call_id)
 end
 
 --- True if this tool call already has a pending or finalized edit range.
---- Used by SessionManager to avoid redundant disk reads when recording
---- is attempted from multiple points in the tool-call lifecycle.
 --- @param tool_call_id string
 --- @return boolean
 function PermissionManager:has_edit_range(tool_call_id)
@@ -1156,10 +1150,9 @@ function PermissionManager:_sync_anchor()
 end
 
 --- Highlight the non-known-safe parts of an execute permission prompt while it
---- is shown. No-op when the feature is disabled, for non-execute kinds (no
---- command to decompose), or when the block / chat buffer can't be resolved.
---- Uses the same `tracker.kind` fallback as elsewhere in this file for
---- providers that re-kind a request under the underlying tool's toolCallId.
+--- is shown. A request counts as execute when its tracked tool call is one,
+--- for providers that re-kind a request under the underlying tool's
+--- toolCallId.
 --- @param request agentic.acp.RequestPermission
 function PermissionManager:_apply_unapproved_highlight(request)
     if not Config.permissions.highlight_unapproved then
@@ -1357,7 +1350,6 @@ function PermissionManager:reject_and_cancel_remaining()
         return
     end
 
-    -- Find the reject_once option
     local reject_option_id
     for _, option in ipairs(self.current_request.request.options) do
         if AcpKind.normalise(option.kind) == "reject_once" then
@@ -1370,12 +1362,10 @@ function PermissionManager:reject_and_cancel_remaining()
         { code = reject_option_id and "prompt-reject" or "prompt-cancel" },
     })
 
-    -- Remove UI and keymaps for current request
     self.permission_float:close()
     self:_clear_unapproved_highlight()
     self:_release_request()
 
-    -- Send reject_once for current, cancelled for the rest
     local ok, err = pcall(self.current_request.callback, reject_option_id)
     if not ok then
         Logger.debug("Permission callback error during reject:", err)

@@ -166,7 +166,6 @@ local function get_file_completions(_bufnr, line_text, cursor_col, cursor_line)
     local dir_prefix = typed:match("^(.*/)") or ""
     local scan_dir = dir_prefix == "" and "." or dir_prefix
 
-    -- List one directory level
     local handle = vim.uv.fs_scandir(scan_dir)
     if not handle then
         return {}
@@ -182,7 +181,6 @@ local function get_file_completions(_bufnr, line_text, cursor_col, cursor_line)
         if DIR_EXCLUDE[name] then
             -- skip
         else
-            -- Resolve symlinks to determine if directory
             local is_dir = entry_type == "directory"
             if entry_type == "link" then
                 local stat = vim.uv.fs_stat(vim.fs.joinpath(scan_dir, name))

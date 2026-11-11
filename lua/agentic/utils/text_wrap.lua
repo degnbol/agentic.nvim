@@ -18,7 +18,6 @@ local function wrap_line(line, width)
         return { line }
     end
 
-    -- Detect leading prefix (whitespace + optional list marker) for continuation
     local prefix = line:match("^(%s*%d+%.%s)") -- "  1. "
         or line:match("^(%s*[%-%*]%s)") -- "- ", "* "
         or line:match("^(%s*>%s?)") -- "> "
@@ -152,12 +151,10 @@ end
 --- @return string[]
 local function parse_table_row(line)
     local cells = {}
-    -- Strip leading whitespace and leading pipe
     local inner = line:match("^%s*|(.*)$")
     if not inner then
         return cells
     end
-    -- Split on unescaped pipes — gives empty strings for leading/trailing delimiters
     local parts = split_on_pipes(inner)
     -- Drop trailing empty part from the closing `|`
     if #parts > 0 and vim.trim(parts[#parts]) == "" then

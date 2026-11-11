@@ -443,9 +443,9 @@ local ConfigDefault = {
     --- @field border string|string[] nvim_open_win border style
     --- @field winblend integer 0..100 transparency
     permission_float = {
-        anchor = "SE", -- chat-window corner to anchor to
+        anchor = "SE",
         width = 30,
-        row_offset = 1, -- inset from anchored corner
+        row_offset = 1,
         col_offset = -1,
         border = "rounded",
         winblend = 0,

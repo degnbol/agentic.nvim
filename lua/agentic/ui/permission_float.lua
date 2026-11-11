@@ -98,9 +98,7 @@ function PermissionFloat:_find_anchor_winid(bufnr)
     return winids[1]
 end
 
---- Build the lines and option_mapping for the prompt body. Mirrors the
---- previous inline rendering but skips buffer concerns — pure transformation
---- from options to display lines.
+--- Build the lines and option_mapping for the prompt body.
 --- @param options agentic.acp.PermissionOption[]
 --- @return string[] lines
 --- @return table<string, string> option_mapping Option id by the key that selects it (see `Config.keymaps.permission`)

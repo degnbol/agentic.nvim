@@ -85,7 +85,6 @@ local KIND_BY_NAME = {
     todowrite = "TodoWrite",
 }
 
---- OpenCode-specific adapter that extends ACPClient with OpenCode-specific behaviors
 --- @class agentic.acp.OpenCodeACPAdapter : agentic.acp.ACPClient
 local OpenCodeACPAdapter = ACPClient.extend()
 

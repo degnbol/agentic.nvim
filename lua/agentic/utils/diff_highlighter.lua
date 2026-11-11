@@ -8,8 +8,6 @@ local function utf8_chars(str)
     local chars = {}
     local byte_positions = vim.str_utf_pos(str)
 
-    -- vim.str_utf_pos returns 1-indexed byte positions
-    -- For "cat" it returns {1, 2, 3}, for "世界" it returns {1, 4}
     -- We need to add the string length + 1 as the final boundary
     table.insert(byte_positions, #str + 1)
 
@@ -19,7 +17,6 @@ local function utf8_chars(str)
 
         --- @class agentic.utils.DiffHighlighter.Utf8CharPos
         local pos = {
-            -- sub is 1-indexed, byte_positions are 1-indexed
             text = str:sub(start_byte, end_byte - 1),
             -- Store 0-indexed byte position for highlight.range compatibility
             byte_pos = start_byte - 1,
@@ -55,7 +52,6 @@ function M.find_inline_change(old_line, new_line)
         end
     end
 
-    -- Find common suffix (character-based)
     local suffix_chars = 0
     for i = 1, min_len - prefix_chars do
         local old_char = old_chars[#old_chars - i + 1]
@@ -67,7 +63,6 @@ function M.find_inline_change(old_line, new_line)
         end
     end
 
-    -- Calculate byte positions for change regions
     local old_start = 0
     local old_end = 0
     local new_start = 0
@@ -92,7 +87,6 @@ function M.find_inline_change(old_line, new_line)
         new_end = suffix_char.byte_pos + #suffix_char.text
     end
 
-    -- If no changes found, return nil
     if old_start >= old_end and new_start >= new_end then
         return nil
     end
@@ -136,7 +130,6 @@ function M.apply_diff_highlights(bufnr, ns_id, line_number, old_line, new_line)
         return
     end
 
-    -- Apply line-level highlight for deleted lines
     if old_line and not new_line then
         -- Pure deletion - full line highlight
         vim.api.nvim_buf_set_extmark(bufnr, ns_id, line_number, 0, {
@@ -146,7 +139,6 @@ function M.apply_diff_highlights(bufnr, ns_id, line_number, old_line, new_line)
         -- Pure addition - full line highlight
         apply_add_line_highlight(bufnr, ns_id, line_number)
     elseif old_line and new_line then
-        -- Skip highlighting if lines are identical
         if old_line == new_line then
             return
         end
@@ -187,15 +179,12 @@ function M.apply_new_line_word_highlights(
         return
     end
 
-    -- Skip highlighting if lines are identical
     if old_line == new_line then
         return
     end
 
-    -- Find word-level changes
     local change = M.find_inline_change(old_line, new_line)
     if change and change.new_end > change.new_start then
-        -- Word-level highlight for changed portion only (not entire line)
         vim.highlight.range(
             bufnr,
             ns_id,

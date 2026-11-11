@@ -3,8 +3,7 @@ local FileSystem = require("agentic.utils.file_system")
 local TextWrap = require("agentic.utils.text_wrap")
 local ContextList = require("agentic.ui.context_list")
 
---- Get diagnostic severity icons from config
---- @return table<number, string> Mapping of severity to icon
+--- @return table<number, string>
 local function get_diagnostic_icons()
     local icons = Config.diagnostic_icons
     return {
@@ -125,7 +124,6 @@ function DiagnosticsList:__rows(diagnostic)
         or tostring(diagnostic.message or "")
     message = message:gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("\n", "\\n")
 
-    -- Format: ICON path:line:col - message
     local line = string.format("%s %s - %s", icon, location, message)
     return { TextWrap.truncate_to_width(line, buf_width) }
 end

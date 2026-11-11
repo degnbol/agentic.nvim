@@ -10,7 +10,6 @@ function M.check()
     local Config = require("agentic.config")
 
     vim_health.start("agentic.nvim")
-    -- Check Neovim version
     local nvim_version = vim.version()
     local required_version = { 0, 12, 0 }
     if
@@ -42,7 +41,6 @@ function M.check()
         )
     end
 
-    -- Check default provider
     vim_health.start("ACP Provider Configuration")
     local provider_name = Config.provider
     local provider_config = Config.acp_providers[provider_name]
@@ -76,7 +74,6 @@ function M.check()
         end
     end
 
-    -- Check all configured providers (excluding the default one)
     vim_health.start(
         "Other ACP Providers (optional, if don't intend to use them)"
     )
@@ -95,7 +92,6 @@ function M.check()
         end
     end
 
-    -- Check Node.js and package managers
     vim_health.start("Node.js and Package Managers")
     vim_health.info(
         "Most of the ACP providers require Node.js and a package manager to run, so you'll need at least one installed."
@@ -123,7 +119,6 @@ function M.check()
         end
     end
 
-    -- Check optional dependencies
     vim_health.start("Optional Dependencies")
     local Clipboard = require("agentic.ui.clipboard")
     if Clipboard.is_img_clip_installed() then

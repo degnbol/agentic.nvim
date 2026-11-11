@@ -99,7 +99,6 @@ end
 function Subagents:_set_open(agent, open)
     agent.open = open
     self._host.sync_modified()
-    -- Nil once the user wiped it.
     if agent.transcript then
         agent.transcript:set_running(open)
     end

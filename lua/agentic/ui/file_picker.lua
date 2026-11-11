@@ -54,7 +54,6 @@ function FilePicker:new(bufnr)
 end
 
 --- Get cached file list for a buffer, scanning if empty.
---- Called by the LSP completion server.
 --- @param bufnr integer
 --- @return agentic.ui.FilePickerFile[]
 function FilePicker.get_files(bufnr)
@@ -84,7 +83,6 @@ end
 function FilePicker:scan_files()
     local commands = self:_build_scan_commands()
 
-    -- Try each command until one succeeds
     for _, cmd_parts in ipairs(commands) do
         Logger.debug("[FilePicker] Trying command:", vim.inspect(cmd_parts))
         local start_time = vim.uv.hrtime()
@@ -119,11 +117,9 @@ function FilePicker:scan_files()
         end
     end
 
-    -- Fallback to glob if all commands failed
     Logger.debug("[FilePicker] All commands failed, using glob fallback")
     local files = {}
     local seen = {}
-    -- Get all files including hidden files (dotfiles) and files inside hidden directories
     -- Note: vim.fn.glob() doesn't support brace expansion, so we need separate calls
     local glob_files = vim.fn.glob("**/*", false, true) -- Regular files
     local hidden_files = vim.fn.glob("**/.*", false, true) -- Dotfiles at any depth
@@ -189,8 +185,7 @@ function FilePicker:scan_files()
     return files
 end
 
---- Asynchronously scan files and populate the cache.
---- Uses vim.system() for non-blocking execution. Falls back to synchronous
+--- Asynchronously scan files and populate the cache. Falls back to synchronous
 --- glob on next get_files() call if all async commands fail.
 function FilePicker:scan_files_async()
     if self._scanning then
@@ -207,9 +202,8 @@ function FilePicker:scan_files_async()
     self:_try_async_command(commands, 1)
 end
 
---- Parse stdout text into file list, preferring shallow files.
---- Buckets paths by depth, then fills level by level up to max_files.
---- Only calls fnamemodify on paths that make the cut (the expensive part).
+--- Parse stdout text into a file list, shallowest first, capped at
+--- `file_picker.max_files` (0 is no cap).
 --- @param stdout string
 --- @return agentic.ui.FilePickerFile[]
 --- @return boolean truncated
@@ -285,16 +279,14 @@ function FilePicker:_try_async_command(commands, idx)
                 self._files = files
                 self._scanning = false
             else
-                -- Try next command
                 self:_try_async_command(commands, idx + 1)
             end
         end)
     end)
 end
 
---- Builds list of all available scan commands to try in order
 --- All commands run in current working directory by default
---- @return table[] commands List of command arrays to try
+--- @return table[] commands
 function FilePicker:_build_scan_commands()
     local commands = {}
 
@@ -357,7 +349,6 @@ FilePicker.GLOB_EXCLUDE_PATTERNS = {
     "bower_components/",
 }
 
---- Checks if path should be excluded from the file list
 --- Necessary when using glob fallback, since it can't exclude files
 --- @param path string
 --- @return boolean

@@ -587,10 +587,8 @@ function ChatWidget:_setup_input()
 end
 
 --- Wire up [[ / ]] navigation between the rows of a chat or transcript buffer
---- written outside the agent's stream: prompts and notices. Those rows are
---- marked with extmarks in NS_USER_ACTIONS at write time (see
---- MessageWriter:write_user_prompt and :write_notice); each row's identity sign
---- rides on the same mark. Navigation reads the marks, so agent-authored `## `
+--- written outside the agent's stream: prompts and notices. Navigation reads
+--- their `MessageWriter.NS_USER_ACTIONS` marks, so agent-authored `## `
 --- headings are never treated as prompts.
 --- @param bufnr integer
 function ChatWidget:_setup_prompt_navigation(bufnr)

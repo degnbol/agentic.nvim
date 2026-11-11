@@ -578,7 +578,6 @@ end
 --- @param prompt agentic.acp.Content[] The prompt array to prepend to
 function ChatHistory:prepend_history_messages(prompt)
     for _, msg in ipairs(self.messages) do
-        -- Convert stored messages to ACP Content format
         if msg.type == "user" and not msg.synthetic then
             local author = msg.author
                 and (msg.author:sub(1, 1):upper() .. msg.author:sub(2))

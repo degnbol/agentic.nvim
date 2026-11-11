@@ -1,7 +1,6 @@
 local ACPClient = require("agentic.acp.acp_client")
 local Logger = require("agentic.utils.logger")
 
---- Cursor-specific adapter that extends ACPClient with Cursor-specific behaviors
 --- @class agentic.acp.CursorACPAdapter : agentic.acp.ACPClient
 --- @field _available_commands_updates table<string, table> Cursor sends available commands before session starts, indexed by session ID, to be processed after session creation
 local CursorACPAdapter = ACPClient.extend()
@@ -48,7 +47,6 @@ function CursorACPAdapter:__handle_session_update(params)
     local update_type = params.update.sessionUpdate
 
     if update_type == "available_commands_update" then
-        -- Store for later processing if session not yet subscribed
         if not self.subscribers[params.sessionId] then
             Logger.debug(
                 "CursorACPAdapter",

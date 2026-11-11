@@ -158,11 +158,9 @@ function Theme.setup()
         { Theme.HL_GROUPS.FOOTER_NOTE, { link = "Comment" } },
         { Theme.HL_GROUPS.CODE_BLOCK_FENCE, { link = "NonText" } },
 
-        -- Chat section heading markers (`##` prompt, `###` tool call). Linked
-        -- from the chat window's winhighlight (`@markup.heading.N.agentic`),
-        -- which the markdown highlighter captures over the `##`/`###` marker
-        -- only — the heading text is remapped to Normal there, and the
-        -- tool-call name keeps its markdown_inline `@markup.raw` colour. So
+        -- Chat section heading markers (`##` prompt, `###` tool call), linked
+        -- from the chat window's winhighlight (`CHAT_WINHIGHLIGHT` in
+        -- `ui/chat_buffer.lua`). So
         -- being a heading (a treesitter-context anchor) is decoupled from
         -- looking important. Retarget this group to restyle the markers.
         { Theme.HL_GROUPS.HEADING, { link = "@punctuation.special" } },
@@ -180,10 +178,7 @@ function Theme.setup()
         -- nvim_set_hl ignores every other field when `link` is set, so the
         -- strikethrough needs a resolved colour, an attribute-only group
         -- having no foreground of its own to strike (it falls through to
-        -- SignColumn, dimmer than the glyph it pairs with). A colorscheme
-        -- that leaves the source group to the terminal resolves to no
-        -- foreground at all, and nothing can be inherited then, so that case
-        -- trades the strikethrough away rather than the colour.
+        -- SignColumn, dimmer than the glyph it pairs with).
         { Theme.HL_GROUPS.GLYPH_OFF, glyph_off_hl(user_glyph) },
 
         -- Sidecar body dim (fetch/WebSearch/SubAgent output)

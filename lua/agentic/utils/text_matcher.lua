@@ -17,7 +17,6 @@ end
 --- @param compare_fn function
 --- @return boolean matches
 local function matches_at_position(original_lines, target_lines, i, compare_fn)
-    -- Validate bounds
     if i < 1 or i + #target_lines - 1 > #original_lines then
         return false
     end
@@ -68,7 +67,6 @@ function M.find_all_matches(original_lines, target_lines)
     return {}
 end
 
---- Find all matches using compare function
 --- @param original_lines string[]
 --- @param target_lines string[]
 --- @param compare_fn fun(line_a: string, line_b: string): boolean
@@ -90,7 +88,7 @@ function M._try_find_all_matches(original_lines, target_lines, compare_fn)
         if matches_at_position(original_lines, target_lines, i, compare_fn) then
             local end_line = i + #target_lines - 1
             table.insert(matches, { start_line = i, end_line = end_line })
-            -- Skip past the match to avoid infinite loop
+            -- Matches do not overlap
             i = end_line + 1
         else
             i = i + 1
@@ -105,9 +103,8 @@ end
 --- @field end_line integer
 --- @field suffix string Remaining text from file line after prefix match on last line
 
---- Prefix-aware strategies: each returns {compare_fn, starts_with_fn}
---- compare_fn is used for lines 1..N-1 (full match)
---- starts_with_fn checks if file line starts with target line (last line only)
+--- Prefix-aware strategies: `compare` matches lines 1..N-1 in full,
+--- `starts_with` checks that the file line starts with the last target line
 local PREFIX_STRATEGIES = {
     {
         compare = function(a, b)

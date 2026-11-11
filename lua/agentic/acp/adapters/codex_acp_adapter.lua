@@ -24,7 +24,6 @@ local FileSystem = require("agentic.utils.file_system")
 --- @field title? string
 --- @field rawInput? agentic.acp.CodexRawInput
 
---- Codex-specific adapter that extends ACPClient with Codex-specific behaviors
 --- @class agentic.acp.CodexACPAdapter : agentic.acp.ACPClient
 local CodexACPAdapter = ACPClient.extend()
 

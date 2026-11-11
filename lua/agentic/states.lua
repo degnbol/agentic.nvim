@@ -58,7 +58,6 @@ function M.setSlashCommands(bufnr, items)
     safe_set(vim.b, bufnr, "agentic_slash_commands", items)
 end
 
---- Slash commands stored on `bufnr`.
 --- @param bufnr integer
 --- @return agentic.acp.SlashCommand[]
 function M.getSlashCommands(bufnr)
@@ -73,7 +72,6 @@ function M.setChatBufnr(input_bufnr, chat_bufnr)
     safe_set(vim.b, input_bufnr, "agentic_chat_bufnr", chat_bufnr)
 end
 
---- Retrieve the associated chat buffer number for an input buffer.
 --- @param input_bufnr integer
 --- @return integer?
 function M.getChatBufnr(input_bufnr)

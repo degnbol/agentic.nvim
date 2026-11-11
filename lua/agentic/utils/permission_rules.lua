@@ -516,8 +516,6 @@ local extract_args
 --- recurses only into statement positions (so `while read x; …` clears via the
 --- recursed condition while `case $x in …` skips the matched value), stops at
 --- `SCOPE_BOUNDARY` nodes (inner bindings sealed in a child shell).
---- `printf -v` enumerates its target; other namespace-mutating builtins
---- clear-all.
 --- @param node TSNode
 --- @param src string
 --- @param targets table<string, boolean>
@@ -646,9 +644,8 @@ end
 --- capable grade): a plain command or a binding-free control-flow construct
 --- drops nothing (`f=…; if c; then :; fi; find $f` keeps `f`), one that binds
 --- enumerable names (`printf -v g`, an `if`-body assignment, a `for` loop var)
---- drops exactly those, and one whose targets can't be enumerated (a
---- namespace-mutating builtin, arithmetic assignment, a `declaration_command`,
---- a dynamic name, or any unmodelled node type) clears `known` entirely.
+--- drops exactly those, and one whose targets can't be enumerated clears
+--- `known` entirely.
 --- Dropping can only shrink `known`, so it can only ever over-prompt.
 --- @param known table<string, string>
 --- @param child TSNode
@@ -774,10 +771,8 @@ function extract_args(node, src, ctx, known, inner_check)
         elseif t == "command_name" then
             -- Not an argument: callers read it with `ShellParse.command_name`.
         elseif t == "command_substitution" then
-            -- A bare `$(...)` argument: vet the inner command (it runs), then
-            -- splice its output into the arg stream as a dynamic token. The
-            -- dynamic flag makes the structured layer wildcard deny/ask, so a
-            -- payload like `find . $(echo -exec rm)` still prompts.
+            -- The dynamic flag makes the structured layer wildcard deny/ask, so
+            -- a payload like `find . $(echo -exec rm)` still prompts.
             if not inner_check(child, src, ctx) then
                 return nil
             end
@@ -785,13 +780,12 @@ function extract_args(node, src, ctx, known, inner_check)
             table.insert(arg_nodes, child)
             table.insert(args_dynamic, true)
         elseif t == "process_substitution" then
-            -- `<(cmd)` / `>(cmd)`: vet the inner command(s) (they run), then
-            -- splice a concrete `/dev/fd` placeholder. The arg always expands to
-            -- a single `/dev/fd/N` path — structurally a path, never a flag or
-            -- subcommand — so unlike `$(…)` output it cannot launder a gate token
-            -- and stays static (a dynamic splice would wildcard-fire the outer
-            -- command's deny/ask gates and over-prompt). `>(…)` is the same node
-            -- type and equally safe: a writing inner still bails on the recursion.
+            -- Static: the arg always expands to one `/dev/fd/N` path, never a
+            -- flag or subcommand, so unlike `$(…)` output it cannot launder a
+            -- gate token. A dynamic splice would wildcard-fire the outer
+            -- command's deny/ask gates and over-prompt. `>(…)` is the same
+            -- node type and equally safe: a writing inner still bails on the
+            -- recursion.
             if not inner_check(child, src, ctx) then
                 return nil
             end
@@ -815,11 +809,10 @@ function extract_args(node, src, ctx, known, inner_check)
                 and child:named_child_count() == 1
                 and child:named_child(0):type() == "command_substitution"
             then
-                -- a quoted `"$(cmd)"`. Like the bare form, vet the inner (it
-                -- runs) and splice the inner's `$(…)` text as a dynamic token.
-                -- Quoting suppresses word-splitting (one term vs zero-or-many),
-                -- but the spliced token is unknown content either way, so the
-                -- dynamic-token wildcarding gives the identical safety outcome.
+                -- a quoted `"$(cmd)"`. Quoting suppresses word-splitting (one
+                -- term vs zero-or-many), but the spliced token is unknown
+                -- content either way, so the dynamic-token wildcarding gives
+                -- the identical safety outcome.
                 local inner = child:named_child(0) --[[@as TSNode]]
                 if not inner_check(inner, src, ctx) then
                     return nil
@@ -1752,9 +1745,9 @@ local function walk_assignment(node, src, ctx)
         ctx.sources.read_only = true
         return true
     end
-    -- Any other value form (literal, concatenation, expansion, …): the
-    -- pre-Phase-2 bail still applies — a substitution anywhere in the value
-    -- that did not come through the two carve-outs above is rejected.
+    -- Any other value form (literal, concatenation, expansion, …): a
+    -- substitution anywhere in the value that did not come through the two
+    -- carve-outs above is rejected.
     if subtree_has_substitution(value) then
         return false
     end
@@ -1797,7 +1790,6 @@ local function walk_for(node, src, ctx)
         return false
     end
 
-    -- unroll a fully-literal list with a plain loop var, bounded by budget.
     local budget = ctx.for_budget or FOR_UNROLL_CAP
     if var_name:match("^[%w_]+$") and #items > 0 then
         --- @type string[]
@@ -1827,8 +1819,6 @@ local function walk_for(node, src, ctx)
         end
     end
 
-    -- Fallback: validate list-item substitutions, then walk the body once with
-    -- the loop var dynamic.
     for _, item in ipairs(items) do
         if item:type() == "command_substitution" then
             if not walk_substitution_inner(item, src, ctx) then
@@ -1965,7 +1955,6 @@ function walk(node, src, ctx)
     elseif t == "for_statement" then
         return walk_for(node, src, ctx)
     elseif t == "while_statement" then
-        -- `until` also parses to `while_statement` in the pinned zsh grammar.
         return walk_while(node, src, ctx)
     elseif t == "function_definition" then
         -- Reached outside a sequence (a pipeline stage): there is no
@@ -2246,9 +2235,6 @@ local function command_known_safe(node, src, ctx, known, funcs)
         return true
     end
 
-    -- Transparent prefix: known-safe iff the inner tallies clean. A wrapper or
-    -- single-quoted `-c` body pinpoints its unapproved sub-ranges; other `-c`
-    -- quoting has no faithful mapping (nil origin) and stays coarse.
     local inner, origin =
         inner_source(cmd_name, node, args, arg_nodes, args_dynamic, src)
     if inner and ctx.depth < NESTED_MAX_DEPTH then

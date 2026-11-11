@@ -380,7 +380,6 @@ function SessionManager:new(provider)
 
             local pending = self._pending_load
             if pending then
-                -- Deferred load_acp_session: agent is now ready
                 self._pending_load = nil
                 self:_do_load_acp_session(
                     pending.session_id,
@@ -393,7 +392,6 @@ function SessionManager:new(provider)
                 self._pending_fork = nil
                 self:_do_start_fork(fork)
             elseif not self._load_state then
-                -- Skip auto-new_session while a load is in flight
                 self:new_session({ keep_cwd = true })
             end
         end)
@@ -1421,7 +1419,6 @@ function SessionManager:_rename_session(new_title)
         mid_turn = self:_turn_open(),
     })
 
-    -- Persist the updated title
     self:_persist_history(self.chat_history)
 end
 
@@ -2053,8 +2050,7 @@ function SessionManager:_on_request_permission(request, callback)
     local tracker =
         self:_view_for(tool_call_id).writer.tool_call_blocks[tool_call_id]
     if tracker and tracker.exits_plan then
-        -- Inject "Clear context & implement plan" option.
-        -- It sorts first (priority 0 in PermissionManager).
+        -- Sorts first (priority 0 in PermissionManager).
         table.insert(request.options, {
             kind = "plan_implement",
             name = "Clear context & implement plan",
@@ -2066,7 +2062,6 @@ function SessionManager:_on_request_permission(request, callback)
         -- Handle the custom plan-implement option: accept the plan with
         -- the provider, then cancel and start a fresh implementation session.
         if option_id == PLAN_IMPLEMENT_ID then
-            -- Find the real allow_once option to accept the plan
             local accept_id
             for _, opt in ipairs(request.options) do
                 if AcpKind.normalise(opt.kind) == "allow_once" then
@@ -2310,7 +2305,6 @@ function SessionManager:_on_tool_call_update(tool_call_update)
         self.permission_manager:drop_bash_cwd(id)
     end
 
-    -- Reload buffers when file-mutating tool calls complete.
     -- Debounce: rapid tool_call_update completions (e.g. hook retry cycles)
     -- coalesce into a single deferred checktime() to avoid cascading
     -- autocmds (FileChangedShell → BufReadPost → LSP → treesitter) that
@@ -3237,12 +3231,11 @@ function SessionManager:_handle_input_submit_inner(input_text)
     local consumed = { selections = {}, files = {}, diagnostics = {} }
 
     if not is_command then
-        -- After a re-create from history, prepend the history on first submit
         if self._history_to_send then
             self._history_to_send:prepend_history_messages(prompt)
             self._history_to_send = nil
         elseif self.chat_history.title == "" then
-            self.chat_history:set_title(input_text) -- Set title for new session
+            self.chat_history:set_title(input_text)
             self.widget:set_chat_title(input_text)
         end
     end
@@ -3288,7 +3281,6 @@ function SessionManager:_handle_input_submit_inner(input_text)
 
         for _, selection in ipairs(selections) do
             if selection and #selection.lines > 0 then
-                -- Add line numbers to each line in the snippet
                 local numbered_lines = {}
                 for i, line in ipairs(selection.lines) do
                     local line_num = selection.start_line + i - 1
@@ -3843,7 +3835,6 @@ function SessionManager:new_session(opts)
 
         self._is_first_message = true
 
-        -- Add initial welcome message after session is created
         -- Defer to avoid fast event context issues
         -- For a re-create from history: write welcome first, then replay via on_created
         -- quiet_welcome is used by a session renewal so the chat does not
@@ -3869,7 +3860,6 @@ function SessionManager:new_session(opts)
                 end
             end
 
-            -- Invoke on_created callback after welcome message is written
             if on_created then
                 on_created()
             end
@@ -3892,10 +3882,8 @@ end
 --- @param on_shown? fun(session: agentic.SessionManager) Runs once the chat shows the loaded conversation, or the saved one when the load fails
 function SessionManager:load_acp_session(session_id, cwd, model, on_shown)
     if self.agent and self.agent.agent_capabilities then
-        -- Agent is already initialised, load immediately
         self:_do_load_acp_session(session_id, cwd, model, on_shown)
     else
-        -- Agent still starting — defer until on_ready fires
         self._pending_load = {
             session_id = session_id,
             cwd = cwd,
@@ -3907,8 +3895,7 @@ end
 
 --- Internal: actually send session/load after the agent is ready.
 --- @param session_id string
---- @param cwd? string Original working directory for the session. When nil,
----   the cwd recorded in the saved session file, else vim.fn.getcwd().
+--- @param cwd? string See `load_acp_session`
 --- @param model? string Model id to reapply after load (queued until options arrive).
 --- @param on_shown? fun(session: agentic.SessionManager) See `load_acp_session`
 function SessionManager:_do_load_acp_session(session_id, cwd, model, on_shown)
@@ -3932,7 +3919,6 @@ function SessionManager:_do_load_acp_session(session_id, cwd, model, on_shown)
     -- session context). The old ACP session is orphaned — it will expire
     -- on the provider side or be replaced by the loaded session's subscriber.
     if self.session_id then
-        -- Remove subscriber to stop routing stale notifications
         self.agent:unsubscribe(self.session_id)
     end
     self:_reset_conversation()
@@ -4159,8 +4145,8 @@ function SessionManager:_reset_conversation()
 
     self.chat_history = ChatHistory:new()
     self:_sync_modified(self.chat_history)
-    self._title_user_set = false -- Fresh session: allow provider auto-summary again
-    self.widget:set_chat_title(nil) -- Reset buffer name to default
+    self._title_user_set = false
+    self.widget:set_chat_title(nil)
     self.widget:set_idle(false)
     self._history_to_send = nil
     self._usage = nil
@@ -4396,7 +4382,6 @@ end
 --- Use when a session becomes stuck or unresponsive.
 function SessionManager:restart_session()
     if not self.chat_history:has_prompt() then
-        -- No prompt to carry over — just create a fresh session
         self:new_session({ keep_cwd = true })
         return
     end

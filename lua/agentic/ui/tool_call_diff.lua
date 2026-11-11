@@ -82,12 +82,10 @@ function M.extract_diff_blocks(opts)
             end
         end
 
-        -- No match: return empty diff_blocks.
         if blocks then
             if opts.replace_all then
                 vim.list_extend(diff_blocks, blocks)
             else
-                -- Only use the first match if replace_all is false
                 table.insert(diff_blocks, blocks[1])
             end
         end
@@ -154,7 +152,6 @@ function M.minimize_diff_blocks(diff_blocks)
         local old_string = table.concat(diff_block.old_lines, "\n")
         local new_string = table.concat(diff_block.new_lines, "\n")
 
-        -- Skip unchanged blocks
         if old_string ~= new_string then
             if #diff_block.old_lines == 1 and #diff_block.new_lines == 1 then
                 -- Fast path for single-line blocks
@@ -315,7 +312,6 @@ function M.normalize_to_lines(lines)
     end
     --- @cast lines string[]
 
-    -- Strip trailing "" from \n-terminated content split by adapters
     if #lines > 0 and lines[#lines] == "" then
         return vim.list_slice(lines, 1, #lines - 1) --[[@as string[] ]]
     end
@@ -324,10 +320,10 @@ function M.normalize_to_lines(lines)
 end
 
 --- Try fuzzy match for all occurrences, fallback to substring replacement for single-line cases
---- @param file_lines string[] File content lines
---- @param old_lines string[] Old text lines
---- @param new_lines string[] New text lines
---- @return agentic.ui.ToolCallDiff.DiffBlock[]|nil blocks Array of diff blocks or nil if no match
+--- @param file_lines string[]
+--- @param old_lines string[]
+--- @param new_lines string[]
+--- @return agentic.ui.ToolCallDiff.DiffBlock[]|nil blocks Nil if no match
 function M.match_or_substring_fallback(file_lines, old_lines, new_lines)
     local matches = TextMatcher.find_all_matches(file_lines, old_lines)
 
@@ -367,7 +363,6 @@ function M.match_or_substring_fallback(file_lines, old_lines, new_lines)
         end, prefix_matches)
     end
 
-    -- Fallback to substring replacement for single-line cases
     if #old_lines == 1 and #new_lines == 1 then
         local blocks = M._find_substring_replacements(
             file_lines,
@@ -381,19 +376,17 @@ function M.match_or_substring_fallback(file_lines, old_lines, new_lines)
 end
 
 --- Find all substring replacement occurrences in file lines
---- @param file_lines string[] File content lines
---- @param search_text string Text to search for
---- @param replace_text string Text to replace with
---- @return agentic.ui.ToolCallDiff.DiffBlock[] diff_blocks Array of diff blocks (empty if no matches)
+--- @param file_lines string[]
+--- @param search_text string
+--- @param replace_text string
+--- @return agentic.ui.ToolCallDiff.DiffBlock[] diff_blocks Empty if no matches
 function M._find_substring_replacements(file_lines, search_text, replace_text)
     local diff_blocks = {}
 
     for line_idx, line_content in ipairs(file_lines) do
         if line_content:find(search_text, 1, true) then
-            -- Escape pattern for gsub
             local escaped_search =
                 search_text:gsub("[%(%)%.%%%+%-%*%?%[%]%^%$]", "%%%1")
-            -- Replace first occurrence in this line
             -- Use function replacement to ensure literal text (no pattern interpretation)
             local modified_line = line_content:gsub(escaped_search, function()
                 return replace_text

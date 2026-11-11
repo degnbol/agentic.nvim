@@ -76,8 +76,7 @@ function M.apply_block_highlights(bufnr, start_row, layout)
 end
 
 --- Cache of derived "clean" highlight groups: target capture name →
---- generated group name with the same fg/bg as the target but typography
---- attributes (bold/italic/underline/etc.) explicitly forced off. Cleared
+--- generated `nocombine` group name with the same fg/bg as the target. Cleared
 --- on `ColorScheme` since `:hi clear` wipes every group.
 --- @type table<string, string>
 local _clean_hl_cache = {}
@@ -89,8 +88,8 @@ vim.api.nvim_create_autocmd("ColorScheme", {
 })
 
 --- Look up (and cache) a derived highlight group for `name` that inherits
---- its fg/bg/sp from the original but with typography attributes
---- explicitly set to false. This stops bold/italic from a lower-priority
+--- its fg/bg/sp from the original and sets `nocombine`. This stops
+--- bold/italic from a lower-priority
 --- highlight (e.g. the markdown injection's `@keyword.python`) from
 --- bleeding through when our `fg`-only override sits at higher priority.
 --- Returns the original name as fallback when it resolves to nothing.
@@ -125,9 +124,7 @@ end
 --- Apply per-column treesitter capture highlights from a context-aware
 --- reparse. The col_hl map is byte-col → language-qualified capture name
 --- (e.g. `@string.python`). Adjacent cols with identical capture names are
---- merged into a single extmark to keep the count bounded. Each capture
---- is mapped through `get_clean_hl_group` so that typography attributes
---- from the underlying markdown-injected highlights don't leak through.
+--- merged into a single extmark to keep the count bounded.
 --- Priority 200 beats markdown's priority-100 injected highlights.
 ---
 --- `col_hl` keys are byte offsets into the *unformatted* source line.
@@ -399,8 +396,6 @@ end
 
 --- Register a dim extmark spanning a body range. Lines are highlighted with
 --- AgenticDimmedBlock to de-emphasise sidecar content.
---- Returns the extmark id so callers can track it for clearing alongside
---- other decoration extmarks.
 --- @param bufnr integer
 --- @param start_row integer Absolute buffer row (0-indexed)
 --- @param end_row integer Absolute buffer row (0-indexed), inclusive

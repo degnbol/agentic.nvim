@@ -1,7 +1,6 @@
 local ACPClient = require("agentic.acp.acp_client")
 local FileSystem = require("agentic.utils.file_system")
 
---- Auggie-specific adapter that extends ACPClient with Auggie-specific behaviors
 --- @class agentic.acp.AuggieACPAdapter : agentic.acp.ACPClient
 local AuggieACPAdapter = ACPClient.extend()
 
@@ -14,7 +13,6 @@ local AuggieACPAdapter = ACPClient.extend()
 --- @param session_id string
 --- @param update agentic.acp.ToolCallMessage
 function AuggieACPAdapter:__handle_tool_call(session_id, update)
-    -- Skip empty tool calls
     if not update.rawInput or vim.tbl_isempty(update.rawInput) then
         return
     end

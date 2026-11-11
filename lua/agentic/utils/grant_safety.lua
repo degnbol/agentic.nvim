@@ -270,9 +270,9 @@ function M.is_wide_scope(scope, tmp_roots)
     return false, nil
 end
 
---- True iff target_lines occurs as a contiguous subsequence in file_lines,
---- searching from `start_at` (1-based, default 1). Returns the 1-based start
---- index of the match, or nil.
+--- The 1-based start index of the first contiguous occurrence of
+--- target_lines in file_lines at or after `start_at` (1-based, default 1),
+--- or nil.
 --- @param file_lines string[]
 --- @param target_lines string[]
 --- @param start_at? integer
@@ -317,8 +317,7 @@ function M.range_within(inner, outer)
 end
 
 --- Locate `target_lines` as a contiguous subsequence in `file_lines`, but
---- only return the match position if it is **unique**. If the sequence
---- appears zero or multiple times, returns nil.
+--- only return the match position if it is **unique**.
 ---
 --- Used for Claude's Edit tool: the tool enforces `old_string` uniqueness
 --- at execution time, so a non-unique match here means the surrounding
@@ -417,8 +416,8 @@ function M.is_pure_addition(diff)
     return M.find_subsequence(new, old, 1) ~= nil
 end
 
---- Locate the target range of an Edit / Write in the current file using the
---- diff already attached to the in-flight tool call's tool_call_blocks entry.
+--- Locate the target range of an Edit / Write in the current file from its
+--- diff.
 ---
 --- - For Write with `diff.all == true`, returns the whole-file range.
 --- - For Edit, finds `diff.old` as a contiguous subsequence and returns its

@@ -58,7 +58,6 @@ local function is_dir_writable(dir)
         return false
     end
 
-    -- Test write permission by attempting to create a test file
     local ok, fd = pcall(function()
         local test_file = vim.fs.joinpath(dir, ".agentic_write_test")
         return vim.uv.fs_open(test_file, "w", 438) -- 438 = 0666 octal
@@ -151,7 +150,6 @@ function M.setup(opts)
                 return original_paste(lines, phase)
             end
 
-            -- Verify file exists
             local stat = vim.uv.fs_stat(line)
             if not stat or stat.type ~= "file" then
                 Logger.debug("clipboard: file does not exist", line)

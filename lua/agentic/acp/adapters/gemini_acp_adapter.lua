@@ -1,7 +1,6 @@
 local ACPClient = require("agentic.acp.acp_client")
 local FileSystem = require("agentic.utils.file_system")
 
---- Gemini-specific adapter that extends ACPClient with Gemini-specific behaviors
 --- @class agentic.acp.GeminiACPAdapter : agentic.acp.ACPClient
 local GeminiACPAdapter = ACPClient.extend()
 

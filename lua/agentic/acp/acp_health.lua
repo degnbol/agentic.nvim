@@ -106,7 +106,6 @@ function ACPHealth.check_configured_provider(provider_name)
         "Run `:checkhealth agentic` for more information.",
     })
 
-    -- Build final message with header, error content, and footer
     local merged_lines = {
         "# Welcome to Agentic.nvim!",
         "",

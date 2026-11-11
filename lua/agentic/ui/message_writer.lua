@@ -903,8 +903,6 @@ function MessageWriter:write_message(update)
         self:_end_prose_run(bufnr)
         self:_append_lines(wrapped)
         self:_append_lines({ "" })
-        -- After the append: on an empty buffer `_append_lines` replaces row
-        -- 0, so a count taken before would be off by one.
         local first_row = vim.api.nvim_buf_line_count(bufnr) - #wrapped - 1
         mark_table_row_ends(bufnr, first_row, table_row_ends)
     end)
@@ -1289,17 +1287,11 @@ function MessageWriter:_append_collapsed_region(body, sign, opts)
     self:_schedule_follow()
 
     self:_own_edit(function(bufnr)
-        -- End the prose run first, for the reason write_user_prompt documents:
-        -- the fence would otherwise land inside one the streamed prose left
-        -- open, and a later reflow's set_lines would span these rows and drag
-        -- their signs.
+        -- End the prose run first, for the reason write_user_prompt documents.
         self:_end_prose_run(bufnr)
 
         self:_append_lines(lines)
 
-        -- Derived from the line count AFTER the append: on an empty buffer
-        -- _append_lines replaces row 0 rather than appending, so a row captured
-        -- before the call would be off by one.
         local body_start = vim.api.nvim_buf_line_count(bufnr)
             - #lines
             + body_offset
@@ -1491,9 +1483,8 @@ end
 --- it. Nothing shows meanwhile except the status indicator, which already says
 --- "thinking".
 ---
---- Public because `SessionResume.replay_messages` ends on this too — a stored
---- history whose last entry is a thought would otherwise stay buffered until
---- the next turn's first write and render under the new prompt.
+--- Call after a final write: a trailing thought otherwise stays buffered until
+--- the next write, and renders after it.
 function MessageWriter:flush_thought_run()
     local text = self._thought_run
     self._thought_run = nil
@@ -1710,8 +1701,6 @@ function MessageWriter:_append_row(row)
     end
 
     self:_append_lines({ row, "" })
-    -- Derived from the line count AFTER the append: on an empty buffer
-    -- _append_lines replaces row 0 rather than appending.
     local row_index = vim.api.nvim_buf_line_count(bufnr) - 2
     self._end_rows = {
         mark_id = vim.api.nvim_buf_set_extmark(
@@ -1786,10 +1775,6 @@ function MessageWriter:write_user_prompt(text, extra_lines, author, payload)
         self:_append_lines(flat)
         self:_append_lines({ "" })
 
-        -- Compute the heading row AFTER the append: on an empty buffer
-        -- _append_lines replaces row 0 rather than appending, so a pre-capture
-        -- would be off by one (session/load replay clears the buffer before
-        -- the first chunk). The -1 accounts for the trailing blank just added.
         local heading_row = vim.api.nvim_buf_line_count(bufnr) - #flat - 1
 
         -- The sign rides on the marker itself, so there is no separate scan.
@@ -1967,16 +1952,11 @@ function MessageWriter:write_notice(notice)
     self:_schedule_follow()
 
     self:_own_edit(function(bufnr)
-        -- End the prose run first, for the reason write_user_prompt documents:
-        -- the heading would otherwise land inside an unclosed prose fence, and a
-        -- later reflow's set_lines would span the heading row and drag the
-        -- marker with it.
+        -- End the prose run first, for the reason write_user_prompt documents.
         self:_end_prose_run(bufnr)
 
         self:_append_lines(lines)
 
-        -- Computed AFTER the append: on an empty buffer _append_lines replaces
-        -- row 0 rather than appending, so a pre-capture would be off by one.
         local heading_row = vim.api.nvim_buf_line_count(bufnr) - #lines
         self:_decorate_notice(heading_row, notice, layout)
     end)
@@ -2262,8 +2242,6 @@ function MessageWriter:write_error_message(err)
 
         local end_row = vim.api.nvim_buf_line_count(bufnr) - 1
         local start_row = end_row - #all_lines + 1
-        -- When the buffer was empty, _append_lines replaces instead of
-        -- appending, so the heading is at row 0.
         if was_empty then
             start_row = 0
         end
@@ -2575,9 +2553,6 @@ end
 --- @param update agentic.acp.SessionUpdateMessage
 --- @param starts_response boolean|nil The chunk starts a new model response, which is separated by a blank line from prose it follows
 function MessageWriter:write_message_chunk(update, starts_response)
-    -- _on_session_update routes chunks to the writer for the agent that
-    -- produced them (main → chat, subagent → its transcript), so each buffer
-    -- shows its own agent's prose and thinking.
     local text = update.content
         and update.content.type == "text"
         and update.content.text --[[@as string]]
@@ -2637,16 +2612,8 @@ function MessageWriter:write_message_chunk(update, starts_response)
 
         -- Record where streamed content starts (0-indexed)
         if not self._chunk_start_line then
-            local current = vim.api.nvim_buf_get_lines(
-                bufnr,
-                last_line,
-                last_line + 1,
-                false
-            )[1] or ""
-            -- If appending to a non-empty line, this line is the start
-            -- If the line is empty, the new content starts here
-            self._chunk_start_line = current == "" and last_line or last_line
-            self._prose_run_start_line = self._chunk_start_line
+            self._chunk_start_line = last_line
+            self._prose_run_start_line = last_line
         end
 
         local current_line = vim.api.nvim_buf_get_lines(
@@ -2732,6 +2699,9 @@ function MessageWriter:write_message_chunk(update, starts_response)
     end)
 end
 
+--- Append `lines` at the end of the buffer, or replace its content when every
+--- line is blank. Derive rows from the line count after the call, not before
+--- it. Notifies on failure.
 --- @param lines string[]
 --- @return nil
 function MessageWriter:_append_lines(lines)
@@ -3236,10 +3206,6 @@ function MessageWriter:write_tool_call_block(tool_call_block)
         end
 
         self:_append_lines(layout.lines)
-
-        -- Compute the start AFTER _append_lines: when the buffer was empty,
-        -- _append_lines replaces instead of appending, so line_count before
-        -- the call would over-count by 1.
         local start_row = vim.api.nvim_buf_line_count(bufnr) - #layout.lines
 
         self.tool_call_blocks[tool_call_block.tool_call_id] = tool_call_block

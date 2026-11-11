@@ -130,9 +130,7 @@ function BufHelpers.is_keymap_disabled(keymaps)
 end
 
 --- Sets multiple keymaps from a KeymapValue config entry for a specific buffer.
---- Normalizes the config value (string, string[], or array of string/KeymapEntry)
---- and calls keymap_set for each binding. Binds nothing for a disabled value
---- (`is_keymap_disabled`).
+--- Binds nothing for a disabled value (`is_keymap_disabled`).
 --- @param keymaps agentic.UserConfig.KeymapValue|nil
 --- @param bufnr integer
 --- @param callback fun(lhs: string):any

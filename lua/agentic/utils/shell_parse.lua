@@ -451,7 +451,7 @@ end
 --- `brace_expression`) are static. A `~`-prefixed path is a plain `word` in this grammar and
 --- expands only to a path (never a flag or subcommand), so it stays static.
 --- A `concatenation` bearing an expansion/glob part (`$d/x`, `$d/*.js`) is
---- dynamic: `literal_token` now emits its raw text, so the same post-expansion
+--- dynamic: `literal_token` emits its raw text, so the same post-expansion
 --- word-split surface as a bare `$d` must wildcard the deny/ask gates.
 --- Command-substitution-bearing nodes (rejected at the command level) never
 --- reach here.
@@ -526,7 +526,6 @@ end
 --- @return string|nil
 local function literal_token(node, src)
     local t = node:type()
-    -- Pure-literal types: delegate to the strict path.
     if
         t == "word"
         or t == "number"
@@ -771,12 +770,8 @@ local function redirect_is_safe(fr, src)
 end
 
 --- The destination node of a write redirect that `redirect_is_safe` rejects, or
---- nil when there is nothing to pin a write to. nil means "not a pinnable write
---- target" — the caller bails (falls through to a prompt). A returned node is the
---- destination the redirect would truncate/append to; the caller resolves it to a
---- concrete literal path (quote-strip + `known`-var resolution, which live in
---- permission_rules) and surfaces a `write` effect so the policy layer can clear
---- it against the grant scopes (see permission_manager's `_bash_effects_clear`).
+--- nil when there is nothing to pin a write to. A returned node is the
+--- destination the redirect would truncate/append to.
 ---
 --- Returns nil for the forms `redirect_is_safe` already approves (input `<`, fd
 --- duplication, `/dev/null`), for a command/process-substitution destination
@@ -2880,8 +2875,7 @@ function collect(node, src, out, depth, shell, io_of, enclosing)
     end
     -- Every other node (containers, pipelines, control flow, assignments,
     -- substitutions): recurse named children. A redirect target / env prefix
-    -- does not hide a command, so we never bail here. Only `collect_command`
-    -- decides safety.
+    -- does not hide a command, so this branch fails only when a child does.
     local children = vim.tbl_filter(function(child)
         return child:type() ~= "comment"
     end, node:named_children())

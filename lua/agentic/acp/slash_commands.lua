@@ -1,6 +1,5 @@
 local States = require("agentic.states")
 
---- Stored slash command structure
 --- @class agentic.acp.SlashCommand
 --- @field word string Command name (without leading /)
 --- @field menu string Short description

@@ -92,7 +92,6 @@ ACPClient.ERROR_CODES = {
 }
 
 --- Set up a child adapter class with proper ACPClient inheritance chain.
---- Returns a new class table with __index set for method lookup.
 --- The child inherits ACPClient:new() — no need to override unless adding
 --- extra instance fields (e.g. CursorACPAdapter).
 --- @return table child_class
@@ -739,9 +738,7 @@ function ACPClient:_handle_message(message)
         Logger.debug_to_file(self.provider_config.name, "response: ", message)
     end
 
-    -- Check if this is a notification (has method but no id, or has both method and id for notifications)
     if message.method and not message.result and not message.error then
-        -- This is a notification
         self:_handle_notification(message.id, message.method, message.params)
     elseif message.id and (message.result or message.error) then
         local callback = self.callbacks[message.id]
@@ -1013,7 +1010,6 @@ function ACPClient:__build_tool_call_message(update, _session_id)
 end
 
 --- Default handler for tool_call session updates.
---- Builds a generic ToolCallBlock from standard ACP fields.
 --- Adapters override this for provider-specific transformations.
 --- @protected
 --- @param session_id string
@@ -1062,8 +1058,8 @@ function ACPClient:__handle_tool_call_update(session_id, update)
 end
 
 --- Handle fs/read_text_file request from the provider.
---- Reads the file from disk and sends the content back. This lets the provider
---- read files outside cwd without hitting the ignore library's ../ rejection.
+--- Lets the provider read files outside cwd without hitting the ignore
+--- library's ../ rejection.
 --- @param message_id number
 --- @param params table {sessionId, path, line?, limit?}
 function ACPClient:_handle_fs_read(message_id, params)
@@ -1102,7 +1098,6 @@ function ACPClient:_handle_fs_read(message_id, params)
 end
 
 --- Handle fs/write_text_file request from the provider.
---- Writes content to disk and sends an empty result back.
 --- @param message_id number
 --- @param params table {sessionId, path, content}
 function ACPClient:_handle_fs_write(message_id, params)

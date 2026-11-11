@@ -5,8 +5,7 @@ local PromptBlocks = require("agentic.utils.prompt_blocks")
 local PromptInput = require("agentic.ui.prompt_input")
 local Theme = require("agentic.theme")
 
---- Highlight namespace for queued input regions. Extmarks are buffer-scoped,
---- so a module-level (global) namespace is fine (see session-isolation rules).
+--- Highlight namespace for queued input regions.
 local NS_QUEUED = vim.api.nvim_create_namespace("agentic_queued_region")
 
 --- Submit, partial send and the queue of one input buffer.
@@ -152,15 +151,12 @@ function InputDispatch:_whole_input_send()
 end
 
 --- Submit a prompt. With no `send`, submits the whole input buffer; with it,
---- submits that slice and saves it to the send register. Single submit
---- entrypoint — the submit keymap and `:w` (BufWriteCmd) both funnel through
---- here.
+--- submits that slice and saves it to the send register.
 ---
---- The submitted lines split into blocks (`utils/prompt_blocks.lua`) and only
---- the first one dispatches now; the rest stay in the buffer as a queued
---- region and drain one per turn, so buffer order is the whole record of the
---- sequence. Prose-only text is a single block, which is every submit that
---- names no command.
+--- The submitted lines split into blocks (`PromptBlocks.split`) and only the
+--- first one dispatches now; the rest stay in the buffer as a queued region
+--- and drain one per turn, so buffer order is the whole record of the
+--- sequence.
 ---
 --- The session decides whether the first block goes now. If it defers, the
 --- lines stay put and are tagged as a queued region instead of being deleted.
@@ -461,12 +457,11 @@ function InputDispatch:_clear_queued_in_range(sr, er)
     end
 end
 
---- Tag lines [sr, er] (0-indexed, inclusive) as a queued region: a full-width
---- (hl_eol) background extmark that leaves the text in place. The extmark IS
---- the region — its range stays accurate for drain because any edit inside it
---- drops the tag (see `new` and `attach_untag`), so a still-tagged mark has
+--- Tag lines [sr, er] (0-indexed, inclusive) as a queued region, leaving the
+--- text in place. The extmark IS the region — its range stays accurate for
+--- drain because any edit inside it drops the tag, so a still-tagged mark has
 --- never been edited since tagging. Re-queueing over existing tags replaces
---- them, so regions never overlap or double-highlight.
+--- them, so regions never overlap.
 --- @param sr integer
 --- @param er integer
 --- @return integer mark_id

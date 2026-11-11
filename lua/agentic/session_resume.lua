@@ -383,14 +383,9 @@ function SessionResume.end_state(row)
     return row.state == "cancelled" and "interrupted" or row.state
 end
 
---- Write a session message or a subagent end as a notice. A message is signed
---- with the glyph of its kind (`Glyphs.MESSAGE`), split into heading and body
---- by `SessionResume.message_title`, with the other end's buffer name, else
---- the sender's name, dimmed under the heading and the body folded, and
---- tagged with its message id. A launch's reply is instead one closed folded
---- row: the title, over that name and the body. An end is signed with its
---- state's status icon when that is one cell wide, else `Glyphs.RUN_ENDED`,
---- and holds the error text, titled `SessionResume.end_state`.
+--- Write a session message or a subagent end as a notice. A message shows the
+--- other end's buffer name, else the sender's name, under its heading. A
+--- launch's reply is instead one closed folded row.
 --- @param writer agentic.ui.MessageWriter
 --- @param row agentic.ui.ChatHistory.SessionMessage|agentic.ui.ChatHistory.SubagentEnd
 --- @param mid_turn boolean The writer's turn is still running, so the row must not finalize it

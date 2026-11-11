@@ -112,8 +112,6 @@ function M.format(err)
             local prefix = msg:sub(1, msg:find("{", 1, true) - 1)
             local http_code = prefix:match("(%d%d%d)%s*$")
 
-            -- Build the main error line: "401 Invalid authentication credentials"
-            -- or just the message if no HTTP code is available
             if http_code and error_msg ~= "" then
                 table.insert(lines, http_code .. " " .. error_msg)
             elseif error_msg ~= "" then

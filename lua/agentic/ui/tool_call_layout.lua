@@ -52,7 +52,7 @@ local M = {}
 --- @field folds agentic.ui.ToolCallLayout.Fold[] Outermost first
 --- @field titled integer[] Opening fence row of each titled section
 --- @field dim? [integer, integer] First and last dimmed row
---- @field diff_blocks? agentic.ui.ToolCallDiff.DiffBlock[] Matched hunks, nil when none matched
+--- @field diff_blocks? agentic.ui.ToolCallDiff.DiffBlock[] Matched hunks, nil when none matched. Kept because matching again fails once the file holds post-edit content
 
 --- @class agentic.ui.ToolCallLayout.Fold
 --- @field anchor integer First row inside the fold
@@ -1067,9 +1067,6 @@ function M.build(block, wrap_width, measure)
     vim.list_extend(sections, body)
 
     local layout = assemble(sections)
-    -- Captured for diff_jump navigation: re-extracting at gf-press time can
-    -- fail once the file's loaded buffer holds post-edit content, where the
-    -- old-text matcher finds nothing.
     if call.diff and #call.diff.hunks > 0 then
         layout.diff_blocks = call.diff.hunks
     end
