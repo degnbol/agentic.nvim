@@ -392,17 +392,12 @@ difference.
 
 ### opencode kind remapping
 
-opencode sends several tools as `kind: "other"` (global `acp` skill →
-`references/opencode.md` § Tool kinds). `OpenCodeACPAdapter:__handle_tool_call`
-re-kinds them by `title`:
-
-| `title` / field                   | Adapter `kind` |
-| --------------------------------- | -------------- |
-| `list`                            | `search`       |
-| `websearch`, `google_search`      | `WebSearch`    |
-| `task`, or `rawInput.subagent_type` | `SubAgent`   |
-| `skill`                           | `Skill`        |
-| `todowrite`                       | `TodoWrite`    |
+opencode gives a subagent call kind `think` and several tools kind `other`
+(global `acp` skill → `references/opencode.md` § Tools › Kinds).
+`__handle_tool_call` and `__handle_tool_call_update` both turn `think` into
+`SubAgent`; `__handle_tool_call` also re-kinds by tool `name`
+(`KIND_BY_NAME`), and updates keep that kind. It keys on `name` because a
+child session's calls arrive with `title` prefixed `<child title>: `.
 
 ### Subagents are child sessions (claude-agent-acp)
 

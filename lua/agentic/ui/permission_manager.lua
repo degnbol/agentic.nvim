@@ -157,11 +157,11 @@ local FILE_SCOPED_KINDS = {
 --- (e.g. `"other"`) still scope correctly without per-tool maintenance.
 --- @type table<string, string[]>
 local CACHE_KEY_FIELDS = {
-    edit = { "file_path", "filePath" },
-    write = { "file_path", "filePath" },
-    create = { "file_path", "filePath" },
-    delete = { "file_path", "filePath" },
-    move = { "file_path", "filePath" },
+    edit = { "file_path", "filePath", "path" },
+    write = { "file_path", "filePath", "path" },
+    create = { "file_path", "filePath", "path" },
+    delete = { "file_path", "filePath", "path" },
+    move = { "file_path", "filePath", "path" },
     execute = { "command" },
     fetch = { "url" },
     WebSearch = { "query" },
@@ -505,7 +505,7 @@ end
 ---
 --- Known field usage by provider:
 ---   - claude-agent-acp, auggie-acp: `file_path` (snake_case)
----   - opencode-acp: `filePath` (camelCase)
+---   - opencode-acp: `path` (`filePath` in sessions migrated from 1.x)
 ---   - gemini-acp, codex-acp, mistral-vibe-acp: path arrives via
 ---     `update.locations[]` or `update.content[]`, not `rawInput` — these
 ---     providers will return nil here and rely on the adapter to surface

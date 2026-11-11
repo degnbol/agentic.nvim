@@ -2,6 +2,7 @@
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 local Deferred = require("tests.helpers.deferred")
+local FileSystem = require("agentic.utils.file_system")
 
 describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
     --- @type table
@@ -10,6 +11,117 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
     before_each(function()
         OpenCodeACPAdapter =
             require("agentic.acp.adapters.opencode_acp_adapter")
+    end)
+
+    local ABS = "/abs/project/a.txt"
+
+    --- @param handler "on_tool_call"|"on_tool_call_update"
+    --- @return table adapter
+    --- @return TestSpy sub_spy
+    local function adapter_with(handler)
+        local sub_spy = spy.new(function() end)
+        local adapter = setmetatable({
+            _children = {},
+            subscribers = { ["sess-1"] = { [handler] = sub_spy } },
+        }, { __index = OpenCodeACPAdapter })
+        return adapter, sub_spy
+    end
+
+    describe("__handle_tool_call", function()
+        --- @type tests.helpers.Deferred
+        local deferred
+
+        before_each(function()
+            deferred = Deferred.capture()
+        end)
+
+        after_each(function()
+            deferred.revert()
+        end)
+
+        --- @param update table
+        --- @return table message
+        local function handle(update)
+            local adapter, sub_spy = adapter_with("on_tool_call")
+            adapter:__handle_tool_call("sess-1", update)
+            deferred.drain()
+            assert.spy(sub_spy).was.called(1)
+            return sub_spy.calls[1][1]
+        end
+
+        it("renders a replayed subagent from its input", function()
+            local msg = handle({
+                toolCallId = "tc-1",
+                name = "subagent",
+                title = "subagent",
+                kind = "think",
+                status = "pending",
+                rawInput = {
+                    agent = "general",
+                    description = "d",
+                    prompt = "p",
+                },
+            })
+
+            assert.equal("SubAgent", msg.kind)
+            assert.equal("general: d", msg.argument)
+            assert.same({ "p" }, msg.body)
+        end)
+
+        it("takes a replayed read's path from its location", function()
+            local msg = handle({
+                toolCallId = "tc-2",
+                name = "read",
+                title = "read",
+                kind = "read",
+                status = "pending",
+                rawInput = { path = "a.txt" },
+                locations = { { path = ABS } },
+            })
+
+            assert.equal(FileSystem.to_smart_path(ABS), msg.argument)
+        end)
+
+        it("keeps a live shell call's head off its cwd", function()
+            local msg = handle({
+                toolCallId = "tc-shell",
+                name = "shell",
+                title = "shell",
+                kind = "execute",
+                status = "pending",
+                rawInput = { cwd = "/abs/project" },
+                locations = { { path = "/abs/project" } },
+            })
+
+            assert.equal("shell", msg.argument)
+        end)
+
+        it("formats a child grep by its name", function()
+            local msg = handle({
+                toolCallId = "tc-3",
+                name = "grep",
+                title = "child: grep",
+                kind = "search",
+                status = "pending",
+                rawInput = { pattern = "foo" },
+            })
+
+            assert.equal('rg "foo"', msg.argument)
+            assert.equal("foo", msg.search_pattern)
+        end)
+
+        it("re-kinds a skill by its name", function()
+            local msg = handle({
+                toolCallId = "tc-4",
+                name = "skill",
+                title = "child: skill",
+                kind = "other",
+                status = "pending",
+                rawInput = {},
+            })
+
+            assert.equal("Skill", msg.kind)
+        end)
     end)
 
     describe("__handle_tool_call_update", function()
@@ -40,12 +152,7 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
             adapter:__handle_tool_call_update("sess-1", {
                 toolCallId = "tc-task-1",
                 status = "completed",
-                kind = "other",
-                rawInput = {
-                    subagent_type = "general",
-                    description = "explore codebase",
-                    prompt = "Find all references to X",
-                },
+                kind = "think",
                 content = {
                     {
                         type = "content",
@@ -71,56 +178,55 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
             )
         end)
 
-        it(
-            "handles completed SubAgent with multi-line body via rawOutput",
-            function()
-                local sub_spy = spy.new(function() end)
+        it("handles failed SubAgent with a multi-line body", function()
+            local sub_spy = spy.new(function() end)
 
-                --- @type agentic.acp.ACPClient
-                local adapter = setmetatable({
-                    _children = {},
-                    subscribers = {
-                        ["sess-1"] = {
-                            on_tool_call_update = sub_spy,
+            --- @type agentic.acp.ACPClient
+            local adapter = setmetatable({
+                _children = {},
+                subscribers = {
+                    ["sess-1"] = {
+                        on_tool_call_update = sub_spy,
+                    },
+                },
+            }, { __index = OpenCodeACPAdapter })
+
+            adapter:__handle_tool_call_update("sess-1", {
+                toolCallId = "tc-task-2",
+                status = "failed",
+                kind = "think",
+                title = "subagent",
+                rawInput = {
+                    agent = "explore",
+                    description = "search codebase",
+                    prompt = "Find X",
+                },
+                content = {
+                    {
+                        type = "content",
+                        content = {
+                            type = "text",
+                            text = "task_id: sess_abc (for resuming)\n\n<task_result>\nFound matching patterns in 3 files.\n</task_result>",
                         },
                     },
-                }, { __index = OpenCodeACPAdapter })
+                },
+            })
 
-                adapter:__handle_tool_call_update("sess-1", {
-                    toolCallId = "tc-task-2",
-                    status = "completed",
-                    kind = "other",
-                    rawInput = {
-                        subagent_type = "explore",
-                        description = "search codebase",
-                    },
-                    content = {
-                        {
-                            type = "content",
-                            content = {
-                                type = "text",
-                                text = "task_id: sess_abc (for resuming)\n\n<task_result>\nFound matching patterns in 3 files.\n</task_result>",
-                            },
-                        },
-                    },
-                })
+            deferred.drain()
 
-                deferred.drain()
+            assert.spy(sub_spy).was.called(1)
 
-                assert.spy(sub_spy).was.called(1)
-
-                local msg = sub_spy.calls[1][1]
-                assert.equal("SubAgent", msg.kind)
-                assert.equal("tc-task-2", msg.tool_call_id)
-                assert.same({
-                    "task_id: sess_abc (for resuming)",
-                    "",
-                    "<task_result>",
-                    "Found matching patterns in 3 files.",
-                    "</task_result>",
-                }, msg.body)
-            end
-        )
+            local msg = sub_spy.calls[1][1]
+            assert.equal("SubAgent", msg.kind)
+            assert.equal("tc-task-2", msg.tool_call_id)
+            assert.same({
+                "task_id: sess_abc (for resuming)",
+                "",
+                "<task_result>",
+                "Found matching patterns in 3 files.",
+                "</task_result>",
+            }, msg.body)
+        end)
 
         it("skips update when status is nil", function()
             local sub_spy = spy.new(function() end)
@@ -137,10 +243,8 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
 
             adapter:__handle_tool_call_update("sess-1", {
                 toolCallId = "tc-task-3",
-                kind = "other",
-                rawInput = {
-                    subagent_type = "general",
-                },
+                kind = "think",
+                rawInput = { agent = "general" },
             })
 
             -- The nil-status early return schedules no subscriber call. Drain
@@ -165,10 +269,12 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
             adapter:__handle_tool_call_update("sess-1", {
                 toolCallId = "tc-task-4",
                 status = "in_progress",
-                kind = "other",
+                kind = "think",
+                title = "subagent",
                 rawInput = {
-                    subagent_type = "general",
+                    agent = "general",
                     description = "test task",
+                    prompt = "p",
                 },
             })
 
@@ -179,6 +285,62 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
             local msg = sub_spy.calls[1][1]
             assert.equal("SubAgent", msg.kind)
             assert.equal("pending", msg.status)
+            assert.equal("general: test task", msg.argument)
+            assert.same({ "p" }, msg.body)
+        end)
+
+        --- @param update table
+        --- @return table message
+        local function handle(update)
+            local adapter, sub_spy = adapter_with("on_tool_call_update")
+            adapter:__handle_tool_call_update("sess-1", update)
+            deferred.drain()
+            assert.spy(sub_spy).was.called(1)
+            return sub_spy.calls[1][1]
+        end
+
+        it("takes an in-progress edit's path from its location", function()
+            local msg = handle({
+                toolCallId = "tc-edit",
+                status = "in_progress",
+                kind = "edit",
+                title = "edit",
+                rawInput = { path = "a.txt", oldString = "a", newString = "b" },
+                locations = { { path = ABS } },
+            })
+
+            assert.equal(FileSystem.to_smart_path(ABS), msg.argument)
+            assert.same({ old = { "a" }, new = { "b" }, all = false }, msg.diff)
+        end)
+
+        it("shows an in-progress skill's id", function()
+            local msg = handle({
+                toolCallId = "tc-skill",
+                status = "in_progress",
+                kind = "other",
+                title = "skill",
+                rawInput = { id = "x" },
+            })
+
+            assert.equal("x", msg.argument)
+        end)
+
+        it("shows a failed call's error, not its title", function()
+            local msg = handle({
+                toolCallId = "tc-mcp",
+                status = "failed",
+                kind = "other",
+                title = "mcp_tool",
+                rawInput = { name = "n" },
+                content = {
+                    {
+                        type = "content",
+                        content = { type = "text", text = "boom" },
+                    },
+                },
+            })
+
+            assert.same({ "boom" }, msg.body)
         end)
     end)
 

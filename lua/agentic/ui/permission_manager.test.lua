@@ -708,6 +708,17 @@ describe("agentic.ui.PermissionManager", function()
             assert.is_true(cb2:called_with("reject-once"))
         end)
 
+        it("keys an edit on rawInput.path", function()
+            assert.equal(
+                "edit:a.txt",
+                pm:_build_cache_key({
+                    toolCallId = "tc-path",
+                    kind = "edit",
+                    rawInput = { path = "a.txt" },
+                })
+            )
+        end)
+
         describe("a command filled in from the tracker", function()
             --- A permission request for tool call `id` on wire kind `kind`.
             --- @param id string

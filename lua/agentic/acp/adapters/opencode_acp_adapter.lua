@@ -34,6 +34,57 @@ local function format_search_command(tool, raw_input)
     return table.concat(parts, " ")
 end
 
+--- The block fields a tool call's input gives: its head, and for some tools
+--- a body, description or search pattern.
+--- @param tool string|nil Tool name. Only `grep` and `glob` get an `rg` command as head.
+--- @param update agentic.acp.OpenCodeToolCallMessage|agentic.acp.OpenCodeToolCallUpdate
+--- @return { argument?: string, body?: string[], description?: string, search_pattern?: string } fields Empty when the input names nothing
+local function input_fields(tool, update)
+    local raw = update.rawInput or {}
+    -- opencode resolves this against the session cwd, unlike `rawInput.path`.
+    -- Only a read or edit's location is its file: shell's is its cwd,
+    -- grep's and glob's the search directory.
+    local file = (update.kind == "read" or update.kind == "edit")
+        and update.locations
+        and update.locations[1]
+    if raw.pattern then
+        return {
+            argument = (tool == "grep" or tool == "glob")
+                    and format_search_command(tool, raw)
+                or nil,
+            search_pattern = raw.pattern,
+        }
+    elseif raw.url then
+        return { argument = raw.url }
+    elseif raw.query then
+        return { argument = raw.query, body = ACPClient:safe_split(raw.query) }
+    elseif raw.command then
+        return { argument = raw.command, description = raw.description }
+    elseif update.kind == "think" and raw.agent then
+        return {
+            argument = string.format(
+                "%s: %s",
+                raw.agent,
+                raw.description or ""
+            ),
+            body = raw.prompt and ACPClient:safe_split(raw.prompt) or nil,
+        }
+    elseif file and file.path then
+        return { argument = FileSystem.to_smart_path(file.path) }
+    elseif raw.id then
+        return { argument = raw.id }
+    end
+    return {}
+end
+
+--- Adapter kind per opencode tool name, for tools opencode kinds `other`.
+--- @type table<string, string>
+local KIND_BY_NAME = {
+    websearch = "WebSearch",
+    skill = "Skill",
+    todowrite = "TodoWrite",
+}
+
 --- OpenCode-specific adapter that extends ACPClient with OpenCode-specific behaviors
 --- @class agentic.acp.OpenCodeACPAdapter : agentic.acp.ACPClient
 local OpenCodeACPAdapter = ACPClient.extend()
@@ -45,35 +96,14 @@ function OpenCodeACPAdapter:__handle_tool_call(session_id, update)
     --- @type agentic.ui.MessageWriter.ToolCallBlock
     local message = {
         tool_call_id = update.toolCallId,
-        kind = update.kind,
+        kind = update.kind == "think" and "SubAgent"
+            or KIND_BY_NAME[update.name]
+            or update.kind,
         status = update.status,
         argument = update.title ~= update.kind and update.title or "pending...",
     }
-
-    if update.title == "list" then
-        message.kind = "search"
-    elseif update.title == "websearch" or update.title == "google_search" then
-        message.kind = "WebSearch"
-    elseif update.title == "task" then
-        message.kind = "SubAgent"
-    elseif update.title == "skill" then
-        message.kind = "Skill"
-        message.argument = update.rawInput and update.rawInput.name
-            or "unknown skill"
-    elseif update.title == "todowrite" then
-        message.kind = "TodoWrite"
-    elseif update.title == "grep" or update.title == "glob" then
-        -- rawInput is usually empty on the initial tool_call; the pattern
-        -- arrives in tool_call_update. Try to format here so the block
-        -- shows the real command immediately when rawInput is populated,
-        -- and fall back to "pending..." otherwise.
-        local cmd = update.rawInput
-            and format_search_command(update.title, update.rawInput)
-        message.argument = cmd or "pending..."
-        if update.rawInput and update.rawInput.pattern then
-            message.search_pattern = update.rawInput.pattern
-        end
-    end
+    message =
+        vim.tbl_extend("force", message, input_fields(update.name, update)) --[[@as agentic.ui.MessageWriter.ToolCallBlock]]
 
     self:__with_subscriber(session_id, function(subscriber)
         subscriber.on_tool_call(message)
@@ -107,19 +137,18 @@ end
 --- Specific OpenCode structure - created to avoid confusion with the standard ACP types,
 --- as only OpenCode sends these fields
 --- @class agentic.acp.OpenCodeToolCallMessage : agentic.acp.ToolCallMessage
+--- @field name? string Tool name
 --- @field rawInput? agentic.acp.OpenCodeToolCallRawInput
 
 --- @class agentic.acp.OpenCodeToolCallRawInput : agentic.acp.RawInput
---- @field filePath? string
 --- @field newString? string
 --- @field oldString? string
 --- @field replaceAll? boolean
---- @field error? string
---- @field name? string Skill name
---- @field subagent_type? string For sub-agent tasks
---- @field description? string For sub-agent tasks
+--- @field id? string Skill id
+--- @field agent? string For sub-agent tasks
+--- @field description? string Sub-agent task description, or a 1.x shell command's
 --- @field prompt? string For sub-agent tasks
---- @field path? string Search directory for grep/glob
+--- @field path? string File path as the model gave it, or search directory for grep/glob
 --- @field include? string File pattern filter for grep
 
 --- @class agentic.acp.OpenCodeToolCallUpdate : agentic.acp.ToolCallUpdate
@@ -150,16 +179,15 @@ function OpenCodeACPAdapter:__handle_tool_call_update(session_id, update)
         status = status,
     }
 
-    -- Detect SubAgent for ALL statuses (kind comes as "other" from OpenCode)
-    if update.rawInput and update.rawInput.subagent_type then
+    if update.kind == "think" then
         message.kind = "SubAgent"
     end
 
-    -- Opencode sends Edit diffs via the standard ACP content field. For writes
-    -- content[1] is a "Wrote file successfully." text entry and the diff sits
-    -- at [2], hence find_content_diff rather than extract_content_body.
-    -- MessageWriter freezes the diff after first render, so double-setting
-    -- across updates is safe.
+    -- Opencode sends Edit diffs via the standard ACP content field. On a
+    -- completed edit content[1] is a status text entry (e.g. `Edited a.txt
+    -- (1 replacement)`) ahead of the diff, hence find_content_diff rather
+    -- than extract_content_body. MessageWriter freezes the diff after first
+    -- render, so double-setting across updates is safe.
     local diff_content = self:find_content_diff(update)
     if diff_content then
         message.argument = FileSystem.to_smart_path(diff_content.path or "")
@@ -170,87 +198,22 @@ function OpenCodeACPAdapter:__handle_tool_call_update(session_id, update)
     end
 
     if update.status == "completed" or update.status == "failed" then
-        if
-            update.kind == "other"
-            and update.rawInput
-            and update.rawInput.name
-        then
-            message.body = { update.title or "" }
-        elseif not message.diff then
+        if not message.diff then
             message.body = self:extract_content_body(update)
         end
-
-        -- Lift description for execute tool calls
-        if
-            update.kind == "execute"
-            and update.rawInput
-            and update.rawInput.description
-        then
-            message.description = update.rawInput.description
-        end
     else
-        if update.rawInput then
-            if update.rawInput.newString then
-                message.argument =
-                    FileSystem.to_smart_path(update.rawInput.filePath or "")
-
-                local old_string = update.rawInput.oldString
-
-                message.diff = {
-                    new = self:safe_split(update.rawInput.newString),
-                    old = self:safe_split(old_string),
-                    all = update.rawInput.replaceAll or false,
-                }
-            elseif update.rawInput.pattern then -- grep/glob search
-                -- Only format the argument when we can identify the tool by
-                -- its in-progress title. On `completed`, opencode replaces
-                -- title with `part.state.title` (the pattern itself), so
-                -- treating that as a tool name would mis-format. Skipping
-                -- here lets MessageWriter's merge keep the argument written
-                -- during the earlier in_progress update.
-                if update.title == "grep" or update.title == "glob" then
-                    local cmd =
-                        format_search_command(update.title, update.rawInput)
-                    if cmd then
-                        message.argument = cmd
-                    end
-                end
-                message.search_pattern = update.rawInput.pattern
-            elseif update.rawInput.url then -- fetch command
-                message.argument = update.rawInput.url
-            elseif update.rawInput.query then -- WebSearch command
-                message.argument = update.rawInput.query
-                message.body = self:safe_split(update.rawInput.query)
-            elseif update.rawInput.command then
-                message.argument = update.rawInput.command
-
-                if update.rawInput.description then
-                    message.description = update.rawInput.description
-                end
-            elseif update.rawInput.subagent_type then
-                message.argument = string.format(
-                    "%s: %s",
-                    update.rawInput.subagent_type,
-                    update.rawInput.description or ""
-                )
-                if update.rawInput.prompt then
-                    message.body = self:safe_split(update.rawInput.prompt)
-                end
-            elseif update.rawInput.filePath then
-                message.argument =
-                    FileSystem.to_smart_path(update.rawInput.filePath)
-            elseif update.rawInput.name then
-                message.argument = update.rawInput.name
-            elseif update.rawInput.error then
-                message.body = self:safe_split(update.rawInput.error)
-            end
-        elseif update.rawOutput then -- rawOutput doesn't seem standard, also we don't have types
-            if update.rawOutput.output then
-                message.body = self:safe_split(update.rawOutput.output)
-            elseif update.rawOutput.error then
-                message.body = self:safe_split(update.rawOutput.error)
-            end
+        local raw = update.rawInput
+        if raw and raw.newString then
+            message.diff = {
+                new = self:safe_split(raw.newString),
+                old = self:safe_split(raw.oldString),
+                all = raw.replaceAll or false,
+            }
         end
+        -- An update's title is the tool name (the command for shell),
+        -- prefixed with the subagent's title for a child call.
+        message =
+            vim.tbl_extend("force", message, input_fields(update.title, update)) --[[@as agentic.ui.MessageWriter.ToolCallBase]]
     end
 
     self:__with_subscriber(session_id, function(subscriber)
