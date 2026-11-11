@@ -94,7 +94,7 @@ BackgroundSession.__index = BackgroundSession
 
 --- Start a session. `prompt` calls wait until it is ready.
 --- @param opts agentic.BackgroundSession.Opts
---- @return agentic.BackgroundSession|nil session Nil with a notify for another provider
+--- @return agentic.BackgroundSession|nil session Nil with a notify for another provider, or when its process cannot be configured
 function BackgroundSession:new(opts)
     if opts.provider ~= PROVIDER then
         Logger.notify(
@@ -116,14 +116,7 @@ function BackgroundSession:new(opts)
         _history = ChatHistory:new(),
     }, self)
 
-    -- A provider that fails to start never calls `on_ready`, and reaches
-    -- only sessions already subscribed.
-    self._start_timer = vim.defer_fn(function()
-        if not self._ready and not self._destroyed then
-            self:_fail_start("timeout")
-        end
-    end, opts.turn_timeout_ms)
-    AgentInstance.get_instance(opts.provider, function(client)
+    local instance = AgentInstance.get_instance(opts.provider, function(client)
         vim.schedule(function()
             -- A reconnect runs this again.
             if self._destroyed or self._client then
@@ -138,7 +131,17 @@ function BackgroundSession:new(opts)
                 end
             )
         end)
-    end)
+    end, true)
+    if not instance then
+        return nil
+    end
+    -- A provider that fails to start never calls `on_ready`, and reaches
+    -- only sessions already subscribed.
+    self._start_timer = vim.defer_fn(function()
+        if not self._ready and not self._destroyed then
+            self:_fail_start("timeout")
+        end
+    end, opts.turn_timeout_ms)
     return self
 end
 
@@ -463,7 +466,7 @@ function BackgroundSession:_check_tripwire(tool_call_id)
         return
     end
     Logger.notify(
-        ('Background session %q stopped: opencode ran a %s call without asking. Set `edit` and `bash` to "ask" in opencode\'s `permission` config.'):format(
+        ("Background session %q stopped: opencode ran a %s call without asking; a managed opencode setting may allow it."):format(
             self._opts.label,
             kind
         ),

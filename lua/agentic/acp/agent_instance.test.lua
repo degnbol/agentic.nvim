@@ -1,5 +1,6 @@
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
+local MiniTest = require("mini.test")
 
 describe("agentic.acp.AgentInstance", function()
     local AgentInstance = require("agentic.acp.agent_instance")
@@ -50,6 +51,124 @@ describe("agentic.acp.AgentInstance", function()
 
             assert.are_not.equal(opencode, gemini)
             assert.equal("gemini-acp", gemini.provider_name)
+        end)
+
+        describe("unattended", function()
+            local Config = require("agentic.config")
+            local Logger = require("agentic.utils.logger")
+            local OpenCode = adapters["opencode-acp"]
+
+            --- @type TestStub
+            local env_stub
+            --- @type TestStub
+            local notify_stub
+
+            before_each(function()
+                env_stub = spy.stub(OpenCode, "unattended_env")
+                env_stub:returns({ FOO = "1" })
+                notify_stub = spy.stub(Logger, "notify")
+            end)
+
+            after_each(function()
+                notify_stub:revert()
+                env_stub:revert()
+            end)
+
+            it("gets its own client with the merged env", function()
+                local provider = Config.acp_providers["opencode-acp"]
+                local saved_env = provider.env
+                provider.env = { BAR = "2" }
+                MiniTest.finally(function()
+                    provider.env = saved_env
+                end)
+                local before = vim.deepcopy(provider)
+                local plain = AgentInstance.get_instance("opencode-acp")
+                local unattended =
+                    AgentInstance.get_instance("opencode-acp", nil, true)
+
+                assert.is_false(rawequal(plain, unattended))
+                assert.equal("opencode-acp", unattended.provider_name)
+                assert.is_true(
+                    rawequal(plain, AgentInstance.get_instance("opencode-acp"))
+                )
+                local config = new_stubs["opencode-acp"].calls[2][2]
+                assert.same({ BAR = "2", FOO = "1" }, config.env)
+                assert.same(before, provider)
+            end)
+
+            it("asks for the env once", function()
+                local first =
+                    AgentInstance.get_instance("opencode-acp", nil, true)
+                local second =
+                    AgentInstance.get_instance("opencode-acp", nil, true)
+
+                assert.is_true(rawequal(first, second))
+                assert.spy(env_stub).was.called(1)
+            end)
+
+            it("notifies and returns nil when the env fails", function()
+                env_stub:invokes(function()
+                    return nil, "bad OPENCODE_CONFIG_CONTENT"
+                end)
+                local on_ready = spy.new(function() end)
+
+                local client =
+                    AgentInstance.get_instance("opencode-acp", on_ready, true)
+
+                assert.is_nil(client)
+                assert.spy(on_ready).was.called(0)
+                assert.spy(notify_stub).was.called(1)
+                assert.spy(new_stubs["opencode-acp"]).was.called(0)
+            end)
+        end)
+
+        describe("dead client", function()
+            --- @param subscribers table
+            --- @param state string|nil Default disconnected
+            --- @return table client
+            local function dead_client(subscribers, state)
+                local client = {
+                    state = state or "disconnected",
+                    subscribers = subscribers,
+                    restart = spy.new(function() end),
+                }
+                new_stubs["opencode-acp"]:invokes(function()
+                    return client
+                end)
+                AgentInstance.get_instance("opencode-acp")
+                return client
+            end
+
+            it("restarts one without subscribers", function()
+                local client = dead_client({})
+                local on_ready = spy.new(function() end)
+
+                local returned =
+                    AgentInstance.get_instance("opencode-acp", on_ready)
+
+                assert.equal(client, returned)
+                assert.spy(client.restart).was.called(1)
+                assert.equal(on_ready, client.restart.calls[1][2])
+                assert.spy(on_ready).was.called(0)
+            end)
+
+            it("restarts one in error", function()
+                local client = dead_client({}, "error")
+
+                AgentInstance.get_instance("opencode-acp")
+
+                assert.spy(client.restart).was.called(1)
+            end)
+
+            it("hands out one with subscribers as is", function()
+                local client = dead_client({ ["s-1"] = {} })
+                local on_ready = spy.new(function() end)
+
+                AgentInstance.get_instance("opencode-acp", on_ready)
+
+                assert.spy(client.restart).was.called(0)
+                assert.spy(on_ready).was.called(1)
+            end)
         end)
     end)
 

@@ -1270,9 +1270,7 @@ Each skeptic has a transcript, opened like a subagent's
 
 Requires:
 - `text_model.url`, for the model that extracts the claims.
-- The `opencode-acp` provider, with `edit` and `bash` set to "ask" in
-  opencode's `permission` config. A skeptic that runs one of them without
-  asking is stopped.
+- The `opencode-acp` provider.
 
     `/skeptic`           Report whether the skeptic is on.
     `/skeptic on|off`    Turn it on or off for the session.

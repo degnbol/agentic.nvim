@@ -80,6 +80,30 @@ function OpenCodeACPAdapter:__handle_tool_call(session_id, update)
     end)
 end
 
+--- `OPENCODE_CONFIG_CONTENT` with an `ask` rule for every tool appended to
+--- its `permissions`: opencode's last matching rule wins, and the inline
+--- config outranks every config file. The base is `env`'s value, else the
+--- editor's, else `{}`.
+--- @param env table<string, string|nil> The env the process starts with
+--- @return table<string, string>|nil env
+--- @return string|nil err Why the base config cannot be extended
+function OpenCodeACPAdapter:unattended_env(env)
+    local base = env.OPENCODE_CONFIG_CONTENT
+        or vim.env.OPENCODE_CONFIG_CONTENT
+        or "{}"
+    local ok, config = pcall(vim.json.decode, base)
+    if not ok or type(config) ~= "table" or vim.islist(config) then
+        return nil, "OPENCODE_CONFIG_CONTENT is not a JSON object: " .. base
+    end
+    local rules = config.permissions or {}
+    if not vim.islist(rules) then
+        return nil, "OPENCODE_CONFIG_CONTENT `permissions` is not a list"
+    end
+    table.insert(rules, { action = "*", resource = "*", effect = "ask" })
+    config.permissions = rules
+    return { OPENCODE_CONFIG_CONTENT = vim.json.encode(config) }
+end
+
 --- Specific OpenCode structure - created to avoid confusion with the standard ACP types,
 --- as only OpenCode sends these fields
 --- @class agentic.acp.OpenCodeToolCallMessage : agentic.acp.ToolCallMessage

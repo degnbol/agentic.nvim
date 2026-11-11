@@ -181,4 +181,68 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
             assert.equal("pending", msg.status)
         end)
     end)
+
+    describe("unattended_env", function()
+        local ASK = { action = "*", resource = "*", effect = "ask" }
+
+        --- @type string|nil
+        local saved_env
+
+        before_each(function()
+            saved_env = vim.env.OPENCODE_CONFIG_CONTENT
+            vim.env.OPENCODE_CONFIG_CONTENT = nil
+        end)
+
+        after_each(function()
+            vim.env.OPENCODE_CONFIG_CONTENT = saved_env
+        end)
+
+        --- @param env table<string, string>
+        --- @return table config Decoded `OPENCODE_CONFIG_CONTENT`
+        local function config_of(env)
+            local result, err = OpenCodeACPAdapter:unattended_env(env)
+            assert.is_nil(err)
+            return vim.json.decode(result.OPENCODE_CONFIG_CONTENT)
+        end
+
+        it("asks for every call without a base config", function()
+            assert.same({ permissions = { ASK } }, config_of({}))
+        end)
+
+        it("appends the rule to the base's rules and keeps its keys", function()
+            local allow = { action = "shell", resource = "*", effect = "allow" }
+            local config = config_of({
+                OPENCODE_CONFIG_CONTENT = vim.json.encode({
+                    model = "a/b",
+                    permissions = { allow },
+                }),
+            })
+
+            assert.same({ model = "a/b", permissions = { allow, ASK } }, config)
+        end)
+
+        it("reads the base from the editor's env", function()
+            vim.env.OPENCODE_CONFIG_CONTENT = '{"model":"a/b"}'
+
+            assert.same({ model = "a/b", permissions = { ASK } }, config_of({}))
+        end)
+
+        it("rejects a base that is not a JSON object", function()
+            for _, base in ipairs({
+                "{",
+                "[]",
+                '"x"',
+                "1",
+                "null",
+                '{"permissions":{}}',
+                '{"permissions":{"edit":"ask"}}',
+            }) do
+                local result, err = OpenCodeACPAdapter:unattended_env({
+                    OPENCODE_CONFIG_CONTENT = base,
+                })
+                assert.is_nil(result)
+                assert.truthy(err:find("OPENCODE_CONFIG_CONTENT", 1, true))
+            end
+        end)
+    end)
 end)

@@ -198,6 +198,17 @@ describe("agentic.BackgroundSession", function()
         assert.equal(0, instance_stub.call_count)
     end)
 
+    it("asks for the unattended client", function()
+        new_session()
+        assert.is_true(instance_stub.calls[1][3])
+    end)
+
+    it("is nil and starts no timer without a client", function()
+        instance_stub:invokes(function() end)
+        assert.is_nil(new_session())
+        assert.equal(0, #timers)
+    end)
+
     it("is no registry session and saves no history", function()
         local session = new_session() --[[@as agentic.BackgroundSession]]
         create()
@@ -425,7 +436,9 @@ describe("agentic.BackgroundSession", function()
         end)
 
         it("fails queued prompts when the start never ends", function()
-            instance_stub:invokes(function() end)
+            instance_stub:invokes(function()
+                return client
+            end)
             local session = new_session() --[[@as agentic.BackgroundSession]]
             local results, on_done = collector()
             session:prompt("hi", on_done)

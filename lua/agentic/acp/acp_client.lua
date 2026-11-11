@@ -68,7 +68,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 
 --- @class agentic.acp.ACPClient : agentic.acp.ACPClientData
 --- @field provider_name agentic.UserConfig.ProviderName Config key of the provider this client runs
---- @field usage_limit agentic.acp.UsageLimit The provider account's usage limit. A restart keeps it
+--- @field usage_limit agentic.acp.UsageLimit This process's usage limit. A restart keeps it
 --- @field _on_ready fun(client: agentic.acp.ACPClient) Ready callback passed to `new`, run again when a dropped connection reconnects
 --- @field _connection integer Number of connections started. Callbacks of an earlier connection are ignored
 --- @field _was_ready? boolean Whether any connection has reached `ready`
@@ -355,6 +355,16 @@ end
 --- @return table|nil meta
 function ACPClient:capability_meta()
     return nil
+end
+
+--- The env entries that make the provider leave every tool call's permission
+--- to the client, over any rule of the user's that allows it. Called on the
+--- class, not an instance. The default has none to give.
+--- @param _env table<string, string|nil> The env the process starts with
+--- @return table<string, string>|nil env
+--- @return string|nil err Why no env could be built
+function ACPClient:unattended_env(_env)
+    return nil, "no way to send every tool call for a permission decision"
 end
 
 --- Claude's config directory for the environment this client runs with:

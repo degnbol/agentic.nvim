@@ -22,7 +22,7 @@ the file is dispatched (`_dispatch_replay_tail`).
 Two races leave a callback acting on a session that has moved on:
 
 1. **Constructor on-ready race:** `AgentInstance.get_instance()` calls `on_ready`
-   synchronously when the instance already exists. The constructor wraps the
+   synchronously for a cached instance it does not restart. The constructor wraps the
    inner logic in `vim.schedule`. When `load_acp_session()` is called immediately
    after construction (from `SessionResume.resume`), the deferred callback fires
    after `_do_load_acp_session` — without the `_load_state` guard it would call
