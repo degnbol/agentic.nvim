@@ -1267,9 +1267,9 @@ resume and a re-create from history.
 
                                                         *agentic-agents-panel*
 The agents panel has a row for each subagent that works or whose transcript
-is listed: `<state>  <heading>  <transcript name>`. The state is `working`,
-else how its last run ended. `toggle_agents` shows or hides it; without a
-row, it stays closed. With
+is listed, in aligned columns: state, mode, agent type, transcript name,
+label. The state is `working`, else how its last run ended. `toggle_agents`
+shows or hides it; without a row, it stays closed. With
 `windows.agents.auto_open`, it opens when a subagent starts work, but not
 while a resumed session replays; it closes when its last row goes.
 

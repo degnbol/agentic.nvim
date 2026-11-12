@@ -1,4 +1,5 @@
 local BufHelpers = require("agentic.utils.buf_helpers")
+local Columns = require("agentic.utils.columns")
 local Logger = require("agentic.utils.logger")
 local ToolCallLayout = require("agentic.ui.tool_call_layout")
 
@@ -7,8 +8,8 @@ local ToolCallLayout = require("agentic.ui.tool_call_layout")
 --- @field buf_of fun(child_id: string): integer|nil A subagent's transcript, while valid
 --- @field open fun(child_id: string) Show a subagent's transcript
 
---- A session's subagents, one row each: how its work stands, its heading and
---- its transcript's name.
+--- A session's subagents, one row each: how its work stands, its mode, its
+--- agent type, its transcript's name and its label.
 --- @class agentic.ui.AgentsPanel
 --- @field _get_buf fun(): integer|nil
 --- @field _actions agentic.ui.AgentsPanel.Actions
@@ -27,17 +28,31 @@ function AgentsPanel:new(get_buf, actions)
     }, self)
 end
 
---- One row per entry: `<state>  <heading>  <name>`.
+--- The cells of an entry's row: state, mode, agent type, name and label.
+--- The mode and type are empty while unknown, and the label is `Agent`
+--- without one.
+--- @param entry agentic.Subagents.Entry
+--- @return string[] cells
+local function cells(entry)
+    local subagent = entry.subagent
+    if not subagent then
+        return { entry.state, "", "", entry.name, "Agent" }
+    end
+    return {
+        entry.state,
+        ToolCallLayout.subagent_mode_text(subagent),
+        subagent.agent_type or "",
+        entry.name,
+        subagent.label or "Agent",
+    }
+end
+
+--- One row per entry, in columns `<state>  <mode>  <type>  <name>  <label>`
+--- padded to align. A column empty on every row is left out.
 --- @param entries agentic.Subagents.Entry[]
 --- @return string[] lines
 function AgentsPanel.lines(entries)
-    return vim.tbl_map(function(entry)
-        return table.concat({
-            entry.state,
-            ToolCallLayout.subagent_heading(entry.subagent),
-            entry.name,
-        }, "  ")
-    end, entries)
+    return Columns.align(vim.tbl_map(cells, entries), "  ")
 end
 
 --- Write the rows of `entries`. No-op while `get_buf` gives nil.

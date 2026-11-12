@@ -5,20 +5,20 @@ local spy = require("tests.helpers.spy")
 local AgentsPanel = require("agentic.ui.agents_panel")
 local Logger = require("agentic.utils.logger")
 local SessionRegistry = require("agentic.session_registry")
-local ToolCallLayout = require("agentic.ui.tool_call_layout")
 
 --- @type agentic.ui.MessageWriter.SubagentInfo
 local info = { label = "map UI", mode = "blocking", confirmed = true }
 
 --- @param child_id string
 --- @param state string
+--- @param subagent agentic.ui.MessageWriter.SubagentInfo|nil Default `info`
 --- @return agentic.Subagents.Entry
-local function entry(child_id, state)
+local function entry(child_id, state, subagent)
     --- @type agentic.Subagents.Entry
     local e = {
         child_id = child_id,
         state = state,
-        subagent = info,
+        subagent = subagent or info,
         name = "agentic://c1/" .. child_id,
     }
     return e
@@ -26,29 +26,59 @@ end
 
 describe("agentic.ui.AgentsPanel", function()
     describe("lines", function()
-        it("gives one row per entry: state, heading, name", function()
+        it("aligns state, mode, type, name and label", function()
             assert.same(
                 {
-                    "working  "
-                        .. ToolCallLayout.subagent_heading(info)
-                        .. "  agentic://c1/a",
-                    "completed  "
-                        .. ToolCallLayout.subagent_heading(info)
-                        .. "  agentic://c1/b",
+                    "working    Blocking?   Explore        agentic://c1/a  Map UI",
+                    "completed  Background  code-reviewer  agentic://c1/b  Review",
+                },
+                AgentsPanel.lines({
+                    entry("a", "working", {
+                        mode = "blocking",
+                        confirmed = false,
+                        agent_type = "Explore",
+                        label = "Map UI",
+                    }),
+                    entry("b", "completed", {
+                        mode = "background",
+                        confirmed = true,
+                        agent_type = "code-reviewer",
+                        label = "Review",
+                    }),
+                })
+            )
+        end)
+
+        it("labels an entry without a block `Agent`", function()
+            local e = entry("a", "ended")
+            e.subagent = nil
+            assert.same(
+                {
+                    "ended                       agentic://c1/a  Agent",
+                    "working  Blocking  Explore  agentic://c1/b  map UI",
+                },
+                AgentsPanel.lines({
+                    e,
+                    entry("b", "working", {
+                        mode = "blocking",
+                        confirmed = true,
+                        agent_type = "Explore",
+                        label = "map UI",
+                    }),
+                })
+            )
+        end)
+
+        it("drops the type column while no entry has a type", function()
+            assert.same(
+                {
+                    "working    Blocking  agentic://c1/a  map UI",
+                    "completed  Blocking  agentic://c1/b  map UI",
                 },
                 AgentsPanel.lines({
                     entry("a", "working"),
                     entry("b", "completed"),
                 })
-            )
-        end)
-
-        it("heads an entry without a block `Agent`", function()
-            local e = entry("a", "ended")
-            e.subagent = nil
-            assert.same(
-                { "ended  Agent  agentic://c1/a" },
-                AgentsPanel.lines({ e })
             )
         end)
     end)

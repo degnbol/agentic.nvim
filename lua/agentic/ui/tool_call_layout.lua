@@ -182,7 +182,7 @@ local SUBAGENT_MODE_TEXT = {
 --- with a trailing `?` while the mode is only predicted.
 --- @param subagent agentic.ui.MessageWriter.SubagentInfo
 --- @return string
-local function subagent_mode_text(subagent)
+function M.subagent_mode_text(subagent)
     return SUBAGENT_MODE_TEXT[subagent.mode]
         .. (subagent.confirmed and "" or "?")
 end
@@ -198,7 +198,7 @@ function M.subagent_heading(subagent)
     end
     return string.format(
         "%s %s%s",
-        subagent_mode_text(subagent),
+        M.subagent_mode_text(subagent),
         subagent.agent_type and (subagent.agent_type .. " · ") or "",
         subagent.label or "Agent"
     )
