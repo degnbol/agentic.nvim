@@ -67,7 +67,7 @@ where prose is being written, and which of the plugin's own steps runs.
 - New session, load and fork show which step runs until it ends.
 
 ## Non-goals
-- Which subagents run (agents panel plan).
+- Which subagents run (the agents panel, `:h agentic-agents-panel`).
 - Animation.
 
 ## Open questions

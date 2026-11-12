@@ -10,7 +10,7 @@ local TextWrap = require("agentic.utils.text_wrap")
 local WindowDecoration = require("agentic.ui.window_decoration")
 local WidgetLayout = require("agentic.ui.widget_layout")
 
---- @alias agentic.ui.ChatWidget.PanelNames "agent"|"todos"|"code"|"files"|"input"|"diagnostics"|"activity"|"info"|"subagent"|"message"
+--- @alias agentic.ui.ChatWidget.PanelNames "agent"|"agents"|"todos"|"code"|"files"|"input"|"diagnostics"|"activity"|"info"|"subagent"|"message"
 
 --- Runtime header parts with dynamic context
 --- @class agentic.ui.ChatWidget.HeaderParts
@@ -263,8 +263,10 @@ function ChatWidget:show(mods, target_win)
     self:show_in(vim.api.nvim_get_current_win())
 end
 
---- The stack panels that only a key opens or closes, never their buffer's rows.
-local TOGGLED_PANELS = { input = true, activity = true, info = true }
+--- The stack panels that `sync_panels` never opens or closes from their
+--- buffer's rows.
+local TOGGLED_PANELS =
+    { input = true, activity = true, info = true, agents = true }
 
 --- The stack panels shown with the markdown parser. The input starts its own
 --- on each load (`_attach_input`).
@@ -315,6 +317,16 @@ function ChatWidget:_open_panels()
     return vim.tbl_filter(function(panel)
         return self:panel_win(panel) ~= nil
     end, Config.windows.stack)
+end
+
+--- Open the `panel` window below the home window, unless it is open. No-op
+--- without a home window.
+--- @param panel agentic.ui.ChatWidget.StackPanel
+function ChatWidget:open_panel(panel)
+    local home = self:home_win()
+    if home and self:panel_buf(panel) then
+        WidgetLayout.open_panel(self.win_nrs, self.buf_nrs, home, panel)
+    end
 end
 
 --- Close the `panel` window.
@@ -823,6 +835,7 @@ local function panel_buf_opts(panel)
         agent = { filetype = "AgenticChat", buftype = "acwrite" },
         subagent = { filetype = "AgenticChat", buftype = "acwrite" },
         todos = { filetype = "AgenticTodos" },
+        agents = { filetype = "AgenticAgents" },
         code = { filetype = "AgenticCode" },
         files = { filetype = "AgenticFiles" },
         diagnostics = { filetype = "AgenticDiagnostics" },
@@ -992,12 +1005,12 @@ function ChatWidget:set_chat_title(title)
     WindowDecoration.set_header(chat, header)
 end
 
---- Show or hide `panel`. Only this call opens or closes it, never its buffer's
---- rows. `on_open` runs before the window opens, `on_close` after it closes.
+--- Show or hide `panel`. `on_open` runs before the window opens, `on_close`
+--- after it closes.
 --- Acts on the panels of the chat in the current tabpage, moving them to a
 --- window there that shows the chat. Warns, and does nothing, when the current
 --- tabpage shows no chat.
---- @param panel "activity"|"info"
+--- @param panel "activity"|"info"|"agents"
 --- @param on_open fun()|nil
 --- @param on_close fun()|nil
 function ChatWidget:toggle_panel(panel, on_open, on_close)

@@ -21,6 +21,7 @@ local WINDOW_HEADERS = {
     activity = { icon = "", title = "Files" },
     info = { icon = Glyphs.INFO, title = "Session" },
     todos = { icon = "", title = "Tasks list" },
+    agents = { icon = Glyphs.COMMAND.agents, title = "Agents" },
 }
 
 --- @alias agentic.ui.HeaderState "permission"|"running"|"idle"

@@ -46,12 +46,13 @@ local function fake_main_view(session)
 end
 
 --- Give a fake session a real `Subagents` with no subagents, reaching the
---- session through its host, and a main view of its writer and indicator
---- unless it has one.
+--- session through its host, a main view of its writer and indicator
+--- unless it has one, and no agents panel to render.
 --- @param session agentic.SessionManager
 --- @return agentic.SessionManager session
 local function with_subagents(session)
     session.main_view = session.main_view or fake_main_view(session)
+    session.render_agents = function() end
     session._subagents = Subagents:new(
         session.widget,
         session.main_view,
@@ -2057,6 +2058,96 @@ describe("agentic.SessionManager", function()
 
             assert.is_nil(unstarted._name)
             assert.is_nil(destroyed._name)
+        end)
+    end)
+
+    describe("agents panel", function()
+        --- @type TestStub
+        local notify_stub
+
+        before_each(function()
+            notify_stub = spy.stub(Logger, "notify")
+        end)
+
+        after_each(function()
+            notify_stub:revert()
+        end)
+
+        --- A session whose subagents give `entries`, its agents panel open
+        --- when `open`.
+        --- @param entries agentic.Subagents.Entry[]
+        --- @param open boolean
+        local function make_session(entries, open)
+            local session = {
+                widget = {
+                    close_panel = spy.new(function() end),
+                    resize_panel = spy.new(function() end),
+                    toggle_panel = spy.new(function() end),
+                    panel_win = function()
+                        return open and 1000 or nil
+                    end,
+                },
+                agents_panel = { render = spy.new(function() end) },
+                _subagents = {
+                    entries = function()
+                        return entries
+                    end,
+                },
+                render_agents = SessionManager.render_agents,
+                toggle_agents = SessionManager.toggle_agents,
+            }
+            return session
+        end
+
+        --- @type agentic.Subagents.Entry
+        local entry = { child_id = "c1", state = "working", name = "n" }
+
+        it("renders the entries and fits the panel", function()
+            local session = make_session({ entry }, true)
+
+            session:render_agents()
+
+            assert
+                .spy(session.agents_panel.render).was
+                .called_with(session.agents_panel, { entry })
+            assert.spy(session.widget.resize_panel).was.called(1)
+            assert.spy(session.widget.close_panel).was.called(0)
+        end)
+
+        it("closes the panel without an entry", function()
+            local session = make_session({}, true)
+
+            session:render_agents()
+
+            assert
+                .spy(session.widget.close_panel).was
+                .called_with(session.widget, "agents")
+        end)
+
+        it("toggles the panel with an entry", function()
+            local session = make_session({ entry }, false)
+
+            session:toggle_agents()
+
+            assert.spy(session.widget.toggle_panel).was.called(1)
+            assert.spy(notify_stub).was.called(0)
+        end)
+
+        it("notifies, and opens nothing, without an entry", function()
+            local session = make_session({}, false)
+
+            session:toggle_agents()
+
+            assert.spy(session.widget.toggle_panel).was.called(0)
+            assert.spy(notify_stub).was.called(1)
+        end)
+
+        it("closes an open panel without an entry", function()
+            local session = make_session({}, true)
+
+            session:toggle_agents()
+
+            assert.spy(session.widget.toggle_panel).was.called(1)
         end)
     end)
 

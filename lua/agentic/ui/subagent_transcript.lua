@@ -11,6 +11,7 @@ local WindowDecoration = require("agentic.ui.window_decoration")
 --- @field on_reload fun() Render the buffer again after `:e`, starting with `restart`
 --- @field on_write fun() Write the buffer on `:w`
 --- @field on_wipeout fun() The buffer is gone, wiped by the user
+--- @field on_listed_change? fun() The buffer was made, listed or unlisted, called on the next tick: during `BufDelete` it is still listed
 
 --- One subagent's transcript: a listed, chat-style buffer with its own view.
 --- @class agentic.ui.SubagentTranscript
@@ -80,6 +81,24 @@ function SubagentTranscript:new(name, subagent, widget, handlers)
             end
         end,
     })
+    local on_listed_change = handlers.on_listed_change
+    if on_listed_change then
+        -- The buffer was made listed.
+        vim.schedule(function()
+            if not self._destroyed then
+                on_listed_change()
+            end
+        end)
+        -- A wipe of a listed buffer fires `BufDelete` too.
+        vim.api.nvim_create_autocmd({ "BufAdd", "BufDelete" }, {
+            buffer = bufnr,
+            callback = function()
+                if not self._destroyed then
+                    vim.schedule(on_listed_change)
+                end
+            end,
+        })
+    end
 
     return self
 end

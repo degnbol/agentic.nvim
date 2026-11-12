@@ -122,6 +122,7 @@ end
 --- @field diagnostics_list agentic.ui.DiagnosticsList
 --- @field config_options agentic.acp.AgentConfigOptions
 --- @field todo_list agentic.ui.TodoList
+--- @field agents_panel agentic.ui.AgentsPanel
 --- @field chat_history agentic.ui.ChatHistory
 --- @field _thought_response_id? string `messageId` of the main agent's last thought chunk
 --- @field _title_user_set? boolean Set once the user picks a title via /rename; blocks the provider's auto-summary from overriding it
@@ -349,6 +350,7 @@ function SessionManager:new(provider)
     local FileList = require("agentic.ui.file_list")
     local PermissionManager = require("agentic.ui.permission_manager")
     local TodoList = require("agentic.ui.todo_list")
+    local AgentsPanel = require("agentic.ui.agents_panel")
 
     last_id = last_id + 1
     self = setmetatable({
@@ -525,6 +527,18 @@ function SessionManager:new(provider)
         self:_context_panel_on_change("diagnostics")
     )
 
+    self.agents_panel = AgentsPanel:new(buf_of("agents"), {
+        buf_of = function(child_id)
+            return self._subagents:buf_of(child_id)
+        end,
+        open = function(child_id)
+            local bufnr = self._subagents:open_buf(child_id)
+            if bufnr then
+                WidgetLayout.open_buf(bufnr, "edit", self.widget:target_win())
+            end
+        end,
+    })
+
     self.todo_list = TodoList:new(buf_of("todos"), function(todo_list)
         if not todo_list:is_empty() then
             self.widget:sync_panels()
@@ -641,6 +655,7 @@ function SessionManager:_setup_panel_buf(panel, bufnr)
         files = self.file_list,
         diagnostics = self.diagnostics_list,
         activity = self.file_activity,
+        agents = self.agents_panel,
     }
     local owner = owners[panel]
     if owner then
@@ -664,6 +679,9 @@ end
 --- Per panel, the call that renders its buffer again from the session's state.
 --- @type table<agentic.ui.ChatWidget.StackPanel, fun(self: agentic.SessionManager)>
 local PANEL_RELOADS = {
+    agents = function(self)
+        self:render_agents()
+    end,
     todos = function(self)
         self.todo_list:redraw()
     end,
@@ -906,6 +924,10 @@ function SessionManager:_bind_owner_keymaps(bufnr)
         self:toggle_info()
     end, { desc = "Agentic: Toggle session info panel" })
 
+    BufHelpers.multi_keymap_set(keymaps.toggle_agents, bufnr, function()
+        self:toggle_agents()
+    end, { desc = "Agentic: Toggle agents panel" })
+
     BufHelpers.multi_keymap_set(keymaps.restart_session, bufnr, function()
         self:restart_session()
     end, { desc = "Agentic: Restart session (re-create from history)" })
@@ -1114,6 +1136,12 @@ function SessionManager:_subagents_host()
         end,
         relay = function(instruction, on_returned)
             return self:_relay(instruction, on_returned)
+        end,
+        agents_changed = function()
+            -- A transcript reports a listing change on the next tick.
+            if not self.destroyed then
+                self:render_agents()
+            end
         end,
         return_prompt = function(text, bufnr, reason)
             local return_prompt = reason == "usage_limit"
@@ -1985,6 +2013,37 @@ end
 function SessionManager:toggle_info()
     self.widget:toggle_panel("info", function()
         self:render_info()
+    end)
+end
+
+--- Render the agents panel from the subagents' entries: closed without one,
+--- else fitted when open.
+function SessionManager:render_agents()
+    local entries = self._subagents:entries()
+    self.agents_panel:render(entries)
+    if #entries == 0 then
+        self.widget:close_panel("agents")
+    else
+        self.widget:resize_panel("agents")
+    end
+end
+
+--- Show or hide the agents panel. Notifies, and opens nothing, without a
+--- subagent to list.
+function SessionManager:toggle_agents()
+    if
+        not self.widget:panel_win("agents")
+        and #self._subagents:entries() == 0
+    then
+        Logger.notify(
+            "No subagents to list.",
+            vim.log.levels.INFO,
+            { title = "Agentic" }
+        )
+        return
+    end
+    self.widget:toggle_panel("agents", function()
+        self:render_agents()
     end)
 end
 

@@ -36,6 +36,14 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field end_side_records fun(child_id: string) Apply the tool call fields a subagent's side records give, and drop those held for calls it never reported
 --- @field relay fun(instruction: string, on_returned: agentic.OnReturned|nil): string|nil Send a prompt on the user's behalf; when held, returns the cause, as a phrase
 --- @field return_prompt fun(text: string, bufnr: integer|nil, reason: agentic.ReturnReason) Give a returned message back, at the top of `bufnr` or of the session's input
+--- @field agents_changed fun() What `entries` gives may have changed
+
+--- A subagent as a row of the agents panel.
+--- @class agentic.Subagents.Entry
+--- @field child_id string
+--- @field state string `working`, else how its last run ended
+--- @field subagent? agentic.ui.MessageWriter.SubagentInfo Of its block
+--- @field name string Its transcript's buffer name
 
 --- The subagents of one session: their blocks in the chat, transcripts,
 --- message inputs, session messages, and which subagent owns each tool call.
@@ -44,6 +52,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field _main_view agentic.ui.AgentView
 --- @field _host agentic.Subagents.Host
 --- @field _agents table<string, agentic.Subagents.Agent> By child session id
+--- @field _order string[] Child session ids of `_agents`, in start order
 --- @field _inputs table<string, agentic.ui.SubagentInput> Message inputs of background subagents by child session id
 --- @field _agent_by_task table<string, string> Task id -> child session id of the subagent it gave work
 --- @field _tool_call_owner table<string, string> toolCallId -> child session id of the subagent whose transcript holds the call
@@ -63,6 +72,7 @@ function Subagents:new(widget, main_view, host)
         _main_view = main_view,
         _host = host,
         _agents = {},
+        _order = {},
         _inputs = {},
         _agent_by_task = {},
         _tool_call_owner = {},
@@ -93,8 +103,8 @@ function Subagents:set_modified(unsaved)
     end
 end
 
---- Mark a subagent working or not, and with it the chat's `modified` flag and
---- its transcript's header.
+--- Mark a subagent working or not, and with it the chat's `modified` flag,
+--- its transcript's header and the entries.
 --- @param agent agentic.Subagents.Agent
 --- @param open boolean
 function Subagents:_set_open(agent, open)
@@ -103,6 +113,49 @@ function Subagents:_set_open(agent, open)
     if agent.transcript then
         agent.transcript:set_running(open)
     end
+    self._host.agents_changed()
+end
+
+--- How the last run ended, from the last end row of a subagent's rows.
+--- @param rows agentic.ui.ChatHistory.Message[] A subagent's stored messages, in stored order
+--- @return string|nil state Nil without an end row
+local function last_end_state(rows)
+    for i = #rows, 1, -1 do
+        if rows[i].type == "subagent_end" then
+            return SessionResume.end_state(rows[i])
+        end
+    end
+    return nil
+end
+
+--- A subagent's stored messages, in stored order.
+--- @param child_id string
+--- @return agentic.ui.ChatHistory.Message[]
+function Subagents:_rows(child_id)
+    return self._host.history():messages_for_agent(self:agent_key(child_id))
+end
+
+--- The subagents that work or whose transcript is listed, in start order.
+--- @return agentic.Subagents.Entry[]
+function Subagents:entries()
+    --- @type agentic.Subagents.Entry[]
+    local entries = {}
+    for _, child_id in ipairs(self._order) do
+        local agent = self._agents[child_id]
+        local bufnr = self:buf_of(child_id)
+        if agent.open or (bufnr and vim.bo[bufnr].buflisted) then
+            local block = self:_agent_block(child_id)
+            table.insert(entries, {
+                child_id = child_id,
+                state = agent.open and "working" or last_end_state(
+                    self:_rows(child_id)
+                ) or "ended",
+                subagent = block and block.subagent,
+                name = self._widget:buffer_name(child_id),
+            })
+        end
+    end
+    return entries
 end
 
 --- The block of a subagent in its parent's view, as the history holds it.
@@ -151,6 +204,9 @@ function Subagents:_new_transcript(child_id, subagent)
                     agent.transcript = nil
                 end
             end,
+            on_listed_change = function()
+                self._host.agents_changed()
+            end,
         }
     )
     return transcript
@@ -163,8 +219,7 @@ function Subagents:_replay_transcript(child_id)
     local agent = self._agents[child_id]
     local transcript = agent.transcript --[[@as agentic.ui.SubagentTranscript]]
     local block = self:_agent_block(child_id)
-    local rows =
-        self._host.history():messages_for_agent(self:agent_key(child_id))
+    local rows = self:_rows(child_id)
     transcript:restart(block and block.subagent)
     SessionResume.replay_messages(transcript.view.writer, rows, function(id)
         return self:peer_detail(id)
@@ -173,17 +228,7 @@ function Subagents:_replay_transcript(child_id)
 
     transcript:set_header(block and block.subagent)
     transcript:set_running(agent.open)
-    --- @type string|nil
-    local end_state = nil
-    if not agent.open then
-        for i = #rows, 1, -1 do
-            if rows[i].type == "subagent_end" then
-                end_state = SessionResume.end_state(rows[i])
-                break
-            end
-        end
-    end
-    transcript:set_context(end_state)
+    transcript:set_context(not agent.open and last_end_state(rows) or nil)
     self._host.sync_modified()
 end
 
@@ -261,10 +306,40 @@ function Subagents:record_writer(record, make)
     return transcript and transcript.view.writer
 end
 
+--- The child ids of the subagents `history` records, in the order of their
+--- blocks (the main chat's first), then those without a block, by id.
+--- @param history agentic.ui.ChatHistory
+--- @return string[] child_ids
+local function record_order(history)
+    --- @type table<string, integer>
+    local position = {}
+    local count = 0
+    for _, list in ipairs({ history.messages, history.subagent_messages }) do
+        for _, msg in ipairs(list) do
+            local id = msg.type == "tool_call" and msg.tool_call_id
+            if id and history.subagents[id] and not position[id] then
+                count = count + 1
+                position[id] = count
+            end
+        end
+    end
+    local child_ids = vim.tbl_keys(history.subagents)
+    table.sort(child_ids, function(a, b)
+        local pa, pb = position[a] or math.huge, position[b] or math.huge
+        if pa ~= pb then
+            return pa < pb
+        end
+        return a < b
+    end)
+    return child_ids
+end
+
 --- Give each subagent the history holds a transcript, unloaded, so it renders
 --- on its first load, and point its block at the transcript's name.
 function Subagents:add_history_transcripts()
-    for child_id, record in pairs(self._host.history().subagents) do
+    local history = self._host.history()
+    for _, child_id in ipairs(record_order(history)) do
+        local record = history.subagents[child_id]
         if record.task_id then
             self._agent_by_task[record.task_id] = child_id
         end
@@ -274,6 +349,9 @@ function Subagents:add_history_transcripts()
             local transcript =
                 self:_new_transcript(child_id, block and block.subagent)
             transcript:unload()
+            if not agent then
+                table.insert(self._order, child_id)
+            end
             self._agents[child_id] = {
                 transcript = transcript,
                 open = false,
@@ -284,6 +362,7 @@ function Subagents:add_history_transcripts()
             end
         end
     end
+    self._host.agents_changed()
 end
 
 --- The subagent whose transcript is `bufnr`.
@@ -442,6 +521,7 @@ function Subagents:_merge_block_fields(child_id, fields)
         vim.tbl_extend("force", fields, { tool_call_id = child_id })
     )
     self._host.history_changed()
+    self._host.agents_changed()
 end
 
 --- Settle a subagent's `pending` block `completed`: its launch is confirmed.
@@ -485,6 +565,7 @@ function Subagents:_open_agent(child_id, label, parent_session_id, replayed)
         record_read = false,
         parent_session_id = parent_session_id,
     }
+    table.insert(self._order, child_id)
 
     --- @type agentic.ui.MessageWriter.ToolCallBlock
     local block = {
@@ -509,14 +590,21 @@ function Subagents:_open_agent(child_id, label, parent_session_id, replayed)
     self:read_record(child_id)
 end
 
---- Start a closed subagent's work, first or again: its model when known
+--- Start a closed subagent's work, first or again: its transcript listed, so
+--- a resumed agent's comes back after `:bd`, its model when known
 --- (`_announce_model`), its working indicator, a header without the last
---- run's end, and a background one's message input.
+--- run's end, and a background one's message input. With
+--- `Config.windows.agents.auto_open`, outside a replay, the agents panel opens.
 --- @param child_id string
-function Subagents:_start_agent(child_id)
+--- @param replayed boolean From a session/load replay
+function Subagents:_start_agent(child_id, replayed)
     local agent = self._agents[child_id]
     self:_set_open(agent, true)
     local transcript = self:transcript(child_id)
+    vim.bo[transcript.bufnr].buflisted = true
+    if Config.windows.agents.auto_open and not replayed then
+        self._widget:open_panel("agents")
+    end
     self:_announce_model(agent)
     transcript.view.status_indicator:start("generating")
     transcript:set_context(nil)
@@ -575,6 +663,8 @@ function Subagents:end_agent(child_id, state)
     end
     self:_write_row(child_id, row)
     transcript:set_context(word)
+    -- Again: `_set_open` reported before the end row gave the entry its state.
+    self._host.agents_changed()
 end
 
 --- End every working subagent as `state`.
@@ -726,7 +816,7 @@ function Subagents:update(update, source_session_id, replayed)
     end
     if state.state == "running" or state.state == "requires_action" then
         if not agent.open then
-            self:_start_agent(child_id)
+            self:_start_agent(child_id, replayed)
         end
     elseif state.state == "idle" or state.state == "unknown" then
         self:end_agent(child_id, state)
@@ -764,9 +854,7 @@ function Subagents:_message_info(message_id, sender, recipient)
         if not self._delegated[recipient] then
             info = { kind = "task", summary = to.description }
         else
-            local rows = self._host
-                .history()
-                :messages_for_agent(self:agent_key(recipient))
+            local rows = self:_rows(recipient)
             if vim.tbl_get(rows, #rows, "type") == "subagent_end" then
                 info.kind = "task"
             end
@@ -957,12 +1045,14 @@ function Subagents:reset()
         end
     end
     self._agents = {}
+    self._order = {}
     self._host.sync_modified()
     self._agent_by_task = {}
     self._tool_call_owner = {}
     self._seen_messages = {}
     self._message_infos = {}
     self._delegated = {}
+    self._host.agents_changed()
 end
 
 --- Wipe an agent's message input. Unsent text in it is given back in a

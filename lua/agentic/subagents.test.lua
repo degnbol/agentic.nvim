@@ -1,8 +1,10 @@
 --- @diagnostic disable: invisible, missing-fields, assign-type-mismatch, param-type-mismatch, need-check-nil
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
+local MiniTest = require("mini.test")
 
 local ChatHistory = require("agentic.ui.chat_history")
+local Config = require("agentic.config")
 local SessionResume = require("agentic.session_resume")
 local Subagents = require("agentic.subagents")
 
@@ -11,6 +13,7 @@ local Subagents = require("agentic.subagents")
 --- @field sync_modified TestSpy
 --- @field write_chat_row TestSpy
 --- @field return_prompt TestSpy
+--- @field agents_changed TestSpy
 
 --- A host of stubs over `history`, with `overrides` replacing any of them.
 --- @param history agentic.ui.ChatHistory
@@ -24,6 +27,7 @@ local function make_host(history, overrides)
         sync_modified = spy.new(noop),
         write_chat_row = spy.new(noop),
         return_prompt = spy.new(noop),
+        agents_changed = spy.new(noop),
     }
     local host = vim.tbl_extend("force", {
         agent = function()
@@ -177,6 +181,244 @@ describe("agentic.Subagents", function()
 
             assert.is_false(agent.open)
             assert.spy(spies.sync_modified).was.called(1)
+        end)
+
+        it("tells the host the agents changed", function()
+            local host, spies = make_host(ChatHistory:new())
+            local subagents = make_subagents(host)
+
+            subagents:_set_open(
+                { open = false } --[[@as agentic.Subagents.Agent]],
+                true
+            )
+
+            assert.spy(spies.agents_changed).was.called(1)
+        end)
+    end)
+
+    describe("agents panel", function()
+        --- @type integer[]
+        local bufs
+        --- @type agentic.ui.MessageWriter.SubagentInfo
+        local info = { label = "x", mode = "blocking", confirmed = true }
+
+        before_each(function()
+            bufs = {}
+        end)
+
+        after_each(function()
+            for _, bufnr in ipairs(bufs) do
+                if vim.api.nvim_buf_is_valid(bufnr) then
+                    vim.api.nvim_buf_delete(bufnr, { force = true })
+                end
+            end
+        end)
+
+        --- A stand-in transcript over a new buffer, listed or not.
+        --- @param listed boolean
+        --- @return agentic.ui.SubagentTranscript
+        local function fake_transcript(listed)
+            local bufnr = vim.api.nvim_create_buf(listed, true)
+            table.insert(bufs, bufnr)
+            local noop = function() end
+            return {
+                bufnr = bufnr,
+                view = { status_indicator = { start = noop, stop = noop } },
+                set_running = noop,
+                set_context = noop,
+                is_loaded = function()
+                    return true
+                end,
+                destroy = noop,
+            } --[[@as agentic.ui.SubagentTranscript]]
+        end
+
+        --- @param history agentic.ui.ChatHistory
+        --- @param overrides table|nil
+        --- @return agentic.Subagents subagents
+        --- @return tests.SubagentsHostSpies spies
+        --- @return TestSpy open_panel
+        local function make(history, overrides)
+            local host, spies = make_host(history, overrides)
+            local open_panel = spy.new(function() end)
+            local widget = {
+                buf_nrs = {},
+                open_panel = open_panel,
+                buffer_name = function(_, child_id)
+                    return "agentic://c1/" .. child_id
+                end,
+            }
+            return Subagents:new(widget, {}, host), spies, open_panel
+        end
+
+        describe("entries", function()
+            it("lists working and listed agents in start order", function()
+                local history = ChatHistory:new()
+                history:add_message({
+                    type = "tool_call",
+                    tool_call_id = "b",
+                    kind = "SubAgent",
+                    subagent = info,
+                })
+                history:add_message({
+                    type = "subagent_end",
+                    state = "cancelled",
+                    agent_key = "b",
+                })
+                local subagents = make(history)
+                subagents._agents = {
+                    a = { open = true, transcript = fake_transcript(false) },
+                    b = { open = false, transcript = fake_transcript(true) },
+                    c = { open = false, transcript = fake_transcript(true) },
+                    d = { open = false, transcript = fake_transcript(false) },
+                    e = { open = true },
+                }
+                subagents._order = { "c", "a", "b", "d", "e" }
+
+                local entries = subagents:entries()
+
+                assert.same({
+                    {
+                        child_id = "c",
+                        state = "ended",
+                        name = "agentic://c1/c",
+                    },
+                    {
+                        child_id = "a",
+                        state = "working",
+                        name = "agentic://c1/a",
+                    },
+                    {
+                        child_id = "b",
+                        state = "interrupted",
+                        subagent = info,
+                        name = "agentic://c1/b",
+                    },
+                    {
+                        child_id = "e",
+                        state = "working",
+                        name = "agentic://c1/e",
+                    },
+                }, entries)
+            end)
+        end)
+
+        it("orders transcripts from history by their blocks", function()
+            local history = ChatHistory:new()
+            for _, id in ipairs({ "z", "y" }) do
+                history:set_subagent_task(id, nil)
+                history:add_message({
+                    type = "tool_call",
+                    tool_call_id = id,
+                    kind = "SubAgent",
+                    subagent = info,
+                })
+            end
+            local subagents = make(history)
+            subagents._new_transcript = function()
+                local transcript = fake_transcript(true)
+                transcript.unload = function() end
+                return transcript
+            end
+
+            subagents:add_history_transcripts()
+
+            assert.same({ "z", "y" }, subagents._order)
+        end)
+
+        it("tells the host on reset", function()
+            local subagents, spies = make(ChatHistory:new())
+            subagents:reset()
+            assert.spy(spies.agents_changed).was.called(1)
+        end)
+
+        it("tells the host once a working agent's end row is in", function()
+            local write_row_stub = spy.stub(SessionResume, "write_row")
+            MiniTest.finally(function()
+                write_row_stub:revert()
+            end)
+            --- @type agentic.Subagents
+            local subagents
+            --- @type string[]
+            local seen = {}
+            subagents = make(ChatHistory:new(), {
+                agents_changed = function()
+                    table.insert(seen, subagents:entries()[1].state)
+                end,
+            })
+            local transcript = fake_transcript(true)
+            local noop = function() end
+            transcript.view = {
+                writer = {
+                    stamp_open_calls = function()
+                        return {}
+                    end,
+                },
+                status_indicator = { stop = noop, reposition = noop },
+            }
+            subagents._agents.c1 = { open = true, transcript = transcript }
+            subagents._order = { "c1" }
+
+            subagents:end_agent("c1", { state = "failed" })
+
+            assert.equal("failed", seen[#seen])
+        end)
+
+        describe("start", function()
+            local original_auto_open
+
+            before_each(function()
+                original_auto_open = Config.windows.agents.auto_open
+            end)
+
+            after_each(function()
+                Config.windows.agents.auto_open = original_auto_open
+            end)
+
+            --- Subagents with `c1` not working, its transcript unlisted.
+            --- @return agentic.Subagents subagents
+            --- @return TestSpy open_panel
+            --- @return integer bufnr
+            local function make_closed()
+                local subagents, _, open_panel = make(ChatHistory:new(), {
+                    agent = function()
+                        return {}
+                    end,
+                })
+                local transcript = fake_transcript(false)
+                subagents._agents.c1 = { open = false, transcript = transcript }
+                return subagents, open_panel, transcript.bufnr
+            end
+
+            it("lists the transcript and opens the panel", function()
+                Config.windows.agents.auto_open = true
+                local subagents, open_panel, bufnr = make_closed()
+
+                subagents:_start_agent("c1", false)
+
+                assert.is_true(vim.bo[bufnr].buflisted)
+                assert.spy(open_panel).was.called(1)
+                assert.equal("agents", open_panel.calls[1][2])
+            end)
+
+            it("opens no panel in a replay", function()
+                Config.windows.agents.auto_open = true
+                local subagents, open_panel, bufnr = make_closed()
+
+                subagents:_start_agent("c1", true)
+
+                assert.is_true(vim.bo[bufnr].buflisted)
+                assert.spy(open_panel).was.called(0)
+            end)
+
+            it("opens no panel without auto_open", function()
+                Config.windows.agents.auto_open = false
+                local subagents, open_panel = make_closed()
+
+                subagents:_start_agent("c1", false)
+
+                assert.spy(open_panel).was.called(0)
+            end)
         end)
     end)
 

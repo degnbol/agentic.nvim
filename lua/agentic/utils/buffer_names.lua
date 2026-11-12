@@ -6,8 +6,16 @@ local SCHEME = "agentic://"
 
 --- The panels below a chat, each a `part` of a name.
 --- @type agentic.ui.ChatWidget.StackPanel[]
-BufferNames.PANELS =
-    { "todos", "code", "files", "diagnostics", "activity", "info", "input" }
+BufferNames.PANELS = {
+    "agents",
+    "todos",
+    "code",
+    "files",
+    "diagnostics",
+    "activity",
+    "info",
+    "input",
+}
 
 --- @class agentic.BufferNames.Parts
 --- @field key string The chat id (`ChatHistory.chat_id`), or for `background` the session's short key

@@ -183,12 +183,12 @@ All options with defaults are in `lua/agentic/config_default.lua`.
 `windows` table
     Panels and wrapping.
 
-    `stack`             list (default: `{ "todos", "code", "files",`
+    `stack`             list (default: `{ "agents", "todos", "code", "files",`
                         `"diagnostics", "activity", "info", "input" }`)
     `wrap_width`        integer (default: 80)
 
     `stack` is the top-to-bottom order of the panels below the chat's
-    window (|agentic-buffers|). It must list each of the seven exactly once.
+    window (|agentic-buffers|). It must list each of the eight exactly once.
 
     Chat prose is hard-wrapped at `wrap_width` columns. 0 turns hard wrap
     off and sets 'wrap' in the chat windows.
@@ -204,9 +204,10 @@ All options with defaults are in `lua/agentic/config_default.lua`.
       `info`          `{ max_height = 10, win_opts = {} }`
       `todos`         `{ display = true, max_height = 10, win_opts = {} }`
       `subagent`      `{ win_opts = {} }`
+      `agents`        `{ auto_open = true, max_height = 10, win_opts = {} }`
 
     `activity.display` turns off the panel. `activity.hide_reverted`: see
-    |agentic-file-activity|.
+    |agentic-file-activity|. `agents.auto_open`: see |agentic-agents-panel|.
 
     `win_opts` is passed to |nvim_set_option_value()| for each window.
 
@@ -615,6 +616,7 @@ Applied to all buffers in the widget (chat, prompt, panels).
     `<localLeader>!`   `restart_session`       n       Restart session
     `<localLeader>f`   `toggle_activity`       n       Toggle file activity panel (|agentic-file-activity|)
     `<localLeader>I`   `toggle_info`           n       Toggle session info panel (|agentic-info-panel|)
+    `<localLeader>A`   `toggle_agents`         n       Toggle agents panel (|agentic-agents-panel|)
     `<localLeader>a`   `toggle_follow`         n       Toggle follow (|agentic-follow|)
     `<localLeader>G`   `goto_bottom`           n       Scroll chat and transcripts in the tabpage to bottom, keep focus
 
@@ -1018,7 +1020,8 @@ lives as long as its chat buffer, which is listed.
     `:w` in the chat       Writes the history to the session file.
     `:bd` on the chat      Ends the session and wipes its buffers.
     `:e` / `:e!`           Re-renders the buffer from its session.
-    `:bd` on a transcript  Unloads and unlists it; its agent's output reloads it.
+    `:bd` on a transcript  Unloads and unlists it; its agent's output reloads it,
+                         and its agent's next run lists it again.
     `:bw` on a transcript  Wipes it; its agent's output makes it again.
 
 The chat is 'modified' while its history is not yet written, and while a turn
@@ -1063,7 +1066,8 @@ first, the chat's window. The panels stack
 below it in `windows.stack` order (|agentic-config-windows-tbl|). The context
 panels open while they list something. The input opens on the first
 `to_input` key (|agentic-keymaps-agent|). `toggle_activity` toggles the file
-activity panel, `toggle_info` the session info panel.
+activity panel, `toggle_info` the session info panel, `toggle_agents` the
+agents panel.
 
 When the chat's window closes or shows another buffer, its panels close.
 |:q| in the chat's window closes its panels first; when vim refuses the
@@ -1260,6 +1264,21 @@ that subagent; the main agent's turn goes on.
 
 Transcripts are saved with the session (|agentic-buffers|) and come back on a
 resume and a re-create from history.
+
+                                                        *agentic-agents-panel*
+The agents panel has a row for each subagent that works or whose transcript
+is listed: `<state>  <heading>  <transcript name>`. The state is `working`,
+else how its last run ended. `toggle_agents` shows or hides it; without a
+row, it stays closed. With
+`windows.agents.auto_open`, it opens when a subagent starts work, but not
+while a resumed session replays; it closes when its last row goes.
+
+    Key              Mode    Description ~
+    `gf`, `<CR>`       n       Open the row's transcript in the chat's window
+    `dd`, `d{motion}`  n       |:bdelete| the transcripts of the rows
+    `d`                x       |:bdelete| the transcripts of the selected rows
+
+`d` keeps the row of a subagent that works.
 
 ------------------------------------------------------------------------------
 9.8 TAGS                                                        *agentic-tags*

@@ -234,6 +234,7 @@ describe("WidgetLayout", function()
                 "files",
                 "code",
                 "todos",
+                "agents",
             }
             Config.windows.stack = stack
 
@@ -279,6 +280,7 @@ describe("WidgetLayout", function()
                 WidgetLayout.validate_stack()
 
                 assert.same({
+                    "agents",
                     "todos",
                     "code",
                     "files",

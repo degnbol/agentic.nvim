@@ -5,7 +5,7 @@ local WindowDecoration = require("agentic.ui.window_decoration")
 local Logger = require("agentic.utils.logger")
 
 --- A panel that opens in the stack below the chat's home window.
---- @alias agentic.ui.ChatWidget.StackPanel "todos"|"code"|"files"|"diagnostics"|"activity"|"info"|"input"
+--- @alias agentic.ui.ChatWidget.StackPanel "agents"|"todos"|"code"|"files"|"diagnostics"|"activity"|"info"|"input"
 
 --- @class agentic.ui.WidgetLayout
 local WidgetLayout = {}
@@ -165,7 +165,7 @@ local function panel_height(bufnr, panel)
     if panel == "input" then
         return Config.windows.input.height
     end
-    local padding = panel == "todos" and 0 or 1
+    local padding = (panel == "todos" or panel == "agents") and 0 or 1
     return calculate_dynamic_height(
         bufnr,
         Config.windows[panel].max_height,

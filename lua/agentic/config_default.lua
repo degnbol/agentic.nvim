@@ -208,6 +208,11 @@ local ConfigDefault = {
     --- @class agentic.UserConfig.Windows.Subagent
     --- @field win_opts? agentic.UserConfig.WinOpts
 
+    --- @class agentic.UserConfig.Windows.Agents
+    --- @field auto_open boolean Open the panel when a subagent starts work
+    --- @field max_height number
+    --- @field win_opts? agentic.UserConfig.WinOpts
+
     --- @class agentic.UserConfig.Windows
     --- @field stack agentic.ui.ChatWidget.StackPanel[] Top-to-bottom order of the panels below the chat, each listed once
     --- @field wrap_width integer Hard-wrap width of chat prose, or 0 to soft-wrap instead
@@ -220,8 +225,10 @@ local ConfigDefault = {
     --- @field info agentic.UserConfig.Windows.Info
     --- @field todos agentic.UserConfig.Windows.Todos
     --- @field subagent agentic.UserConfig.Windows.Subagent
+    --- @field agents agentic.UserConfig.Windows.Agents
     windows = {
         stack = {
+            "agents",
             "todos",
             "code",
             "files",
@@ -245,6 +252,7 @@ local ConfigDefault = {
         info = { max_height = 10, win_opts = {} },
         todos = { display = true, max_height = 10, win_opts = {} },
         subagent = { win_opts = {} },
+        agents = { auto_open = true, max_height = 10, win_opts = {} },
     },
 
     --- @type agentic.UserConfig.Keymaps
@@ -265,6 +273,7 @@ local ConfigDefault = {
             },
             toggle_activity = "<localLeader>f",
             toggle_info = "<localLeader>I",
+            toggle_agents = "<localLeader>A",
             restart_session = "<localLeader>!",
             resume_session = "<localLeader>R",
             refresh = "",

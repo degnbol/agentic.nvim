@@ -1,5 +1,6 @@
 local assert = require("tests.helpers.assert")
 local Config = require("agentic.config")
+local Deferred = require("tests.helpers.deferred")
 local Glyphs = require("agentic.glyphs")
 
 describe("agentic.ui.SubagentTranscript", function()
@@ -27,7 +28,13 @@ describe("agentic.ui.SubagentTranscript", function()
             return true
         end)
         transcripts = {}
-        calls = { setup_buf = 0, on_reload = 0, on_write = 0, on_wipeout = 0 }
+        calls = {
+            setup_buf = 0,
+            on_reload = 0,
+            on_write = 0,
+            on_wipeout = 0,
+            on_listed_change = 0,
+        }
     end)
 
     after_each(function()
@@ -59,6 +66,9 @@ describe("agentic.ui.SubagentTranscript", function()
                 end,
                 on_wipeout = function()
                     calls.on_wipeout = calls.on_wipeout + 1
+                end,
+                on_listed_change = function()
+                    calls.on_listed_change = calls.on_listed_change + 1
                 end,
             }
         )
@@ -136,6 +146,77 @@ describe("agentic.ui.SubagentTranscript", function()
         assert.is_true(view.writer ~= main_view.writer)
         assert.is_true(view.status_indicator ~= main_view.status_indicator)
         assert.is_true(view.response_boundary ~= main_view.response_boundary)
+    end)
+
+    describe("on_listed_change", function()
+        --- @type tests.helpers.Deferred
+        local deferred
+
+        before_each(function()
+            deferred = Deferred.capture()
+        end)
+
+        after_each(function()
+            deferred.revert()
+        end)
+
+        it("runs on the next tick after it is made", function()
+            new_transcript("aa11bb22cc33dd44")
+            assert.equal(0, calls.on_listed_change)
+
+            deferred.drain()
+
+            assert.equal(1, calls.on_listed_change)
+        end)
+
+        it("runs on the next tick after :bd, once unlisted", function()
+            local transcript = new_transcript("aa11bb22cc33dd44")
+            deferred.drain()
+            local listed_then = nil
+            calls.on_listed_change = 0
+
+            vim.cmd.bdelete({ args = { transcript.bufnr }, bang = true })
+            assert.equal(0, calls.on_listed_change)
+            vim.schedule(function()
+                listed_then = vim.bo[transcript.bufnr].buflisted
+            end)
+            deferred.drain()
+
+            assert.equal(1, calls.on_listed_change)
+            assert.is_false(listed_then)
+        end)
+
+        it("runs when the buffer is listed again", function()
+            local transcript = new_transcript("aa11bb22cc33dd44")
+            vim.cmd.bdelete({ args = { transcript.bufnr }, bang = true })
+            deferred.drain()
+
+            vim.bo[transcript.bufnr].buflisted = true
+            deferred.drain()
+
+            assert.equal(3, calls.on_listed_change)
+        end)
+
+        it("runs after the user wipes it", function()
+            local transcript = new_transcript("aa11bb22cc33dd44")
+            deferred.drain()
+            calls.on_listed_change = 0
+
+            vim.cmd.bwipeout({ args = { transcript.bufnr }, bang = true })
+            deferred.drain()
+
+            assert.equal(1, calls.on_wipeout)
+            assert.equal(1, calls.on_listed_change)
+        end)
+
+        it("does not run when destroyed", function()
+            local transcript = new_transcript("aa11bb22cc33dd44")
+
+            transcript:destroy()
+            deferred.drain()
+
+            assert.equal(0, calls.on_listed_change)
+        end)
     end)
 
     it("writes its heading again on :e", function()
