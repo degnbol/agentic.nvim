@@ -122,15 +122,16 @@ describe("agentic.acp.AgentInstance", function()
             end)
         end)
 
-        describe("dead client", function()
+        describe("cached client", function()
             --- @param subscribers table
             --- @param state string|nil Default disconnected
             --- @return table client
-            local function dead_client(subscribers, state)
+            local function cached_client(subscribers, state)
                 local client = {
                     state = state or "disconnected",
                     subscribers = subscribers,
                     restart = spy.new(function() end),
+                    when_ready = spy.new(function() end),
                 }
                 new_stubs["opencode-acp"]:invokes(function()
                     return client
@@ -139,8 +140,8 @@ describe("agentic.acp.AgentInstance", function()
                 return client
             end
 
-            it("restarts one without subscribers", function()
-                local client = dead_client({})
+            it("restarts a dead one without subscribers", function()
+                local client = cached_client({})
                 local on_ready = spy.new(function() end)
 
                 local returned =
@@ -148,27 +149,40 @@ describe("agentic.acp.AgentInstance", function()
 
                 assert.equal(client, returned)
                 assert.spy(client.restart).was.called(1)
-                assert.equal(on_ready, client.restart.calls[1][2])
+                assert.is_nil(client.restart.calls[1][2])
+                assert.equal(on_ready, client.when_ready.calls[1][2])
                 assert.spy(on_ready).was.called(0)
             end)
 
             it("restarts one in error", function()
-                local client = dead_client({}, "error")
+                local client = cached_client({}, "error")
 
                 AgentInstance.get_instance("opencode-acp")
 
                 assert.spy(client.restart).was.called(1)
             end)
 
-            it("hands out one with subscribers as is", function()
-                local client = dead_client({ ["s-1"] = {} })
-                local on_ready = spy.new(function() end)
+            for label, case in pairs({
+                ["a dead one with subscribers"] = {
+                    subscribers = { ["s-1"] = {} },
+                },
+                ["a live one in initializing"] = {
+                    subscribers = {},
+                    state = "initializing",
+                },
+            }) do
+                it("hands " .. label .. " the callback to wait", function()
+                    local client = cached_client(case.subscribers, case.state)
+                    local on_ready = spy.new(function() end)
 
-                AgentInstance.get_instance("opencode-acp", on_ready)
+                    AgentInstance.get_instance("opencode-acp", on_ready)
 
-                assert.spy(client.restart).was.called(0)
-                assert.spy(on_ready).was.called(1)
-            end)
+                    assert.spy(client.restart).was.called(0)
+                    assert.spy(on_ready).was.called(0)
+                    assert.spy(client.when_ready).was.called(1)
+                    assert.equal(on_ready, client.when_ready.calls[1][2])
+                end)
+            end
         end)
     end)
 

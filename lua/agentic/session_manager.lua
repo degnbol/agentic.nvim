@@ -4181,7 +4181,8 @@ function SessionManager:switch_provider(provider_name)
 
     self._transient_attempt = 0
 
-    -- Save references before get_instance (on_ready may fire synchronously)
+    -- Save references before get_instance (on_ready fires synchronously for
+    -- a ready agent)
     local saved_history = self.chat_history
     local old_agent = self.agent
     local old_session_id = self.session_id
@@ -4220,7 +4221,7 @@ function SessionManager:switch_provider(provider_name)
     self.permission_manager:cancel_requests()
     self.todo_list:clear()
 
-    -- If agent was already cached, on_ready fired synchronously above.
+    -- If the agent was ready, on_ready fired synchronously above.
     -- If not, it will fire when the process is ready.
     self.agent = new_agent
 end

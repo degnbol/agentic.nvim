@@ -137,8 +137,8 @@ function BackgroundSession:new(opts)
     if not instance then
         return nil
     end
-    -- A provider that fails to start never calls `on_ready`, and reaches
-    -- only sessions already subscribed.
+    -- A provider that fails to start never reaches ready, so `on_ready`
+    -- never runs.
     self._start_timer = vim.defer_fn(function()
         if not self._ready and not self._destroyed then
             self:_fail_start("timeout")

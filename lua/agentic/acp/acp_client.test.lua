@@ -775,6 +775,7 @@ describe("agentic.acp.ACPClient", function()
                 capabilities = {},
                 provider_config = { auth_method = auth_method },
                 _connection = 0,
+                _ready_waiters = {},
                 transport = {
                     start = function()
                         client.state = "connected"
@@ -789,7 +790,8 @@ describe("agentic.acp.ACPClient", function()
                     cb({}, authenticate_err)
                 end
             end
-            client:_connect(on_ready)
+            client:when_ready(on_ready)
+            client:_connect()
             return client
         end
 
@@ -915,6 +917,7 @@ describe("agentic.acp.ACPClient", function()
                 provider_config = { auth_method = auth_method },
                 _connection = 0,
                 _on_ready = on_ready,
+                _ready_waiters = {},
                 _session_roots = {},
                 _children = {},
                 _tool_call_kinds = ToolCallKinds:new(),
@@ -932,7 +935,8 @@ describe("agentic.acp.ACPClient", function()
                     end,
                 },
             }, { __index = ACPClient }) --[[@as agentic.acp.ACPClient]]
-            client:_connect(on_ready)
+            client:when_ready(on_ready)
+            client:_connect()
             return client
         end
 
@@ -988,8 +992,8 @@ describe("agentic.acp.ACPClient", function()
             assert.equal(limit, client.usage_limit)
         end)
 
-        -- The creator's first start never ran, so it runs on the new
-        -- subprocess, before the passed callback.
+        -- The creator waits for the client, not for a connection, and
+        -- waiters run before the passed callback.
         it("ignores a failed initialize of the old connection", function()
             local order = {}
             local client = connect(nil, function()
@@ -1023,6 +1027,196 @@ describe("agentic.acp.ACPClient", function()
             assert.spy(replacement).was.called(0)
             assert.spy(notify_stub).was.called(0)
         end)
+
+        it("restart(A) then restart(B) before ready runs only B", function()
+            local client = connect(nil, function() end)
+            answer(client, 1, { protocolVersion = 1 })
+            local a = spy.new(function() end)
+            local b = spy.new(function() end)
+
+            client:restart(a)
+            client:restart(b)
+            deferred.drain()
+            answer(client, 3, { protocolVersion = 1 })
+
+            assert.spy(a).was.called(0)
+            assert.spy(b).was.called(1)
+        end)
+
+        it(
+            "runs a waiter queued before a failed initialize at the restart's ready",
+            function()
+                local order = {}
+                local client = connect(nil, function()
+                    table.insert(order, "creator")
+                end)
+                local initialize_cb = client.callbacks[1]
+                client.callbacks[1] = nil
+                initialize_cb(nil, { code = -32603, message = "boom" })
+                assert.equal("error", client.state)
+
+                client:restart(function()
+                    table.insert(order, "replacement")
+                end)
+                deferred.drain()
+                answer(client, 2, { protocolVersion = 1 })
+                client:restart(function() end)
+                deferred.drain()
+                answer(client, 3, { protocolVersion = 1 })
+
+                assert.same({ "creator", "replacement" }, order)
+            end
+        )
+
+        it("keeps a waiter across a restart that replaces another", function()
+            local order = {}
+            local client = connect(nil, function() end)
+            answer(client, 1, { protocolVersion = 1 })
+
+            client:restart()
+            client:when_ready(function()
+                table.insert(order, "waiter")
+            end)
+            client:restart(function()
+                table.insert(order, "restart")
+            end)
+            deferred.drain()
+            answer(client, 3, { protocolVersion = 1 })
+
+            assert.same({ "waiter", "restart" }, order)
+        end)
+
+        describe("when_ready", function()
+            it("calls at once on a ready client", function()
+                local client = connect(nil, function() end)
+                answer(client, 1, { protocolVersion = 1 })
+                local waiter = spy.new(function() end)
+
+                client:when_ready(waiter)
+
+                assert.spy(waiter).was.called(1)
+                assert.equal(client, waiter.calls[1][1])
+            end)
+
+            it(
+                "runs the waiters queued while initializing once, in order",
+                function()
+                    local order = {}
+                    local client = connect(nil, function()
+                        table.insert(order, 1)
+                    end)
+                    client:when_ready(function()
+                        table.insert(order, 2)
+                    end)
+                    client:when_ready(function()
+                        table.insert(order, 3)
+                    end)
+
+                    answer(client, 1, { protocolVersion = 1 })
+                    client:restart(function() end)
+                    deferred.drain()
+                    answer(client, 2, { protocolVersion = 1 })
+
+                    assert.same({ 1, 2, 3 }, order)
+                end
+            )
+
+            it("keeps the waiters after one that stops the client", function()
+                local order = {}
+                local client = connect(nil, function(c)
+                    c:stop()
+                end)
+                client:when_ready(function()
+                    table.insert(order, "later")
+                end)
+
+                answer(client, 1, { protocolVersion = 1 })
+                deferred.drain()
+                assert.equal("disconnected", client.state)
+                assert.same({}, order)
+
+                client:restart(function()
+                    table.insert(order, "restart")
+                end)
+                answer(client, 2, { protocolVersion = 1 })
+                assert.same({ "later", "restart" }, order)
+            end)
+        end)
+
+        describe("process death during startup", function()
+            it("stays disconnected when it dies during authenticate", function()
+                local waiter = spy.new(function() end)
+                local client = connect("key", waiter)
+                answer(client, 1, KEY)
+                assert.equal("authenticate", sent[2])
+
+                client.transport:stop()
+                deferred.drain()
+
+                assert.equal("disconnected", client.state)
+                assert.spy(waiter).was.called(0)
+                assert.spy(notify_stub).was.called(1)
+                assert.truthy(
+                    notify_stub.calls[1][1]:find(
+                        "Authentication with K",
+                        1,
+                        true
+                    )
+                )
+            end)
+
+            it("stays disconnected when it dies during initialize", function()
+                local client = connect(nil, function() end)
+
+                client.transport:stop()
+                deferred.drain()
+
+                assert.equal("disconnected", client.state)
+                assert.spy(notify_stub).was.called(1)
+                assert.truthy(
+                    notify_stub.calls[1][1]:find(
+                        "Failed to initialize",
+                        1,
+                        true
+                    )
+                )
+            end)
+        end)
+
+        it(
+            "runs _on_ready once over a failed then a successful reconnect",
+            function()
+                local transport_module = require("agentic.acp.acp_transport")
+                --- @type agentic.acp.TransportCallbacks
+                local callbacks
+                local on_ready = spy.new(function() end)
+                local client = connect(nil, on_ready)
+                local transport = client.transport
+                local create_stub =
+                    spy.stub(transport_module, "create_stdio_transport")
+                create_stub:invokes(function(_config, cbs)
+                    callbacks = cbs
+                    return transport
+                end)
+                MiniTest.finally(function()
+                    create_stub:revert()
+                end)
+                client:_setup_transport()
+                answer(client, 1, { protocolVersion = 1 })
+                on_ready:reset()
+
+                transport:stop()
+                deferred.drain()
+                callbacks.on_reconnect()
+                transport:stop()
+                deferred.drain()
+                callbacks.on_reconnect()
+                answer(client, 3, { protocolVersion = 1 })
+
+                assert.equal("ready", client.state)
+                assert.spy(on_ready).was.called(1)
+            end
+        )
     end)
 
     describe("close_session", function()

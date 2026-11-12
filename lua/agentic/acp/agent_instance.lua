@@ -34,10 +34,11 @@ local AgentInstance = {}
 AgentInstance._instances = {}
 
 --- The client of `provider_name`'s process, started on first use. A cached
---- client whose process died and that no session uses is restarted.
+--- client whose process died or failed to initialize, and that no session
+--- uses, is restarted.
 --- Raises for a provider without config or adapter.
 --- @param provider_name agentic.UserConfig.ProviderName
---- @param on_ready fun(client: agentic.acp.ACPClient)|nil Called when the process is ready, at once for a live cached client
+--- @param on_ready fun(client: agentic.acp.ACPClient)|nil Called when the process is ready, at once for a ready cached client
 --- @param unattended boolean|nil Use the provider's separate process that leaves every tool call's permission to the client
 --- @return agentic.acp.ACPClient|nil client Nil with a notify when that process cannot be configured
 function AgentInstance.get_instance(provider_name, on_ready, unattended)
@@ -49,9 +50,10 @@ function AgentInstance.get_instance(provider_name, on_ready, unattended)
             (client.state == "disconnected" or client.state == "error")
             and not next(client.subscribers)
         then
-            client:restart(on_ready or function() end)
-        elseif on_ready then
-            on_ready(client)
+            client:restart()
+        end
+        if on_ready then
+            client:when_ready(on_ready)
         end
         return client
     end

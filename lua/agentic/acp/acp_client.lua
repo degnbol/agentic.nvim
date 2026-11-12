@@ -69,7 +69,8 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @class agentic.acp.ACPClient : agentic.acp.ACPClientData
 --- @field provider_name agentic.UserConfig.ProviderName Config key of the provider this client runs
 --- @field usage_limit agentic.acp.UsageLimit This process's usage limit. A restart keeps it
---- @field _on_ready fun(client: agentic.acp.ACPClient) Ready callback passed to `new`, run again when a dropped connection reconnects
+--- @field _on_ready fun(client: agentic.acp.ACPClient) Ready callback passed to `new`, run again when a reconnect of a client that was ready reaches ready
+--- @field _ready_waiters fun(client: agentic.acp.ACPClient)[] Callbacks of `when_ready` that wait for the next ready, in order
 --- @field _connection integer Number of connections started. Callbacks of an earlier connection are ignored
 --- @field _was_ready? boolean Whether any connection has reached `ready`
 --- @field _notified_output table<string, true> Process output summaries already shown as a notification by this client
@@ -134,6 +135,7 @@ function ACPClient:new(config, on_ready)
 
     local client = setmetatable(instance, self) --[[@as agentic.acp.ACPClient]]
     client._on_ready = on_ready
+    client._ready_waiters = {}
     client._connection = 0
     client._loading_sessions = {}
     client._children = {}
@@ -143,7 +145,8 @@ function ACPClient:new(config, on_ready)
     client:_setup_usage_limit()
 
     client:_setup_transport()
-    client:_connect(on_ready)
+    client:when_ready(on_ready)
+    client:_connect()
     return client
 end
 
@@ -525,8 +528,10 @@ function ACPClient:_setup_transport()
                 self:_handle_message(message)
             end,
             on_reconnect = function()
+                -- A client that was never ready still holds `_on_ready` as a
+                -- waiter.
                 if self.state == "disconnected" then
-                    self:_connect(self._on_ready)
+                    self:_connect(self._was_ready and self._on_ready or nil)
                 end
             end,
             on_stdout_line = function(line)
@@ -1198,27 +1203,29 @@ end
 --- Stop the provider subprocess and start a new one in this same client
 --- object. No ACP session survives the restart: every subscriber gets
 --- `on_disconnect`, then is unsubscribed.
---- @param on_ready fun(client: agentic.acp.ACPClient) Runs once the new subprocess is ready. The callback passed to `new` runs before it only when the client was never ready
+--- @param on_ready fun(client: agentic.acp.ACPClient)|nil Runs once the new subprocess is ready, after the waiters of `when_ready`. Dropped when this start does not reach ready
 function ACPClient:restart(on_ready)
     self:stop()
     for session_id in pairs(self.subscribers) do
         self:unsubscribe(session_id)
     end
+    self:_connect(on_ready)
+end
 
-    local first_start = not self._was_ready and self._on_ready
-    if first_start then
-        self:_connect(function(client)
-            first_start(client)
-            on_ready(client)
-        end)
+--- Run `on_ready` once the client is ready: at once when it is, else at
+--- the next start that reaches ready.
+--- @param on_ready fun(client: agentic.acp.ACPClient)
+function ACPClient:when_ready(on_ready)
+    if self.state == "ready" then
+        on_ready(self)
     else
-        self:_connect(on_ready)
+        table.insert(self._ready_waiters, on_ready)
     end
 end
 
 --- Start the subprocess and initialize it.
---- @param on_ready fun(client: agentic.acp.ACPClient) Runs once the client is ready
-function ACPClient:_connect(on_ready)
+--- @param on_start fun(client: agentic.acp.ACPClient)|nil Runs once this start reaches ready, after the waiters of `when_ready`
+function ACPClient:_connect(on_start)
     if self.state ~= "disconnected" or not self.transport then
         return
     end
@@ -1251,12 +1258,16 @@ function ACPClient:_connect(on_ready)
         if connection ~= self._connection then
             return
         end
+        -- A process that died also fails this request. It stays
+        -- `disconnected`, so a reconnect can start it again.
         if not result or err then
-            self:_set_state("error")
             Logger.notify(
                 "Failed to initialize\n\n" .. vim.inspect(err),
                 vim.log.levels.ERROR
             )
+            if self.state == "initializing" then
+                self:_set_state("error")
+            end
             return
         end
 
@@ -1264,9 +1275,20 @@ function ACPClient:_connect(on_ready)
         self:_apply_initialize_result(result)
 
         local function go_ready()
+            -- The process can die or stop while `authenticate` waits.
+            if self.state ~= "initializing" then
+                return
+            end
             self:_set_state("ready")
             self._was_ready = true
-            on_ready(self)
+            -- A waiter that stops or restarts the client leaves the rest
+            -- queued for the next ready.
+            while self.state == "ready" and self._ready_waiters[1] do
+                table.remove(self._ready_waiters, 1)(self)
+            end
+            if on_start and self.state == "ready" then
+                on_start(self)
+            end
         end
 
         -- No notice for an unadvertised `auth_method`: the advertised set can
