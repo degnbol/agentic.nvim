@@ -3,6 +3,7 @@ local Logger = require("agentic.utils.logger")
 local MiniTest = require("mini.test")
 local assert = require("tests.helpers.assert")
 local Deferred = require("tests.helpers.deferred")
+local RecordingHandlers = require("tests.helpers.recording_handlers")
 local spy = require("tests.helpers.spy")
 local ToolCallKinds = require("agentic.acp.tool_call_kinds")
 local UsageLimit = require("agentic.acp.usage_limit")
@@ -1875,23 +1876,7 @@ describe("agentic.acp.ACPClient", function()
             })
         end
 
-        --- @return agentic.acp.ClientHandlers handlers
-        --- @return table[] calls `{ method, payload, source }` per call
-        local function recording_handlers()
-            local calls = {}
-            local function record(method)
-                return function(payload, source)
-                    table.insert(calls, { method, payload, source })
-                end
-            end
-            return {
-                on_session_update = record("on_session_update"),
-                on_tool_call = record("on_tool_call"),
-                on_tool_call_update = record("on_tool_call_update"),
-                on_request_permission = record("on_request_permission"),
-            },
-                calls
-        end
+        local recording_handlers = RecordingHandlers.new
 
         it("routes a child's update to the root with the raw id", function()
             local handlers, calls = recording_handlers()
@@ -1958,6 +1943,59 @@ describe("agentic.acp.ACPClient", function()
 
             assert.equal("on_request_permission", calls[2][1])
             assert.equal("child", calls[2][2].sessionId)
+        end)
+
+        describe("a resolved permission request", function()
+            --- @param option_id string|nil
+            --- @return table[] events `{ "send", result }` or `{ "hook", option_id }` in order
+            local function resolve(option_id)
+                local events = {}
+                local handlers, calls = recording_handlers()
+                local client = make_client({
+                    subscribers = { root = handlers },
+                    __send_result = function(_, _, result)
+                        table.insert(events, { "send", result })
+                    end,
+                    __on_permission_resolved = function(_, _, id)
+                        table.insert(events, { "hook", id })
+                    end,
+                })
+
+                client:__handle_request_permission(7, {
+                    sessionId = "root",
+                    toolCall = { toolCallId = "t1" },
+                    options = {},
+                })
+                deferred.drain()
+                calls[1][3](option_id)
+                return events
+            end
+
+            it("sends cancelled, then calls the hook with nil", function()
+                local events = resolve(nil)
+
+                assert.same({
+                    { "send", { outcome = { outcome = "cancelled" } } },
+                    { "hook" },
+                }, events)
+            end)
+
+            it("sends selected, then calls the hook with the id", function()
+                local events = resolve("allow")
+
+                assert.same({
+                    {
+                        "send",
+                        {
+                            outcome = {
+                                outcome = "selected",
+                                optionId = "allow",
+                            },
+                        },
+                    },
+                    { "hook", "allow" },
+                }, events)
+            end)
         end)
 
         it("resolves the root's session roots for a child", function()

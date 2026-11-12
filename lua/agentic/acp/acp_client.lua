@@ -1154,7 +1154,6 @@ function ACPClient:__handle_request_permission(message_id, request)
     end
 
     vim.schedule(function()
-        -- Every change to this block MUST be reflected in Gemini's ACP Adapter, as it has custom implementation @see gemini_acp_adapter.lua
         local ok, err = pcall(
             subscriber.on_request_permission,
             request,
@@ -1179,6 +1178,7 @@ function ACPClient:__handle_request_permission(message_id, request)
                         }
                     )
                 end
+                self:__on_permission_resolved(request, option_id)
             end
         )
         if not ok then
@@ -1193,6 +1193,13 @@ function ACPClient:__handle_request_permission(message_id, request)
         end
     end)
 end
+
+--- Called with the option a permission request was resolved with, after the
+--- result is sent. Default: no-op.
+--- @protected
+--- @param _request agentic.acp.RequestPermission
+--- @param _option_id string|nil Nil when the request was cancelled
+function ACPClient:__on_permission_resolved(_request, _option_id) end
 
 function ACPClient:stop()
     if self.transport then

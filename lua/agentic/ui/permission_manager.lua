@@ -6,6 +6,7 @@ local GitFiles = require("agentic.utils.git_files")
 local Logger = require("agentic.utils.logger")
 local PermissionFloat = require("agentic.ui.permission_float")
 local PermissionHighlight = require("agentic.ui.permission_highlight")
+local PermissionOptions = require("agentic.acp.permission_options")
 local PermissionRules = require("agentic.utils.permission_rules")
 local GrantSafety = require("agentic.utils.grant_safety")
 
@@ -1237,14 +1238,8 @@ function PermissionManager:_complete_request(option_id)
     end
 
     -- Cache allow_always/reject_always decisions for client-side auto-approval
-    local selected_kind
-    for _, opt in ipairs(current.request.options) do
-        if opt.optionId == option_id then
-            selected_kind = opt.kind
-            break
-        end
-    end
-    local selected = AcpKind.normalise(selected_kind)
+    local selected =
+        PermissionOptions.option_kind(current.request.options, option_id)
     if selected == "allow_always" or selected == "reject_always" then
         local _, resolved, _, cwd = self:resolve_request(current.request)
         local tool_call = resolved --[[@as agentic.acp.ToolCall]]

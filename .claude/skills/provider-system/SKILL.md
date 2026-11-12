@@ -254,8 +254,9 @@ through these overrides, never from shared code.
 
 Override a `__` handler when the provider sends data in non-standard fields
 (e.g. `rawInput`, `rawOutput`), needs synthetic events (Gemini synthesizes
-`tool_call` from permission request), or skips events (Gemini doesn't send
-cancel updates on rejection).
+`tool_call` from permission request), or skips events (Gemini sends no
+`tool_call_update` for a rejected call; it overrides `__on_permission_resolved`
+to end the call `failed`).
 
 An adapter whose provider has a plan mode sets `exits_plan` on the block of the
 call that leaves it, and overrides `plan_file(request)` (default nil) to name

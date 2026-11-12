@@ -25,8 +25,7 @@ Status: reviewed spec
 - `.luarc.json` (`need-check-nil: Error`), `.claude/rules/provider-specific.md`
 - Notes: `notes/FIX-placeholder-titles.md`,
   `notes/feature-provider-drift-detection.md`,
-  `notes/refactor-acp-kind-normalisation.md`,
-  `notes/FIX-gemini-permission-handler.md`
+  `notes/refactor-acp-kind-normalisation.md`
 - Skills: `provider-system` (§ "Adapter override points", § "Edit diffs come
   from `content[]`"), `lua-class`
 

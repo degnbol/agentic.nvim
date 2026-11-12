@@ -46,7 +46,6 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 **No ordering:**
 - P3 [`FEAT-to-chat-key.md`](notes/FEAT-to-chat-key.md)
 - P3 [`REFACTOR-blocking-stopped-name.md`](notes/REFACTOR-blocking-stopped-name.md)
-- P1 [`FIX-gemini-permission-handler.md`](notes/FIX-gemini-permission-handler.md)
 - P3 [`REFACTOR-grant-target.md`](notes/REFACTOR-grant-target.md)
 - P3 [`REFACTOR-substitution-word.md`](notes/REFACTOR-substitution-word.md)
 - P3 [`REFACTOR-redirect-expansions.md`](notes/REFACTOR-redirect-expansions.md)
