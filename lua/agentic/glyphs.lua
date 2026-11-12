@@ -253,6 +253,10 @@ Glyphs.KIND.slashcommand = Glyphs.COMMAND_DEFAULT
 Glyphs.PIE =
     { "󰝦", "󰪞", "󰪟", "󰪠", "󰪡", "󰪢", "󰪣", "󰪤", "󰪥" }
 
+--- End of the prose the agent is still writing, inline after its last
+--- character.
+Glyphs.PROSE_CURSOR = "▎"
+
 --- Bar of a fraction: 1 to 8 eighths high. Unicode block elements, one cell
 --- wide, so no trailing cell.
 --- @type string[]

@@ -223,7 +223,7 @@ describe("agentic.Subagents", function()
             local noop = function() end
             return {
                 bufnr = bufnr,
-                view = { status_indicator = { start = noop, stop = noop } },
+                view = { writer = { hide_prose_cursor = noop } },
                 set_running = noop,
                 set_context = noop,
                 is_loaded = function()
@@ -347,14 +347,13 @@ describe("agentic.Subagents", function()
                 end,
             })
             local transcript = fake_transcript(true)
-            local noop = function() end
             transcript.view = {
                 writer = {
                     stamp_open_calls = function()
                         return {}
                     end,
+                    hide_prose_cursor = function() end,
                 },
-                status_indicator = { stop = noop, reposition = noop },
             }
             subagents._agents.c1 = { open = true, transcript = transcript }
             subagents._order = { "c1" }
@@ -529,10 +528,7 @@ describe("agentic.Subagents", function()
             local host, spies = make_host(history)
             local subagents = make_subagents(host)
             local transcript = {
-                view = {
-                    writer = {},
-                    status_indicator = { reposition = function() end },
-                },
+                view = { writer = {} },
             }
             subagents._agents.c1 = { open = true, record_read = true }
             subagents.transcript = function()
@@ -656,10 +652,7 @@ describe("agentic.Subagents", function()
                         stamp_open_calls = function()
                             return {}
                         end,
-                    },
-                    status_indicator = {
-                        stop = function() end,
-                        reposition = function() end,
+                        hide_prose_cursor = function() end,
                     },
                 },
                 set_running = function() end,

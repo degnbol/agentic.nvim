@@ -93,6 +93,14 @@ function Subagents:any_open()
     return false
 end
 
+--- Whether the subagent of `child_id` works. False for an unknown one.
+--- @param child_id string
+--- @return boolean
+function Subagents:is_open(child_id)
+    local agent = self._agents[child_id]
+    return agent ~= nil and agent.open
+end
+
 --- Set the `modified` flag of every loaded transcript.
 --- @param unsaved boolean
 function Subagents:set_modified(unsaved)
@@ -104,7 +112,7 @@ function Subagents:set_modified(unsaved)
 end
 
 --- Mark a subagent working or not, and with it the chat's `modified` flag,
---- its transcript's header and the entries.
+--- its transcript's header and prose cursor, and the entries.
 --- @param agent agentic.Subagents.Agent
 --- @param open boolean
 function Subagents:_set_open(agent, open)
@@ -112,6 +120,9 @@ function Subagents:_set_open(agent, open)
     self._host.sync_modified()
     if agent.transcript then
         agent.transcript:set_running(open)
+        if not open then
+            agent.transcript.view.writer:hide_prose_cursor()
+        end
     end
     self._host.agents_changed()
 end
@@ -224,7 +235,6 @@ function Subagents:_replay_transcript(child_id)
     SessionResume.replay_messages(transcript.view.writer, rows, function(id)
         return self:peer_detail(id)
     end)
-    transcript.view.status_indicator:reposition()
 
     transcript:set_header(block and block.subagent)
     transcript:set_running(agent.open)
@@ -244,9 +254,6 @@ function Subagents:transcript(child_id)
         transcript = self:_new_transcript(child_id, block and block.subagent)
         agent.transcript = transcript
         self:_replay_transcript(child_id)
-        if agent.open then
-            transcript.view.status_indicator:start("generating")
-        end
     elseif not transcript:is_loaded() then
         -- Its `BufReadCmd` renders it now, before a caller writes to it,
         -- rather than as a side effect of that write.
@@ -592,8 +599,8 @@ end
 
 --- Start a closed subagent's work, first or again: its transcript listed, so
 --- a resumed agent's comes back after `:bd`, its model when known
---- (`_announce_model`), its working indicator, a header without the last
---- run's end, and a background one's message input. With
+--- (`_announce_model`), a header without the last run's end, and a
+--- background one's message input. With
 --- `Config.windows.agents.auto_open`, outside a replay, the agents panel opens.
 --- @param child_id string
 --- @param replayed boolean From a session/load replay
@@ -606,7 +613,6 @@ function Subagents:_start_agent(child_id, replayed)
         self._widget:open_panel("agents")
     end
     self:_announce_model(agent)
-    transcript.view.status_indicator:start("generating")
     transcript:set_context(nil)
     self:_open_input(child_id)
 end
@@ -626,12 +632,11 @@ local function end_word(state)
     return CanonicalToolCall.stop_reason_word(reason)
 end
 
---- End a subagent's work as `state` reports it: settle its launch, stop its
---- indicator, end its unfinished calls `failed` with the end's word unless it
---- ended its turn or the end is `unknown`, write an end row and show the end
---- in the header. On an ended agent, only a
---- report with error text writes a row, holding that text: the provider can
---- report a failure a second time to add it.
+--- End a subagent's work as `state` reports it: settle its launch, end its
+--- unfinished calls `failed` with the end's word unless it ended its turn or
+--- the end is `unknown`, write an end row and show the end in the header. On
+--- an ended agent, only a report with error text writes a row, holding that
+--- text: the provider can report a failure a second time to add it.
 --- @param child_id string
 --- @param state agentic.acp.SubagentWorkState
 function Subagents:end_agent(child_id, state)
@@ -654,7 +659,6 @@ function Subagents:end_agent(child_id, state)
 
     self:_set_open(agent, false)
     local transcript = self:transcript(child_id)
-    transcript.view.status_indicator:stop()
     -- An `unknown` end does not say the calls stopped.
     if word ~= "completed" and word ~= "unknown" then
         self._host.history():update_tool_calls(
@@ -705,7 +709,6 @@ function Subagents:_write_row(child_id, row)
             return self:peer_detail(id)
         end
     )
-    view.status_indicator:reposition()
     self._host.history():add_message(row)
     self._host.history_changed()
 end
@@ -1024,14 +1027,11 @@ function Subagents:set_config_options(child_id, options)
     self:_announce_model(agent)
 end
 
---- Mark every subagent ended, stop its indicator and wipe the message
---- inputs. Blocks and transcripts stay.
+--- Mark every subagent ended and wipe the message inputs. Blocks and
+--- transcripts stay.
 function Subagents:forget()
     for _, agent in pairs(self._agents) do
         self:_set_open(agent, false)
-        if agent.transcript then
-            agent.transcript.view.status_indicator:stop()
-        end
     end
     self:_destroy_inputs()
 end

@@ -345,6 +345,114 @@ describe("agentic.ui.MessageWriter", function()
         end)
     end)
 
+    describe("prose cursor", function()
+        --- Each cursor mark as `{ row, col }`.
+        --- @return integer[][]
+        local function cursors()
+            local marks = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                vim.api.nvim_get_namespaces().agentic_prose_cursor,
+                0,
+                -1,
+                { details = true }
+            )
+            return vim.tbl_map(function(mark)
+                assert.equal(Glyphs.PROSE_CURSOR, mark[4].virt_text[1][1])
+                return { mark[2], mark[3] }
+            end, marks)
+        end
+
+        --- @param text string
+        local function stream(text)
+            writer:write_message_chunk(make_message_update(text), nil, true)
+        end
+
+        it("shows at the end of live prose", function()
+            stream("one\n\ntw")
+
+            assert.same({ { 2, 2 } }, cursors())
+        end)
+
+        it("follows each chunk", function()
+            stream("one")
+            stream(" two")
+
+            assert.same({ { 0, 7 } }, cursors())
+        end)
+
+        it("does not show for prose that is not live", function()
+            writer:write_message_chunk(make_message_update("one"))
+
+            assert.same({}, cursors())
+        end)
+
+        it("goes with a chunk that is not live", function()
+            stream("one")
+
+            writer:write_message_chunk(make_message_update(" two"))
+
+            assert.same({}, cursors())
+        end)
+
+        it("goes when thinking follows the prose", function()
+            stream("one")
+
+            writer:write_message_chunk(make_thought_update("hmm"), nil, true)
+
+            assert.same({}, cursors())
+        end)
+
+        for name, write_next in pairs({
+            ["tool call"] = function()
+                writer:write_tool_call_block(
+                    make_tool_call_block("t1", "completed")
+                )
+            end,
+            ["turn end"] = function()
+                writer:finalize_turn()
+            end,
+            reset = function()
+                writer:reset()
+            end,
+            ["turn state reset"] = function()
+                writer:reset_turn_state()
+            end,
+            hide = function()
+                writer:hide_prose_cursor()
+            end,
+        }) do
+            it("goes at a " .. name, function()
+                stream("one")
+
+                write_next()
+
+                assert.same({}, cursors())
+            end)
+        end
+
+        it("counts its column in the hard wrap", function()
+            Config.windows.wrap_width = 10
+
+            stream("aaaa bbbbb")
+
+            assert.same(
+                { "aaaa", "bbbbb" },
+                vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            )
+        end)
+
+        it("leaves a full row of prose that is not live", function()
+            Config.windows.wrap_width = 10
+
+            writer:write_message_chunk(make_message_update("aaaa bbbbb"))
+
+            assert.same(
+                { "aaaa bbbbb" },
+                vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            )
+        end)
+    end)
+
     describe("fence balancing", function()
         local function buffer_lines()
             return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)

@@ -173,17 +173,19 @@ _G.row_sign_of = function(bufnr, text)
         end
     end
 end
--- Whether a transcript's working indicator is on its last line.
-_G.indicator_at_end = function(child_id)
-    local transcript = _G.transcript(child_id)
-    local indicator = transcript.view.status_indicator
-    local pos = vim.api.nvim_buf_get_extmark_by_id(
-        transcript.bufnr,
-        vim.api.nvim_create_namespace("agentic_status"),
-        indicator._extmark_id,
+-- Whether a transcript shows the prose cursor, at the end of its last line.
+_G.prose_cursor_at_end = function(child_id)
+    local bufnr = _G.transcript(child_id).bufnr
+    local marks = vim.api.nvim_buf_get_extmarks(
+        bufnr,
+        vim.api.nvim_create_namespace("agentic_prose_cursor"),
+        0,
+        -1,
         {}
     )
-    return pos[1] == vim.api.nvim_buf_line_count(transcript.bufnr) - 1
+    local last = vim.api.nvim_buf_line_count(bufnr) - 1
+    local text = vim.api.nvim_buf_get_lines(bufnr, last, last + 1, false)[1]
+    return #marks == 1 and marks[1][2] == last and marks[1][3] == #text
 end
 -- Put the cursor of the current window on the line `line`.
 _G.cursor_to_line = function(line)
@@ -289,18 +291,13 @@ describe("native subagent sessions", function()
         end
     )
 
-    it("an announce without state opens no indicator and no input", function()
+    it("an announce without state opens no agent and no input", function()
         child.lua([[
 _G.s.agent.provider_config.subagents.force_background = true
 _G.announce("c1", "find it", "root", false)
 ]])
 
         assert.is_false(child.lua_get([[_G.s._subagents._agents.c1.open]]))
-        assert.is_false(
-            child.lua_get(
-                [[_G.transcript("c1").view.status_indicator:is_active()]]
-            )
-        )
         assert.is_true(child.lua_get([[_G.s._subagents._inputs.c1 == nil]]))
     end)
 
@@ -992,11 +989,6 @@ _G.state("c1", ...)
                 assert.is_false(
                     child.lua_get([[_G.s._subagents._agents.c1.open]])
                 )
-                assert.is_false(
-                    child.lua_get(
-                        [[_G.transcript("c1").view.status_indicator:is_active()]]
-                    )
-                )
                 assert.equal(
                     1,
                     count(
@@ -1055,11 +1047,6 @@ _G.state("c1", { state = "running" })
 
         assert.is_true(child.lua_get([[_G.s._subagents._agents.c1.open]]))
         assert.is_true(child.lua_get([[_G.transcript("c1").bufnr == _G.bufnr]]))
-        assert.is_true(
-            child.lua_get(
-                [[_G.transcript("c1").view.status_indicator:is_active()]]
-            )
-        )
         assert.is_true(child.lua_get([[_G.context("c1") == nil]]))
     end)
 
@@ -1072,11 +1059,6 @@ _G.state("c1", { state = "running" })
 ]])
 
         assert.is_true(child.lua_get([[_G.s._subagents._agents.c1.open]]))
-        assert.is_true(
-            child.lua_get(
-                [[_G.transcript("c1").view.status_indicator:is_active()]]
-            )
-        )
         local transcript = child.lua_get([[_G.ttext("c1")]])
         assert.truthy(transcript:find("## find it", 1, true))
         assert.truthy(transcript:find("## completed", 1, true))
@@ -1133,11 +1115,7 @@ _G.prompt_cb({ stopReason = "cancelled" }, nil)
                     [[_G.transcript("c1").view.writer.tool_call_blocks.t1.status]]
                 )
             )
-            assert.is_true(
-                child.lua_get(
-                    [[_G.transcript("c1").view.status_indicator:is_active()]]
-                )
-            )
+            assert.is_true(child.lua_get([[_G.s._subagents._agents.c1.open]]))
 
             child.lua(
                 [[_G.state("c1", { state = "idle", stopReason = "cancelled" })]]
@@ -1186,11 +1164,6 @@ _G.s:_advance_session_epoch()
 ]])
 
         assert.is_false(child.lua_get([[_G.s._subagents._agents.c1.open]]))
-        assert.is_false(
-            child.lua_get(
-                [[_G.transcript("c1").view.status_indicator:is_active()]]
-            )
-        )
         assert.is_true(child.lua_get([[_G.context("c1") == nil]]))
     end)
 
@@ -1260,32 +1233,26 @@ _G.child_chunk("c1", "agent_message_chunk", "the answer", "r1")
         assert.is_true(loaded < thought and thought < answer)
     end)
 
-    it("a child's indicator shows what the child does", function()
+    it("a child's prose cursor shows while it writes prose", function()
         child.lua([[
 _G.spawn("c1")
-_G.child_chunk("c1", "agent_thought_chunk", "pondering", "r1")
-_G.thought_state = _G.transcript("c1").view.status_indicator._state
-_G.call("c1", "t1")
-_G.s:_on_tool_call_update({ tool_call_id = "t1", status = "in_progress" })
+_G.child_chunk("c1", "agent_message_chunk", "writing", "r1")
+_G.while_writing = _G.prose_cursor_at_end("c1")
+_G.child_chunk("c1", "agent_thought_chunk", "pondering", "r2")
 ]])
 
-        assert.equal("thinking", child.lua_get("_G.thought_state"))
-        assert.equal(
-            "generating",
-            child.lua_get([[_G.transcript("c1").view.status_indicator._state]])
-        )
-        assert.is_false(child.lua_get([[_G.s.status_indicator:is_active()]]))
+        assert.is_true(child.lua_get("_G.while_writing"))
+        assert.is_false(child.lua_get([[_G.prose_cursor_at_end("c1")]]))
 
         child.lua([[
+_G.child_chunk("c1", "agent_message_chunk", "more", "r3")
 _G.state("c1", _G.COMPLETED)
-_G.child_chunk("c1", "agent_message_chunk", "late", "r2")
+_G.after_end = _G.prose_cursor_at_end("c1")
+_G.child_chunk("c1", "agent_message_chunk", "late", "r4")
 ]])
 
-        assert.is_false(
-            child.lua_get(
-                [[_G.transcript("c1").view.status_indicator:is_active()]]
-            )
-        )
+        assert.is_false(child.lua_get("_G.after_end"))
+        assert.is_false(child.lua_get([[_G.prose_cursor_at_end("c1")]]))
     end)
 
     it("main and child chunks land in their own buffers", function()
@@ -1385,7 +1352,6 @@ _G.announce("c2", "beta", "c1")
 end)]]
                 )
             )
-            assert.is_true(child.lua_get([[_G.indicator_at_end("c1")]]))
         end)
 
         it("gf on its block opens its transcript", function()
@@ -1788,11 +1754,6 @@ _G.child_options("c1", "late-model")
         child.lua([[_G.state("c1", { state = "running" }, "sid-x")]])
 
         assert.is_true(child.lua_get("_G.s._subagents._agents.c1.open"))
-        assert.is_true(
-            child.lua_get(
-                [[_G.transcript("c1").view.status_indicator:is_active()]]
-            )
-        )
         assert.truthy(
             child.lua_get([[_G.ttext("c1")]]):find("saved finding", 1, true)
         )
@@ -2012,24 +1973,6 @@ _G.s:_on_request_permission({ sessionId = "c1", toolCall = { toolCallId = "t9" }
 
         assert.equal(1, child.lua_get("#vim.api.nvim_list_tabpages()"))
     end)
-
-    it(
-        "answering a subagent's request leaves the chat's indicator alone",
-        function()
-            child.lua([[
-_G.spawn("c1")
-_G.s.status_indicator:stop()
-_G.s.permission_manager.add_request = function(_, _, cb) _G.cb = cb; return true end
-_G.s:_on_request_permission({ sessionId = "c1", toolCall = { toolCallId = "t9" },
-  options = { { optionId = "allow", name = "Allow", kind = "allow_once" } } }, function() end)
-_G.cb("allow")
-]])
-
-            assert.is_false(
-                child.lua_get([[_G.s.status_indicator:is_active()]])
-            )
-        end
-    )
 
     it(
         "output from before the task id is known replays with the rest",

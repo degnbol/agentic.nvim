@@ -112,7 +112,7 @@ end
 --- @field message_writer agentic.ui.MessageWriter `main_view.writer`
 --- @field permission_manager agentic.ui.PermissionManager
 --- @field _grant_command agentic.GrantCommand
---- @field status_indicator agentic.ui.StatusIndicator `main_view.status_indicator`
+--- @field step_line agentic.ui.StepLine `main_view.step_line`
 --- @field _subagents agentic.Subagents
 --- @field _output_tails table<string, agentic.utils.FileTail> toolCallId -> tail of the output file of a command still running
 --- @field _held_tool_call_updates table<string, { update: agentic.ui.MessageWriter.ToolCallBase, child_id?: string }> toolCallId -> fields a side record gave a call the chat does not show yet, and the subagent whose records gave them. Dropped at the turn's end for the main agent, at the subagent's end for a subagent
@@ -431,7 +431,7 @@ function SessionManager:new(provider)
     end
 
     self.main_view = AgentView:new(self.widget.buf_nrs.agent)
-    self.status_indicator = self.main_view.status_indicator
+    self.step_line = self.main_view.step_line
     self.message_writer = self.main_view.writer
     self._subagents =
         Subagents:new(self.widget, self.main_view, self:_subagents_host())
@@ -1029,7 +1029,7 @@ function SessionManager:_reload_chat()
             return self._subagents:peer_detail(id)
         end
     )
-    self.status_indicator:reposition()
+    self.step_line:reposition()
     self:_sync_modified(self.chat_history)
 end
 
@@ -1093,7 +1093,7 @@ function SessionManager:_write_chat_row(row)
     SessionResume.write_row(self.message_writer, row, mid_turn, function(id)
         return self._subagents:peer_detail(id)
     end)
-    self.status_indicator:reposition()
+    self.step_line:reposition()
     self.chat_history:add_message(row)
     self:_history_changed(self.chat_history)
 end
@@ -1159,10 +1159,11 @@ function SessionManager:_subagents_host()
 end
 
 --- Write an agent's message or thought chunk to the chat, or to the
---- transcript of the subagent that sent it, show its kind on that view's
---- working indicator, and append its text to the history. A message chunk
---- that opens a new response loses its leading newlines, and is dropped if no
---- text is left. A thought chunk is written as sent.
+--- transcript of the subagent that sent it, and append its text to the
+--- history. While that agent still runs, outside a replay, a message chunk
+--- shows the prose cursor. A message chunk that opens a new response loses
+--- its leading newlines, and is dropped if no text is left. A thought chunk
+--- is written as sent.
 --- @param update agentic.acp.AgentMessageChunk|agentic.acp.AgentThoughtChunk
 --- @param source_session_id string|nil The session that sent it: the root, or a subagent's child session
 function SessionManager:_on_agent_chunk(update, source_session_id)
@@ -1199,15 +1200,15 @@ function SessionManager:_on_agent_chunk(update, source_session_id)
             self:_drain_side_records()
         end
     end
-    view.writer:write_message_chunk(chunk, starts_response)
-    local state = is_message and "generating" or "thinking"
+    local live
     if transcript then
-        -- A subagent's indicator runs from its start to its end, and late
-        -- chunks of an ended one must not bring it back.
-        view.status_indicator:switch(state)
+        -- Late chunks of an ended subagent are not live.
+        live = self._subagents:is_open(child_id --[[@as string]])
     else
-        view.status_indicator:start(state)
+        live = self:_turn_open() and not self:_replaying()
     end
+    view.writer:write_message_chunk(chunk, starts_response, live)
+    view.step_line:reposition()
     if chunk.content and chunk.content.text then
         self.chat_history:append_agent_text({
             type = is_message and "agent" or "thought",
@@ -1338,8 +1339,10 @@ function SessionManager:_refresh()
         -- If a turn IS active, this is harmless: the next response callback
         -- will set is_generating = false anyway.
         self:_set_generating(false)
-        self.status_indicator:stop()
     end
+    -- A lost session/new, session/load or session/fork callback leaves its
+    -- step shown.
+    self.step_line:clear()
 
     -- Release the gate states a lost callback can wedge. A prompt callback or
     -- a session/load that never completes would otherwise defer every later
@@ -2061,11 +2064,7 @@ function SessionManager:_on_request_permission(request, callback)
     local tool_call_id = request.toolCall.toolCallId
     -- A subagent's request can come before its call, which is then the
     -- agent's too.
-    local child_id =
-        self._subagents:claim_tool_call(tool_call_id, request.sessionId, nil)
-    if not child_id then
-        self.status_indicator:stop()
-    end
+    self._subagents:claim_tool_call(tool_call_id, request.sessionId, nil)
 
     local tracker =
         self:_view_for(tool_call_id).writer.tool_call_blocks[tool_call_id]
@@ -2112,20 +2111,6 @@ function SessionManager:_on_request_permission(request, callback)
         end
 
         callback(option_id)
-
-        if self.destroyed then
-            return
-        end
-
-        -- A subagent's request leaves the chat's indicator alone: the agent
-        -- may run outside any turn.
-        if
-            not child_id
-            and not self.permission_manager.current_request
-            and #self.permission_manager.queue == 0
-        then
-            self.status_indicator:start("generating")
-        end
     end
 
     -- add_request must run first and unconditionally: if it never runs, the
@@ -2260,8 +2245,8 @@ end
 --- footer for the rest of the session, and after a resume too.
 --- @param word string How the turn ended, a `CanonicalToolCall.stop_reason_word`
 function SessionManager:_end_open_tool_calls(word)
-    -- Not through `_on_tool_call_update`: that would also restart the status
-    -- indicator and re-record edit ranges.
+    -- Not through `_on_tool_call_update`: that would also re-record edit
+    -- ranges.
     self.chat_history:update_tool_calls(
         self.message_writer:stamp_open_calls(word, "failed")
     )
@@ -2355,19 +2340,6 @@ function SessionManager:_on_tool_call_update(tool_call_update)
             and tracker.argument:match("%.md$")
         then
             self._last_edited_md = tracker.argument
-        end
-    end
-
-    -- An update without status reports no step of the agent: the end of a
-    -- background command comes after its turn.
-    if tool_call_update.status then
-        if is_subagent then
-            view.status_indicator:switch("generating")
-        elseif
-            not self.permission_manager.current_request
-            and #self.permission_manager.queue == 0
-        then
-            self.status_indicator:start("generating")
         end
     end
 
@@ -3050,9 +3022,11 @@ end
 --- `_cancel_session` unrun.
 --- The same holds for the load state of a load the refused callback would
 --- have ended, and for `is_generating`, which the refused prompt callback
+--- would have cleared, and for the step line, which the refused callback
 --- would have cleared. The usage limit is the provider account's, and stays.
 function SessionManager:_advance_session_epoch()
     self._session_epoch = self._session_epoch + 1
+    self.step_line:clear()
     self._subagents:forget()
     self:_set_prompt_pending(0)
     self:_set_generating(false)
@@ -3079,7 +3053,6 @@ function SessionManager:stop_generation()
     self.agent:stop_generation(self.session_id)
     self.permission_manager:cancel_requests()
     self:_set_generating(false)
-    self.status_indicator:stop()
 end
 
 --- Delete the automatic "continue" from the input while it is still queued
@@ -3490,10 +3463,10 @@ local function replied_only_with(messages, prompt, text)
     return false
 end
 
---- Send an assembled prompt as a turn and own the turn tail: thinking
---- indicator, per-turn state reset, error dispatch, finalization, attention
---- notification, hooks and queue drain. Shared by user submits and synthetic
---- prompts — everything that records user intent happens before this is called.
+--- Send an assembled prompt as a turn and own the turn tail: per-turn state
+--- reset, error dispatch, finalization, attention notification, hooks and
+--- queue drain. Shared by user submits and synthetic prompts — everything
+--- that records user intent happens before this is called.
 ---
 --- The turn returns its prompt when the model refuses it (`"refusal"`, after
 --- the refusal is reported), or when the usage limit turns it away before any
@@ -3503,8 +3476,6 @@ end
 --- @param user_msg agentic.ui.ChatHistory.UserMessage|nil The prompt's history entry; nil for a prompt that cannot be returned
 --- @param on_returned agentic.OnReturned|nil Called when the turn returns the prompt
 function SessionManager:_dispatch_turn(prompt, user_msg, on_returned)
-    self.status_indicator:start("thinking")
-
     local session_id = self.session_id
     local epoch = self._session_epoch
     -- Capture chat_history before send to avoid race with _cancel_session
@@ -3542,10 +3513,10 @@ function SessionManager:_dispatch_turn(prompt, user_msg, on_returned)
             return
         end
 
-        -- Everything below ends *a* turn: the indicator, the footer and
-        -- separator, the per-turn writer flags, the idle state and the
-        -- completion hook. A superseded turn must run none of it, or it ends
-        -- the turn that replaced it. Reachable from a resume mid-turn.
+        -- Everything below ends *a* turn: the footer and separator, the
+        -- per-turn writer flags, the idle state and the completion hook. A
+        -- superseded turn must run none of it, or it ends the turn that
+        -- replaced it. Reachable from a resume mid-turn.
         if epoch ~= self._session_epoch then
             return
         end
@@ -3663,10 +3634,6 @@ function SessionManager:_dispatch_turn(prompt, user_msg, on_returned)
         self:_finalize_turn(turn_usage)
         -- The provider can rename the session while it runs.
         self:_refresh_name()
-
-        if not session_busy then
-            self.status_indicator:stop()
-        end
 
         if not retrying then
             if not session_busy then
@@ -3786,14 +3753,13 @@ function SessionManager:new_session(opts)
         self:_cancel_session()
     end
 
-    self.status_indicator:start("busy")
-
     local handlers = self:_build_handlers()
 
     -- Capture epoch so the callback can detect if a load (or another
     -- new_session) superseded this create while the RPC was in flight.
     self:_advance_session_epoch()
     local epoch = self._session_epoch
+    self.step_line:show("starting session")
 
     if not (history or opts.keep_cwd) then
         self._cwd = vim.fn.getcwd()
@@ -3812,7 +3778,10 @@ function SessionManager:new_session(opts)
             return
         end
 
-        self.status_indicator:stop()
+        -- A superseded create leaves the step of what superseded it.
+        if epoch == self._session_epoch then
+            self.step_line:clear()
+        end
 
         if err or not response then
             -- no log here, already logged in create_session
@@ -3989,7 +3958,7 @@ function SessionManager:_do_load_acp_session(chat_id, cwd, model)
     end
     self:_reset_conversation()
 
-    self.status_indicator:start("busy")
+    self.step_line:show("loading session")
 
     self.session_id = session_id
     if not from_file then
@@ -4069,7 +4038,7 @@ function SessionManager:_do_load_acp_session(chat_id, cwd, model)
                 self:_dispatch_replay_tail(hold)
             end
             self:_set_load_state(nil)
-            self.status_indicator:stop()
+            self.step_line:clear()
 
             if not from_file then
                 -- After the replay, whose spawns made the transcripts they
@@ -4185,12 +4154,10 @@ function SessionManager:_reset_conversation()
         self.file_activity:clear()
 
         -- Tearing down a live session ends any in-flight turn. Reset the
-        -- generating flag and stop the indicator so a reset mid-turn doesn't
-        -- leave is_generating stale-true or a spinner
-        -- running. Only reachable with a session — is_generating is set true
-        -- only after the session is ready.
+        -- generating flag so a reset mid-turn doesn't leave is_generating
+        -- stale-true. Only reachable with a session — is_generating is set
+        -- true only after the session is ready.
         self:_set_generating(false)
-        self.status_indicator:stop()
     end
 
     self.session_id = nil
@@ -4429,7 +4396,7 @@ function SessionManager:_render_history()
             return self._subagents:peer_detail(id)
         end
     )
-    self.status_indicator:reposition()
+    self.step_line:reposition()
 end
 
 --- The messages of the history the chat shows: those from
@@ -4547,8 +4514,8 @@ function SessionManager:_do_start_fork(fork)
     end
 
     self:_install_history(history)
-    self.status_indicator:start("busy")
     self:_advance_session_epoch()
+    self.step_line:show("forking")
     local epoch = self._session_epoch
     self.agent:fork_session(
         fork.source_id,
@@ -4562,7 +4529,7 @@ function SessionManager:_do_start_fork(fork)
                 end
                 return
             end
-            self.status_indicator:stop()
+            self.step_line:clear()
             if err or not result then
                 local message = "session/fork failed: "
                     .. (err and err.message or "no result")

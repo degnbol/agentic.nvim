@@ -4,13 +4,13 @@ local ChatBuffer = require("agentic.ui.chat_buffer")
 local ChatHistory = require("agentic.ui.chat_history")
 local MessageWriter = require("agentic.ui.message_writer")
 local ResponseBoundary = require("agentic.acp.response_boundary")
-local StatusIndicator = require("agentic.ui.status_indicator")
+local StepLine = require("agentic.ui.step_line")
 
 --- One agent's chat-style buffer, with what writes to it.
 --- @class agentic.ui.AgentView
 --- @field bufnr integer
 --- @field writer agentic.ui.MessageWriter
---- @field status_indicator agentic.ui.StatusIndicator
+--- @field step_line agentic.ui.StepLine
 --- @field response_boundary agentic.acp.ResponseBoundary
 local AgentView = {}
 AgentView.__index = AgentView
@@ -20,7 +20,7 @@ AgentView.__index = AgentView
 function AgentView:new(bufnr)
     return setmetatable({
         bufnr = bufnr,
-        status_indicator = StatusIndicator:new(bufnr),
+        step_line = StepLine:new(bufnr),
         writer = MessageWriter:new(bufnr),
         response_boundary = ResponseBoundary:new(),
     }, self)
@@ -69,7 +69,7 @@ function AgentView:write_tool_call(history, call, causes, agent_key)
     written.status = written.status or "pending"
     written.causes = causes
     self.writer:write_tool_call_block(written)
-    self.status_indicator:reposition()
+    self.step_line:reposition()
 
     local record = ChatHistory.tool_call_record(written)
     record.agent_key = agent_key
@@ -94,7 +94,7 @@ function AgentView:update_tool_call(history, update)
         applied.rejection = nil
     end
     self.writer:update_tool_call_block(applied)
-    self.status_indicator:reposition()
+    self.step_line:reposition()
     history:update_tool_call(
         applied.tool_call_id,
         ChatHistory.tool_call_record(applied)

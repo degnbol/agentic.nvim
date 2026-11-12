@@ -434,7 +434,7 @@ local ConfigDefault = {
     --- @class agentic.UserConfig.Follow
     --- @field enabled boolean Whether the chat view follows new output (toggle at runtime with keymap)
     --- @field pause_on_prose boolean Pin the start of a prose run to the top of the viewport so the model's narrative stays readable. The pin releases at the next non-prose write to chat; a run taller than the window then leaves the window in user control
-    --- @field bottom_padding integer Rows to reserve below the last buffer line so the thinking/generating indicator stays visible when it appears
+    --- @field bottom_padding integer Rows to reserve below the last buffer line so the line naming a session step in progress (starting, loading or forking) stays visible when it appears
     follow = {
         enabled = true,
         pause_on_prose = true,

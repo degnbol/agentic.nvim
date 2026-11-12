@@ -251,10 +251,7 @@ end
     end)
 
     it("forks while a turn runs", function()
-        child.lua([[
-_G.s._prompt_pending = 1
-_G.s.status_indicator:start("thinking")
-]])
+        child.lua([[_G.s._prompt_pending = 1]])
         fork_natively()
 
         assert_forked()

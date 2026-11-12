@@ -1360,6 +1360,7 @@ Tool call status ~
 Chat text ~
     AgenticHeading            `@punctuation.special`   Heading markers
     AgenticCodeBlockFence     |hl-NonText|             Fences, region rails
+    AgenticProseCursor        |hl-NonText|             End of streaming prose
     AgenticDimmedBlock        `Comment`                Dimmed fence lines
     AgenticTurnUsage          `Comment`                Token-usage footer
     AgenticSearchMatch        |hl-Search|              Search match

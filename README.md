@@ -98,7 +98,7 @@ If you want to guard against prompt injection through fetched web content (a ret
 
 OpenCode's SubAgent tool (`task`) is broken through ACP — the subagent session's
 permission requests are filtered inside opencode's ACP bridge before reaching
-the plugin, causing the generating indicator to hang indefinitely. See
+the plugin, causing the turn to hang indefinitely. See
 `notes/opencode-subagent-fix.md` for the full analysis and upstream fix. This
 cannot be worked around from the plugin side.
 

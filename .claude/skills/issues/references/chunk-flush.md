@@ -10,7 +10,6 @@ During the buggy window (while the agent is responding):
 
 **IS written to the chat buffer:**
 - User prompt heading (e.g. `## Continue`).
-- Status indicator ("thinking", "generating") and transitions between states.
 - Permission prompts (numbered accept/reject options) — interactive and
   working.
 

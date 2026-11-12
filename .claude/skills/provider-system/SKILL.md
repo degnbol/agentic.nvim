@@ -550,8 +550,8 @@ in `_handle_input_submit_inner`): render `response.stopReason` +
 success path and would otherwise be silently dropped. `end_turn`
 (normal completion) and `cancelled` (user pressed Ctrl-C, see "Tool call
 lifecycle" above) are skipped. Auth-rejection cases like opencode +
-litellm now manifest as an empty chat after the thinking indicator
-clears; the user resolves them by checking provider credentials.
+litellm now manifest as an empty chat once the turn ends; the user
+resolves them by checking provider credentials.
 
 ### Error classification keys on `err.data.errorKind`
 

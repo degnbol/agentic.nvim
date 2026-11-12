@@ -17,7 +17,6 @@ describe("agentic.ui.AgentView", function()
     end)
 
     after_each(function()
-        view.status_indicator:stop()
         vim.api.nvim_buf_delete(bufnr, { force = true })
     end)
 

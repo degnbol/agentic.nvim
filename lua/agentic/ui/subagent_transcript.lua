@@ -179,7 +179,6 @@ end
 function SubagentTranscript:destroy()
     local was_destroyed = self._destroyed
     self._destroyed = true
-    self.view.status_indicator:stop()
     -- A buffer stays valid during its BufWipeout, and deleting it then is E937.
     if not was_destroyed and vim.api.nvim_buf_is_valid(self.bufnr) then
         vim.api.nvim_buf_delete(self.bufnr, { force = true })

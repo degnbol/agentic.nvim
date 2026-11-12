@@ -144,7 +144,7 @@ describe("agentic.ui.SubagentTranscript", function()
         assert.equal(transcripts[1].bufnr, view.bufnr)
         assert.is_true(view ~= main_view)
         assert.is_true(view.writer ~= main_view.writer)
-        assert.is_true(view.status_indicator ~= main_view.status_indicator)
+        assert.is_true(view.step_line ~= main_view.step_line)
         assert.is_true(view.response_boundary ~= main_view.response_boundary)
     end)
 

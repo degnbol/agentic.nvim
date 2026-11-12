@@ -48,6 +48,7 @@ Theme.HL_GROUPS = {
     BUDGET_WARNING = "AgenticBudgetWarning",
     BUDGET_EXHAUSTED = "AgenticBudgetExhausted",
     HEADER_ATTENTION = "AgenticHeaderAttention",
+    PROSE_CURSOR = "AgenticProseCursor",
 }
 
 local status_hl = {
@@ -157,6 +158,7 @@ function Theme.setup()
         -- Plain, so the note does not compete with the status colour.
         { Theme.HL_GROUPS.FOOTER_NOTE, { link = "Comment" } },
         { Theme.HL_GROUPS.CODE_BLOCK_FENCE, { link = "NonText" } },
+        { Theme.HL_GROUPS.PROSE_CURSOR, { link = "NonText" } },
 
         -- Chat section heading markers (`##` prompt, `###` tool call), linked
         -- from the chat window's winhighlight (`CHAT_WINHIGHLIGHT` in

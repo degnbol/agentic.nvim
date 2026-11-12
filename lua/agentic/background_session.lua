@@ -349,7 +349,7 @@ function BackgroundSession:_on_session_update(update)
         end
         chunk = filtered
     end
-    view.writer:write_message_chunk(chunk, starts_response)
+    view.writer:write_message_chunk(chunk, starts_response, self._turn ~= nil)
     local text = chunk.content and chunk.content.text
     if text then
         self._history:append_agent_text({
@@ -517,7 +517,6 @@ function BackgroundSession:_send(text)
         timestamp = os.time(),
         provider_name = self._client.provider_config.name,
     })
-    view.status_indicator:start("generating")
     self:_mark_unmodified()
 
     --- @type agentic.BackgroundSession.Turn
@@ -610,7 +609,6 @@ function BackgroundSession:_close_turn()
     close_timer(turn.timer)
     if self._transcript then
         self._transcript.view.writer:finalize_turn()
-        self._transcript.view.status_indicator:stop()
         self:_mark_unmodified()
     end
 end

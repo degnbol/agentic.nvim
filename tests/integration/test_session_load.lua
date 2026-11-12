@@ -357,10 +357,11 @@ _G.tool("t3", "pending", { kind = "edit", argument = _G.path,
     diff = { old = { "foo" }, new = { "foo", "bar" } } })
 ]])
         child.flush()
+        assert.equal("loading session", child.lua_get([[_G.s.step_line._text]]))
         child.lua([[_G.load_cb({}, nil)]])
         child.flush()
 
-        assert.is_false(child.lua_get([[_G.s.status_indicator:is_active()]]))
+        assert.is_true(child.lua_get([[_G.s.step_line._text == nil]]))
         assert.is_false(
             child.lua_get([[_G.s.permission_manager:has_edit_range("t3")]])
         )

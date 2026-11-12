@@ -28,6 +28,7 @@ local NS_FOLD_ANCHORS = vim.api.nvim_create_namespace("agentic_fold_anchors")
 --- footers are stamped once and never updated or cleared.
 local NS_TURN_USAGE = vim.api.nvim_create_namespace("agentic_turn_usage")
 local NS_TABLE_ROWS = vim.api.nvim_create_namespace("agentic_table_rows")
+local NS_PROSE_CURSOR = vim.api.nvim_create_namespace("agentic_prose_cursor")
 
 --- Mark buffer rows as table row ends (`Renderer.mark_table_row_end`).
 --- @param bufnr integer
@@ -235,6 +236,7 @@ end
 --- @field _hold_reveals boolean The held tool call's outer fold stays open while the hold lasts (`hold_tool_call`)
 --- @field _hold_unplaced boolean The next scroll that resolves the held block's rows places it (`BufHelpers.show_rows`) instead of capping the topline at it
 --- @field _prose_run_start_line? integer 0-indexed buffer line where the current prose run began — the row `_chunk_start_line` was first set to, which reflows then advance past each paragraph they wrap. Read by `_end_prose_run` to bracket the run; cleared by every flushing reflow, which is to say wherever a prose run ends.
+--- @field _prose_cursor_id? integer Extmark in NS_PROSE_CURSOR of the prose cursor, while it shows
 --- @field _prose_region_ids? integer[] Decoration extmark ids of the live prose run's region signs, in buffer order, so the last one is its `╰─`. Held so a re-stamp can free the signs it replaces, and released in the same statement as `_prose_run_start_line`: a list outliving its run would have the next run's first re-stamp delete a committed bracket.
 --- @field _views table<integer, agentic.ui.MessageWriter.View> Per window, the last view seen, recorded by `_own_change` and at each view change. `on_view_change` reads the user's motion as the difference from it.
 --- @field _entered_window? integer The window that just became current, whose next view change is the entry and not a motion
@@ -276,8 +278,8 @@ local NS_ANCHORS = vim.api.nvim_create_namespace("agentic_anchors")
 --- deleting them, so a tracker or mark surviving its text resolves to the top
 --- of what replaces it — `[[`/`]]` jump to a phantom prompt, rail signs pile
 --- on row 0, and anything anchored to a stale tracker is inserted there. Every
---- namespace is cleared, the status indicator's and the fold anchors'
---- included: none of them outlives the text it marks.
+--- namespace is cleared, the fold anchors' included: none of them outlives
+--- the text it marks.
 function MessageWriter:reset()
     self.tool_call_blocks = {}
     self._prompt_anchor = nil
@@ -788,6 +790,7 @@ end
 --- @param bufnr integer
 --- @private
 function MessageWriter:_abandon_prose_run(bufnr)
+    self:hide_prose_cursor()
     self._chunk_start_line = nil
     self._prose_run_start_line = nil
     Renderer.clear_decoration_extmarks(bufnr, self._prose_region_ids)
@@ -1175,6 +1178,7 @@ end
 --- bracketed, nor bracketed twice.
 --- @param bufnr integer
 function MessageWriter:_end_prose_run(bufnr)
+    self:hide_prose_cursor()
     local run_start = self._prose_run_start_line
     -- The reflow can rewrite the run's rows and append a closing fence, moving
     -- both ends of the region, so the final bracket is stamped fresh. Its ids go
@@ -1471,8 +1475,8 @@ end
 --- Thinking is buffered rather than streamed because the fence has to reach the
 --- buffer in a single write. Held open across chunks, `_reflow_chunks` would
 --- rewrite the rows it spans, and a `set_lines` over a row drops the signs on
---- it. Nothing shows meanwhile except the status indicator, which already says
---- "thinking".
+--- it. Nothing shows meanwhile, the prose cursor included: the buffer has no
+--- thinking text to put it after until the run has ended.
 ---
 --- Call after a final write: a trailing thought otherwise stays buffered until
 --- the next write, and renders after it.
@@ -2543,7 +2547,8 @@ end
 --- Some ACP providers stream chunks instead of full messages
 --- @param update agentic.acp.SessionUpdateMessage
 --- @param starts_response boolean|nil The chunk starts a new model response, which is separated by a blank line from prose it follows
-function MessageWriter:write_message_chunk(update, starts_response)
+--- @param live boolean|nil The agent is still writing: show the prose cursor after a message chunk, until the run ends or `hide_prose_cursor`. Else hide it.
+function MessageWriter:write_message_chunk(update, starts_response, live)
     local text = update.content
         and update.content.type == "text"
         and update.content.text --[[@as string]]
@@ -2556,6 +2561,8 @@ function MessageWriter:write_message_chunk(update, starts_response)
     -- that follows is what ends it, and has to be written after it.
     if update.sessionUpdate == "agent_thought_chunk" then
         self._thought_run = (self._thought_run or "") .. text
+        -- The prose has stopped.
+        self:hide_prose_cursor()
         return
     end
     self:flush_thought_run()
@@ -2652,8 +2659,10 @@ function MessageWriter:write_message_chunk(update, starts_response)
 
         -- Wrap the last line immediately if it overflows, so the user sees
         -- wrapping during streaming instead of after the line completes.
-        -- Skip when wrap_width is 0 (the chat soft-wraps).
+        -- Skip when wrap_width is 0 (the chat soft-wraps). The prose cursor
+        -- takes a column after the text.
         local wrap_width = Config.windows.wrap_width
+        local tail_width = live and wrap_width - 1 or wrap_width
         local end_line = vim.api.nvim_buf_line_count(bufnr) - 1
         local tail = vim.api.nvim_buf_get_lines(
             bufnr,
@@ -2661,10 +2670,10 @@ function MessageWriter:write_message_chunk(update, starts_response)
             end_line + 1,
             false
         )[1] or ""
-        if wrap_width > 0 and #tail > wrap_width then
+        if wrap_width > 0 and #tail > tail_width then
             local code = buffer_code_rows(bufnr, end_line, end_line)
             local wrapped = (code and code[1]) and { tail }
-                or TextWrap.wrap_single_line(tail, wrap_width)
+                or TextWrap.wrap_single_line(tail, tail_width)
             if #wrapped > 1 then
                 vim.api.nvim_buf_set_lines(
                     bufnr,
@@ -2687,7 +2696,45 @@ function MessageWriter:write_message_chunk(update, starts_response)
         -- rewrote rows above has already rebuilt the region, leaving this a
         -- no-op.
         self:_extend_prose_region(bufnr)
+
+        -- Placed again rather than moved: the wrap and the reflow replace
+        -- the rows it was on.
+        if live then
+            local last_row = vim.api.nvim_buf_line_count(bufnr) - 1
+            local last_text = vim.api.nvim_buf_get_lines(
+                bufnr,
+                last_row,
+                last_row + 1,
+                false
+            )[1]
+            self._prose_cursor_id = vim.api.nvim_buf_set_extmark(
+                bufnr,
+                NS_PROSE_CURSOR,
+                last_row,
+                #last_text,
+                {
+                    id = self._prose_cursor_id,
+                    virt_text = {
+                        { Glyphs.PROSE_CURSOR, Theme.HL_GROUPS.PROSE_CURSOR },
+                    },
+                    virt_text_pos = "inline",
+                }
+            )
+        else
+            self:hide_prose_cursor()
+        end
     end)
+end
+
+--- Remove the prose cursor `write_message_chunk` shows. A no-op when none
+--- shows.
+function MessageWriter:hide_prose_cursor()
+    local id = self._prose_cursor_id
+    self._prose_cursor_id = nil
+    if id then
+        -- The mark may already be gone with its buffer or namespace.
+        pcall(vim.api.nvim_buf_del_extmark, self.bufnr, NS_PROSE_CURSOR, id)
+    end
 end
 
 --- Append `lines` at the end of the buffer, or replace its content when every

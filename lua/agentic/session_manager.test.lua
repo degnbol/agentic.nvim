@@ -35,22 +35,26 @@ local function fresh_id()
 end
 
 --- The main view of a fake session: an `AgentView` of its writer and
---- indicator.
+--- step line.
 --- @param session agentic.SessionManager
 --- @return agentic.ui.AgentView
 local function fake_main_view(session)
     return setmetatable({
         writer = session.message_writer,
-        status_indicator = session.status_indicator,
+        step_line = session.step_line,
     }, { __index = AgentView }) --[[@as agentic.ui.AgentView]]
 end
 
 --- Give a fake session a real `Subagents` with no subagents, reaching the
---- session through its host, a main view of its writer and indicator
---- unless it has one, and no agents panel to render.
+--- session through its host, a step line that does nothing and a main view
+--- of its writer and step line unless it has them, and no agents panel to
+--- render.
 --- @param session agentic.SessionManager
 --- @return agentic.SessionManager session
 local function with_subagents(session)
+    local noop = function() end
+    session.step_line = session.step_line
+        or { show = noop, clear = noop, reposition = noop }
     session.main_view = session.main_view or fake_main_view(session)
     session.render_agents = function() end
     session._subagents = Subagents:new(
@@ -436,66 +440,60 @@ describe("agentic.SessionManager", function()
             end
         end)
 
-        it(
-            "resets is_generating and stops indicators on reset mid-turn",
-            function()
-                local SlashCommands = require("agentic.acp.slash_commands")
-                local stubs = {
-                    spy.stub(SlashCommands, "setCommands"),
-                }
+        it("resets is_generating on reset mid-turn", function()
+            local SlashCommands = require("agentic.acp.slash_commands")
+            local stubs = {
+                spy.stub(SlashCommands, "setCommands"),
+            }
 
-                local noop = function() end
-                local status_stop = spy.new(noop)
-                local session = {
-                    session_id = "live-session", -- exercise the teardown block
-                    is_generating = true, -- as if a turn were streaming
-                    agent = { cancel_session = noop },
-                    permission_manager = {
-                        clear = noop,
-                    },
-                    todo_list = { clear = noop },
-                    file_list = { clear = noop },
-                    code_selection = { clear = noop },
-                    diagnostics_list = { clear = noop },
-                    config_options = { clear = noop },
-                    file_activity = { clear = noop },
-                    status_indicator = { stop = status_stop },
-                    widget = {
-                        buf_nrs = { input = 0 },
-                        clear = noop,
-                        set_chat_title = noop,
-                        rename_buffers = noop,
-                        set_running = noop,
-                        set_idle = noop,
-                    },
-                    message_writer = { reset = noop },
-                    clear_chat = SessionManager.clear_chat,
-                    _output_tails = {},
-                    _stop_output_tails = SessionManager._stop_output_tails,
-                    _cancel_session = SessionManager._cancel_session,
-                    _reset_conversation = SessionManager._reset_conversation,
-                    _set_available_commands = SessionManager._set_available_commands,
-                    render_info = function() end,
-                    _set_generating = SessionManager._set_generating,
-                    _update_chat_header = function() end,
-                    chat_history = ChatHistory:new(),
-                    _sync_modified = SessionManager._sync_modified,
-                    _replaying = SessionManager._replaying,
-                    _turn_open = SessionManager._turn_open,
-                    _set_prompt_pending = SessionManager._set_prompt_pending,
-                } --[[@as agentic.SessionManager]]
-                with_names(with_subagents(session))
+            local noop = function() end
+            local session = {
+                session_id = "live-session", -- exercise the teardown block
+                is_generating = true, -- as if a turn were streaming
+                agent = { cancel_session = noop },
+                permission_manager = {
+                    clear = noop,
+                },
+                todo_list = { clear = noop },
+                file_list = { clear = noop },
+                code_selection = { clear = noop },
+                diagnostics_list = { clear = noop },
+                config_options = { clear = noop },
+                file_activity = { clear = noop },
+                widget = {
+                    buf_nrs = { input = 0 },
+                    clear = noop,
+                    set_chat_title = noop,
+                    rename_buffers = noop,
+                    set_running = noop,
+                    set_idle = noop,
+                },
+                message_writer = { reset = noop },
+                clear_chat = SessionManager.clear_chat,
+                _output_tails = {},
+                _stop_output_tails = SessionManager._stop_output_tails,
+                _cancel_session = SessionManager._cancel_session,
+                _reset_conversation = SessionManager._reset_conversation,
+                _set_available_commands = SessionManager._set_available_commands,
+                render_info = function() end,
+                _set_generating = SessionManager._set_generating,
+                _update_chat_header = function() end,
+                chat_history = ChatHistory:new(),
+                _sync_modified = SessionManager._sync_modified,
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
+            } --[[@as agentic.SessionManager]]
+            with_names(with_subagents(session))
 
-                session:_cancel_session()
+            session:_cancel_session()
 
-                assert.is_false(session.is_generating)
-                assert.spy(status_stop).was.called(1)
+            assert.is_false(session.is_generating)
 
-                for _, s in ipairs(stubs) do
-                    s:revert()
-                end
+            for _, s in ipairs(stubs) do
+                s:revert()
             end
-        )
+        end)
     end)
 
     describe("_reset_conversation", function()
@@ -529,7 +527,6 @@ describe("agentic.SessionManager", function()
                 diagnostics_list = { clear = noop },
                 config_options = { clear = noop },
                 file_activity = { clear = noop },
-                status_indicator = { stop = spy.new(noop) },
                 widget = {
                     buf_nrs = { input = 0 },
                     clear = noop,
@@ -591,7 +588,6 @@ describe("agentic.SessionManager", function()
             session:_reset_conversation()
 
             assert.is_false(session.is_generating)
-            assert.spy(session.status_indicator.stop).was.called(1)
         end)
 
         it("keeps the load state", function()
@@ -840,7 +836,7 @@ describe("agentic.SessionManager", function()
                     reset = noop,
                     tool_call_blocks = {},
                 },
-                status_indicator = { start = noop, stop = noop },
+                step_line = { show = noop, clear = noop },
                 chat_history = {
                     session_id = nil,
                     timestamp = nil,
@@ -2896,10 +2892,7 @@ describe("agentic.SessionManager", function()
                 },
                 _try_record_edit_range = function() end,
                 _record_file_op = function() end,
-                status_indicator = {
-                    start = function() end,
-                    reposition = function() end,
-                },
+                step_line = { reposition = function() end },
                 chat_history = { update_tool_call = function() end },
                 _history_changed = function() end,
                 _view_for = SessionManager._view_for,
@@ -2922,10 +2915,7 @@ describe("agentic.SessionManager", function()
                             update_tool_call_block = function() end,
                             tool_call_blocks = tool_call_blocks,
                         },
-                        status_indicator = {
-                            reposition = function() end,
-                            switch = function() end,
-                        },
+                        step_line = { reposition = function() end },
                     }, { __index = AgentView }),
                 }
             end
@@ -3085,7 +3075,6 @@ describe("agentic.SessionManager", function()
             local choose
             --- @type agentic.SessionManager
             local session = {
-                status_indicator = { stop = function() end },
                 message_writer = { tool_call_blocks = { ["tc-plan"] = block } },
                 agent = {
                     plan_file = function(_self, request)
@@ -3974,7 +3963,7 @@ describe("agentic.SessionManager", function()
                 _refresh_name = noop,
                 _drain_side_records = SessionManager._drain_side_records,
                 _held_tool_call_updates = {},
-                status_indicator = { start = noop, stop = noop },
+                step_line = { show = noop, clear = noop },
                 chat_history = {
                     session_id = "s-1",
                     add_message = noop,
@@ -4163,7 +4152,7 @@ describe("agentic.SessionManager", function()
                 _refresh_name = noop,
                 _drain_side_records = SessionManager._drain_side_records,
                 _held_tool_call_updates = {},
-                status_indicator = { start = noop, stop = noop },
+                step_line = { show = noop, clear = noop },
                 chat_history = {
                     session_id = "s-1",
                     add_message = function(_self, msg)
@@ -4333,10 +4322,6 @@ describe("agentic.SessionManager", function()
                 session.message_writer.finalize_turn = function()
                     finalized = finalized + 1
                 end
-                local stopped = 0
-                session.status_indicator.stop = function()
-                    stopped = stopped + 1
-                end
                 local consumed = 0
                 session.widget.input_dispatch.next_queued_block = function()
                     return { text = "queued", sr = 0, er = 0 }
@@ -4352,7 +4337,6 @@ describe("agentic.SessionManager", function()
 
                 assert.equal(1, finalized)
                 assert.is_true(session.is_generating)
-                assert.equal(0, stopped)
                 -- The queue still advances one block per turn, which is the one
                 -- thing the in-flight reason is left to hold.
                 assert.equal(0, consumed)
@@ -5559,7 +5543,7 @@ describe("agentic.SessionManager", function()
                 session_id = "s-1",
                 id = 1,
                 destroyed = false,
-                status_indicator = { start = noop, stop = noop },
+                step_line = { show = noop, clear = noop },
                 message_writer = { tool_call_blocks = {} },
                 _view_for = SessionManager._view_for,
                 -- chat not current => unfocused => bell would ring if notified
@@ -5998,6 +5982,25 @@ describe("agentic.SessionManager", function()
             assert.is_nil(session._load_state)
             assert.is_nil(session._replay_hold)
         end)
+
+        -- The refused callback is what would have cleared it.
+        it("ends the outgoing step", function()
+            local session = {
+                _session_epoch = 0,
+                widget = { set_running = function() end },
+                step_line = { clear = spy.new(function() end) },
+                _advance_session_epoch = SessionManager._advance_session_epoch,
+                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _set_generating = SessionManager._set_generating,
+                _set_load_state = SessionManager._set_load_state,
+                _sync_modified = function() end,
+            } --[[@as agentic.SessionManager]]
+            with_subagents(session)
+
+            session:_advance_session_epoch()
+
+            assert.spy(session.step_line.clear).was.called(1)
+        end)
     end)
 
     describe("_set_load_state", function()
@@ -6062,6 +6065,7 @@ describe("agentic.SessionManager", function()
                 _replay_hold = load_state == "holding" and {} or nil,
                 widget = {},
                 message_writer = { reset_turn_state = noop },
+                step_line = { clear = spy.new(noop) },
                 _refresh = SessionManager._refresh,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
                 _set_load_state = SessionManager._set_load_state,
@@ -6089,6 +6093,14 @@ describe("agentic.SessionManager", function()
             session:_refresh()
 
             assert.is_nil(session._load_state)
+        end)
+
+        it("clears the step a lost callback left shown", function()
+            local session = make_session(nil)
+
+            session:_refresh()
+
+            assert.spy(session.step_line.clear).was.called(1)
         end)
     end)
 
@@ -6151,7 +6163,6 @@ describe("agentic.SessionManager", function()
             session = {
                 session_id = "s-1",
                 agent = { stop_generation = function() end },
-                status_indicator = { stop = function() end },
                 permission_manager = pm,
                 widget = {
                     buf_nrs = { input = 0 },
@@ -6231,7 +6242,7 @@ describe("agentic.SessionManager", function()
                 message_writer = writer,
                 permission_manager = pm,
                 chat_history = ChatHistory:new(),
-                status_indicator = { reposition = noop, start = noop },
+                step_line = { reposition = noop },
                 _held_tool_call_updates = {},
                 _drain_side_records = noop,
                 _drain_subagent_side_records = noop,
@@ -6589,7 +6600,6 @@ describe("agentic.SessionManager", function()
                 session.agent = {
                     stop_generation = spy.new(noop),
                 } --[[@as agentic.acp.ACPClient]]
-                session.status_indicator.stop = noop
                 session._set_generating = noop
                 session.stop_generation = SessionManager.stop_generation
                 session._end_open_tool_calls =
@@ -6790,11 +6800,8 @@ describe("agentic.SessionManager", function()
                                 bufnr = child_buf,
                                 view = setmetatable({
                                     writer = writer,
-                                    status_indicator = {
+                                    step_line = {
                                         reposition = noop,
-                                        start = noop,
-                                        stop = noop,
-                                        switch = noop,
                                     },
                                 }, {
                                     __index = AgentView,
@@ -7888,8 +7895,6 @@ describe("agentic.SessionManager", function()
         --- @type TestSpy
         local subagent_write
         --- @type TestSpy
-        local indicator_start
-        --- @type TestSpy
         local drain
         --- `"drain"` per hook record drain and the text of each main-writer
         --- write, in call order.
@@ -7905,7 +7910,6 @@ describe("agentic.SessionManager", function()
                 table.insert(main_calls, update.content.text)
             end)
             subagent_write = spy.new(function() end)
-            indicator_start = spy.new(function() end)
             drain = spy.new(function()
                 table.insert(main_calls, "drain")
             end)
@@ -7914,7 +7918,7 @@ describe("agentic.SessionManager", function()
             local transcript = {
                 view = setmetatable({
                     writer = { write_message_chunk = subagent_write },
-                    status_indicator = { reposition = noop, switch = noop },
+                    step_line = { reposition = noop },
                     response_boundary = ResponseBoundary:new(),
                 }, { __index = AgentView }),
                 set_modified = noop,
@@ -7922,10 +7926,7 @@ describe("agentic.SessionManager", function()
             session = setmetatable({
                 main_view = setmetatable({
                     writer = { write_message_chunk = main_write },
-                    status_indicator = {
-                        start = indicator_start,
-                        reposition = noop,
-                    },
+                    step_line = { reposition = noop },
                     response_boundary = ResponseBoundary:new(),
                 }, { __index = AgentView }),
                 chat_history = ChatHistory:new(),
@@ -8050,8 +8051,40 @@ describe("agentic.SessionManager", function()
                 { { "answer", false }, { "\nhm", nil } },
                 writes(main_write)
             )
-            assert.equal("thinking", indicator_start.calls[2][2])
             assert.equal("thought", session.chat_history.messages[2].type)
+        end)
+
+        --- Whether each call a writer received was live.
+        --- @param write TestSpy
+        --- @return boolean[]
+        local function live(write)
+            return vim.tbl_map(function(call)
+                return call[4]
+            end, write.calls)
+        end
+
+        it("writes the chat's chunks live while a turn is open", function()
+            session:_on_session_update(chunk("X", "a"))
+            session._prompt_pending = 0
+            session:_on_session_update(chunk("X", "b"))
+
+            assert.same({ true, false }, live(main_write))
+        end)
+
+        it("writes the chat's chunks not live during a replay", function()
+            session._load_state = "loading"
+
+            session:_on_session_update(chunk("X", "a"))
+
+            assert.same({ false }, live(main_write))
+        end)
+
+        it("writes a subagent's chunks live while it is open", function()
+            session:_on_session_update(chunk("S1", "a", "task"))
+            session._subagents._agents.c1.open = false
+            session:_on_session_update(chunk("S1", "b", "task"))
+
+            assert.same({ true, false }, live(subagent_write))
         end)
     end)
 
