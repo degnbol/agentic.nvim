@@ -6,6 +6,7 @@ local Config = require("agentic.config")
 local Glyphs = require("agentic.glyphs")
 local Logger = require("agentic.utils.logger")
 local BufHelpers = require("agentic.utils.buf_helpers")
+local BufferNames = require("agentic.utils.buffer_names")
 local Renderer = require("agentic.ui.tool_call_renderer")
 
 describe("agentic.ui.ChatWidget", function()
@@ -20,7 +21,7 @@ describe("agentic.ui.ChatWidget", function()
     --- @return agentic.ui.ChatWidget
     local function new_widget(on_submit)
         last_owner_id = last_owner_id + 1
-        return ChatWidget:new(last_owner_id, on_submit)
+        return ChatWidget:new(last_owner_id, "c" .. last_owner_id, on_submit)
     end
 
     --- Helper to populate a dynamic buffer with content
@@ -1205,8 +1206,8 @@ describe("agentic.ui.ChatWidget", function()
             end)
         end)
 
-        it("names the chat and panels by the owner id", function()
-            local key = tostring(last_owner_id)
+        it("names the chat and panels by the key given", function()
+            local key = "c" .. last_owner_id
             assert.equal(
                 "agentic://" .. key,
                 vim.api.nvim_buf_get_name(buf_nrs.agent)
@@ -1214,6 +1215,14 @@ describe("agentic.ui.ChatWidget", function()
             assert.equal(
                 "agentic://" .. key .. "/input",
                 vim.api.nvim_buf_get_name(buf_nrs.input)
+            )
+        end)
+
+        it("names a subagent's buffers by its short key", function()
+            local sub = BufferNames.short_key("toolu_01abc")
+            assert.equal(
+                "agentic://c" .. last_owner_id .. "/" .. sub .. "/input",
+                widget:buffer_name("toolu_01abc", "input")
             )
         end)
 
@@ -1234,9 +1243,7 @@ describe("agentic.ui.ChatWidget", function()
                 "agentic://sid-a/files",
                 vim.api.nvim_buf_get_name(files)
             )
-            assert.is_nil(
-                BufHelpers.named("agentic://" .. tostring(last_owner_id))
-            )
+            assert.is_nil(BufHelpers.named("agentic://c" .. last_owner_id))
         end)
 
         it("returns the panel's buffer while it is valid", function()

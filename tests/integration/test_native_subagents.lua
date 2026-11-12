@@ -1533,7 +1533,7 @@ _G.s.agent._send_request = function(_, method, _, cb)
     if method == "session/load" then _G.load_cb = cb end
 end
 local ChatHistory = require("agentic.ui.chat_history")
-_G.saved = ChatHistory:new()
+_G.saved = ChatHistory:new("sid-x")
 _G.saved.session_id = "sid-x"
 _G.saved.messages = { {
     type = "user", text = "go", timestamp = 0, provider_name = "p",
@@ -1950,7 +1950,14 @@ _G.new_cb({ sessionId = "sid-live" }, nil)
             local name = child.lua_get(
                 [[vim.api.nvim_buf_get_name(_G.s2._subagents._agents.c1.transcript.bufnr)]]
             )
-            assert.equal("agentic://sid-live/c1", name)
+            -- The history keeps its chat id into the new ACP session.
+            assert.equal(
+                "agentic://sid-x/"
+                    .. child.lua_get(
+                        [[require("agentic.utils.buffer_names").short_key("c1")]]
+                    ),
+                name
+            )
             assert.equal(
                 name,
                 child.lua_get([[_G.s2._subagents:_agent_block("c1").argument]])

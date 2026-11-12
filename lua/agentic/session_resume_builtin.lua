@@ -10,7 +10,7 @@ local M = {}
 --- @class agentic.SessionResumeBuiltin.Opts
 --- @field scope agentic.SessionResume.Scope
 --- @field mods? vim.api.keyset.cmd_mods
---- @field marked_id? string ACP session id to mark
+--- @field marked_id? string Chat id to mark
 
 --- @class agentic.SessionResumeBuiltin.DeleteEntry
 --- @field index integer Original index in items list at time of deletion
@@ -36,7 +36,7 @@ local function set_qf_items(items, scope, marked_id)
             lnum = item.prompt_count or 0,
             text = title,
         })
-        if marked_id and item.session_id == marked_id then
+        if marked_id and item.chat_id == marked_id then
             current_idx = i
         end
     end

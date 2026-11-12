@@ -147,25 +147,21 @@ end
 --- @class agentic.SessionResume.ResumeOpts
 --- @field mods? vim.api.keyset.cmd_mods A split or tab modifier shows the chat in a new window
 --- @field winid? integer Show the chat in this window; `mods` is then ignored
---- @field on_shown? fun(session: agentic.SessionManager, winid: integer) Runs once the chat shows the session, with the window it was shown in: at once for an open session, else when the load ends
 
 --- Show `session`'s chat as `opts` places it.
 --- @param session agentic.SessionManager
 --- @param opts agentic.SessionResume.ResumeOpts
---- @return integer winid The window it shows in
 local function show_chat(session, opts)
     if opts.winid then
         session.widget:show_in(opts.winid)
-        return opts.winid
+    else
+        session.widget:show(opts.mods, SessionRegistry.target_win())
     end
-    session.widget:show(opts.mods, SessionRegistry.target_win())
-    -- `show` focuses the window it shows the chat in.
-    return vim.api.nvim_get_current_win()
 end
 
---- Show the chat of the open session that holds `ref.session_id`
---- (`SessionRegistry.session_for_key`). Else create a session on
---- `ref.provider`, apply `sessions.cd_on_load`, load the saved session into
+--- Show the chat of the open session whose chat id or ACP session id is
+--- `ref.chat_id`. Else create a session on
+--- `ref.provider`, apply `sessions.cd_on_load`, load the saved chat into
 --- it (ACP `session/load`) and show its chat. A nil `cwd`, `provider` or
 --- `model` takes the value of the saved file, when there is one. A provider
 --- that is not configured warns and uses the default provider.
@@ -174,19 +170,16 @@ end
 --- @return agentic.SessionManager|nil session The session shown, open or created; nil when none could be created
 function SessionResume.resume(ref, opts)
     opts = opts or {}
-    local on_shown = opts.on_shown
-    local open_session = SessionRegistry.session_for_key(ref.session_id)
+    local open_session = SessionRegistry.session_for_key(ref.chat_id)
+        or SessionRegistry.session_for_acp_id(ref.chat_id)
     if open_session then
-        local winid = show_chat(open_session, opts)
-        if on_shown then
-            on_shown(open_session, winid)
-        end
+        show_chat(open_session, opts)
         return open_session
     end
 
     local cwd, provider, model = ref.cwd, ref.provider, ref.model
     if not (cwd and provider and model) then
-        local saved = ChatHistory.read_saved(ref.session_id)
+        local saved = ChatHistory.read_saved(ref.chat_id)
         if saved then
             cwd = cwd or saved.cwd
             provider = provider or saved.provider
@@ -216,18 +209,8 @@ function SessionResume.resume(ref, opts)
             vim.log.levels.WARN
         )
     end
-    --- @type integer
-    local shown_win
-    session:load_acp_session(
-        ref.session_id,
-        cwd,
-        model,
-        on_shown
-            and function(loaded)
-                on_shown(loaded, shown_win)
-            end
-    )
-    shown_win = show_chat(session, opts)
+    session:load_acp_session(ref.chat_id, cwd, model)
+    show_chat(session, opts)
     return session
 end
 
@@ -243,22 +226,19 @@ end
 --- `BufReadCmd` of `agentic://*` names (`agentic.BufferNames`): show the
 --- buffer the name stands for in the window reading it. A live session shows
 --- its buffer, made again when wiped; a closed one is resumed when the name
---- is its chat's or a transcript's. Notifies an error for a name that stands
---- for no such buffer. Does nothing for a background transcript,
---- for a session buffer reloading after an unload (its own `BufReadCmd`
---- refills it), and for a read in no window or the autocmd window (`bufload`).
+--- is its chat's. Notifies an error for a name that stands for no such
+--- buffer. Does nothing for a background transcript, for a session buffer
+--- reloading after an unload (its own `BufReadCmd` refills it), and for a
+--- read in no window or the autocmd window (`bufload`).
 --- @param args vim.api.keyset.create_autocmd.callback_args
 function SessionResume.open_name(args)
     local parts = BufferNames.parse(args.match)
     if not parts or parts.part == "background" then
         return
     end
-    -- Any session's: across a provider switch, a name keeps the old session
-    -- id until the new session is adopted.
-    for _, live in pairs(SessionRegistry.by_id) do
-        if live:buf_of(parts.sub_id, parts.part) == args.buf then
-            return
-        end
+    local session = SessionRegistry.session_for_key(parts.key)
+    if session and session:buf_of(parts.sub_id, parts.part) == args.buf then
+        return
     end
     local winid = vim.fn.bufwinid(args.buf)
     -- `bufload` and `nvim_buf_call` read in the autocmd window.
@@ -266,7 +246,6 @@ function SessionResume.open_name(args)
         return
     end
 
-    local session = SessionRegistry.session_for_key(parts.key)
     if session then
         local bufnr = session:open_buf(parts.sub_id, parts.part)
         if not bufnr then
@@ -285,7 +264,9 @@ function SessionResume.open_name(args)
         return
     end
 
-    local saved = not parts.part and ChatHistory.read_saved(parts.key)
+    local saved = not parts.sub_id
+        and not parts.part
+        and ChatHistory.read_saved(parts.key)
     if not saved then
         Logger.notify(
             "No Agentic session to open: " .. args.match,
@@ -293,41 +274,19 @@ function SessionResume.open_name(args)
         )
         return
     end
-    local sub_id = parts.sub_id
     SessionResume.resume({
-        session_id = parts.key,
+        chat_id = parts.key,
         cwd = saved.cwd,
         provider = saved.provider,
         model = saved.model,
-    }, {
-        winid = winid,
-        on_shown = sub_id and function(loaded, shown_win)
-            -- The load can end after the user moved on from the window.
-            if
-                not vim.api.nvim_win_is_valid(shown_win)
-                or vim.api.nvim_win_get_buf(shown_win)
-                    ~= loaded.widget.buf_nrs.agent
-            then
-                return
-            end
-            local transcript = loaded:open_buf(sub_id, nil)
-            if transcript then
-                vim.api.nvim_win_set_buf(shown_win, transcript)
-            else
-                Logger.notify(
-                    "No such subagent: " .. args.match,
-                    vim.log.levels.ERROR
-                )
-            end
-        end,
-    })
+    }, { winid = winid })
     -- Until the load names the chat, the name must reach no stale buffer.
     drop_placeholder(args.buf)
 end
 
---- Saved sessions of all projects whose id starts with `query`, else whose
---- title equals `query` (case-insensitive). One row per session id, newest
---- activity first.
+--- Saved sessions of all projects whose chat id or ACP session id starts
+--- with `query`, else whose title equals `query` (case-insensitive). One row
+--- per chat id, newest activity first.
 --- @param query string
 --- @param callback fun(matches: agentic.ui.ChatHistory.SessionMeta[])
 function SessionResume.find(query, callback)
@@ -339,7 +298,7 @@ end
 --- @class agentic.SessionResume.PickerOpts
 --- @field scope? agentic.SessionResume.Scope "local" (default) or "all"
 --- @field mods? vim.api.keyset.cmd_mods
---- @field marked_id? string ACP session id to mark
+--- @field marked_id? string Chat id to mark
 --- @field sessions? agentic.ui.ChatHistory.SessionMeta[] Sessions to show. Default: the saved sessions of `scope`
 --- @field notice? string Notified before the picker shows, or joined with the "No saved sessions found" notification into one
 

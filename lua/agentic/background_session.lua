@@ -217,7 +217,7 @@ end
 function BackgroundSession:_open_transcript()
     local transcript = SubagentTranscript:new(
         BufferNames.format({
-            key = self._session_id --[[@as string]],
+            key = BufferNames.short_key(self._session_id --[[@as string]]),
             part = "background",
         }),
         subagent_info(self._opts.label),

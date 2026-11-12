@@ -51,7 +51,13 @@ end
 
 _G.s.session_id = "sid-src"
 local h = _G.s.chat_history
+h.chat_id = "sid-src"
 h.session_id = "sid-src"
+_G.s:_name_buffers()
+--- The fork's chat id.
+_G.fid = function()
+    return _G.f.chat_history.chat_id
+end
 h:set_title("Src")
 _G.q1 = _G.msg("user", "first question", { model = "m-old" })
 _G.q2 = _G.msg("user", "second question", { model = "m-new" })
@@ -93,6 +99,7 @@ end
         child.flush()
         child.lua([[_G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)]])
         child.flush()
+        child.lua([[_G.fork_cid = _G.fid()]])
     end
 
     --- The fork's session holds the first turn, renders from its link and
@@ -100,6 +107,7 @@ end
     --- that prompt.
     local function assert_forked()
         assert.equal("sid-fork", child.lua_get("_G.f.session_id"))
+        assert.truthy(child.lua_get("_G.f:chat_id()"):match("^%x+$"))
         assert.same(
             { "user", "agent", "fork_link" },
             child.lua_get([[vim.tbl_map(function(m) return m.type end,
@@ -116,18 +124,18 @@ end
         assert.equal(
             1,
             child.lua_get(
-                [[#require("agentic.ui.chat_history").find_files("sid-fork")]]
+                [[#require("agentic.ui.chat_history").find_files(_G.fid())]]
             )
         )
 
         local link = child.lua_get("_G.s.chat_history.messages[3]")
         assert.equal("fork_link", link.type)
         assert.equal("to", link.direction)
-        assert.equal("sid-fork", link.session_id)
+        assert.equal(child.lua_get("_G.fid()"), link.chat_id)
         assert.equal("Src (fork)", link.title)
         local link_row = child.lua_get([[_G.row_of(_G.s, "## Src (fork)")]])
         assert.equal(
-            "Forked to agentic://sid-fork",
+            "Forked to agentic://" .. link.chat_id,
             child.lua_get("_G.lines(_G.s)")[link_row + 1]
         )
         assert.equal(
@@ -326,18 +334,33 @@ _G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)
         assert.equal(4, child.lua_get("#_G.s.chat_history.messages"))
     end)
 
-    it("links nothing into a source that moved on", function()
+    it("links nothing into a source that moved to another chat", function()
         child.lua([[_G.fork_at("second answer")]])
         child.flush()
-        child.lua([[_G.s.session_id = "sid-other"]])
-        child.lua([[_G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)]])
+        child.lua([[
+_G.s.session_id = "sid-other"
+_G.s.chat_history.chat_id = "sid-other"
+_G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)
+]])
         child.flush()
 
         assert.equal(
             "sid-src",
-            child.lua_get("_G.f.chat_history.messages[3].session_id")
+            child.lua_get("_G.f.chat_history.messages[3].chat_id")
         )
         assert.equal(4, child.lua_get("#_G.s.chat_history.messages"))
+    end)
+
+    it("links into a source whose chat moved to a new session", function()
+        child.lua([[_G.fork_at("second answer")]])
+        child.flush()
+        child.lua([[
+_G.s.session_id = "sid-switched"
+_G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)
+]])
+        child.flush()
+
+        assert.equal(5, child.lua_get("#_G.s.chat_history.messages"))
     end)
 
     it("drains a submit made while session/fork is in flight", function()
@@ -367,7 +390,7 @@ if win == -1 then
     win = vim.api.nvim_get_current_win()
 end
 vim.api.nvim_set_current_win(win)
-local row = _G.row_of(_G.s, "Forked to agentic://sid-fork")
+local row = _G.row_of(_G.s, "Forked to agentic://" .. _G.fork_cid)
 vim.api.nvim_win_set_cursor(win, { row, #_G.lines(_G.s)[row] - 1 })
 vim.api.nvim_feedkeys(vim.keycode(...), "mx", false)
 ]],
@@ -394,7 +417,7 @@ vim.api.nvim_feedkeys(vim.keycode(...), "mx", false)
         child.lua([[_G.tabs = #vim.api.nvim_list_tabpages()]])
         follow_link("<C-w>gf")
         child.lua([[
-_G.l = require("agentic.session_registry").session_for_key("sid-fork")
+_G.l = require("agentic.session_registry").session_for_key(_G.fork_cid)
 _G.shown_win = vim.api.nvim_get_current_win()
 ]])
         child.lua([[_G.cbs["session/load"]({}, nil)]])
@@ -409,10 +432,9 @@ _G.shown_win = vim.api.nvim_get_current_win()
                 "vim.api.nvim_win_get_buf(_G.shown_win) == _G.l.widget.buf_nrs.agent"
             )
         )
-        assert.equal(
-            "agentic://sid-fork",
+        assert.is_true(
             child.lua_get(
-                "vim.api.nvim_buf_get_name(_G.l.widget.buf_nrs.agent)"
+                [[vim.api.nvim_buf_get_name(_G.l.widget.buf_nrs.agent) == "agentic://" .. _G.fork_cid]]
             )
         )
         assert.equal(1, child.lua_get([[_G.row_of(_G.l, "## Src")]]))
@@ -430,7 +452,7 @@ _G.shown_win = vim.api.nvim_get_current_win()
         fork_natively()
         child.lua([[
 _G.l = require("agentic.session_registry").create()
-_G.l:load_acp_session("sid-fork")
+_G.l:load_acp_session(_G.fork_cid)
 ]])
         child.flush()
 
@@ -444,7 +466,7 @@ _G.l:load_acp_session("sid-fork")
             child.lua([[
 _G.q3 = _G.msg("user", "unrendered")
 _G.s.chat_history:add_message(_G.q3)
-_G.link = { type = "fork_link", direction = "to", session_id = "sid-x",
+_G.link = { type = "fork_link", direction = "to", chat_id = "sid-x",
     cwd = "/c", title = "Linked" }
 _G.s:add_fork_link(_G.link, _G.q3)
 _G.s:add_fork_link(_G.link, _G.msg("user", "gone"))

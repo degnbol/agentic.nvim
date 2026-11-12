@@ -2006,7 +2006,7 @@ local PROMPT_MARK_KEYS = { "right_gravity", "sign_text", "sign_hl_group" }
 MessageWriter.FORK_NOTICE = "fork:"
 
 --- Write a link to the other chat of a fork as a notice with id
---- `FORK_NOTICE .. link.session_id`, showing the other chat's buffer name:
+--- `FORK_NOTICE .. link.chat_id`, showing the other chat's buffer name:
 --- at the end, or above the prompt heading `before_mark` marks. Never ends a
 --- turn: the link can be written while one runs.
 --- @param link agentic.ui.ChatHistory.ForkLink
@@ -2019,9 +2019,9 @@ function MessageWriter:write_fork_link(link, before_mark)
         detail = string.format(
             "Forked %s %s",
             link.direction,
-            BufferNames.format({ key = link.session_id })
+            BufferNames.format({ key = link.chat_id })
         ),
-        id = MessageWriter.FORK_NOTICE .. link.session_id,
+        id = MessageWriter.FORK_NOTICE .. link.chat_id,
         mid_turn = true,
     }
     if not before_mark then

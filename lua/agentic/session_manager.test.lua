@@ -60,6 +60,28 @@ local function with_subagents(session)
     return session
 end
 
+--- Stub `ChatHistory.find_files` to find `paths` for `chat_id` and nothing
+--- for any other id, so a new chat id is still drawn.
+--- @param chat_id string
+--- @param paths string[]
+--- @return TestStub
+local function stub_saved_files(chat_id, paths)
+    local stub = spy.stub(ChatHistory, "find_files")
+    stub:invokes(function(id)
+        return id == chat_id and paths or {}
+    end)
+    return stub
+end
+
+--- Give a fake session the chat id and buffer naming of `SessionManager`.
+--- @param session agentic.SessionManager
+--- @return agentic.SessionManager session
+local function with_names(session)
+    session.chat_id = SessionManager.chat_id
+    session._name_buffers = SessionManager._name_buffers
+    return session
+end
+
 --- Give a fake session the turn predicates of `SessionManager`, with no
 --- prompt in flight unless it already counts one.
 --- @param session agentic.SessionManager
@@ -402,7 +424,7 @@ describe("agentic.SessionManager", function()
                 _turn_open = SessionManager._turn_open,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
-            with_subagents(session)
+            with_names(with_subagents(session))
 
             session:_cancel_session()
 
@@ -461,7 +483,7 @@ describe("agentic.SessionManager", function()
                     _turn_open = SessionManager._turn_open,
                     _set_prompt_pending = SessionManager._set_prompt_pending,
                 } --[[@as agentic.SessionManager]]
-                with_subagents(session)
+                with_names(with_subagents(session))
 
                 session:_cancel_session()
 
@@ -497,7 +519,7 @@ describe("agentic.SessionManager", function()
         --- @param update_chat_header fun(self: agentic.SessionManager)|nil
         --- @return agentic.SessionManager
         local function make_session(update_chat_header)
-            return with_subagents({
+            return with_names(with_subagents({
                 session_id = "old-sid",
                 permission_manager = { clear = noop },
                 todo_list = { clear = noop },
@@ -529,7 +551,7 @@ describe("agentic.SessionManager", function()
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
-            } --[[@as agentic.SessionManager]])
+            } --[[@as agentic.SessionManager]]))
         end
 
         it("lets the next conversation take the provider title", function()
@@ -591,6 +613,42 @@ describe("agentic.SessionManager", function()
             session:_reset_conversation()
 
             assert.is_nil(usage_at_render)
+        end)
+
+        it("keeps the chat id of an empty chat with no session", function()
+            local session = make_session()
+            session.session_id = nil
+            local chat_id = session.chat_history.chat_id
+
+            session:_reset_conversation()
+
+            assert.equal(chat_id, session.chat_history.chat_id)
+        end)
+
+        it("gives a new chat id after a session", function()
+            local session = make_session()
+            local chat_id = session.chat_history.chat_id
+
+            session:_reset_conversation()
+
+            assert.are_not.equal(chat_id, session.chat_history.chat_id)
+        end)
+
+        it("gives a new chat id to a chat with messages", function()
+            local session = make_session()
+            session.session_id = nil
+            session.chat_history:add_message({
+                type = "agent",
+                text = "partial",
+                timestamp = 0,
+                provider_name = "p",
+            })
+            local chat_id = session.chat_history.chat_id
+
+            session:_reset_conversation()
+
+            assert.are_not.equal(chat_id, session.chat_history.chat_id)
+            assert.equal(0, #session.chat_history.messages)
         end)
     end)
 
@@ -718,7 +776,7 @@ describe("agentic.SessionManager", function()
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _busy_reason = SessionManager._busy_reason,
             } --[[@as agentic.SessionManager]]
-            with_turn_state(with_subagents(session))
+            with_names(with_turn_state(with_subagents(session)))
 
             -- As `new_session` runs them.
             session:_cancel_session()
@@ -751,7 +809,7 @@ describe("agentic.SessionManager", function()
         local function make_load_session()
             local noop = function() end
             captured_load_cb = nil
-            return with_events(with_subagents({
+            return with_names(with_events(with_subagents({
                 session_id = nil,
                 _session_epoch = 0,
                 _is_first_message = true,
@@ -840,7 +898,7 @@ describe("agentic.SessionManager", function()
                 _on_session_update = noop,
                 _on_tool_call = noop,
                 _on_tool_call_update = noop,
-            } --[[@as agentic.SessionManager]]))
+            } --[[@as agentic.SessionManager]])))
         end
 
         local original_storage_path
@@ -870,7 +928,7 @@ describe("agentic.SessionManager", function()
             session:load_acp_session("test-session-id", "/tmp", "m")
 
             assert.same({
-                session_id = "test-session-id",
+                chat_id = "test-session-id",
                 cwd = "/tmp",
                 model = "m",
             }, session._pending_load)
@@ -914,8 +972,10 @@ describe("agentic.SessionManager", function()
 
             it("takes the title of the saved file", function()
                 local session = make_live_session()
-                local find_stub = spy.stub(ChatHistory, "find_files")
-                find_stub:returns({ "/saved/test-session-id.json" })
+                local find_stub = stub_saved_files(
+                    "test-session-id",
+                    { "/saved/test-session-id.json" }
+                )
                 local read_stub = spy.stub(FileSystem, "read_json")
                 read_stub:returns({ title = "Saved title", messages = {} })
 
@@ -930,8 +990,10 @@ describe("agentic.SessionManager", function()
 
         it("warns when the saved file cannot be read", function()
             local session = make_load_session()
-            local find_stub = spy.stub(ChatHistory, "find_files")
-            find_stub:returns({ "/saved/test-session-id.json" })
+            local find_stub = stub_saved_files(
+                "test-session-id",
+                { "/saved/test-session-id.json" }
+            )
             local read_stub = spy.stub(FileSystem, "read_json")
             read_stub:invokes(function(path)
                 return nil, "JSON decode error in " .. path
@@ -959,8 +1021,10 @@ describe("agentic.SessionManager", function()
                     .. (case.given and "given" or "of the saved file"),
                 function()
                     local session = make_load_session()
-                    local find_stub = spy.stub(ChatHistory, "find_files")
-                    find_stub:returns({ "/saved/test-session-id.json" })
+                    local find_stub = stub_saved_files(
+                        "test-session-id",
+                        { "/saved/test-session-id.json" }
+                    )
                     local read_stub = spy.stub(FileSystem, "read_json")
                     read_stub:returns({
                         title = "",
@@ -1369,7 +1433,7 @@ describe("agentic.SessionManager", function()
 
                     assert.equal(history, session.chat_history)
                     assert.equal("new-sid", history.session_id)
-                    assert.are_not.equal(1, history.timestamp)
+                    assert.equal(1, history.timestamp)
                     assert.equal(history, session._history_to_send)
                     assert.is_true(session._is_first_message)
                     assert.equal("/project/a", session._cwd)
@@ -5470,7 +5534,11 @@ describe("agentic.SessionManager", function()
                     write_user_prompt = noop,
                     write_error_action = noop,
                 },
-                chat_history = { title = "existing", add_message = noop },
+                chat_history = {
+                    session_id = "s-1",
+                    title = "existing",
+                    add_message = noop,
+                },
                 _history_changed = noop,
                 widget = {
                     buf_nrs = { input = 0 },
@@ -5992,7 +6060,7 @@ describe("agentic.SessionManager", function()
                 _turn_open = SessionManager._turn_open,
                 _set_prompt_pending = SessionManager._set_prompt_pending,
             } --[[@as agentic.SessionManager]]
-            with_subagents(session)
+            with_names(with_subagents(session))
 
             request_edit("tc-1")
             pm:_complete_request("allow-always")
@@ -7109,7 +7177,12 @@ describe("agentic.SessionManager", function()
                         table.insert(errors, text)
                     end,
                 },
-                chat_history = { title = "existing", add_message = noop },
+                chat_history = {
+                    chat_id = "s-1",
+                    session_id = "s-1",
+                    title = "existing",
+                    add_message = noop,
+                },
                 _history_changed = noop,
                 widget = {
                     buf_nrs = { input = 0 },
@@ -7251,6 +7324,9 @@ describe("agentic.SessionManager", function()
 
         describe("/delete", function()
             local confirm_stub, find_files_stub, delete_file_stub, notify_stub
+            --- The files of chat `s-1`.
+            --- @type string[]
+            local saved_paths
 
             before_each(function()
                 session._delete_session = SessionManager._delete_session
@@ -7259,8 +7335,11 @@ describe("agentic.SessionManager", function()
                 end
                 session._advance_session_epoch = function() end
                 confirm_stub = spy.stub(vim.fn, "confirm")
+                saved_paths = { "/saved/sid.json" }
                 find_files_stub = spy.stub(ChatHistory, "find_files")
-                find_files_stub:returns({ "/saved/sid.json" })
+                find_files_stub:invokes(function(id)
+                    return id == "s-1" and saved_paths or {}
+                end)
                 delete_file_stub = spy.stub(os, "remove")
                 delete_file_stub:returns(true)
                 notify_stub = spy.stub(Logger, "notify")
@@ -7290,7 +7369,7 @@ describe("agentic.SessionManager", function()
 
             it("removes every copy of the session file", function()
                 confirm_stub:returns(1)
-                find_files_stub:returns({ "/a/sid.json", "/b/sid.json" })
+                saved_paths = { "/a/sid.json", "/b/sid.json" }
 
                 submit("/delete", {})
 
@@ -7304,7 +7383,7 @@ describe("agentic.SessionManager", function()
 
             it("reports a copy that cannot be removed", function()
                 confirm_stub:returns(1)
-                find_files_stub:returns({ "/a/sid.json", "/b/sid.json" })
+                saved_paths = { "/a/sid.json", "/b/sid.json" }
                 delete_file_stub:invokes(function(path)
                     if path == "/b/sid.json" then
                         return false, "Permission denied"
@@ -7327,7 +7406,7 @@ describe("agentic.SessionManager", function()
 
             it("reports a session with no saved file", function()
                 confirm_stub:returns(1)
-                find_files_stub:returns({})
+                saved_paths = {}
                 local written = spy.new(function() end)
                 session.message_writer.write_message = written
                 session._finalize_turn = function() end

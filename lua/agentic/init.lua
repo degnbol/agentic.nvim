@@ -145,21 +145,21 @@ function Agentic.new_session(opts)
     return session
 end
 
---- Resume the saved session `session_id` on its saved provider and show its
---- chat. When a session already holds `session_id`, show that chat instead.
---- @param session_id string Full UUID
+--- Resume the saved chat `id` on its saved provider and show it. When a
+--- session already holds `id`, show that chat instead.
+--- @param id string A chat id, or the full ACP id of a session with no saved file
 --- @param cwd string|nil Working directory of the session. When nil, the saved one, else vim.fn.getcwd()
 --- @param model string|nil Model id. When nil, the saved one
 --- @param mods vim.api.keyset.cmd_mods|nil Command modifiers. A split or tab modifier shows the chat in a new window
-function Agentic.load_acp_session(session_id, cwd, model, mods)
+function Agentic.load_acp_session(id, cwd, model, mods)
     SessionResume.resume(
-        { session_id = session_id, cwd = cwd, model = model },
+        { chat_id = id, cwd = cwd, model = model },
         { mods = mods }
     )
 end
 
---- Saved sessions of all projects whose id starts with `query`, else whose
---- title equals `query` (case-insensitive).
+--- Saved sessions of all projects whose chat id or ACP session id starts
+--- with `query`, else whose title equals `query` (case-insensitive).
 --- @param query string
 --- @param callback fun(matches: agentic.ui.ChatHistory.SessionMeta[])
 function Agentic.resolve_session(query, callback)
@@ -175,7 +175,7 @@ function Agentic.resume_session(query, mods)
     local owner = SessionRegistry.owner_of_buf(vim.api.nvim_get_current_buf())
     SessionResume.pick(query, {
         mods = mods,
-        marked_id = owner and owner.session_id,
+        marked_id = owner and owner:chat_id(),
     })
 end
 

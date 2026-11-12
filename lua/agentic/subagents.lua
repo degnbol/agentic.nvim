@@ -1,6 +1,7 @@
 local AgentConfigOptions = require("agentic.acp.agent_config_options")
 local AgentView = require("agentic.ui.agent_view")
 local BufHelpers = require("agentic.utils.buf_helpers")
+local BufferNames = require("agentic.utils.buffer_names")
 local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local Config = require("agentic.config")
 local Json = require("agentic.utils.json")
@@ -636,26 +637,17 @@ function Subagents:peer_detail(session_id)
     return title ~= "" and title .. " " .. name or name
 end
 
---- Name the transcripts and message inputs after the widget's current names,
---- and point each block at its transcript's name.
-function Subagents:rename_buffers()
+--- The session id of the subagent whose short key (`BufferNames.short_key`)
+--- is `key`.
+--- @param key string
+--- @return string|nil child_id Nil when no subagent has that key
+function Subagents:child_for_key(key)
     for child_id in pairs(self._agents) do
-        local name = self._widget:buffer_name(child_id)
-        local transcript = self:buf_of(child_id, nil)
-        if transcript then
-            BufHelpers.claim_name(transcript, name)
-        end
-        local block = self:_agent_block(child_id)
-        if block and block.argument ~= name then
-            self:_merge_block_fields(child_id, { argument = name })
+        if BufferNames.short_key(child_id) == key then
+            return child_id
         end
     end
-    for child_id, input in pairs(self._inputs) do
-        BufHelpers.claim_name(
-            input.bufnr,
-            self._widget:buffer_name(child_id, "input")
-        )
-    end
+    return nil
 end
 
 --- A subagent's transcript, or with `part` `input` its message input, while

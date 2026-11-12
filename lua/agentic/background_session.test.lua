@@ -99,7 +99,7 @@ describe("agentic.BackgroundSession", function()
         end)
 
         owner_id = owner_id + 1
-        widget = ChatWidget:new(owner_id, function()
+        widget = ChatWidget:new(owner_id, "c" .. owner_id, function()
             return true
         end)
     end)

@@ -84,12 +84,10 @@ describe("ChatHistory", function()
         read_from_disk_stub:revert()
     end
 
-    --- @param session_id string
+    --- @param chat_id string
     --- @return agentic.ui.ChatHistory
-    local function history_with_id(session_id)
-        local history = ChatHistory:new()
-        history.session_id = session_id
-        return history
+    local function history_with_id(chat_id)
+        return ChatHistory:new(chat_id)
     end
 
     describe("get_project_folder", function()
@@ -135,18 +133,60 @@ describe("ChatHistory", function()
         end)
     end)
 
-    describe("get_file_path", function()
-        it(
-            "combines storage_path, project_folder, and session_id.json",
-            function()
-                local path = ChatHistory.get_file_path("session-abc", TEST_CWD)
-                local project_folder = ChatHistory.get_project_folder(TEST_CWD)
+    describe("chat ids", function()
+        before_each(use_disk)
 
-                assert.truthy(path:match("^" .. vim.pesc("/test/storage")))
-                assert.truthy(path:find(project_folder, 1, true))
-                assert.truthy(path:match("session%-abc%.json$"))
+        --- @type TestStub|nil
+        local random_stub
+        after_each(function()
+            if random_stub then
+                random_stub:revert()
+                random_stub = nil
             end
-        )
+        end)
+
+        it("are 8 lowercase hex digits, different per history", function()
+            local a, b = ChatHistory:new(), ChatHistory:new()
+            assert.truthy(a.chat_id:match("^[0-9a-f]+$"))
+            assert.equal(8, #a.chat_id)
+            assert.are_not.equal(a.chat_id, b.chat_id)
+        end)
+
+        it("skip an id a saved file has", function()
+            assert.is_nil(history_with_id("abcdef01"):save(TEST_CWD))
+            local draws = { "\171\205\239\001", "\018\052\086\120" }
+            random_stub = spy.stub(vim.uv, "random")
+            random_stub:invokes(function()
+                return table.remove(draws, 1)
+            end)
+
+            assert.equal("12345678", ChatHistory.new_chat_id())
+        end)
+
+        it("raise an error when every draw is taken", function()
+            local find_stub = spy.stub(ChatHistory, "find_files")
+            find_stub:returns({ "/saved/x.json" })
+            local ok = pcall(ChatHistory.new_chat_id)
+            find_stub:revert()
+
+            assert.is_false(ok)
+            assert.equal(10, find_stub.call_count)
+        end)
+
+        it("are kept as given", function()
+            assert.equal("chat-1", ChatHistory:new("chat-1").chat_id)
+        end)
+    end)
+
+    describe("get_file_path", function()
+        it("combines storage_path, project_folder, and chat_id.json", function()
+            local path = ChatHistory.get_file_path("session-abc", TEST_CWD)
+            local project_folder = ChatHistory.get_project_folder(TEST_CWD)
+
+            assert.truthy(path:match("^" .. vim.pesc("/test/storage")))
+            assert.truthy(path:find(project_folder, 1, true))
+            assert.truthy(path:match("session%-abc%.json$"))
+        end)
     end)
 
     describe("find_files", function()
@@ -276,12 +316,14 @@ describe("ChatHistory", function()
     end)
 
     describe("match_sessions", function()
-        --- @param id string
+        --- @param id string The chat id
         --- @param title string
+        --- @param session_id string|nil The ACP id. Default: `id`
         --- @return agentic.ui.ChatHistory.SessionMeta
-        local function meta(id, title)
+        local function meta(id, title, session_id)
             return {
-                session_id = id,
+                chat_id = id,
+                session_id = session_id or id,
                 title = title,
                 timestamp = 0,
                 file_path = id,
@@ -290,7 +332,7 @@ describe("ChatHistory", function()
 
         local function ids(sessions)
             return vim.tbl_map(function(s)
-                return s.session_id
+                return s.chat_id
             end, sessions)
         end
 
@@ -299,7 +341,15 @@ describe("ChatHistory", function()
             meta("abd-2", "abc"),
             meta("abc-3", "Other"),
             meta("xyz-4", "fix BUG"),
+            meta("chat-5", "Switched", "acp-5"),
         }
+
+        it("matches a prefix of the ACP id", function()
+            assert.same(
+                { "chat-5" },
+                ids(ChatHistory.match_sessions(sessions, "acp"))
+            )
+        end)
 
         it("matches one id prefix", function()
             assert.same(
@@ -359,7 +409,7 @@ describe("ChatHistory", function()
             end)
 
             local rows = vim.tbl_filter(function(s)
-                return s.session_id == "sid-d"
+                return s.chat_id == "sid-d"
             end, sessions)
             assert.equal(1, #rows)
             assert.equal(
@@ -695,7 +745,7 @@ describe("ChatHistory", function()
                     { "type": "subagent_event", "kind": "end", "title": "completed" }
                 ]
             }]])
-            local history = ChatHistory.from_data(data)
+            local history = ChatHistory.from_data(data, "s")
 
             assert.same(
                 { "user" },
@@ -704,6 +754,18 @@ describe("ChatHistory", function()
                 end, history.messages)
             )
             assert.same({}, history.subagent_messages)
+        end)
+
+        it("takes the chat id given and the file's ACP id", function()
+            local history = ChatHistory.from_data({
+                session_id = "acp-2",
+                title = "",
+                timestamp = 0,
+                messages = {},
+            }, "chat-1")
+
+            assert.equal("chat-1", history.chat_id)
+            assert.equal("acp-2", history.session_id)
         end)
 
         describe("side records", function()
@@ -727,7 +789,7 @@ describe("ChatHistory", function()
                     title = "",
                     timestamp = 0,
                     messages = messages,
-                })
+                }, "s")
             end
 
             it("drops unknown kinds with one notification", function()
@@ -1373,16 +1435,28 @@ describe("ChatHistory", function()
     end)
 
     describe("save and read", function()
-        --- The history saved for `session_id` under `TEST_CWD`.
-        --- @param session_id string
+        --- The history saved for `chat_id` under `TEST_CWD`.
+        --- @param chat_id string
         --- @return agentic.ui.ChatHistory|nil history
         --- @return string|nil err
-        local function read(session_id)
+        local function read(chat_id)
             local data, err = FileSystem.read_json(
-                ChatHistory.get_file_path(session_id, TEST_CWD)
+                ChatHistory.get_file_path(chat_id, TEST_CWD)
             )
-            return data and ChatHistory.from_data(data), err
+            return data and ChatHistory.from_data(data, chat_id), err
         end
+
+        it("names the file by the chat id and stores the ACP id", function()
+            local history = history_with_id("chat-1")
+            history.session_id = "acp-2"
+            assert.is_nil(history:save(TEST_CWD))
+
+            local data = vim.json.decode(
+                mock_files[ChatHistory.get_file_path("chat-1", TEST_CWD)]
+            )
+            assert.equal("acp-2", data.session_id)
+            assert.is_nil(data.chat_id)
+        end)
 
         it("writes to the folder of cwd and records cwd", function()
             stub_process_cwd()
@@ -1400,7 +1474,8 @@ describe("ChatHistory", function()
 
         it("persists and restores ChatHistory instance", function()
             local original = ChatHistory:new()
-            original.session_id = "roundtrip-test"
+            original.chat_id = "roundtrip-test"
+            original.session_id = "roundtrip-acp"
             original.provider = "claude-agent-acp"
             original.provider_version = "0.66.0"
             original:add_message({
@@ -1415,8 +1490,7 @@ describe("ChatHistory", function()
             assert.is_nil(original:save(TEST_CWD))
             assert.is_false(original.dirty)
 
-            local path =
-                ChatHistory.get_file_path(original.session_id, TEST_CWD)
+            local path = ChatHistory.get_file_path(original.chat_id, TEST_CWD)
             assert.equal(1, mkdirp_stub.call_count)
             assert.equal(1, write_file_stub.call_count)
 
@@ -1430,11 +1504,12 @@ describe("ChatHistory", function()
             assert.equal("claude-agent-acp", parsed.provider)
             assert.equal("0.66.0", parsed.provider_version)
 
-            local loaded, load_err = read(original.session_id)
+            local loaded, load_err = read(original.chat_id)
 
             assert.is_nil(load_err)
             assert.is_not_nil(loaded)
             --- @cast loaded agentic.ui.ChatHistory
+            assert.equal(original.chat_id, loaded.chat_id)
             assert.equal(original.session_id, loaded.session_id)
             assert.equal(original.timestamp, loaded.timestamp)
             assert.equal(original.provider_version, loaded.provider_version)
@@ -1445,7 +1520,7 @@ describe("ChatHistory", function()
 
         it("round-trips subagent_messages", function()
             local original = ChatHistory:new()
-            original.session_id = "subagent-roundtrip"
+            original.chat_id = "subagent-roundtrip"
             original:add_message({
                 type = "agent",
                 text = "Found it",
@@ -1454,7 +1529,7 @@ describe("ChatHistory", function()
             })
             assert.is_nil(original:save(TEST_CWD))
 
-            local loaded = read(original.session_id)
+            local loaded = read(original.chat_id)
 
             --- @cast loaded agentic.ui.ChatHistory
             assert.same(original.subagent_messages, loaded.subagent_messages)
@@ -1462,7 +1537,7 @@ describe("ChatHistory", function()
 
         it("round-trips side records", function()
             local original = ChatHistory:new()
-            original.session_id = "side-records-roundtrip"
+            original.chat_id = "side-records-roundtrip"
             original:add_message({
                 type = "side_records",
                 records = {
@@ -1483,7 +1558,7 @@ describe("ChatHistory", function()
             })
             assert.is_nil(original:save(TEST_CWD))
 
-            local loaded = read(original.session_id)
+            local loaded = read(original.chat_id)
 
             --- @cast loaded agentic.ui.ChatHistory
             assert.same(original.messages, loaded.messages)
@@ -1491,7 +1566,7 @@ describe("ChatHistory", function()
 
         it("round-trips a tool call's compaction flag", function()
             local original = ChatHistory:new()
-            original.session_id = "compaction-roundtrip"
+            original.chat_id = "compaction-roundtrip"
             original:add_message(ChatHistory.tool_call_record({
                 tool_call_id = "c-1",
                 status = "completed",
@@ -1501,7 +1576,7 @@ describe("ChatHistory", function()
             }))
             assert.is_nil(original:save(TEST_CWD))
 
-            local loaded = read(original.session_id)
+            local loaded = read(original.chat_id)
 
             --- @cast loaded agentic.ui.ChatHistory
             assert.is_true(loaded.messages[1].is_compaction)
@@ -1509,11 +1584,11 @@ describe("ChatHistory", function()
 
         it("round-trips subagents", function()
             local original = ChatHistory:new()
-            original.session_id = "subagents-roundtrip"
+            original.chat_id = "subagents-roundtrip"
             original:set_subagent_task("child-1", "toolu_1")
             assert.is_nil(original:save(TEST_CWD))
 
-            local loaded = read(original.session_id)
+            local loaded = read(original.chat_id)
 
             --- @cast loaded agentic.ui.ChatHistory
             assert.same(
@@ -1554,21 +1629,20 @@ describe("ChatHistory", function()
 
         it("returns error for missing or corrupted files", function()
             local test_cases = {
-                { session_id = "non-existent" },
+                { chat_id = "non-existent" },
                 {
-                    session_id = "corrupted",
+                    chat_id = "corrupted",
                     content = "not valid json {{{",
                 },
             }
 
             for _, tc in ipairs(test_cases) do
                 if tc.content then
-                    local path =
-                        ChatHistory.get_file_path(tc.session_id, TEST_CWD)
+                    local path = ChatHistory.get_file_path(tc.chat_id, TEST_CWD)
                     mock_files[path] = tc.content
                 end
 
-                local loaded, load_err = read(tc.session_id)
+                local loaded, load_err = read(tc.chat_id)
 
                 assert.is_nil(loaded)
                 assert.is_not_nil(load_err)
@@ -1600,17 +1674,36 @@ describe("ChatHistory", function()
             assert.same(
                 { "sid-here" },
                 vim.tbl_map(function(s)
-                    return s.session_id
+                    return s.chat_id
                 end, list(TEST_CWD))
             )
         end)
 
-        it("returns all saved sessions in project folder", function()
-            local session_ids = { "session-1", "session-2" }
+        it("gives a row the file's ACP id, else its chat id", function()
+            local switched = history_with_id("chat-1")
+            switched.session_id = "acp-2"
+            assert.is_nil(switched:save(TEST_CWD))
+            local path = ChatHistory.get_file_path("sid-bare", TEST_CWD)
+            vim.fn.writefile({
+                vim.json.encode({ title = "", timestamp = 0, messages = {} }),
+            }, path)
 
-            for _, id in ipairs(session_ids) do
-                local s = ChatHistory:new()
-                s.session_id = id
+            local by_chat = {} --- @type table<string, string>
+            for _, s in ipairs(list(TEST_CWD)) do
+                by_chat[s.chat_id] = s.session_id
+            end
+
+            assert.same(
+                { ["chat-1"] = "acp-2", ["sid-bare"] = "sid-bare" },
+                by_chat
+            )
+        end)
+
+        it("returns all saved sessions in project folder", function()
+            local chat_ids = { "session-1", "session-2" }
+
+            for _, id in ipairs(chat_ids) do
+                local s = history_with_id(id)
                 s:add_message({
                     type = "user",
                     text = id .. " message",
@@ -1627,7 +1720,7 @@ describe("ChatHistory", function()
 
             local ids = {}
             for _, s in ipairs(sessions) do
-                ids[s.session_id] = true
+                ids[s.chat_id] = true
             end
             assert.is_true(ids["session-1"])
             assert.is_true(ids["session-2"])
@@ -1666,7 +1759,7 @@ describe("ChatHistory", function()
             local sessions = list(TEST_CWD)
 
             assert.equal(1, #sessions)
-            assert.equal("sid-valid", sessions[1].session_id)
+            assert.equal("sid-valid", sessions[1].chat_id)
             assert.equal(1, notify_stub.call_count)
             assert.truthy(notify_stub.calls[1][1]:find(corrupt_path, 1, true))
             assert.equal(vim.log.levels.WARN, notify_stub.calls[1][2])
@@ -1700,13 +1793,13 @@ describe("ChatHistory", function()
         end
 
         --- @param direction "to"|"from"
-        --- @param session_id string
+        --- @param chat_id string
         --- @return agentic.ui.ChatHistory.ForkLink
-        local function link(direction, session_id)
+        local function link(direction, chat_id)
             return {
                 type = "fork_link",
                 direction = direction,
-                session_id = session_id,
+                chat_id = chat_id,
                 cwd = "/c",
                 title = "t",
             }
@@ -1770,6 +1863,7 @@ describe("ChatHistory", function()
                 source.provider = "claude-agent-acp"
                 source.model = "m"
                 source.provider_version = "1.0"
+                source.chat_id = "chat-src"
                 source.session_id = "sid-src"
                 source.file_activity = { ops = {}, last_viewed_seq = 0 }
 
@@ -1781,6 +1875,8 @@ describe("ChatHistory", function()
                 assert.same({}, copy.subagents)
                 assert.is_nil(copy.file_activity)
                 assert.equal("", copy.title)
+                assert.is_not_nil(copy.chat_id)
+                assert.are_not.equal("chat-src", copy.chat_id)
                 assert.is_nil(copy.session_id)
                 assert.equal("claude-agent-acp", copy.provider)
                 assert.equal("m", copy.model)
@@ -1947,7 +2043,7 @@ describe("ChatHistory", function()
                     link("from", "sid-src"),
                     user("shown"),
                 })
-                history.session_id = "sid-fork"
+                history.chat_id = "sid-fork"
                 assert.is_nil(history:save(TEST_CWD))
 
                 local sessions = {}

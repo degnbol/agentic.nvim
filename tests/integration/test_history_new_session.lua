@@ -61,6 +61,7 @@ end
         child.lua([[
 _G.s.session_id = "sid-old"
 _G.s.chat_history.session_id = "sid-old"
+_G.s.chat_history.chat_id = "sid-old"
 _G.s.chat_history:add_message(_G.msg("user", "saved question"))
 _G.s.chat_history:add_message(_G.msg("agent", "saved answer"))
 _G.s:restart_session()
@@ -71,9 +72,41 @@ _G.new_cb({ sessionId = "sid-new" }, nil)
         assert_carried()
     end)
 
+    it("restart_session keeps the chat id, creation time and names", function()
+        child.lua([[
+_G.s:new_session()
+_G.new_cb({ sessionId = "sid-old" }, nil)
+]])
+        child.flush()
+        child.lua([[
+_G.cid = _G.s:chat_id()
+_G.s.chat_history.timestamp = 1000
+_G.s.chat_history:add_message(_G.msg("user", "saved question"))
+_G.s:restart_session()
+_G.new_cb({ sessionId = "sid-new" }, nil)
+]])
+        child.flush()
+        child.lua([[_G.s:_write_session()]])
+
+        assert.is_true(child.lua_get("_G.s:chat_id() == _G.cid"))
+        assert.equal(1000, child.lua_get("_G.s.chat_history.timestamp"))
+        assert.is_true(
+            child.lua_get(
+                [[vim.api.nvim_buf_get_name(_G.s.widget.buf_nrs.agent) == "agentic://" .. _G.cid]]
+            )
+        )
+        child.lua([[_G.ChatHistory = require("agentic.ui.chat_history")]])
+        assert.equal(
+            "sid-new",
+            child.lua_get([[_G.ChatHistory.read_saved(_G.cid).session_id]])
+        )
+        assert.same({}, child.lua_get([[_G.ChatHistory.find_files("sid-new")]]))
+    end)
+
     it("restart_session leaves a saved chat with response ids clean", function()
         child.lua([[
 _G.s.session_id = "sid-old"
+_G.s.chat_history.chat_id = "sid-old"
 _G.s.chat_history.session_id = "sid-old"
 _G.s.chat_history:add_message(_G.msg("user", "saved question"))
 local answer = _G.msg("agent", "saved answer")
@@ -118,6 +151,7 @@ _G.s.agent._on_ready(_G.s.agent)
     it("a failed load replaces its partial replay with the file", function()
         child.lua([[
 local saved = require("agentic.ui.chat_history"):new()
+saved.chat_id = "sid-x"
 saved.session_id = "sid-x"
 saved:add_message(_G.msg("user", "saved question"))
 saved:add_message(_G.msg("agent", "saved answer"))
@@ -130,10 +164,45 @@ _G.new_cb({ sessionId = "sid-new" }, nil)
         child.flush()
 
         assert_carried()
+        assert.equal("sid-x", child.lua_get("_G.s:chat_id()"))
         assert.is_true(
             child.lua_get([=[_G.s.agent.subscribers["sid-x"] == nil]=])
         )
     end)
+
+    it(
+        "a chat loaded without loadSession keeps its id through the fallback",
+        function()
+            child.lua([[
+_G.Registry = require("agentic.session_registry")
+_G.s.agent.agent_capabilities = {}
+local saved = require("agentic.ui.chat_history"):new("chat-x")
+saved.session_id = "acp-x"
+saved:add_message(_G.msg("user", "saved question"))
+saved:add_message(_G.msg("agent", "saved answer"))
+assert(saved:save(vim.uv.fs_realpath("/tmp")) == nil)
+_G.s:_do_load_acp_session("chat-x", "/tmp")
+_G.found = { loading = _G.Registry.session_for_key("chat-x") == _G.s }
+if _G.load_cb then
+    _G.load_cb(nil, { code = -32603, message = "boom" })
+end
+]])
+            child.flush()
+            child.lua([[
+_G.found.failed = _G.Registry.session_for_key("chat-x") == _G.s
+_G.found.name = vim.api.nvim_buf_get_name(_G.s.widget.buf_nrs.agent)
+_G.new_cb({ sessionId = "sid-new" }, nil)
+]])
+            child.flush()
+
+            assert.same(
+                { loading = true, failed = true, name = "agentic://chat-x" },
+                child.lua_get("_G.found")
+            )
+            assert_carried()
+            assert.equal("chat-x", child.lua_get("_G.s:chat_id()"))
+        end
+    )
 
     it("a failed load without a file starts an empty session", function()
         child.lua([[
@@ -155,6 +224,7 @@ _G.new_cb({ sessionId = "sid-new" }, nil)
         child.flush()
 
         assert.equal("sid-new", child.lua_get("_G.s.session_id"))
+        assert.truthy(child.lua_get("_G.s:chat_id()"):match("^%x+$"))
         assert.equal(0, child.lua_get([[_G.count_in_chat("partial text")]]))
         assert.equal(0, child.lua_get("#_G.s.chat_history.messages"))
         assert.is_true(child.lua_get("_G.s.todo_list:is_empty()"))

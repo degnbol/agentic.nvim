@@ -36,9 +36,8 @@ end)()
         local chat_name = [[
 (function()
     local session = require("agentic.session_registry").current()
-    local key = session.session_id or tostring(session.id)
     return vim.api.nvim_buf_get_name(session.widget.buf_nrs.agent)
-        == "agentic://" .. key
+        == "agentic://" .. session.chat_history.chat_id
 end)()
 ]]
         assert.is_true(child.lua_get(chat_name))

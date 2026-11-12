@@ -120,4 +120,4 @@ parts: the default winbar concatenates it, and outside readers use it rather tha
 rebuild the order.
 
 **Do not rely on buffer names for UI display.** Names (`BufferNames`) carry
-the session id, never a title.
+the chat id (`ChatHistory.chat_id`), never a title.

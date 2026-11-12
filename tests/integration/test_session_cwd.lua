@@ -19,6 +19,7 @@ end
 --- `_G.load_cb`.
 _G.bind = function(s, id)
     s.session_id = id
+    s.chat_history.chat_id = id
     s.chat_history.session_id = id
     s.agent.agent_capabilities = { loadSession = true }
     s.agent._send_request = function(_, method, _, cb)
@@ -97,6 +98,7 @@ _G.say(_G.b, "in B")
             function()
                 child.lua([[
 local saved = _G.ChatHistory:new()
+saved.chat_id = "sid-x"
 saved.session_id = "sid-x"
 saved:set_title("From A")
 assert(saved:save(_G.dir_of.A) == nil)

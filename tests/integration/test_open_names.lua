@@ -24,7 +24,7 @@ require("agentic.utils.logger").notify = function(message, level)
 end
 
 local ChatHistory = require("agentic.ui.chat_history")
-local saved = ChatHistory:new()
+local saved = ChatHistory:new("sid-saved")
 saved.session_id = "sid-saved"
 saved.timestamp = 1000
 saved.messages = {
@@ -32,6 +32,7 @@ saved.messages = {
 }
 assert(saved:save(vim.uv.fs_realpath("/tmp")) == nil)
 
+_G.key = require("agentic.utils.buffer_names").short_key
 _G.name = function(bufnr)
     return vim.api.nvim_buf_get_name(bufnr)
 end
@@ -54,6 +55,8 @@ end
         child.lua([[
 _G.s:new_session()
 _G.cbs["session/new"]({ sessionId = "sid-live" }, nil)
+_G.live = "agentic://" .. _G.s.chat_history.chat_id
+_G.c1 = _G.live .. "/" .. _G.key("c1")
 ]])
         child.flush()
         -- A used session: an unused one closes when its chat leaves the
@@ -71,14 +74,14 @@ vim.cmd("tabnew")
         child.stop()
     end)
 
-    it("names a session's buffers after its ACP id", function()
-        assert.equal(
-            "agentic://sid-live",
-            child.lua_get("_G.name(_G.s.widget.buf_nrs.agent)")
+    it("names a session's buffers after its chat id", function()
+        assert.is_true(
+            child.lua_get("_G.name(_G.s.widget.buf_nrs.agent) == _G.live")
         )
-        assert.equal(
-            "agentic://sid-live/input",
-            child.lua_get("_G.name(_G.s.widget.buf_nrs.input)")
+        assert.is_true(
+            child.lua_get(
+                [[_G.name(_G.s.widget.buf_nrs.input) == _G.live .. "/input"]]
+            )
         )
     end)
 
@@ -123,6 +126,16 @@ _G.tabs = #vim.api.nvim_list_tabpages()
         end)
     end
 
+    it("notifies an error for a closed chat's transcript name", function()
+        child.lua([[vim.cmd("edit agentic://sid-saved/" .. _G.key("c1"))]])
+
+        assert.equal(1, child.lua_get("vim.tbl_count(_G.Registry.by_id)"))
+        assert.equal(
+            child.lua_get("vim.log.levels.ERROR"),
+            child.lua_get("_G.notes[1].level")
+        )
+    end)
+
     it("a second :e during a deferred load shows the same chat", function()
         child.lua([[
 _G.agent.agent_capabilities = nil
@@ -158,12 +171,12 @@ _G.agent.agent_capabilities = { loadSession = true }
         )
     end)
 
-    it("reaches a session without an ACP id by its number", function()
+    it("reaches a session before its session/new returns", function()
         child.new_session()
         child.lua([[
 _G.n = _G.Registry.current()
 vim.cmd("tabnew")
-vim.cmd("edit agentic://" .. _G.n.id)
+vim.cmd("edit agentic://" .. _G.n.chat_history.chat_id)
 ]])
 
         assert.is_true(
@@ -173,20 +186,11 @@ vim.cmd("edit agentic://" .. _G.n.id)
         )
     end)
 
-    it("reaches no session by its number once it has an id", function()
-        child.cmd("edit agentic://" .. child.lua_get("_G.s.id"))
-
-        assert.equal(
-            child.lua_get("vim.log.levels.ERROR"),
-            child.lua_get("_G.notes[1].level")
-        )
-    end)
-
     it("makes a live session's wiped panel again", function()
         child.lua([[
 vim.cmd.bwipeout(_G.s.widget.buf_nrs.files)
 vim.cmd("tabnew")
-vim.cmd("edit agentic://sid-live/files")
+vim.cmd("edit " .. _G.live .. "/files")
 ]])
 
         assert.is_true(
@@ -207,7 +211,7 @@ _G.announce("c1", "finder")
 local old = _G.s._subagents:buf_of("c1")
 vim.cmd.bwipeout({ args = { tostring(old) }, bang = true })
 vim.cmd("tabnew")
-vim.cmd("edit agentic://sid-live/c1")
+vim.cmd("edit " .. _G.c1)
 ]])
 
         assert.is_true(
@@ -215,7 +219,7 @@ vim.cmd("edit agentic://sid-live/c1")
                 [[vim.api.nvim_get_current_buf() == _G.s._subagents:buf_of("c1")]]
             )
         )
-        assert.equal("agentic://sid-live/c1", child.lua_get("_G.name(0)"))
+        assert.is_true(child.lua_get("_G.name(0) == _G.c1"))
     end)
 
     it("reloads a transcript :bd! unloaded, keeping its buffer", function()
@@ -224,7 +228,7 @@ _G.announce("c1", "finder")
 _G.t = _G.s._subagents:buf_of("c1")
 vim.cmd("tab sbuffer " .. _G.t)
 vim.cmd("bdelete!")
-vim.cmd("edit agentic://sid-live/c1")
+vim.cmd("edit " .. _G.c1)
 ]])
 
         assert.is_true(child.lua_get("vim.api.nvim_get_current_buf() == _G.t"))
@@ -237,7 +241,7 @@ vim.cmd("edit agentic://sid-live/c1")
         function()
             child.lua([[
 _G.announce("c1", "finder")
-vim.cmd("edit agentic://sid-live/c1/input")
+vim.cmd("edit " .. _G.c1 .. "/input")
 ]])
 
             assert.is_true(
@@ -253,7 +257,7 @@ vim.cmd("edit agentic://sid-live/c1/input")
     )
 
     it("notifies an error for an unknown subagent of a live session", function()
-        child.cmd("edit agentic://sid-live/c9")
+        child.lua([[vim.cmd("edit " .. _G.live .. "/" .. _G.key("c9"))]])
 
         assert.equal(
             child.lua_get("vim.log.levels.ERROR"),
@@ -261,31 +265,32 @@ vim.cmd("edit agentic://sid-live/c1/input")
         )
     end)
 
-    it("renames transcripts and blocks when the session id changes", function()
+    it("keeps the names when the conversation moves to a new id", function()
         child.lua([[
 _G.announce("c1", "finder")
 _G.s:_adopt_session("sid-next", {}, true)
 ]])
 
-        local name = "agentic://sid-next/c1"
-        assert.equal(
-            name,
-            child.lua_get([[_G.name(_G.s._subagents:buf_of("c1"))]])
+        assert.is_true(
+            child.lua_get([[_G.name(_G.s._subagents:buf_of("c1")) == _G.c1]])
         )
-        assert.equal(
-            name,
-            child.lua_get([[_G.s._subagents:_agent_block("c1").argument]])
+        assert.is_true(
+            child.lua_get(
+                [[_G.s._subagents:_agent_block("c1").argument == _G.c1]]
+            )
         )
-        assert.equal(
-            "agentic://sid-next/files",
-            child.lua_get("_G.name(_G.s.widget.buf_nrs.files)")
+        assert.is_true(
+            child.lua_get(
+                [[_G.name(_G.s.widget.buf_nrs.files) == _G.live .. "/files"]]
+            )
         )
 
-        -- `gf` on the block's name line opens the transcript.
+        -- `gf` on the block's name line, written before the move, opens
+        -- the live transcript.
         child.flush()
         child.lua([[
 vim.api.nvim_set_current_win(_G.s.widget:home_win())
-local row = vim.fn.index(vim.api.nvim_buf_get_lines(0, 0, -1, false), "agentic://sid-next/c1")
+local row = vim.fn.index(vim.api.nvim_buf_get_lines(0, 0, -1, false), _G.c1)
 vim.api.nvim_win_set_cursor(0, { row + 1, 3 })
 vim.api.nvim_feedkeys("gf", "mx", false)
 ]])
@@ -297,15 +302,16 @@ vim.api.nvim_feedkeys("gf", "mx", false)
         )
     end)
 
-    it(
-        "names the buffers by number again when /new is never adopted",
-        function()
-            child.lua([[_G.s:new_session()]])
+    it("names the buffers after a new chat id on /new", function()
+        child.lua([[_G.s:new_session()]])
 
-            assert.equal(
-                "agentic://" .. child.lua_get("_G.s.id"),
-                child.lua_get("_G.name(_G.s.widget.buf_nrs.agent)")
+        assert.is_true(
+            child.lua_get(
+                "_G.name(_G.s.widget.buf_nrs.agent) == 'agentic://' .. _G.s.chat_history.chat_id"
             )
-        end
-    )
+        )
+        assert.is_false(
+            child.lua_get("_G.name(_G.s.widget.buf_nrs.agent) == _G.live")
+        )
+    end)
 end)

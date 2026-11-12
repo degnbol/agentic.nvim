@@ -582,6 +582,7 @@ describe("agentic.session_recovery", function()
                 _session_epoch = 0,
                 agent = agent or client,
                 chat_history = {
+                    chat_id = session_id,
                     session_id = session_id,
                     timestamp = 1,
                     messages = { { type = "user", text = "hi" } },
@@ -722,6 +723,11 @@ describe("agentic.session_recovery", function()
                 assert.spy(client.close_session).was.called(0)
                 for _, renewed in ipairs({ session, sibling, pending }) do
                     assert.spy(renewed.new_session).was.called(1)
+                    -- The history keeps its chat id into the new session.
+                    assert.equal(
+                        renewed.chat_history,
+                        renewed.new_session.calls[1][2].history
+                    )
                 end
                 assert.spy(moved.new_session).was.called(0)
                 assert.spy(elsewhere.new_session).was.called(0)
@@ -783,7 +789,11 @@ describe("agentic.session_recovery", function()
                 diagnostics = {},
             }
             last_owner_id = last_owner_id + 1
-            local widget = ChatWidget:new(last_owner_id, function() end)
+            local widget = ChatWidget:new(
+                last_owner_id,
+                "c" .. last_owner_id,
+                function() end
+            )
             MiniTest.finally(function()
                 widget:destroy()
             end)

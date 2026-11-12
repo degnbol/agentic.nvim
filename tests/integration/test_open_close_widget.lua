@@ -154,6 +154,7 @@ end
         --- @param title string
         local function meta(id, title)
             return {
+                chat_id = id,
                 session_id = id,
                 title = title,
                 timestamp = 0,

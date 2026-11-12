@@ -23,7 +23,7 @@ describe("agentic.ui.SubagentTranscript", function()
 
     before_each(function()
         owner_id = owner_id + 1
-        widget = ChatWidget:new(owner_id, function()
+        widget = ChatWidget:new(owner_id, "c" .. owner_id, function()
             return true
         end)
         transcripts = {}

@@ -64,10 +64,10 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- transcript holds it.
 --- @class agentic.ui.ChatHistory.ForkLink
 --- @field type "fork_link"
---- @field direction "to"|"from" A fork this session made, or the session this one was forked from
---- @field session_id string The other session
---- @field cwd string Working directory of the other session
---- @field title string The other chat's title when the link was made, else the first 8 characters of `session_id`
+--- @field direction "to"|"from" A fork this chat made, or the chat this one was forked from
+--- @field chat_id string The other chat
+--- @field cwd string Working directory of the other chat
+--- @field title string The other chat's title when the link was made, else the first 8 characters of `chat_id`
 
 --- @alias agentic.ui.ChatHistory.Message
 --- | agentic.ui.ChatHistory.UserMessage
@@ -79,25 +79,31 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- | agentic.ui.ChatHistory.SideRecordsMessage
 --- | agentic.ui.ChatHistory.ForkLink
 
---- The id, working directory, provider and model of a session.
---- @class agentic.ui.ChatHistory.SessionRef
---- @field session_id string
+--- The working directory, provider and model of a session.
+--- @class agentic.ui.ChatHistory.SessionContext
 --- @field cwd? string Working directory of the session. The file is in the project folder of this path. Absent on legacy files
 --- @field provider? agentic.UserConfig.ProviderName config key, absent on pre-2026-04-23 sessions
 --- @field model? string model id used at last save
 
+--- The chat id, working directory, provider and model of a session.
+--- @class agentic.ui.ChatHistory.SessionRef : agentic.ui.ChatHistory.SessionContext
+--- @field chat_id string
+
 --- The fields that a session file and its metadata share.
---- @class agentic.ui.ChatHistory.SessionHeader : agentic.ui.ChatHistory.SessionRef
+--- @class agentic.ui.ChatHistory.SessionHeader : agentic.ui.ChatHistory.SessionContext
 --- @field title string
 --- @field timestamp integer
 --- @field last_activity? integer Unix timestamp of most recent save
 --- @field provider_version? string provider binary version as reported in its ACP initialize response
 
---- @class agentic.ui.ChatHistory.SessionMeta : agentic.ui.ChatHistory.SessionHeader
+--- @class agentic.ui.ChatHistory.SessionMeta : agentic.ui.ChatHistory.SessionRef, agentic.ui.ChatHistory.SessionHeader
+--- @field chat_id string The file's name
+--- @field session_id string The file's ACP session id, else its name
 --- @field file_path string Full path to the session file
 --- @field prompt_count? integer Number of user prompts in the session
 
 --- @class agentic.ui.ChatHistory.StorageData : agentic.ui.ChatHistory.SessionHeader
+--- @field session_id string The ACP session id at the last save
 --- @field messages agentic.ui.ChatHistory.Message[]
 --- @field subagent_messages? agentic.ui.ChatHistory.Message[] Absent from files written before subagent output was saved
 --- @field subagents? table<string, agentic.ui.ChatHistory.Subagent> Absent from files written before subagents were sessions of their own
@@ -109,8 +115,9 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- @field task_id? string Task id of the subagent, the `agent_key` of its messages: the first one seen, replaced by the spawn's once the provider's record is read. Absent until known
 
 --- @class agentic.ui.ChatHistory
---- @field session_id? string
---- @field timestamp integer Unix timestamp when session was created
+--- @field chat_id string 8 hex digits the plugin gives the chat; the session file's name
+--- @field session_id? string The current ACP session id
+--- @field timestamp integer Unix timestamp when the chat was created
 --- @field messages agentic.ui.ChatHistory.Message[]
 --- @field subagent_messages agentic.ui.ChatHistory.Message[] Kept apart from `messages`, which are what a re-create from history sends to the provider, what the picker previews and what the chat replays
 --- @field subagents table<string, agentic.ui.ChatHistory.Subagent> Child session id -> what the session records about that subagent
@@ -123,10 +130,12 @@ local TextWrap = require("agentic.utils.text_wrap")
 local ChatHistory = {}
 ChatHistory.__index = ChatHistory
 
+--- @param chat_id string|nil Else a new one (`new_chat_id`)
 --- @return agentic.ui.ChatHistory
-function ChatHistory:new()
+function ChatHistory:new(chat_id)
     --- @type agentic.ui.ChatHistory
     local instance = {
+        chat_id = chat_id or ChatHistory.new_chat_id(),
         session_id = nil,
         timestamp = os.time(),
         messages = {},
@@ -166,27 +175,27 @@ function ChatHistory.get_sessions_folder(cwd)
     )
 end
 
---- Path of the session file of `session_id` in the project folder of `cwd`.
---- @param session_id string
+--- Path of the session file of `chat_id` in the project folder of `cwd`.
+--- @param chat_id string
 --- @param cwd string Working directory of the session
 --- @return string file_path
-function ChatHistory.get_file_path(session_id, cwd)
+function ChatHistory.get_file_path(chat_id, cwd)
     return vim.fs.joinpath(
         ChatHistory.get_sessions_folder(cwd),
-        session_id .. ".json"
+        chat_id .. ".json"
     )
 end
 
---- Paths of the files of `session_id` in all project folders, newest by
---- mtime first.
---- @param session_id string
+--- Paths of the files of `chat_id` in all project folders, newest by mtime
+--- first.
+--- @param chat_id string
 --- @return string[] file_paths Empty when no folder holds one
-function ChatHistory.find_files(session_id)
+function ChatHistory.find_files(chat_id)
     local base = ChatHistory.get_base_storage_path()
     local found = {} --- @type { path: string, mtime: uv.fs_stat.result.time }[]
     for dirname, dir_type in vim.fs.dir(base) do
         if dir_type == "directory" then
-            local path = vim.fs.joinpath(base, dirname, session_id .. ".json")
+            local path = vim.fs.joinpath(base, dirname, chat_id .. ".json")
             local stat = vim.uv.fs_stat(path)
             if stat then
                 table.insert(found, { path = path, mtime = stat.mtime })
@@ -204,12 +213,25 @@ function ChatHistory.find_files(session_id)
     end, found)
 end
 
---- The newest saved file of `session_id` in any project folder, decoded.
+--- A random chat id of 8 lowercase hex digits that no saved file has.
+--- Raises an error when 10 draws all name a saved file.
+--- @return string chat_id
+function ChatHistory.new_chat_id()
+    for _ = 1, 10 do
+        local chat_id = vim.text.hexencode(assert(vim.uv.random(4))):lower()
+        if #ChatHistory.find_files(chat_id) == 0 then
+            return chat_id
+        end
+    end
+    error("Agentic: 10 random chat ids all name a saved session file")
+end
+
+--- The newest saved file of `chat_id` in any project folder, decoded.
 --- Warns when that file cannot be read or decoded.
---- @param session_id string
+--- @param chat_id string
 --- @return agentic.ui.ChatHistory.StorageData|nil data Nil when there is no file or it cannot be read
-function ChatHistory.read_saved(session_id)
-    local path = ChatHistory.find_files(session_id)[1]
+function ChatHistory.read_saved(chat_id)
+    local path = ChatHistory.find_files(chat_id)[1]
     if not path then
         return nil
     end
@@ -643,16 +665,13 @@ function ChatHistory:prepend_history_messages(prompt)
     end
 end
 
---- Write the history to the session file in the project folder of `cwd`,
---- synchronously, and record `cwd` in it. Clears `dirty` on success.
+--- Write the history to the file of its chat id in the project folder of
+--- `cwd`, synchronously, and record `cwd` and the ACP session id in it.
+--- Clears `dirty` on success.
 --- @param cwd string Working directory of the session
 --- @return string|nil err Why nothing was written
 function ChatHistory:save(cwd)
-    if not self.session_id then
-        return "No session_id set"
-    end
-
-    local path = ChatHistory.get_file_path(self.session_id, cwd)
+    local path = ChatHistory.get_file_path(self.chat_id, cwd)
     local dir = vim.fs.dirname(path)
 
     local dir_ok, dir_err = FileSystem.mkdirp(dir)
@@ -718,11 +737,12 @@ end
 --- A history holding the contents of a session file. Side records of a kind
 --- this build does not write are dropped with a notification.
 --- @param data agentic.ui.ChatHistory.StorageData
+--- @param chat_id string The file's name, which the file does not hold
 --- @return agentic.ui.ChatHistory history
-function ChatHistory.from_data(data)
+function ChatHistory.from_data(data, chat_id)
     -- Assigned directly: a loaded history mirrors the file, so it is not
     -- dirty.
-    local instance = ChatHistory:new()
+    local instance = ChatHistory:new(chat_id)
     instance.session_id = data.session_id
     instance.timestamp = data.timestamp
     -- `subagent_event` rows, from files written before session messages kept
@@ -781,8 +801,10 @@ local function read_sessions_from_folder(folder)
                         prompt_count = prompt_count + 1
                     end
                 end
+                local chat_id = filename:gsub("%.json$", "")
                 table.insert(sessions, {
-                    session_id = filename:gsub("%.json$", ""),
+                    chat_id = chat_id,
+                    session_id = parsed.session_id or chat_id,
                     title = parsed.title or "",
                     timestamp = parsed.timestamp or 0,
                     last_activity = parsed.last_activity,
@@ -836,19 +858,19 @@ function ChatHistory.list_sessions(cwd, callback)
     callback(sessions)
 end
 
---- One row per session id. An id in several project folders keeps the row of
+--- One row per chat id. An id in several project folders keeps the row of
 --- its newest file by mtime.
 --- @param sessions agentic.ui.ChatHistory.SessionMeta[]
 --- @return agentic.ui.ChatHistory.SessionMeta[] distinct In the order of `sessions`
 local function newest_per_id(sessions)
     local count = {} --- @type table<string, integer>
     for _, s in ipairs(sessions) do
-        count[s.session_id] = (count[s.session_id] or 0) + 1
+        count[s.chat_id] = (count[s.chat_id] or 0) + 1
     end
     local newest = {} --- @type table<string, string>
     local distinct = {} --- @type agentic.ui.ChatHistory.SessionMeta[]
     for _, s in ipairs(sessions) do
-        local id = s.session_id
+        local id = s.chat_id
         if count[id] == 1 then
             table.insert(distinct, s)
         else
@@ -861,14 +883,16 @@ local function newest_per_id(sessions)
     return distinct
 end
 
---- The sessions `query` matches: those whose id starts with it, else those
---- whose title equals it (case-insensitive). In the order of `sessions`.
+--- The sessions `query` matches: those whose chat id or ACP session id
+--- starts with it, else those whose title equals it (case-insensitive). In
+--- the order of `sessions`.
 --- @param sessions agentic.ui.ChatHistory.SessionMeta[]
 --- @param query string
 --- @return agentic.ui.ChatHistory.SessionMeta[]
 function ChatHistory.match_sessions(sessions, query)
     local by_id = vim.tbl_filter(function(s)
-        return vim.startswith(s.session_id, query)
+        return vim.startswith(s.chat_id, query)
+            or vim.startswith(s.session_id, query)
     end, sessions)
     if #by_id > 0 then
         return by_id
@@ -879,8 +903,8 @@ function ChatHistory.match_sessions(sessions, query)
     end, sessions)
 end
 
---- List sessions from ALL projects, sorted by last activity descending. An id
---- saved in several projects gives one row, from its newest file.
+--- List sessions from ALL projects, sorted by last activity descending. A chat
+--- id saved in several projects gives one row, from its newest file.
 --- @param callback fun(sessions: agentic.ui.ChatHistory.SessionMeta[])
 function ChatHistory.list_all_sessions(callback)
     local base = ChatHistory.get_base_storage_path()

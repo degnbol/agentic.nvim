@@ -28,13 +28,15 @@ describe("SessionResume", function()
 
     local test_sessions = {
         {
+            chat_id = "session-1",
             session_id = "session-1",
             title = "First chat",
             timestamp = 1704067200,
             file_path = "/storage/p/session-1.json",
         },
         {
-            session_id = "session-2",
+            chat_id = "session-2",
+            session_id = "acp-2",
             title = "Second chat",
             timestamp = 1704153600,
             file_path = "/storage/p/session-2.json",
@@ -114,7 +116,7 @@ describe("SessionResume", function()
             assert.equal(2, #items)
             assert.truthy(items[1].display:match("│ First chat"))
             assert.truthy(items[1].display:match("^%d%d%d%d%-%d%d%-%d%d"))
-            assert.equal("session-1", items[1].session_id)
+            assert.equal("session-1", items[1].chat_id)
         end)
 
         it("shows a shortened cwd when asked", function()
@@ -129,6 +131,7 @@ describe("SessionResume", function()
             for _, case in ipairs(cases) do
                 local items = SessionResume.build_items({
                     {
+                        chat_id = "s",
                         session_id = "s",
                         title = "t",
                         timestamp = 0,
@@ -152,6 +155,7 @@ describe("SessionResume", function()
         it("passes prompt_count through to items", function()
             local items = SessionResume.build_items({
                 {
+                    chat_id = "s1",
                     session_id = "s1",
                     title = "With count",
                     timestamp = 1704067200,
@@ -159,6 +163,7 @@ describe("SessionResume", function()
                     prompt_count = 5,
                 },
                 {
+                    chat_id = "s2",
                     session_id = "s2",
                     title = "No count",
                     timestamp = 1704067200,
@@ -172,6 +177,7 @@ describe("SessionResume", function()
         it("strips newlines from multi-line titles", function()
             local items = SessionResume.build_items({
                 {
+                    chat_id = "s1",
                     session_id = "s1",
                     title = "First line\nSecond line\nThird",
                     timestamp = 1704067200,
@@ -199,7 +205,7 @@ describe("SessionResume", function()
                 {
                     type = "fork_link",
                     direction = "from",
-                    session_id = "sid-src",
+                    chat_id = "sid-src",
                     cwd = "/c",
                     title = "t",
                 },
@@ -407,7 +413,7 @@ describe("SessionResume", function()
                 local opts = builtin_show_stub.calls[1][3]
                 assert.equal("session-2", opts.marked_id)
                 assert.equal("local", opts.scope)
-                assert.equal("session-1", resume_stub.calls[1][1].session_id)
+                assert.equal("session-1", resume_stub.calls[1][1].chat_id)
                 assert.same({ mods = mods }, resume_stub.calls[1][2])
             end
         )
@@ -420,7 +426,7 @@ describe("SessionResume", function()
             local mods = { tab = 1 }
 
             local shown = SessionResume.resume(
-                { session_id = "sid-x" },
+                { chat_id = "sid-x" },
                 { mods = mods }
             )
 
@@ -432,13 +438,28 @@ describe("SessionResume", function()
             assert.equal(open_session, shown)
         end)
 
+        it("shows the open session that runs the ACP id", function()
+            local open_session = create_mock_session()
+            local acp_stub = spy.stub(SessionRegistry, "session_for_acp_id")
+            MiniTest.finally(function()
+                acp_stub:revert()
+            end)
+            acp_stub:returns(open_session)
+
+            local shown = SessionResume.resume({ chat_id = "acp-x" })
+
+            assert.equal("acp-x", acp_stub.calls[1][1])
+            assert.spy(session_registry_stub).was.called(0)
+            assert.equal(open_session, shown)
+        end)
+
         it("shows the chat in the given window, ignoring mods", function()
             local open_session = create_mock_session()
             open_session_stub:returns(open_session)
             local winid = vim.api.nvim_get_current_win()
 
             SessionResume.resume(
-                { session_id = "sid-x" },
+                { chat_id = "sid-x" },
                 { mods = { tab = 1 }, winid = winid }
             )
 
@@ -456,7 +477,7 @@ describe("SessionResume", function()
             local mods = { vertical = true }
 
             local shown = SessionResume.resume({
-                session_id = "sid-x",
+                chat_id = "sid-x",
                 cwd = "/p",
                 provider = "codex-acp",
                 model = "m1",
@@ -465,7 +486,7 @@ describe("SessionResume", function()
             assert.equal(session, shown)
             assert.equal("codex-acp", session_registry_stub.calls[1][1])
             assert.same(
-                { session, "sid-x", "/p", "m1", nil, n = 5 },
+                { session, "sid-x", "/p", "m1", n = 4 },
                 session.load_acp_session.calls[1]
             )
             assert.equal(mods, session.widget.show.calls[1][2])
@@ -480,7 +501,7 @@ describe("SessionResume", function()
                 session_registry_stub:returns(create_mock_session())
 
                 SessionResume.resume({
-                    session_id = "sid-x",
+                    chat_id = "sid-x",
                     cwd = "/p",
                     --- @diagnostic disable-next-line: assign-type-mismatch
                     provider = "gone-acp",
@@ -507,11 +528,11 @@ describe("SessionResume", function()
             local session = create_mock_session()
             session_registry_stub:returns(session)
 
-            SessionResume.resume({ session_id = "sid-x" })
+            SessionResume.resume({ chat_id = "sid-x" })
 
             assert.equal("codex-acp", session_registry_stub.calls[1][1])
             assert.same(
-                { session, "sid-x", "/saved", "m-saved", nil, n = 5 },
+                { session, "sid-x", "/saved", "m-saved", n = 4 },
                 session.load_acp_session.calls[1]
             )
         end)
@@ -521,7 +542,7 @@ describe("SessionResume", function()
             function()
                 session_registry_stub:returns(create_mock_session())
 
-                SessionResume.resume({ session_id = "sid-x" })
+                SessionResume.resume({ chat_id = "sid-x" })
 
                 assert.is_nil(session_registry_stub.calls[1][1])
                 assert.spy(logger_notify_stub).was.called(0)
@@ -538,44 +559,11 @@ describe("SessionResume", function()
                 vim.api.nvim_set_current_dir(before)
             end)
 
-            SessionResume.resume({ session_id = "sid-x", cwd = dir })
+            SessionResume.resume({ chat_id = "sid-x", cwd = dir })
 
             assert.equal(
                 vim.uv.fs_realpath(dir),
                 vim.uv.fs_realpath(vim.fn.getcwd())
-            )
-        end)
-    end)
-
-    describe("resume on_shown", function()
-        it("runs at once for an open session", function()
-            local open_session = create_mock_session()
-            open_session_stub:returns(open_session)
-            local shown = spy.new(function() end)
-
-            SessionResume.resume({ session_id = "sid-x" }, {
-                on_shown = shown --[[@as fun(session: agentic.SessionManager, winid: integer)]],
-            })
-
-            assert.same(
-                { open_session, vim.api.nvim_get_current_win(), n = 2 },
-                shown.calls[1]
-            )
-        end)
-
-        it("goes with the load of a session not open", function()
-            local session = create_mock_session()
-            session_registry_stub:returns(session)
-            local shown = spy.new(function() end)
-
-            SessionResume.resume({ session_id = "sid-x", cwd = "/p" }, {
-                on_shown = shown --[[@as fun(session: agentic.SessionManager, winid: integer)]],
-            })
-            session.load_acp_session.calls[1][5](session)
-
-            assert.same(
-                { session, vim.api.nvim_get_current_win(), n = 2 },
-                shown.calls[1]
             )
         end)
     end)
@@ -716,7 +704,7 @@ describe("SessionResume", function()
             local link = {
                 type = "fork_link",
                 direction = "from",
-                session_id = "sid-src",
+                chat_id = "sid-src",
                 cwd = "/c",
                 title = "t",
             }

@@ -47,6 +47,36 @@ end
         end
     )
 
+    it("loads a file under its name and sends its ACP id", function()
+        child.lua([[
+_G.s.agent._send_request = function(_, method, params, cb)
+    if method == "session/load" then
+        _G.load_params, _G.load_cb = params, cb
+    end
+end
+local saved = require("agentic.ui.chat_history"):new()
+saved.chat_id = "chat-1"
+saved.session_id = "acp-2"
+saved.timestamp = 1000
+saved:add_message({ type = "user", text = "q", timestamp = 0, provider_name = "p" })
+assert(saved:save(vim.uv.fs_realpath("/tmp")) == nil)
+_G.s:load_acp_session("chat-1")
+_G.load_cb({}, nil)
+]])
+        child.flush()
+
+        assert.equal("acp-2", child.lua_get("_G.load_params.sessionId"))
+        assert.equal("acp-2", child.lua_get("_G.s.session_id"))
+        assert.equal("chat-1", child.lua_get("_G.s:chat_id()"))
+        assert.equal(1000, child.lua_get("_G.s.chat_history.timestamp"))
+        assert.equal(
+            "agentic://chat-1",
+            child.lua_get(
+                "vim.api.nvim_buf_get_name(_G.s.widget.buf_nrs.agent)"
+            )
+        )
+    end)
+
     it("records the replayed and the later tool calls", function()
         child.lua([[
 _G.s:_do_load_acp_session("sid-x", "/tmp")
@@ -149,6 +179,7 @@ end
 _G.p = function(text) return { type = "user", text = text, timestamp = 1, provider_name = "p" } end
 _G.a = function(text) return { type = "agent", text = text, provider_name = "p" } end
 local saved = ChatHistory:new()
+saved.chat_id = "sid-x"
 saved.session_id = "sid-x"
 saved.timestamp = 1000
 saved.messages = {

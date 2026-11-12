@@ -23,23 +23,29 @@ describe("Buffer lifecycle", function()
     --- Show a chat in the current window and give its session an id and a
     --- temporary session folder, as a session/new response would. Exposes it
     --- as `_G.s`.
-    local function open_session()
+    --- @param id string|nil The ACP and chat id. Default `sid-1`
+    local function open_session(id)
         child.cmd("Agentic")
         child.flush()
-        child.lua([[
+        child.lua(
+            [[
 require("agentic.config").sessions.storage_path = vim.fn.tempname()
 _G.s = require("agentic.session_registry").owner_of_buf(
     vim.api.nvim_get_current_buf()
 )
-_G.s.session_id = "sid-1"
-_G.s.chat_history.session_id = "sid-1"
+_G.s.session_id = ...
+_G.s.chat_history.chat_id = ...
+_G.s.chat_history.session_id = ...
+_G.s:_name_buffers()
 _G.chat = _G.s.widget.buf_nrs.agent
 -- What ACP notifications reach.
 _G.h = _G.s:_build_handlers()
 _G.user_msg = function(text)
     return { type = "user", text = text, timestamp = 0, provider_name = "p" }
 end
-]])
+]],
+            { id or "sid-1" }
+        )
     end
 
     --- Add a message the way a streaming update does, `mid_turn` or not.
@@ -344,7 +350,7 @@ widget.input_dispatch:consume_queued_block()
         --- one, keeping the first as `_G.other` and its buffers as
         --- `_G.other_bufs`.
         local function open_two_sessions()
-            open_session()
+            open_session("sid-0")
             child.lua([[
 _G.other = _G.s
 _G.other_bufs = vim.deepcopy(_G.s.widget.buf_nrs)

@@ -45,15 +45,16 @@ local ChatWidget = {}
 ChatWidget.__index = ChatWidget
 
 --- @param owner_id integer `SessionManager.id` of the session owning the widget
+--- @param name_key string See `agentic.BufferNames.Parts`
 --- @param on_submit_input fun(prompt: string, opts: agentic.SessionManager.SubmitOpts): boolean
-function ChatWidget:new(owner_id, on_submit_input)
+function ChatWidget:new(owner_id, name_key, on_submit_input)
     self = setmetatable({}, self)
 
     self.win_nrs = {}
 
     self._on_submit_input = on_submit_input
     self._owner_id = owner_id
-    self._name_key = tostring(owner_id)
+    self._name_key = name_key
 
     self:_initialize()
 
@@ -873,7 +874,7 @@ end
 function ChatWidget:buffer_name(sub_id, part)
     return BufferNames.format({
         key = self._name_key,
-        sub_id = sub_id,
+        sub_id = sub_id and BufferNames.short_key(sub_id),
         part = part,
     })
 end

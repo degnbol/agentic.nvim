@@ -39,6 +39,14 @@ describe("agentic.utils.BufferNames", function()
         )
     end)
 
+    it("gives an id a short key of 8 hex digits, the same each time", function()
+        local key = BufferNames.short_key("toolu_01abc")
+        assert.truthy(key:match("^%x%x%x%x%x%x%x%x$"))
+        assert.equal(key:lower(), key)
+        assert.equal(key, BufferNames.short_key("toolu_01abc"))
+        assert.are_not.equal(key, BufferNames.short_key("toolu_01abd"))
+    end)
+
     it("refuses malformed names", function()
         for _, name in ipairs({
             "agentic://",

@@ -69,8 +69,8 @@ function M.show(items, on_select, opts)
             return "Unknown session: " .. selected
         end
 
-        if preview_cache[item.session_id] then
-            return preview_cache[item.session_id]
+        if preview_cache[item.chat_id] then
+            return preview_cache[item.chat_id]
         end
 
         local data, err = FileSystem.read_json(item.file_path)
@@ -83,7 +83,7 @@ function M.show(items, on_select, opts)
 
         local lines = SessionResume.format_preview(data.messages)
         local result = table.concat(lines, "\n")
-        preview_cache[item.session_id] = result
+        preview_cache[item.chat_id] = result
         return result
     end, {}, "{}") --[[@as string]]
 
@@ -126,12 +126,12 @@ function M.show(items, on_select, opts)
                     local ok, err = os.remove(item.file_path)
                     if ok then
                         for i, it in ipairs(items) do
-                            if it.session_id == item.session_id then
+                            if it.chat_id == item.chat_id then
                                 table.remove(items, i)
                                 break
                             end
                         end
-                        preview_cache[item.session_id] = nil
+                        preview_cache[item.chat_id] = nil
                         Logger.notify("Deleted session", vim.log.levels.INFO)
                     else
                         Logger.notify(

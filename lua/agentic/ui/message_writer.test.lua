@@ -7074,13 +7074,13 @@ describe("agentic.ui.MessageWriter", function()
     end)
 
     describe("write_fork_link", function()
-        --- @param session_id string
+        --- @param chat_id string
         --- @return agentic.ui.ChatHistory.ForkLink
-        local function link(session_id)
+        local function link(chat_id)
             return {
                 type = "fork_link",
                 direction = "to",
-                session_id = session_id,
+                chat_id = chat_id,
                 cwd = "/c",
                 title = "Other",
             }

@@ -516,19 +516,21 @@ agentic.new_session({opts})
     it, the new session runs the current session's provider.
 
                                                   *agentic.load_acp_session()*
-agentic.load_acp_session({session_id}, {cwd}, {model}, {mods})
-    Load a specific ACP session by UUID into a new session and show its
-    chat in the target window, as |agentic.open()| does, on the session's
-    saved provider when there is one. Optional {cwd} for the working
-    directory and {model} for the model id; a nil {cwd} or {model} takes
-    the saved value. Optional {mods} as in |agentic.open()|. On failure, the saved transcript is replayed as
-    context on the next prompt. When the session is already open, shows
-    its chat instead.
+agentic.load_acp_session({id}, {cwd}, {model}, {mods})
+    Load the saved chat {id} into a new session and show its chat in the
+    target window, as |agentic.open()| does, on the session's saved
+    provider when there is one. {id} is a chat id (|agentic-buffer-names|),
+    or the ACP session id of a session with no saved file, which loads into
+    a new chat. Optional {cwd} for the working directory and {model} for
+    the model id; a nil {cwd} or {model} takes the saved value. Optional
+    {mods} as in |agentic.open()|. On failure, the saved transcript is
+    replayed as context on the next prompt. When the session is already
+    open, shows its chat instead.
 
                                                    *agentic.resolve_session()*
 agentic.resolve_session({query}, {callback})
-    Find the saved sessions {query} matches: those whose `session_id`
-    starts with {query}, else those whose title equals it,
+    Find the saved sessions {query} matches: those whose chat id or ACP
+    session id starts with {query}, else those whose title equals it,
     case-insensitive. {callback} gets the list of matching sessions, newest
     first.
 
@@ -1035,20 +1037,22 @@ A session with no messages and an empty input ends when no window shows its
 chat.
 
                                                        *agentic-buffer-names*
-Buffers are named after the ACP session id, `<sid>`; before the session has
-one, its `#<id>` number stands in:
+Buffers are named after the chat id, `<cid>`, the name of the chat's
+session file, kept across a provider switch and a restart.
+`<agent key>` and `<background key>` are 8 hex digits standing for the
+subagent's or the background session's ACP session:
 
     Buffer                         Name ~
-    Chat                           `agentic://<sid>`
-    Panel                          `agentic://<sid>/<panel>`
-    Subagent transcript            `agentic://<sid>/<agent id>`
-    Subagent message input         `agentic://<sid>/<agent id>/input`
-    Background session             `agentic://<background sid>/background`
+    Chat                           `agentic://<cid>`
+    Panel                          `agentic://<cid>/<panel>`
+    Subagent transcript            `agentic://<cid>/<agent key>`
+    Subagent message input         `agentic://<cid>/<agent key>/input`
+    Background session             `agentic://<background key>/background`
 
 |:edit|, |:split|, |:tabedit|, |gf|, |CTRL-W_f| and |CTRL-W_gf| on a name
-show that buffer, made again if it was wiped. On the name of a chat or a
-transcript of a session no chat holds, they resume the saved session
-(|agentic-commands-resume|) in the window they open.
+show that buffer, made again if it was wiped. On the name of a chat no
+session holds, they resume the saved chat (|agentic-commands-resume|) in the
+window they open.
 
 The chat shows in any window, like any buffer. Its panels attach to one
 window showing it, the chat's window: the first window the chat enters
