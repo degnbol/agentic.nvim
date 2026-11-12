@@ -325,15 +325,67 @@ describe("agentic.BackgroundSession", function()
             )
         end)
 
-        it("fails on a stop, with no refusal retry", function()
-            client.handlers.on_request_permission(
-                shell_request("t1", "rm y"),
-                function() end
-            )
+        it(
+            "retries when the provider cancels the turn after a reject",
+            function()
+                client.handlers.on_request_permission(
+                    shell_request("t1", "git add x"),
+                    function() end
+                )
+                client.prompts[1].callback({ stopReason = "cancelled" }, nil)
+                assert.equal(2, #client.prompts)
+                assert.equal(
+                    "Refused:\ngit add x: no allow rule matches it",
+                    client.prompts[2].text
+                )
+            end
+        )
+
+        it("gives up when the provider cancels at max_refusals", function()
+            for i = 1, 2 do
+                client.handlers.on_request_permission(
+                    shell_request("t" .. i, "rm y"),
+                    function() end
+                )
+                client.prompts[i].callback({ stopReason = "cancelled" }, nil)
+            end
+            assert.equal(2, #client.prompts)
+            assert.same({ { err = "refused" } }, results)
+        end)
+
+        it("fails on a provider cancel without a reject", function()
             client.prompts[1].callback({ stopReason = "cancelled" }, nil)
             assert.equal(1, #client.prompts)
             assert.same({ { err = "interrupted" } }, results)
         end)
+
+        for _, stop_reason in ipairs({ "end_turn", "cancelled" }) do
+            it(
+                "fails at once on a stop, with no retry on " .. stop_reason,
+                function()
+                    client.handlers.on_request_permission(
+                        shell_request("t1", "rm y"),
+                        function() end
+                    )
+                    session:stop()
+                    assert.same({ "bg-1" }, client.stops)
+                    assert.same({ { err = "interrupted" } }, results)
+                    client.prompts[1].callback(
+                        { stopReason = stop_reason },
+                        nil
+                    )
+                    assert.equal(1, #client.prompts)
+                    assert.equal(1, #results)
+                end
+            )
+        end
+    end)
+
+    it("sends no cancel on a stop with no turn open", function()
+        local session = new_session() --[[@as agentic.BackgroundSession]]
+        create()
+        session:stop()
+        assert.same({}, client.stops)
     end)
 
     describe("tripwire", function()
@@ -425,6 +477,19 @@ describe("agentic.BackgroundSession", function()
                 assert.same({}, client.closes)
             end
         )
+
+        it("gives a stop's cancel a full timeout, then destroys", function()
+            local session = new_session() --[[@as agentic.BackgroundSession]]
+            create()
+            session:prompt("slow", function() end)
+            local n_timers = #timers
+            session:stop()
+            assert.equal(n_timers + 1, #timers)
+            session:prompt("next", function() end)
+            assert.equal(1, #client.prompts)
+            timers[#timers].fn()
+            assert.same({ "bg-1" }, client.closes)
+        end)
 
         it("destroys when the cancel goes unanswered", function()
             local session = new_session() --[[@as agentic.BackgroundSession]]
@@ -538,6 +603,7 @@ describe("agentic.BackgroundSession", function()
         end)
 
         it("binds the stop key to the background session only", function()
+            session:prompt("hi", function() end)
             vim.api.nvim_buf_call(session.bufnr, function()
                 local map = vim.fn.maparg("<C-c>", "n", false, true)
                 assert.equal(1, map.buffer)

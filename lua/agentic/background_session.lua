@@ -70,8 +70,8 @@ end
 --- @class agentic.BackgroundSession.Turn
 --- @field reasons string[] Why each refused call of the turn was refused
 --- @field text string[] The agent's message chunks
---- @field timer uv.uv_timer_t
---- @field abandoned boolean Timed out and cancelled; its output no longer counts
+--- @field timer? uv.uv_timer_t
+--- @field abandoned boolean Cancelled by us; its output no longer counts
 
 --- An agent session the plugin drives unattended, with a transcript the user
 --- can open like a subagent's. It never prompts: a call its policy does not
@@ -398,8 +398,8 @@ function BackgroundSession:_show_causes(tool_call_id, causes)
     end
 end
 
---- The current turn, unless it timed out: an abandoned turn's output counts
---- for no job.
+--- The current turn, unless we cancelled it: an abandoned turn's output
+--- counts for no job.
 --- @return agentic.BackgroundSession.Turn|nil
 function BackgroundSession:_counted_turn()
     local turn = self._turn
@@ -504,9 +504,9 @@ function BackgroundSession:_run_next()
 end
 
 --- Send one prompt for the current job, with its turn timeout. A timeout
---- answers the job and cancels the turn; the next job waits for the cancelled
---- turn's answer, so none of its output reaches the next. A second timeout
---- without that answer destroys the session.
+--- cancels the turn and answers the job "timeout". If the provider has not
+--- answered a cancel (from a timeout or `stop`) at the next timeout, the
+--- session is destroyed.
 --- @param text string
 function BackgroundSession:_send(text)
     local view = self._transcript.view
@@ -521,33 +521,9 @@ function BackgroundSession:_send(text)
     self:_mark_unmodified()
 
     --- @type agentic.BackgroundSession.Turn
-    local turn
-    local function on_timeout()
-        if self._turn ~= turn then
-            return
-        end
-        if turn.abandoned then
-            Logger.notify(
-                ("Background session %q stopped: the provider did not answer a cancel"):format(
-                    self._opts.label
-                ),
-                vim.log.levels.ERROR
-            )
-            self:destroy()
-            return
-        end
-        turn.abandoned = true
-        self:stop()
-        self:_answer(nil, "timeout")
-        turn.timer = vim.defer_fn(on_timeout, self._opts.turn_timeout_ms)
-    end
-    turn = {
-        reasons = {},
-        text = {},
-        abandoned = false,
-        timer = vim.defer_fn(on_timeout, self._opts.turn_timeout_ms),
-    }
+    local turn = { reasons = {}, text = {}, abandoned = false }
     self._turn = turn
+    self:_arm_timeout(turn)
     self._client:send_prompt(
         self._session_id --[[@as string]],
         { { type = "text", text = text } },
@@ -559,9 +535,40 @@ function BackgroundSession:_send(text)
     )
 end
 
---- Answer the current job by how its turn ended: an error or a stop reason
---- other than `end_turn` fails it, refusals send the refusal prompt up to
---- `max_refusals`, else it gets the turn's text.
+--- Start `turn`'s timeout afresh, replacing a running one.
+--- @param turn agentic.BackgroundSession.Turn
+function BackgroundSession:_arm_timeout(turn)
+    close_timer(turn.timer)
+    turn.timer = vim.defer_fn(function()
+        self:_on_timeout(turn)
+    end, self._opts.turn_timeout_ms)
+end
+
+--- Cancel `turn`, or destroy the session when `turn` is cancelled already:
+--- the provider did not answer the cancel. No-op once `turn` is closed.
+--- @param turn agentic.BackgroundSession.Turn
+function BackgroundSession:_on_timeout(turn)
+    if self._turn ~= turn then
+        return
+    end
+    if not turn.abandoned then
+        self:_cancel_turn("timeout")
+        return
+    end
+    Logger.notify(
+        ("Background session %q stopped: the provider did not answer a cancel"):format(
+            self._opts.label
+        ),
+        vim.log.levels.ERROR
+    )
+    self:destroy()
+end
+
+--- Answer the current job by how its turn ended. An abandoned turn's job has
+--- its answer already. An error or a stop reason fails the job, except:
+--- - `end_turn` without refusals gives the job the turn's text.
+--- - `end_turn` or `cancelled` with refusals sends the refusal prompt, up to
+---   `max_refusals`. opencode ends a turn `cancelled` after a reject.
 --- @param result { stopReason?: string }|nil
 --- @param err agentic.acp.ACPError|nil
 function BackgroundSession:_end_turn(result, err)
@@ -569,16 +576,19 @@ function BackgroundSession:_end_turn(result, err)
     local job = self._job --[[@as agentic.BackgroundSession.Job]]
     self:_close_turn()
     local stop_reason = result and result.stopReason
+    local refused = #turn.reasons > 0
+    local ended = stop_reason == "end_turn"
+        or (stop_reason == "cancelled" and refused)
     if turn.abandoned then
         self:_release()
     elseif err then
         self:_finish(nil, err.message or vim.inspect(err))
-    elseif stop_reason ~= "end_turn" then
+    elseif not ended then
         self:_finish(
             nil,
             CanonicalToolCall.stop_reason_word(stop_reason or "error")
         )
-    elseif #turn.reasons == 0 then
+    elseif not refused then
         self:_finish(table.concat(turn.text), nil)
     elseif job.refusals >= self._opts.max_refusals then
         self:_finish(nil, "refused")
@@ -631,11 +641,27 @@ function BackgroundSession:_finish(text, err)
     self:_release()
 end
 
---- Stop the current turn. The session stays usable.
+--- Stop the current turn and answer its job "interrupted" at once, with no
+--- refusal prompt. The session stays usable. No-op without a turn open or
+--- when the turn is cancelled already.
 function BackgroundSession:stop()
-    if self._session_id and not self._destroyed then
-        self._client:stop_generation(self._session_id)
+    self:_cancel_turn("interrupted")
+end
+
+--- Cancel the open counted turn and answer its job with `err`. The turn
+--- stays current until the provider answers the cancel, so the next job
+--- cannot receive its output; the provider gets a full turn timeout to
+--- answer. No-op without a counted turn open.
+--- @param err string
+function BackgroundSession:_cancel_turn(err)
+    local turn = self:_counted_turn()
+    if not turn then
+        return
     end
+    turn.abandoned = true
+    self:_arm_timeout(turn)
+    self._client:stop_generation(self._session_id)
+    self:_answer(nil, err)
 end
 
 --- Close the session and wipe its transcript. Every pending `prompt` call
