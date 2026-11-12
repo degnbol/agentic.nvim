@@ -1,5 +1,5 @@
 ---
-paths: "lua/agentic/init.lua,lua/agentic/bootstrap.lua,lua/agentic/session_registry.lua,lua/agentic/session_manager.lua,lua/agentic/subagents.lua,lua/agentic/ui/chat_widget.lua,lua/agentic/ui/input_dispatch.lua,lua/agentic/ui/window_decoration.lua,lua/agentic/ui/message_writer.lua,lua/agentic/ui/permission_float.lua"
+paths: "lua/agentic/init.lua,lua/agentic/bootstrap.lua,lua/agentic/session_registry.lua,lua/agentic/session_manager.lua,lua/agentic/subagents.lua,lua/agentic/ui/subagent_transcript.lua,lua/agentic/ui/subagent_input.lua,lua/agentic/background_session.lua,lua/agentic/ui/chat_widget.lua,lua/agentic/ui/input_dispatch.lua,lua/agentic/ui/window_decoration.lua,lua/agentic/ui/message_writer.lua,lua/agentic/ui/permission_float.lua"
 ---
 
 # Session isolation

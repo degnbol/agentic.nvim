@@ -9,7 +9,8 @@ description:
   (`__handle_tool_call`, `__build_tool_call_update`,
   `__handle_request_permission`), and known ACP limitations as they
   affect this plugin. Use when editing `lua/agentic/acp/` (adapters,
-  transport, client, session_manager) or debugging provider-specific
+  transport, client) or `lua/agentic/session_manager.lua`'s update
+  routing, or debugging provider-specific
   bridge quirks (claude-agent-acp, opencode, gemini, codex). Distinct
   from the global `acp` skill which covers the ACP protocol spec
   itself.
@@ -68,6 +69,9 @@ determines routing:
 | `"request_permission"`  | `PermissionManager` (queued, sequential)   |
 | others                  | `subscriber.on_session_update()` (generic) |
 
+Subagent child sessions (`subagent_update`, `session_message`, child-tagged
+updates): the `subagents` project skill.
+
 ## Tool call lifecycle
 
 Tool calls go through **2 phases**. `MessageWriter` tracks each via
@@ -115,7 +119,7 @@ A call open when its run ends gets `ended_as`, the word
 `CanonicalToolCall.status_word` shows once the call is `failed`; the status
 stays on the wire enum. A stop sets `interrupted` on the calls open at that
 moment, keeping their status: `stop_generation` on the main chat's and each
-working foreground subagent's, `Subagents:stop` on one subagent's. It is
+working blocking subagent's, `Subagents:stop` on one subagent's. It is
 keyed by call, not by turn, because claude-agent-acp ends every open call
 `failed` at a `session/cancel`, a queued prompt's turn can resolve before
 those `failed` updates arrive, and a subagent's end can come before its own.
@@ -398,21 +402,6 @@ opencode gives a subagent call kind `think` and several tools kind `other`
 `SubAgent`; `__handle_tool_call` also re-kinds by tool `name`
 (`KIND_BY_NAME`), and updates keep that kind. It keys on `name` because a
 child session's calls arrive with `title` prefixed `<child title>: `.
-
-### Subagents are child sessions (claude-agent-acp)
-
-The client advertises `clientCapabilities.subagents`: each subagent is a child
-session (global `acp` skill → `references/claude-agent.md` § Native subagent
-sessions, RFD form). `ACPClient` maps child → root on `subagent_update` and
-passes the raw id to the root's subscriber as `source_session_id`.
-`Subagents` keeps one `SubagentTranscript` per child, opened by `running`,
-ended by an end state or a disconnect, never by a turn's end. Each
-`session_message` view becomes a row holding the text, with the kind
-`_message_info` decides once per message id; the two rows of a message link
-by tag. A background subagent gets a message input only
-when the adapter gives `subagent_message_instruction`, a prompt the main
-agent relays (claude: SendMessage). opencode and
-mistral-vibe `SubAgent` calls are plain blocks.
 
 ### Response boundaries come from `messageId` (claude-agent-acp)
 

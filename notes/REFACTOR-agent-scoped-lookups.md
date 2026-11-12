@@ -19,7 +19,7 @@ Status: reviewed spec
   `_drain_subagent_side_records`, stubs of all three drains),
   `lua/agentic/subagents.test.lua` (`record_writer`),
   `tests/integration/test_native_subagents.lua`
-- Skills: `provider-system` (§ Subagents are child sessions), `implement`
+- Skills: `subagents`, `implement`
 
 ## Background
 ### Drains

@@ -38,7 +38,14 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 2. P3 [`FEAT-per-agent-file-activity.md`](notes/FEAT-per-agent-file-activity.md):
    binds its key in the shared-keys method
 
+**Agent status**
+1. P2 [`FEAT-agents-panel.md`](notes/FEAT-agents-panel.md)
+2. P2 [`REFACTOR-status-indicator.md`](notes/REFACTOR-status-indicator.md):
+   drops the bottom "generating" line the panel replaces
+
 **No ordering:**
+- P3 [`FEAT-to-chat-key.md`](notes/FEAT-to-chat-key.md)
+- P3 [`REFACTOR-blocking-stopped-name.md`](notes/REFACTOR-blocking-stopped-name.md)
 - P1 [`FIX-gemini-permission-handler.md`](notes/FIX-gemini-permission-handler.md)
 - P3 [`REFACTOR-grant-target.md`](notes/REFACTOR-grant-target.md)
 - P3 [`REFACTOR-substitution-word.md`](notes/REFACTOR-substitution-word.md)
