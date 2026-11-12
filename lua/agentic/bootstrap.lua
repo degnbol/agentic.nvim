@@ -3,6 +3,7 @@ local Budget = require("agentic.budget")
 local Config = require("agentic.config")
 local EdgeConceal = require("agentic.ui.edge_conceal")
 local SessionRegistry = require("agentic.session_registry")
+local SessionResume = require("agentic.session_resume")
 local Logger = require("agentic.utils.logger")
 
 --- Process-wide initialization: treesitter languages, the edge conceal
@@ -107,14 +108,14 @@ local function create_global_autocmds()
         desc = "Render every Agentic session's info with the new budget",
     })
 
-    -- A tag jump refuses a name that is neither a file nor matched by a
-    -- BufReadCmd pattern (`jumpto_tag` in nvim's tag.c). It does not consult
-    -- buffer-local BufReadCmds, such as those of Agentic buffers.
+    -- Global: a name with no buffer has no buffer-local autocmd to fire. A
+    -- tag jump also refuses a name that is neither a file nor matched by a
+    -- BufReadCmd pattern (`jumpto_tag` in nvim's tag.c).
     vim.api.nvim_create_autocmd("BufReadCmd", {
         group = group,
         pattern = "agentic://*",
-        callback = function() end,
-        desc = "Let tags of Agentic buffers jump",
+        callback = SessionResume.open_name,
+        desc = "Open the Agentic buffer a name stands for",
     })
 end
 

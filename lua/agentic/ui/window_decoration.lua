@@ -168,27 +168,6 @@ local function resolve_header_text(dynamic_header, window_name)
         )
 end
 
---- Name for an Agentic buffer: `agentic://<id>/<panel>`, or with a title
---- `agentic://<id>/<panel>/<title>`, from the buffer's `agentic_session_id`
---- and `agentic_window`. The id keeps names unique across sessions, the panel
---- keeps a title from taking another panel's name, and the tail is the title
---- when there is one.
---- @param bufnr integer
---- @param title string|nil
---- @return string name
-function WindowDecoration.buffer_name(bufnr, title)
-    local name = string.format(
-        "agentic://%d/%s",
-        vim.b[bufnr].agentic_session_id,
-        vim.b[bufnr].agentic_window
-    )
-    if not title then
-        return name
-    end
-    -- A `/` would make only the text after it the tail.
-    return name .. "/" .. (title:gsub("/", "-"))
-end
-
 --- Render an Agentic buffer's header as the winbar of every window showing
 --- it, set with local scope so it leaves with the buffer.
 --- @param bufnr integer

@@ -578,6 +578,52 @@ describe("BufHelpers", function()
         end)
     end)
 
+    describe("claim_name", function()
+        local notify_stub
+
+        before_each(function()
+            notify_stub = spy.stub(require("agentic.utils.logger"), "notify")
+        end)
+
+        after_each(function()
+            notify_stub:revert()
+        end)
+
+        it("refuses a name a session's loaded buffer holds", function()
+            local holder = vim.api.nvim_create_buf(false, true)
+            vim.b[holder].agentic_session_id = 1
+            BufHelpers.rename(holder, "test://claim/taken")
+            local bufnr = vim.api.nvim_create_buf(false, true)
+
+            assert.is_false(BufHelpers.claim_name(bufnr, "test://claim/taken"))
+
+            assert.equal(1, notify_stub.call_count)
+            assert.equal(
+                "test://claim/taken",
+                vim.api.nvim_buf_get_name(holder)
+            )
+            vim.api.nvim_buf_delete(holder, { force = true })
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        it("takes the windows of a plain buffer holding the name", function()
+            local holder = vim.api.nvim_create_buf(true, false)
+            BufHelpers.rename(holder, "test://claim/plain")
+            vim.cmd.split()
+            local winid = vim.api.nvim_get_current_win()
+            vim.api.nvim_win_set_buf(winid, holder)
+            local bufnr = vim.api.nvim_create_buf(false, true)
+
+            assert.is_true(BufHelpers.claim_name(bufnr, "test://claim/plain"))
+
+            assert.is_false(vim.api.nvim_buf_is_valid(holder))
+            assert.equal(bufnr, vim.api.nvim_win_get_buf(winid))
+            assert.equal("test://claim/plain", vim.api.nvim_buf_get_name(bufnr))
+            vim.api.nvim_win_close(winid, true)
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+    end)
+
     describe("multi_keymap_set", function()
         it("binds nothing for a disabled value", function()
             local bufnr = vim.api.nvim_create_buf(false, true)

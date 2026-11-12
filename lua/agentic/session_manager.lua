@@ -181,12 +181,9 @@ function SessionManager:_on_permission_hidden(badge_bufnr, anchor_bufnr)
     SessionManager._ring_bell()
     self.widget:set_waiting(true, badge_bufnr)
     local title = self.chat_history.title
-    local where = anchor_bufnr == self.widget.buf_nrs.agent
-            and string.format(
-                "its %s buffer",
-                vim.b[anchor_bufnr].agentic_window
-            )
-        or vim.fn.fnamemodify(vim.api.nvim_buf_get_name(anchor_bufnr), ":t")
+    local label = self:_subagent_label(anchor_bufnr)
+    local where = label and "subagent " .. label
+        or string.format("its %s buffer", vim.b[anchor_bufnr].agentic_window)
     Logger.notify(
         string.format(
             "%s is waiting for a permission in %s",
@@ -196,6 +193,14 @@ function SessionManager:_on_permission_hidden(badge_bufnr, anchor_bufnr)
         vim.log.levels.INFO,
         { title = "Agentic" }
     )
+end
+
+--- The label of the subagent whose transcript is `bufnr`.
+--- @param bufnr integer
+--- @return string|nil label Nil for a buffer that is no transcript
+function SessionManager:_subagent_label(bufnr)
+    local child_id = self._subagents:child_of_buf(bufnr)
+    return child_id and self._subagents:agent_label(child_id)
 end
 
 --- Generate the welcome header for a new session
@@ -463,6 +468,9 @@ function SessionManager:new(provider)
     self.permission_manager.open_anchor = function(bufnr, how)
         return WidgetLayout.open_buf(bufnr, how, self.widget:target_win())
     end
+    self.permission_manager.title_for = function(anchor)
+        return self:_subagent_label(anchor)
+    end
     self.permission_manager.proxy_tool_call = function(anchor)
         return self._subagents:child_of_buf(anchor)
     end
@@ -559,8 +567,7 @@ end
 
 --- Bind the session's own buffer-local maps (the widget binds its own) to a
 --- buffer of this session, and give a chat-style buffer the 'tagfunc' that
---- links the rows of a message (`TAGFUNC`). In the chat, `gf` and its window
---- variants also open the other chat of a fork link, and the fork keys fork.
+--- links the rows of a message (`TAGFUNC`). In the chat, the fork keys fork.
 --- @param bufnr integer
 --- @param writer agentic.ui.MessageWriter|nil The writer of a chat-style buffer, whose diffs `gf` jumps into
 function SessionManager:_setup_session_buf(bufnr, writer)
@@ -570,14 +577,10 @@ function SessionManager:_setup_session_buf(bufnr, writer)
         return
     end
     vim.bo[bufnr].tagfunc = SessionManager.TAGFUNC
-    if writer ~= self.message_writer then
-        DiffJump.set_goto_file_keymaps(bufnr, writer)
-        return
+    DiffJump.set_goto_file_keymaps(bufnr, writer)
+    if writer == self.message_writer then
+        self:_bind_fork_keymaps(bufnr)
     end
-    DiffJump.set_goto_file_keymaps(bufnr, writer, function(row, mods)
-        return self:_open_fork_link(row, mods)
-    end)
-    self:_bind_fork_keymaps(bufnr)
 end
 
 --- Bind each key of `Config.keymaps.agent.fork` in `bufnr` to fork at the
@@ -604,48 +607,6 @@ function SessionManager:_bind_fork_keymaps(bufnr)
             { desc = "Agentic: Fork before this turn" }
         )
     end
-end
-
---- Open the other chat of the fork link at `row` of the chat, placed by
---- `mods`, with the cursor on its link back to this chat.
---- @param row integer 0-indexed
---- @param mods vim.api.keyset.cmd_mods
---- @return boolean opened False when `row` holds no fork link
-function SessionManager:_open_fork_link(row, mods)
-    local link = self:_fork_link_at(row)
-    if not link then
-        return false
-    end
-    local own_id = self.session_id
-    SessionResume.resume(
-        { session_id = link.session_id, cwd = link.cwd },
-        mods,
-        function(session, winid)
-            local link_row = own_id
-                and session.message_writer:notice_row(FORK_NOTICE .. own_id)
-            if link_row then
-                session.message_writer:show_row_to_user(winid, link_row)
-            end
-        end
-    )
-    return true
-end
-
---- The fork link of the notice at `row` of the chat.
---- @param row integer 0-indexed
---- @return agentic.ui.ChatHistory.ForkLink|nil
-function SessionManager:_fork_link_at(row)
-    local id = self.message_writer:notice_at(row)
-    if not (id and vim.startswith(id, FORK_NOTICE)) then
-        return nil
-    end
-    local session_id = id:sub(#FORK_NOTICE + 1)
-    for _, msg in ipairs(self.chat_history.messages) do
-        if msg.type == "fork_link" and msg.session_id == session_id then
-            return msg
-        end
-    end
-    return nil
 end
 
 --- Insert `link` above the prompt `before`: in the history, and in the chat
@@ -1042,7 +1003,7 @@ function SessionManager:_reload_chat()
         self.message_writer,
         self:_rendered_messages(),
         function(id)
-            return self._subagents:buffer_name(id)
+            return self._subagents:peer_detail(id)
         end
     )
     self.status_indicator:reposition()
@@ -1107,7 +1068,7 @@ function SessionManager:_write_chat_row(row)
     -- A load replays a running conversation.
     local mid_turn = self:_turn_open()
     SessionResume.write_row(self.message_writer, row, mid_turn, function(id)
-        return self._subagents:buffer_name(id)
+        return self._subagents:peer_detail(id)
     end)
     self.status_indicator:reposition()
     self.chat_history:add_message(row)
@@ -1401,7 +1362,7 @@ function SessionManager:_display_context_usage()
     })
 end
 
---- Rename the current session and update buffer name.
+--- Rename the current session and update its header.
 --- @param new_title string
 function SessionManager:_rename_session(new_title)
     local trimmed = vim.trim(new_title)
@@ -3710,12 +3671,15 @@ function SessionManager:_adopt_session(session_id, response, continued)
     self:render_info()
 end
 
---- Start the session `session_id` on the grant defaults, fire
---- `AgenticSessionChanged` and emit `session_changed`.
+--- Start the session `session_id` on the grant defaults, name its buffers
+--- after it, fire `AgenticSessionChanged` and emit `session_changed`.
 --- @param session_id string
 --- @param continued boolean The conversation carries on in the new session
 function SessionManager:_session_changed(session_id, continued)
     self._grant_command:apply_defaults()
+    self.widget:rename_buffers(session_id)
+    -- A provider switch keeps the subagents and their blocks.
+    self._subagents:rename_buffers()
     vim.api.nvim_exec_autocmds("User", {
         pattern = "AgenticSessionChanged",
         data = { session_id = session_id },
@@ -3891,6 +3855,44 @@ function SessionManager:load_acp_session(session_id, cwd, model, on_shown)
             on_shown = on_shown,
         }
     end
+end
+
+--- The ACP session id the session holds, else the one its deferred load
+--- will take.
+--- @return string|nil
+function SessionManager:target_session_id()
+    return self.session_id
+        or (self._pending_load and self._pending_load.session_id)
+end
+
+--- The live buffer of this session for the parts of its name: the chat, a
+--- panel, or a subagent's transcript or message input. Makes nothing.
+--- @param sub_id string|nil
+--- @param part string|nil
+--- @return integer|nil bufnr Nil while that buffer does not exist
+function SessionManager:buf_of(sub_id, part)
+    if sub_id then
+        return self._subagents:buf_of(sub_id, part --[[@as "input"|nil]])
+    end
+    local bufnr = self.widget.buf_nrs[part or "agent"]
+    return bufnr and vim.api.nvim_buf_is_valid(bufnr) and bufnr or nil
+end
+
+--- Like `buf_of`, but makes the buffer when it does not exist: a wiped panel
+--- or transcript, or a message input.
+--- @param sub_id string|nil
+--- @param part string|nil
+--- @return integer|nil bufnr Nil for a subagent the session does not have, or a message input it cannot have
+function SessionManager:open_buf(sub_id, part)
+    if sub_id then
+        return self._subagents:open_buf(sub_id, part --[[@as "input"|nil]])
+    end
+    if part then
+        return self.widget:panel_buf(
+            part --[[@as agentic.ui.ChatWidget.StackPanel]]
+        )
+    end
+    return self:buf_of(nil, nil)
 end
 
 --- Internal: actually send session/load after the agent is ready.
@@ -4136,6 +4138,8 @@ function SessionManager:_reset_conversation()
     end
 
     self.session_id = nil
+    -- Until a session is adopted, the old id names no buffer of this one.
+    self.widget:rename_buffers(tostring(self.id))
     self._transient_attempt = 0
     self.permission_manager:clear()
     self:_set_available_commands({})
@@ -4363,7 +4367,7 @@ function SessionManager:_render_history()
         self.message_writer,
         self:_rendered_messages(),
         function(id)
-            return self._subagents:buffer_name(id)
+            return self._subagents:peer_detail(id)
         end
     )
     self.status_indicator:reposition()

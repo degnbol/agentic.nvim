@@ -214,34 +214,23 @@ function M.target_at(bufnr, row, col, tool_call_blocks)
 end
 
 --- Native file-opening keys, each with the Ex command that opens a file the
---- same way and the placement of the window it opens.
---- @type table<string, { cmd: string, placement: agentic.utils.BufHelpers.Placement }>
+--- same way.
+--- @type table<string, string>
 local GOTO_FILE_KEYS = {
-    gf = { cmd = "edit", placement = {} },
-    ["<C-w>f"] = { cmd = "split", placement = { mods = { horizontal = true } } },
-    ["<C-w><C-f>"] = {
-        cmd = "split",
-        placement = { mods = { horizontal = true } },
-    },
-    ["<C-w>gf"] = { cmd = "tabedit", placement = { new_tab = true } },
+    gf = "edit",
+    ["<C-w>f"] = "split",
+    ["<C-w><C-f>"] = "split",
+    ["<C-w>gf"] = "tabedit",
 }
 
---- Make `gf`, `<C-w>f`, `<C-w><C-f>` and `<C-w>gf` in `bufnr` first try
---- `open_at`, then act natively, then open the edited file at the line where
---- the native key fails and the cursor is inside one of `writer`'s edit
---- blocks. A count is ignored there.
+--- Make `gf`, `<C-w>f`, `<C-w><C-f>` and `<C-w>gf` in `bufnr` act natively,
+--- then open the edited file at the line where the native key fails and the
+--- cursor is inside one of `writer`'s edit blocks. A count is ignored there.
 --- @param bufnr integer
 --- @param writer agentic.ui.MessageWriter The writer rendering `bufnr`
---- @param open_at (fun(row: integer, mods: vim.api.keyset.cmd_mods): boolean)|nil Opens what the 0-indexed cursor row links to, placed by `mods`; true when it opened something
-function M.set_goto_file_keymaps(bufnr, writer, open_at)
-    for key, how in pairs(GOTO_FILE_KEYS) do
+function M.set_goto_file_keymaps(bufnr, writer)
+    for key, cmd in pairs(GOTO_FILE_KEYS) do
         BufHelpers.keymap_set(bufnr, "n", key, function()
-            if open_at then
-                local row = vim.api.nvim_win_get_cursor(0)[1] - 1
-                if open_at(row, BufHelpers.placement_mods(how.placement)) then
-                    return
-                end
-            end
             local count = vim.v.count > 0 and tostring(vim.v.count) or ""
             local ok, err = pcall(
                 vim.cmd.normal,
@@ -262,7 +251,7 @@ function M.set_goto_file_keymaps(bufnr, writer, open_at)
                 Logger.notify(native_error, vim.log.levels.ERROR)
                 return
             end
-            M.open(target, how.cmd, vim.fn.winline())
+            M.open(target, cmd, vim.fn.winline())
         end, { desc = "Agentic: Open file under cursor" })
     end
 end

@@ -61,6 +61,35 @@ function BufHelpers.rename(bufnr, name)
     end
 end
 
+--- Rename `bufnr` to `name`, taking it from the buffer that holds it unless
+--- that is a loaded session buffer (`vim.b.agentic_session_id`). The holder's
+--- windows show `bufnr` instead, then the holder is deleted, so a window an
+--- `:e`, `:sp` or `gf` of the name opened keeps showing it.
+--- @param bufnr integer
+--- @param name string
+--- @return boolean claimed False, after an error notification, when a session buffer holds `name`
+function BufHelpers.claim_name(bufnr, name)
+    local holder = BufHelpers.named(name)
+    if holder and holder ~= bufnr then
+        if
+            vim.api.nvim_buf_is_loaded(holder)
+            and vim.b[holder].agentic_session_id
+        then
+            Logger.notify(
+                "Another Agentic buffer is named " .. name,
+                vim.log.levels.ERROR
+            )
+            return false
+        end
+        for _, winid in ipairs(vim.fn.win_findbuf(holder)) do
+            vim.api.nvim_win_set_buf(winid, bufnr)
+        end
+        vim.api.nvim_buf_delete(holder, { force = true })
+    end
+    BufHelpers.rename(bufnr, name)
+    return true
+end
+
 --- The buffer named `name`, or nil when none is.
 --- @param name string
 --- @return integer|nil bufnr

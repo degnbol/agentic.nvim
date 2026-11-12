@@ -313,13 +313,13 @@ describe("agentic.ui.PermissionFloat", function()
                 vim.api.nvim_buf_delete(anchor_bufnr, { force = true })
             end)
 
-            it("shows on the chat, titled with the anchor's name", function()
-                float:open(make_options(), anchor_bufnr)
+            it("shows on the chat, titled with the anchor's title", function()
+                float:open(make_options(), anchor_bufnr, "finder")
 
                 assert.is_true(float:is_on_fallback())
                 local cfg = vim.api.nvim_win_get_config(float._winid)
                 assert.equal(chat_winid, cfg.win)
-                assert.equal("transcript-a", chunk_text(cfg.title))
+                assert.equal("finder", chunk_text(cfg.title))
                 assert.equal("\\{e,s,v,t}", chunk_text(cfg.footer))
             end)
 

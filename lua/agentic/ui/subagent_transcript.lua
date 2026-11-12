@@ -20,41 +20,18 @@ local WindowDecoration = require("agentic.ui.window_decoration")
 local SubagentTranscript = {}
 SubagentTranscript.__index = SubagentTranscript
 
---- The buffer-name tail of a transcript: the session id's last 8 characters,
---- then the label with every character outside 'isfname' replaced by `-`, so
---- `<cfile>` takes the whole name. The fixed-width id leads so a truncated
---- name keeps it.
---- @param session_id string
---- @param label string
---- @return string
-local function name_tail(session_id, label)
-    return session_id:sub(-8)
-        .. "-"
-        .. vim.fn.substitute(label, [[\%(\f\)\@!.]], "-", "g")
-end
-
---- A transcript buffer named after the subagent, holding its heading.
---- @param session_id string The subagent's session id
+--- A transcript buffer holding the subagent's heading.
+--- @param name string The buffer name, taken with `BufHelpers.claim_name`
 --- @param subagent agentic.ui.MessageWriter.SubagentInfo|nil Nil for output saved without a block, headed `Agent`
 --- @param widget agentic.ui.ChatWidget
 --- @param handlers agentic.ui.SubagentTranscript.Handlers
 --- @return agentic.ui.SubagentTranscript
-function SubagentTranscript:new(session_id, subagent, widget, handlers)
+function SubagentTranscript:new(name, subagent, widget, handlers)
     local bufnr = vim.api.nvim_create_buf(true, true)
     widget:setup_panel_buf(bufnr, "subagent")
     -- After the b-vars: its BufWinEnter reads the panel.
     ChatBuffer.setup(bufnr)
-    local name = WindowDecoration.buffer_name(
-        bufnr,
-        name_tail(session_id, subagent and subagent.label or "Agent")
-    )
-    -- `:e` or `gf` on the name of a wiped transcript leaves a plain buffer
-    -- holding it.
-    local stray = BufHelpers.named(name)
-    if stray and vim.b[stray].agentic_window ~= "subagent" then
-        vim.api.nvim_buf_delete(stray, { force = true })
-    end
-    BufHelpers.rename(bufnr, name)
+    BufHelpers.claim_name(bufnr, name)
 
     local view = AgentView:new(bufnr)
     local writer = view.writer

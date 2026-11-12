@@ -7115,7 +7115,7 @@ describe("agentic.ui.MessageWriter", function()
                 "## one",
                 "",
                 "## Other",
-                "Forked to sid-othe",
+                "Forked to agentic://sid-other-123",
                 "",
             }, buffer_lines())
             assert.equal("fork:sid-other-123", writer:notice_at(3))
@@ -7127,7 +7127,10 @@ describe("agentic.ui.MessageWriter", function()
             from.direction = "from"
             writer:write_fork_link(from)
 
-            assert.equal("Forked from sid-src-", buffer_lines()[2])
+            assert.equal(
+                "Forked from agentic://sid-src-12345",
+                buffer_lines()[2]
+            )
         end)
 
         --- Write a turn: prompt `text` with `payload`, and a reply.
@@ -7148,7 +7151,7 @@ describe("agentic.ui.MessageWriter", function()
             writer:write_fork_link(link("sid-x"), writer:prompt_mark_of(second))
 
             assert.equal("## Other", buffer_lines()[two + 1])
-            assert.equal("Forked to sid-x", buffer_lines()[two + 2])
+            assert.equal("Forked to agentic://sid-x", buffer_lines()[two + 2])
             assert.equal("", buffer_lines()[two + 3])
             assert.equal("## two", buffer_lines()[two + 4])
             -- The prompt keeps its mark, sign and payload.
@@ -7197,7 +7200,7 @@ describe("agentic.ui.MessageWriter", function()
             )
 
             assert.same(
-                { "## Other", "Forked to sid-x", "", "## one" },
+                { "## Other", "Forked to agentic://sid-x", "", "## one" },
                 vim.list_slice(buffer_lines(), 1, 4)
             )
             assert.same(

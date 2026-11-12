@@ -1,4 +1,5 @@
 local BufHelpers = require("agentic.utils.buf_helpers")
+local BufferNames = require("agentic.utils.buffer_names")
 local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local ChatBuffer = require("agentic.ui.chat_buffer")
 local Config = require("agentic.config")
@@ -648,24 +649,6 @@ function MessageWriter:go_to_bottom(winid)
             -- empty rows below it.
             vim.cmd("normal! Gzb")
         end)
-    end)
-end
-
---- Put `winid`, while it shows the buffer, in user control with its cursor on
---- `row`, so later writes do not scroll it away.
---- @param winid integer
---- @param row integer 0-indexed
-function MessageWriter:show_row_to_user(winid, row)
-    if
-        not vim.api.nvim_win_is_valid(winid)
-        or vim.api.nvim_win_get_buf(winid) ~= self.bufnr
-    then
-        return
-    end
-    self._user_controlled[winid] = true
-    self._newly_shown[winid] = nil
-    self:_own_change(function()
-        vim.api.nvim_win_set_cursor(winid, { row + 1, 0 })
     end)
 end
 
@@ -2023,9 +2006,9 @@ local PROMPT_MARK_KEYS = { "right_gravity", "sign_text", "sign_hl_group" }
 MessageWriter.FORK_NOTICE = "fork:"
 
 --- Write a link to the other chat of a fork as a notice with id
---- `FORK_NOTICE .. link.session_id`: at the end, or above the prompt heading
---- `before_mark` marks. Never ends a turn: the link can be written while one
---- runs.
+--- `FORK_NOTICE .. link.session_id`, showing the other chat's buffer name:
+--- at the end, or above the prompt heading `before_mark` marks. Never ends a
+--- turn: the link can be written while one runs.
 --- @param link agentic.ui.ChatHistory.ForkLink
 --- @param before_mark integer|nil A prompt heading mark in NS_USER_ACTIONS
 function MessageWriter:write_fork_link(link, before_mark)
@@ -2036,7 +2019,7 @@ function MessageWriter:write_fork_link(link, before_mark)
         detail = string.format(
             "Forked %s %s",
             link.direction,
-            link.session_id:sub(1, 8)
+            BufferNames.format({ key = link.session_id })
         ),
         id = MessageWriter.FORK_NOTICE .. link.session_id,
         mid_turn = true,

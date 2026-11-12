@@ -17,7 +17,7 @@ local SubagentInput = {}
 SubagentInput.__index = SubagentInput
 
 --- An input buffer, shown in no window.
---- @param name string Tail of the buffer name
+--- @param name string The buffer name, taken with `BufHelpers.claim_name`
 --- @param label string Display name of the subagent
 --- @param widget agentic.ui.ChatWidget Sets the buffer up as its `message` panel
 --- @param handlers agentic.ui.SubagentInput.Handlers
@@ -45,7 +45,7 @@ function SubagentInput:new(name, label, widget, handlers)
     end
 
     setup()
-    BufHelpers.rename(bufnr, WindowDecoration.buffer_name(bufnr, name))
+    BufHelpers.claim_name(bufnr, name)
 
     vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
         buffer = bufnr,

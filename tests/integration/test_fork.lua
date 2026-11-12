@@ -110,7 +110,7 @@ end
         assert.equal(1, child.lua_get([[_G.row_of(_G.f, "## Src")]]))
         assert.equal(
             2,
-            child.lua_get([[_G.row_of(_G.f, "Forked from sid-src")]])
+            child.lua_get([[_G.row_of(_G.f, "Forked from agentic://sid-src")]])
         )
         assert.same({ "second question" }, child.lua_get("_G.input(_G.f)"))
         assert.equal(
@@ -127,7 +127,7 @@ end
         assert.equal("Src (fork)", link.title)
         local link_row = child.lua_get([[_G.row_of(_G.s, "## Src (fork)")]])
         assert.equal(
-            "Forked to sid-fork",
+            "Forked to agentic://sid-fork",
             child.lua_get("_G.lines(_G.s)")[link_row + 1]
         )
         assert.equal(
@@ -355,69 +355,67 @@ _G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)
         )
     end)
 
-    it("opens the other chat at its link with gf", function()
-        fork_natively()
-        child.lua([[
+    --- Press `keys` with the cursor on the last character of the link name
+    --- in the source chat's fork link row.
+    --- @param keys string
+    local function follow_link(keys)
+        child.lua(
+            [[
 local win = vim.fn.bufwinid(_G.s.widget.buf_nrs.agent)
 if win == -1 then
     vim.api.nvim_set_current_buf(_G.s.widget.buf_nrs.agent)
     win = vim.api.nvim_get_current_win()
 end
 vim.api.nvim_set_current_win(win)
-vim.api.nvim_win_set_cursor(win, { _G.row_of(_G.s, "## Src (fork)"), 0 })
-vim.api.nvim_feedkeys("gf", "mx", false)
-]])
+local row = _G.row_of(_G.s, "Forked to agentic://sid-fork")
+vim.api.nvim_win_set_cursor(win, { row, #_G.lines(_G.s)[row] - 1 })
+vim.api.nvim_feedkeys(vim.keycode(...), "mx", false)
+]],
+            { keys }
+        )
         child.flush()
+    end
+
+    it("opens the other chat with gf on its name", function()
+        fork_natively()
+        follow_link("gf")
 
         assert.is_true(
             child.lua_get(
                 "vim.api.nvim_get_current_buf() == _G.f.widget.buf_nrs.agent"
             )
         )
-        assert.equal(
-            child.lua_get([[_G.row_of(_G.f, "## Src")]]),
-            child.lua_get("vim.api.nvim_win_get_cursor(0)[1]")
-        )
-        assert.is_true(
-            child.lua_get(
-                "_G.f.message_writer._user_controlled[vim.api.nvim_get_current_win()]"
-            )
-        )
     end)
 
-    it("loads a closed chat with gf and shows its link there", function()
+    it("loads a closed chat with gf in the window gf chose", function()
         fork_natively()
-        child.lua([[
-require("agentic.session_registry").destroy(_G.f)
-local win = vim.fn.bufwinid(_G.s.widget.buf_nrs.agent)
-if win == -1 then
-    vim.api.nvim_set_current_buf(_G.s.widget.buf_nrs.agent)
-    win = vim.api.nvim_get_current_win()
-end
-vim.api.nvim_set_current_win(win)
-vim.api.nvim_win_set_cursor(win, { _G.row_of(_G.s, "## Src (fork)"), 0 })
-vim.api.nvim_feedkeys("gf", "mx", false)
-_G.l = require("agentic.session_registry").session_for_acp_id("sid-fork")
-_G.shown_win = vim.api.nvim_get_current_win()
--- Focus moves on while the load runs.
-vim.cmd("new")
-]])
+        child.lua([[require("agentic.session_registry").destroy(_G.f)]])
         child.flush()
+        child.lua([[_G.tabs = #vim.api.nvim_list_tabpages()]])
+        follow_link("<C-w>gf")
+        child.lua([[
+_G.l = require("agentic.session_registry").session_for_key("sid-fork")
+_G.shown_win = vim.api.nvim_get_current_win()
+]])
         child.lua([[_G.cbs["session/load"]({}, nil)]])
         child.flush()
 
+        assert.equal(
+            child.lua_get("_G.tabs + 1"),
+            child.lua_get("#vim.api.nvim_list_tabpages()")
+        )
         assert.is_true(
             child.lua_get(
                 "vim.api.nvim_win_get_buf(_G.shown_win) == _G.l.widget.buf_nrs.agent"
             )
         )
         assert.equal(
-            child.lua_get([[_G.row_of(_G.l, "## Src")]]),
-            child.lua_get("vim.api.nvim_win_get_cursor(_G.shown_win)[1]")
+            "agentic://sid-fork",
+            child.lua_get(
+                "vim.api.nvim_buf_get_name(_G.l.widget.buf_nrs.agent)"
+            )
         )
-        assert.is_true(
-            child.lua_get("_G.l.message_writer._user_controlled[_G.shown_win]")
-        )
+        assert.equal(1, child.lua_get([[_G.row_of(_G.l, "## Src")]]))
     end)
 
     it("renders a reloaded fork from its link", function()

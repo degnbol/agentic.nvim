@@ -1,3 +1,4 @@
+local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local States = require("agentic.states")
 local Logger = require("agentic.utils.logger")
@@ -303,13 +304,23 @@ function M._make_handlers()
                 -- built-in vim.lsp.completion → complete()) runs outside
                 -- the <C-x><C-o> textlock that would otherwise raise E565.
                 vim.schedule(function()
-                    local bufnr = vim.uri_to_bufnr(params.textDocument.uri)
+                    -- Not `vim.uri_to_bufnr`: it adds a buffer for a URI
+                    -- whose buffer was renamed after the request was sent.
+                    local bufnr = BufHelpers.named(
+                        vim.uri_to_fname(params.textDocument.uri)
+                    )
                     local line = params.position.line
                     local col = params.position.character
-                    local lines =
-                        vim.api.nvim_buf_get_lines(bufnr, line, line + 1, false)
+                    local lines = bufnr
+                            and vim.api.nvim_buf_get_lines(
+                                bufnr,
+                                line,
+                                line + 1,
+                                false
+                            )
+                        or {}
 
-                    if #lines == 0 then
+                    if not bufnr or #lines == 0 then
                         callback(nil, { isIncomplete = false, items = {} })
                         return
                     end

@@ -74,6 +74,7 @@ local CAUSE_TEXT = vim.tbl_extend("error", PermissionRules.REASON_TEXT, {
 --- @field on_hidden? fun(badge_bufnr: integer, anchor_bufnr: integer) Called the first time a request waits with its float not visible in the current tabpage. `anchor_bufnr` is the buffer of its tool call. `badge_bufnr` is the chat while the float shows there in place of `anchor_bufnr`, else `anchor_bufnr`
 --- @field on_hidden_resolved? fun(badge_bufnr: integer) Called when a request `on_hidden` reported ends, with the `badge_bufnr` it reported
 --- @field open_anchor? fun(bufnr: integer, how: agentic.ui.OpenHow): integer|nil Opens `bufnr` and returns its window, or nil when nothing opened. Called by the open keys, which are bound while a request's float shows on the chat in place of its tool call's buffer
+--- @field title_for? fun(anchor_bufnr: integer): string|nil The float's title while it shows on the chat in place of `anchor_bufnr`; nil for none
 --- @field proxy_tool_call? fun(anchor_bufnr: integer): string|nil The id of the tool call in the chat that stands for the owner of `anchor_bufnr`, or nil when there is none
 --- @field companion_bufs? fun(anchor: integer): integer[] Buffers besides the session's own that also get the option keys of a request whose tool call is in `anchor`
 --- @field on_decided? fun(tool_call_id: string, causes: agentic.PermissionCause[]) Called on a later event loop tick after causes are recorded for a tool call
@@ -1049,8 +1050,11 @@ function PermissionManager:_process_next()
     local sorted_options = self._sort_permission_options(request.options)
     local writer = self:_writer(toolCallId)
 
-    local option_mapping =
-        self.permission_float:open(sorted_options, writer.bufnr)
+    local option_mapping = self.permission_float:open(
+        sorted_options,
+        writer.bufnr,
+        self:_anchor_title(writer.bufnr)
+    )
     self:_apply_unapproved_highlight(request)
 
     ---@class agentic.ui.PermissionManager.PermissionRequest
@@ -1146,7 +1150,17 @@ function PermissionManager:_sync_anchor()
     request.writer:release_hold()
     request.writer = writer
     writer:hold_tool_call(request.toolCallId, true)
-    self.permission_float:set_anchor(writer.bufnr)
+    self.permission_float:set_anchor(
+        writer.bufnr,
+        self:_anchor_title(writer.bufnr)
+    )
+end
+
+--- `title_for` of an anchor buffer, nil without `title_for`.
+--- @param bufnr integer
+--- @return string|nil
+function PermissionManager:_anchor_title(bufnr)
+    return self.title_for and self.title_for(bufnr)
 end
 
 --- Highlight the non-known-safe parts of an execute permission prompt while it

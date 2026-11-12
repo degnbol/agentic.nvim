@@ -28,7 +28,7 @@ of any tab.
   misses the trigger (`MessageWriter:new`'s WinScrolled,
   `MessageWriter:_rebuild_folds_after_insert`, `PermissionManager:_watch_layout`,
   the `BufEnter` in `bootstrap.lua` that records the last active session, its
-  `agentic://*` BufReadCmd, which tag jumps need, and its
+  `agentic://*` BufReadCmd, which resolves a name no buffer holds, and its
   `User AgenticBudgetChanged`, which renders every session's info)
 - See scoped storage: `vim.b`/`vim.bo`, `vim.w`/`vim.wo`. `vim.t` holds no
   per-session state.

@@ -11,7 +11,7 @@ local Logger = require("agentic.utils.logger")
 --- @field _anchor_bufnr? integer Buffer the float anchors to while open
 --- @field _anchor_winid? integer Window the float is placed against while shown
 --- @field _on_fallback boolean Whether no window showed the anchor buffer at the last `place`
---- @field _title? string The anchor buffer's name tail, shown on fallback. Nil when the anchor is the chat
+--- @field _title? string Border title while the float shows on the chat in place of the anchor buffer
 --- @field _lines string[] The prompt body, without the hint
 --- @field _autocmd_ids integer[]
 --- @field _anchor "NE"|"NW"|"SE"|"SW" Cached anchor used for the open window
@@ -326,8 +326,9 @@ end
 --- float, and `place` it.
 --- @param options agentic.acp.PermissionOption[]
 --- @param anchor_bufnr? integer Buffer whose window the float anchors to (defaults to the main chat buffer)
+--- @param title string|nil See `set_anchor`
 --- @return table<string, string> option_mapping Option id by the key that selects it
-function PermissionFloat:open(options, anchor_bufnr)
+function PermissionFloat:open(options, anchor_bufnr, title)
     self:close()
 
     local lines, option_mapping = build_lines(options)
@@ -338,18 +339,17 @@ function PermissionFloat:open(options, anchor_bufnr)
     self._width = cfg.width
     self._row_offset = cfg.row_offset
     self._col_offset = cfg.col_offset
-    self:set_anchor(anchor_bufnr or self.message_writer.bufnr)
+    self:set_anchor(anchor_bufnr or self.message_writer.bufnr, title)
 
     return option_mapping
 end
 
 --- Anchor the open float to `bufnr` and `place` it again.
 --- @param bufnr integer
-function PermissionFloat:set_anchor(bufnr)
+--- @param title string|nil Border title while the float shows on the chat in place of `bufnr`; nil for none
+function PermissionFloat:set_anchor(bufnr, title)
     self._anchor_bufnr = bufnr
-    self._title = bufnr ~= self.message_writer.bufnr
-            and vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ":t")
-        or nil
+    self._title = title
     -- The title may change with the window and fallback state unchanged.
     self:_close_window()
     self:place()
@@ -358,7 +358,7 @@ end
 --- Show the open float on a window showing its anchor buffer (see
 --- `_find_anchor_winid`). While no window shows that buffer, show it on the
 --- chat's window instead, with a hint listing the open keys: on a border
---- with top and bottom edges, the anchor's name as title and the hint as
+--- with top and bottom edges, the anchor's title as title and the hint as
 --- footer, else the hint as the last body line. Hidden while no window shows either. Never focusable. A no-op
 --- when no float is open or it is already where it belongs.
 function PermissionFloat:place()

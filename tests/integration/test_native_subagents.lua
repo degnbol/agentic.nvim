@@ -132,6 +132,10 @@ end
 _G.tname = function(child_id)
     return vim.api.nvim_buf_get_name(_G.transcript(child_id).bufnr)
 end
+-- The detail line of a message row whose other end is `session_id`.
+_G.detail = function(session_id)
+    return _G.s._subagents:peer_detail(session_id)
+end
 _G.G = require("agentic.glyphs")
 _G.block = function(child_id)
     return _G.s._subagents:_agent_block(child_id)
@@ -232,7 +236,10 @@ describe("native subagent sessions", function()
             local name = child.lua_get(
                 [[vim.api.nvim_buf_get_name(_G.transcript("aa11bb22cc33dd44").bufnr)]]
             )
-            assert.is_true(vim.endswith(name, "/subagent/cc33dd44-find-it"))
+            assert.equal(
+                child.lua_get([[_G.s.widget:buffer_name("aa11bb22cc33dd44")]]),
+                name
+            )
             assert.equal(
                 name,
                 child.lua_get([[_G.block("aa11bb22cc33dd44").argument]])
@@ -249,14 +256,22 @@ describe("native subagent sessions", function()
                 child.lua_get([[_G.block("aa11bb22cc33dd44").body == nil]])
             )
             local chat = child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]])
-            assert.truthy(chat:find("## find it\n" .. name, 1, true))
+            assert.truthy(
+                chat:find(
+                    "## find it\n"
+                        .. child.lua_get([[_G.detail("aa11bb22cc33dd44")]]),
+                    1,
+                    true
+                )
+            )
+            assert.truthy(chat:find("\n" .. name .. "\n", 1, true))
             local transcript = child.lua_get([[_G.ttext("aa11bb22cc33dd44")]])
             assert.truthy(transcript:find("## Blocking? find it", 1, true))
             assert.equal(
                 1,
                 count(
                     transcript,
-                    "## find it\n" .. child.lua_get("_G.chat_name()")
+                    "## find it\n" .. child.lua_get([[_G.detail("root")]])
                 )
             )
             -- Both rows of the first delegation carry the task glyph.
@@ -343,7 +358,7 @@ _G.update("c1", {
             )
             assert.truthy(
                 child.lua_get([[_G.ttext("c1")]]):find(
-                    "\nFound it.\n" .. child.lua_get([[_G.tname("c2")]]),
+                    "\nFound it.\n" .. child.lua_get([[_G.detail("c2")]]),
                     1,
                     true
                 )
@@ -385,7 +400,7 @@ _G.message("toolu_send", "root", "c1", "Look in lib/ too.\nAnd tests/.")
                 count(
                     transcript,
                     "## Look in lib/ too.\n"
-                        .. child.lua_get("_G.chat_name()")
+                        .. child.lua_get([[_G.detail("root")]])
                         .. "\n```markdown-fold\nAnd tests/.\n```"
                 )
             )
@@ -395,7 +410,7 @@ _G.message("toolu_send", "root", "c1", "Look in lib/ too.\nAnd tests/.")
                 count(
                     chat,
                     "## Look in lib/ too.\n"
-                        .. child.lua_get([[_G.tname("c1")]])
+                        .. child.lua_get([[_G.detail("c1")]])
                         .. "\n```markdown-fold\nAnd tests/.\n```"
                 )
             )
@@ -443,7 +458,7 @@ _G.message("toolu_s", "c1", "c2", "Your half.")
         local c1_text = child.lua_get([[_G.ttext("c1")]])
         assert.truthy(
             c1_text:find(
-                "## Your half.\n" .. child.lua_get([[_G.tname("c2")]]),
+                "## Your half.\n" .. child.lua_get([[_G.detail("c2")]]),
                 1,
                 true
             )
@@ -451,7 +466,7 @@ _G.message("toolu_s", "c1", "c2", "Your half.")
         local c2_text = child.lua_get([[_G.ttext("c2")]])
         assert.truthy(
             c2_text:find(
-                "## Your half.\n" .. child.lua_get([[_G.tname("c1")]]),
+                "## Your half.\n" .. child.lua_get([[_G.detail("c1")]]),
                 1,
                 true
             )
@@ -477,12 +492,12 @@ _G.message("toolu_h", "c1", "root", "Report: done.")
             1,
             count(
                 transcript,
-                "## Report: done.\n" .. child.lua_get("_G.chat_name()")
+                "## Report: done.\n" .. child.lua_get([[_G.detail("root")]])
             )
         )
         assert.truthy(
             child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]]):find(
-                "## Report: done.\n" .. child.lua_get([[_G.tname("c1")]]),
+                "## Report: done.\n" .. child.lua_get([[_G.detail("c1")]]),
                 1,
                 true
             )
@@ -536,7 +551,7 @@ _G.update("root", {
             local chat = child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]])
             assert.truthy(
                 chat:find(
-                    "\nAll found.\n" .. child.lua_get([[_G.tname("c1")]]),
+                    "\nAll found.\n" .. child.lua_get([[_G.detail("c1")]]),
                     1,
                     true
                 )
@@ -649,7 +664,7 @@ vim.api.nvim_win_set_cursor(0, { _G.s.message_writer:notice_row("toolu_send") + 
             )
             local row = child.lua_get("vim.fn.line('.')")
             assert.same(
-                { "## Look in lib/ too.", child.lua_get("_G.chat_name()") },
+                { "## Look in lib/ too.", child.lua_get([[_G.detail("root")]]) },
                 child.api.nvim_buf_get_lines(0, row - 1, row + 1, false)
             )
         end)
@@ -1629,9 +1644,9 @@ _G.mid_file = table.concat(vim.fn.readfile(
 
             -- The file's rows once; the reply the file lacks is the tail.
             local chat = child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]])
-            local name = child.lua_get([[_G.block("c1").argument]])
-            assert.equal(1, count(chat, "## Find it.\n" .. name))
-            assert.equal(1, count(chat, "\nreplayed reply\n" .. name))
+            local detail = child.lua_get([[_G.detail("c1")]])
+            assert.equal(1, count(chat, "## Find it.\n" .. detail))
+            assert.equal(1, count(chat, "\nreplayed reply\n" .. detail))
             assert.equal("completed", child.lua_get([[_G.block("c1").status]]))
             assert.same(
                 { "user", "tool_call", "session_message", "session_message" },
@@ -1935,21 +1950,18 @@ _G.new_cb({ sessionId = "sid-live" }, nil)
             local name = child.lua_get(
                 [[vim.api.nvim_buf_get_name(_G.s2._subagents._agents.c1.transcript.bufnr)]]
             )
-            assert.truthy(
-                name:find(
-                    ("agentic://%d/"):format(child.lua_get("_G.s2.id")),
-                    1,
-                    true
-                )
-            )
+            assert.equal("agentic://sid-live/c1", name)
             assert.equal(
                 name,
                 child.lua_get([[_G.s2._subagents:_agent_block("c1").argument]])
             )
             assert.truthy(
-                child
-                    .lua_get([[_G.text(_G.s2.widget.buf_nrs.agent)]])
-                    :find("## Find it.\n" .. name, 1, true)
+                child.lua_get([[_G.text(_G.s2.widget.buf_nrs.agent)]]):find(
+                    "## Find it.\n"
+                        .. child.lua_get([[_G.s2._subagents:peer_detail("c1")]]),
+                    1,
+                    true
+                )
             )
             child.lua(
                 [[vim.fn.bufload(_G.s2._subagents._agents.c1.transcript.bufnr)]]
@@ -1960,7 +1972,7 @@ _G.new_cb({ sessionId = "sid-live" }, nil)
                     :find(
                         "## Report.\n"
                             .. child.lua_get(
-                                [[vim.api.nvim_buf_get_name(_G.s2.widget.buf_nrs.agent)]]
+                                [[_G.s2._subagents:peer_detail("root")]]
                             ),
                         1,
                         true
@@ -2228,7 +2240,7 @@ _G.s:_drain_side_records()
         assert.equal("a1", child.lua_get("_G.last().sender_session_id"))
         assert.truthy(
             child.lua_get("_G.chat()"):find(
-                "## Please rebase.\n" .. child.lua_get([[_G.tname("a1")]]),
+                "## Please rebase.\n" .. child.lua_get([[_G.detail("a1")]]),
                 1,
                 true
             )

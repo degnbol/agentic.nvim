@@ -119,6 +119,5 @@ the buffer's panel. `WindowDecoration.header_chunks` is the one layout of the
 parts: the default winbar concatenates it, and outside readers use it rather than
 rebuild the order.
 
-**Do not rely on buffer names for UI display.** `nvim_buf_set_name` fires no
-event floating-window plugins respond to. Names are `agentic://<id>/<panel>`;
-only the chat's tail follows the session title.
+**Do not rely on buffer names for UI display.** Names (`BufferNames`) carry
+the session id, never a title.

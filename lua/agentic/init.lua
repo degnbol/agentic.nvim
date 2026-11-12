@@ -154,7 +154,7 @@ end
 function Agentic.load_acp_session(session_id, cwd, model, mods)
     SessionResume.resume(
         { session_id = session_id, cwd = cwd, model = model },
-        mods
+        { mods = mods }
     )
 end
 

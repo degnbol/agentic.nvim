@@ -30,26 +30,26 @@ end)()
         )
     end
 
-    it("the chat name's tail is the session title", function()
+    it("the chat is named by its session alone", function()
         child.cmd("Agentic")
         child.flush()
-        assert.equal("agent", get_panel_basename("agent"))
+        local chat_name = [[
+(function()
+    local session = require("agentic.session_registry").current()
+    local key = session.session_id or tostring(session.id)
+    return vim.api.nvim_buf_get_name(session.widget.buf_nrs.agent)
+        == "agentic://" .. key
+end)()
+]]
+        assert.is_true(child.lua_get(chat_name))
 
         child.lua([[
-require("agentic.session_registry").current().widget:set_chat_title("fix a/b")
+local widget = require("agentic.session_registry").current().widget
+widget:set_chat_title("fix a/b")
+widget:set_idle(true)
 ]])
 
-        assert.equal("fix a-b", get_panel_basename("agent"))
-    end)
-
-    it("the header's id and state stay out of the name", function()
-        child.cmd("Agentic")
-        child.flush()
-        child.lua([[
-require("agentic.session_registry").current().widget:set_idle(true)
-]])
-
-        assert.equal("agent", get_panel_basename("agent"))
+        assert.is_true(child.lua_get(chat_name))
     end)
 
     it("names are unique across instances", function()

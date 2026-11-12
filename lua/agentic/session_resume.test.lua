@@ -46,7 +46,10 @@ describe("SessionResume", function()
         return {
             session_id = opts.session_id or "current-session",
             agent = { provider_name = opts.provider_name or "claude-acp" },
-            widget = { show = spy.new(function() end) },
+            widget = {
+                show = spy.new(function() end),
+                show_in = spy.new(function() end),
+            },
             load_acp_session = spy.new(function() end),
         }
     end
@@ -85,7 +88,7 @@ describe("SessionResume", function()
         session_registry_stub = spy.stub(SessionRegistry, "create")
         target_win_stub = spy.stub(SessionRegistry, "target_win")
         target_win_stub:returns(TARGET_WIN)
-        open_session_stub = spy.stub(SessionRegistry, "session_for_acp_id")
+        open_session_stub = spy.stub(SessionRegistry, "session_for_key")
         open_session_stub:returns(nil)
         read_saved_stub = spy.stub(ChatHistory, "read_saved")
         read_saved_stub:returns(nil)
@@ -405,7 +408,7 @@ describe("SessionResume", function()
                 assert.equal("session-2", opts.marked_id)
                 assert.equal("local", opts.scope)
                 assert.equal("session-1", resume_stub.calls[1][1].session_id)
-                assert.equal(mods, resume_stub.calls[1][2])
+                assert.same({ mods = mods }, resume_stub.calls[1][2])
             end
         )
     end)
@@ -416,13 +419,34 @@ describe("SessionResume", function()
             open_session_stub:returns(open_session)
             local mods = { tab = 1 }
 
-            SessionResume.resume({ session_id = "sid-x" }, mods)
+            local shown = SessionResume.resume(
+                { session_id = "sid-x" },
+                { mods = mods }
+            )
 
             assert.same(
                 { open_session.widget, mods, TARGET_WIN, n = 3 },
                 open_session.widget.show.calls[1]
             )
             assert.spy(session_registry_stub).was.called(0)
+            assert.equal(open_session, shown)
+        end)
+
+        it("shows the chat in the given window, ignoring mods", function()
+            local open_session = create_mock_session()
+            open_session_stub:returns(open_session)
+            local winid = vim.api.nvim_get_current_win()
+
+            SessionResume.resume(
+                { session_id = "sid-x" },
+                { mods = { tab = 1 }, winid = winid }
+            )
+
+            assert.same(
+                { open_session.widget, winid, n = 2 },
+                open_session.widget.show_in.calls[1]
+            )
+            assert.spy(open_session.widget.show).was.called(0)
         end)
 
         it("creates a session on the provider and loads into it", function()
@@ -431,13 +455,14 @@ describe("SessionResume", function()
             session_registry_stub:returns(session)
             local mods = { vertical = true }
 
-            SessionResume.resume({
+            local shown = SessionResume.resume({
                 session_id = "sid-x",
                 cwd = "/p",
                 provider = "codex-acp",
                 model = "m1",
-            }, mods)
+            }, { mods = mods })
 
+            assert.equal(session, shown)
             assert.equal("codex-acp", session_registry_stub.calls[1][1])
             assert.same(
                 { session, "sid-x", "/p", "m1", nil, n = 5 },
@@ -528,11 +553,9 @@ describe("SessionResume", function()
             open_session_stub:returns(open_session)
             local shown = spy.new(function() end)
 
-            SessionResume.resume(
-                { session_id = "sid-x" },
-                nil,
-                shown --[[@as fun(session: agentic.SessionManager)]]
-            )
+            SessionResume.resume({ session_id = "sid-x" }, {
+                on_shown = shown --[[@as fun(session: agentic.SessionManager, winid: integer)]],
+            })
 
             assert.same(
                 { open_session, vim.api.nvim_get_current_win(), n = 2 },
@@ -545,11 +568,9 @@ describe("SessionResume", function()
             session_registry_stub:returns(session)
             local shown = spy.new(function() end)
 
-            SessionResume.resume(
-                { session_id = "sid-x", cwd = "/p" },
-                nil,
-                shown --[[@as fun(session: agentic.SessionManager, winid: integer)]]
-            )
+            SessionResume.resume({ session_id = "sid-x", cwd = "/p" }, {
+                on_shown = shown --[[@as fun(session: agentic.SessionManager, winid: integer)]],
+            })
             session.load_acp_session.calls[1][5](session)
 
             assert.same(
@@ -592,7 +613,10 @@ describe("SessionResume", function()
 
             SessionResume.pick("First chat", { mods = mods })
 
-            assert.same({ test_sessions[1], mods, n = 2 }, resume_stub.calls[1])
+            assert.same(
+                { test_sessions[1], { mods = mods }, n = 2 },
+                resume_stub.calls[1]
+            )
             assert.spy(show_picker_stub).was.called(0)
         end)
 
@@ -645,7 +669,7 @@ describe("SessionResume", function()
 
     describe("replay_messages", function()
         local function no_buffer()
-            return nil
+            return ""
         end
 
         it("skips a synthetic prompt", function()
@@ -780,9 +804,9 @@ describe("SessionResume", function()
 
         --- Notices `replay_messages` writes for `rows`, as `write_notice` got them.
         --- @param rows agentic.ui.ChatHistory.Message[]
-        --- @param buffer_name fun(session_id: string): string|nil
+        --- @param peer_detail fun(session_id: string): string
         --- @return agentic.ui.MessageWriter.Notice[]
-        local function replayed_notices(rows, buffer_name)
+        local function replayed_notices(rows, peer_detail)
             local notice_spy = spy.new(function() end)
             local writer = {
                 write_notice = notice_spy,
@@ -791,7 +815,7 @@ describe("SessionResume", function()
             SessionResume.replay_messages(
                 writer --[[@as agentic.ui.MessageWriter]],
                 rows,
-                buffer_name
+                peer_detail
             )
             return vim.tbl_map(function(call)
                 return call[2]
@@ -940,29 +964,32 @@ describe("SessionResume", function()
             end
         )
 
-        it("gives the other end's buffer as the detail", function()
-            local function buffer_name(session_id)
-                return session_id == "c1" and "agentic://1/subagent/finder"
-                    or nil
+        it("gives the other end's peer detail as the detail", function()
+            local function peer_detail(session_id)
+                return "detail of " .. session_id
             end
+            local named = message_row("task", "received")
+            named.sender_session_id = nil
+            named.sender_name = "finder"
             local notices = replayed_notices({
                 message_row("task", "sent"),
                 message_row("task", "received"),
-            }, buffer_name)
+                named,
+            }, peer_detail)
 
-            assert.equal("agentic://1/subagent/finder", notices[1].detail)
-            -- The sender has no buffer here.
-            assert.is_nil(notices[2].detail)
+            assert.equal("detail of c1", notices[1].detail)
+            assert.equal("detail of root", notices[2].detail)
+            assert.equal("finder", notices[3].detail)
         end)
 
         describe("a launch's reply", function()
             --- Calls `replay_messages` made to `write_folded_row` and
             --- `write_notice` for `rows`.
             --- @param rows agentic.ui.ChatHistory.Message[]
-            --- @param buffer_name fun(session_id: string): string|nil
+            --- @param peer_detail fun(session_id: string): string
             --- @return TestSpy folded
             --- @return TestSpy notice
-            local function replay(rows, buffer_name)
+            local function replay(rows, peer_detail)
                 local folded = spy.new(function() end)
                 local notice = spy.new(function() end)
                 local writer = {
@@ -973,7 +1000,7 @@ describe("SessionResume", function()
                 SessionResume.replay_messages(
                     writer --[[@as agentic.ui.MessageWriter]],
                     rows,
-                    buffer_name
+                    peer_detail
                 )
                 return folded, notice
             end

@@ -61,6 +61,26 @@ describe("agentic.completion.LspServer", function()
         end)
     end)
 
+    it(
+        "answers a URI no buffer holds with no items, making no buffer",
+        function()
+            local n_bufs = #vim.api.nvim_list_bufs()
+            local result
+            local deferred = Deferred.capture()
+            MiniTest.finally(deferred.revert)
+            handlers.request("textDocument/completion", {
+                textDocument = { uri = "agentic://renamed-away/input" },
+                position = { line = 0, character = 0 },
+            }, function(_err, res)
+                result = res
+            end)
+            deferred.drain()
+
+            assert.same({ isIncomplete = false, items = {} }, result)
+            assert.equal(n_bufs, #vim.api.nvim_list_bufs())
+        end
+    )
+
     describe("slash command completion", function()
         before_each(function()
             local SlashCommands = require("agentic.acp.slash_commands")

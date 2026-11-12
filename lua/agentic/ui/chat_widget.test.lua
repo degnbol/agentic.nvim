@@ -1160,17 +1160,15 @@ describe("agentic.ui.ChatWidget", function()
             assert.equal("#" .. last_owner_id .. " Agentic Chat", header.title)
         end)
 
-        it("keeps the plain title in the buffer name", function()
-            widget:set_chat_title("Fix parser")
+        it("shows the title in the header, not the buffer name", function()
             local chat = widget.buf_nrs.agent
+            local name = vim.api.nvim_buf_get_name(chat)
+            widget:set_chat_title("Fix parser")
             assert.equal(
                 "#" .. last_owner_id .. " Fix parser",
                 WindowDecoration.get_header(chat).title
             )
-            assert.equal(
-                "Fix parser",
-                vim.fn.fnamemodify(vim.api.nvim_buf_get_name(chat), ":t")
-            )
+            assert.equal(name, vim.api.nvim_buf_get_name(chat))
         end)
 
         it("keeps idle when a prompt on the chat resolves", function()
@@ -1205,6 +1203,40 @@ describe("agentic.ui.ChatWidget", function()
             pcall(function()
                 widget:destroy()
             end)
+        end)
+
+        it("names the chat and panels by the owner id", function()
+            local key = tostring(last_owner_id)
+            assert.equal(
+                "agentic://" .. key,
+                vim.api.nvim_buf_get_name(buf_nrs.agent)
+            )
+            assert.equal(
+                "agentic://" .. key .. "/input",
+                vim.api.nvim_buf_get_name(buf_nrs.input)
+            )
+        end)
+
+        it("names its buffers, and later ones, after a new key", function()
+            widget:rename_buffers("sid-a")
+            vim.cmd.bwipeout(buf_nrs.files)
+            local files = widget:panel_buf("files") --[[@as integer]]
+
+            assert.equal(
+                "agentic://sid-a",
+                vim.api.nvim_buf_get_name(buf_nrs.agent)
+            )
+            assert.equal(
+                "agentic://sid-a/info",
+                vim.api.nvim_buf_get_name(buf_nrs.info)
+            )
+            assert.equal(
+                "agentic://sid-a/files",
+                vim.api.nvim_buf_get_name(files)
+            )
+            assert.is_nil(
+                BufHelpers.named("agentic://" .. tostring(last_owner_id))
+            )
         end)
 
         it("returns the panel's buffer while it is valid", function()

@@ -1,5 +1,6 @@
 local Config = require("agentic.config")
 local BufHelpers = require("agentic.utils.buf_helpers")
+local BufferNames = require("agentic.utils.buffer_names")
 local ChatBuffer = require("agentic.ui.chat_buffer")
 local Logger = require("agentic.utils.logger")
 local LspServer = require("agentic.completion.lsp_server")
@@ -30,6 +31,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- attach below the chat's home window in `Config.windows.stack` order.
 --- @class agentic.ui.ChatWidget
 --- @field _owner_id integer `SessionManager.id` of the owning session
+--- @field _name_key string The `key` of the session's buffer names
 --- @field buf_nrs agentic.ui.ChatWidget.BufNrs
 --- @field win_nrs agentic.ui.ChatWidget.WinNrs Panel windows
 --- @field input_dispatch agentic.ui.InputDispatch Submit, partial send and the queue of the input buffer
@@ -51,6 +53,7 @@ function ChatWidget:new(owner_id, on_submit_input)
 
     self._on_submit_input = on_submit_input
     self._owner_id = owner_id
+    self._name_key = tostring(owner_id)
 
     self:_initialize()
 
@@ -841,9 +844,8 @@ local function panel_buf_opts(panel)
     }, panel_opts[panel])
 end
 
---- A buffer with a panel's options, b-vars and name, and an autocmd that
---- renders its header in a window that starts showing it. Deletes a buffer
---- that already holds the name.
+--- A buffer with a panel's options, b-vars and name (`BufHelpers.claim_name`),
+--- and an autocmd that renders its header in a window that starts showing it.
 --- @param panel agentic.ui.ChatWidget.PanelNames
 --- @param listed boolean
 --- @return integer bufnr
@@ -852,14 +854,7 @@ function ChatWidget:_create_new_buf(panel, listed)
     self:_apply_buf_opts(bufnr, panel)
     -- A `scheme://` name passes through `vim.uri_from_bufnr` unchanged, so the
     -- input's name is also its document URI for the completion LSP.
-    local name = WindowDecoration.buffer_name(bufnr)
-    -- `:e` or a tag jump on the name of a wiped panel leaves a plain buffer
-    -- holding it, and the rename would raise E95.
-    local stray = BufHelpers.named(name)
-    if stray then
-        vim.api.nvim_buf_delete(stray, { force = true })
-    end
-    BufHelpers.rename(bufnr, name)
+    BufHelpers.claim_name(bufnr, self:_panel_name(panel))
     -- The header renders into the windows showing the buffer when it changes;
     -- a window that starts showing it later needs it too.
     vim.api.nvim_create_autocmd("BufWinEnter", {
@@ -869,6 +864,36 @@ function ChatWidget:_create_new_buf(panel, listed)
         end,
     })
     return bufnr
+end
+
+--- The name of one of the session's buffers.
+--- @param sub_id string|nil A subagent's session id, for its transcript or its message input
+--- @param part string|nil See `agentic.BufferNames.Parts`
+--- @return string
+function ChatWidget:buffer_name(sub_id, part)
+    return BufferNames.format({
+        key = self._name_key,
+        sub_id = sub_id,
+        part = part,
+    })
+end
+
+--- The name of the widget's `panel` buffer.
+--- @param panel agentic.ui.ChatWidget.PanelNames
+--- @return string
+function ChatWidget:_panel_name(panel)
+    return self:buffer_name(nil, panel ~= "agent" and panel or nil)
+end
+
+--- Name the widget's buffers after `key`. Buffers made later take it too.
+--- @param key string See `agentic.BufferNames.Parts`
+function ChatWidget:rename_buffers(key)
+    self._name_key = key
+    for panel, bufnr in pairs(self.buf_nrs) do
+        if vim.api.nvim_buf_is_valid(bufnr) then
+            BufHelpers.claim_name(bufnr, self:_panel_name(panel))
+        end
+    end
 end
 
 --- Set a panel's buffer options, except `buflisted`, and its b-vars.
@@ -943,8 +968,7 @@ function ChatWidget:set_running(running)
     set_header_fact(self.buf_nrs.agent, "running", running)
 end
 
---- Set the chat's title, shown in its header after the session id and as the
---- tail of its buffer name.
+--- Set the chat's title, shown in its header after `#` and the owner id.
 --- @param title string|nil New title, or nil to reset to default
 function ChatWidget:set_chat_title(title)
     local chat = self.buf_nrs.agent
@@ -956,19 +980,15 @@ function ChatWidget:set_chat_title(title)
 
     local display = nil
     if title and title ~= "" then
-        -- Keep the buffer name short. Cut by display width, not bytes: a
+        -- Keep the header short. Cut by display width, not bytes: a
         -- byte-slice can halve a codepoint and put invalid UTF-8 into the
-        -- buffer name and winbar.
+        -- winbar.
         display = TextWrap.truncate_to_width(title, 31)
     end
     header.title = "#" .. self._owner_id .. " " .. (display or "Agentic Chat")
     header.session_name = display
 
     WindowDecoration.set_header(chat, header)
-    BufHelpers.rename(
-        chat,
-        WindowDecoration.buffer_name(chat, header.session_name)
-    )
 end
 
 --- Show or hide `panel`. Only this call opens or closes it, never its buffer's

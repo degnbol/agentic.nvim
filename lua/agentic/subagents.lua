@@ -129,24 +129,29 @@ function Subagents:_new_transcript(child_id, subagent)
     local SubagentTranscript = require("agentic.ui.subagent_transcript")
     --- @type agentic.ui.SubagentTranscript
     local transcript
-    transcript = SubagentTranscript:new(child_id, subagent, self._widget, {
-        setup_buf = function(bufnr, writer)
-            self._host.setup_buf(bufnr, writer)
-            self:_bind_agent_keymaps(child_id, bufnr)
-        end,
-        on_reload = function()
-            self:_replay_transcript(child_id)
-        end,
-        on_write = function()
-            self._host.write()
-        end,
-        on_wipeout = function()
-            local agent = self._agents[child_id]
-            if agent and agent.transcript == transcript then
-                agent.transcript = nil
-            end
-        end,
-    })
+    transcript = SubagentTranscript:new(
+        self._widget:buffer_name(child_id),
+        subagent,
+        self._widget,
+        {
+            setup_buf = function(bufnr, writer)
+                self._host.setup_buf(bufnr, writer)
+                self:_bind_agent_keymaps(child_id, bufnr)
+            end,
+            on_reload = function()
+                self:_replay_transcript(child_id)
+            end,
+            on_write = function()
+                self._host.write()
+            end,
+            on_wipeout = function()
+                local agent = self._agents[child_id]
+                if agent and agent.transcript == transcript then
+                    agent.transcript = nil
+                end
+            end,
+        }
+    )
     return transcript
 end
 
@@ -161,7 +166,7 @@ function Subagents:_replay_transcript(child_id)
         self._host.history():messages_for_agent(self:agent_key(child_id))
     transcript:restart(block and block.subagent)
     SessionResume.replay_messages(transcript.view.writer, rows, function(id)
-        return self:buffer_name(id)
+        return self:peer_detail(id)
     end)
     transcript.view.status_indicator:reposition()
 
@@ -274,7 +279,7 @@ function Subagents:add_history_transcripts()
                 record_read = true,
             }
             if block then
-                block.argument = vim.api.nvim_buf_get_name(transcript.bufnr)
+                block.argument = self._widget:buffer_name(child_id)
             end
         end
     end
@@ -485,7 +490,7 @@ function Subagents:_open_agent(child_id, label, parent_session_id, replayed)
         tool_call_id = child_id,
         kind = "SubAgent",
         status = "pending",
-        argument = vim.api.nvim_buf_get_name(transcript.bufnr),
+        argument = self._widget:buffer_name(child_id),
         subagent = subagent,
     }
     self:_view_of(parent_session_id):write_tool_call(
@@ -606,7 +611,7 @@ function Subagents:_write_row(child_id, row)
         row,
         self._agents[child_id].open,
         function(id)
-            return self:buffer_name(id)
+            return self:peer_detail(id)
         end
     )
     view.status_indicator:reposition()
@@ -614,18 +619,75 @@ function Subagents:_write_row(child_id, row)
     self._host.history_changed()
 end
 
---- Name of a session's buffer: a subagent's transcript, nil while it has
---- none, else the chat. Any other id counts as the root, since a re-create from
---- history leaves the old root id in the history's rows.
+--- Who a session is, then the name of its buffer: a subagent's label and its
+--- transcript's name, else the chat's title, when it has one, and its name.
+--- Any other id counts as the root, since a re-create from history leaves
+--- the old root id in the history's rows.
 --- @param session_id string
---- @return string|nil
-function Subagents:buffer_name(session_id)
-    local agent = self._agents[session_id]
-    if not agent then
-        return vim.api.nvim_buf_get_name(self._widget.buf_nrs.agent)
+--- @return string
+function Subagents:peer_detail(session_id)
+    if self._agents[session_id] then
+        return self:agent_label(session_id)
+            .. " "
+            .. self._widget:buffer_name(session_id)
     end
-    return agent.transcript
-        and vim.api.nvim_buf_get_name(agent.transcript.bufnr)
+    local title = self._host.history().title
+    local name = self._widget:buffer_name(nil, nil)
+    return title ~= "" and title .. " " .. name or name
+end
+
+--- Name the transcripts and message inputs after the widget's current names,
+--- and point each block at its transcript's name.
+function Subagents:rename_buffers()
+    for child_id in pairs(self._agents) do
+        local name = self._widget:buffer_name(child_id)
+        local transcript = self:buf_of(child_id, nil)
+        if transcript then
+            BufHelpers.claim_name(transcript, name)
+        end
+        local block = self:_agent_block(child_id)
+        if block and block.argument ~= name then
+            self:_merge_block_fields(child_id, { argument = name })
+        end
+    end
+    for child_id, input in pairs(self._inputs) do
+        BufHelpers.claim_name(
+            input.bufnr,
+            self._widget:buffer_name(child_id, "input")
+        )
+    end
+end
+
+--- A subagent's transcript, or with `part` `input` its message input, while
+--- the buffer is valid. Makes nothing.
+--- @param child_id string
+--- @param part "input"|nil
+--- @return integer|nil bufnr
+function Subagents:buf_of(child_id, part)
+    local owner
+    if part == "input" then
+        owner = self._inputs[child_id]
+    else
+        owner = vim.tbl_get(self._agents, child_id, "transcript")
+    end
+    local bufnr = owner and owner.bufnr
+    return bufnr and vim.api.nvim_buf_is_valid(bufnr) and bufnr or nil
+end
+
+--- A subagent's transcript, loaded and rendered (`transcript`), or with
+--- `part` `input` its message input, made when the subagent can have one.
+--- @param child_id string
+--- @param part "input"|nil
+--- @return integer|nil bufnr Nil for an unknown subagent, or a message input it cannot have
+function Subagents:open_buf(child_id, part)
+    if not self._agents[child_id] then
+        return nil
+    end
+    if part == "input" then
+        self:_open_input(child_id)
+        return self:buf_of(child_id, part)
+    end
+    return self:transcript(child_id).bufnr
 end
 
 --- Apply a `subagent_update`: announce an unknown child, relabel a known one,
@@ -923,7 +985,7 @@ function Subagents:_destroy_input(child_id)
         Logger.notify(
             string.format(
                 "Unsent message to subagent %s, discarded:\n%s",
-                self:_agent_label(child_id),
+                self:agent_label(child_id),
                 text
             ),
             vim.log.levels.WARN
@@ -957,11 +1019,10 @@ function Subagents:_open_input(child_id)
         return
     end
 
-    local transcript = self:transcript(child_id)
     --- @type agentic.ui.SubagentInput
     local input
     input = SubagentInput:new(
-        vim.fn.fnamemodify(vim.api.nvim_buf_get_name(transcript.bufnr), ":t"),
+        self._widget:buffer_name(child_id, "input"),
         subagent.label,
         self._widget,
         {
@@ -1052,7 +1113,7 @@ end
 --- A subagent's display name, else its child session id.
 --- @param child_id string
 --- @return string
-function Subagents:_agent_label(child_id)
+function Subagents:agent_label(child_id)
     local block = self:_agent_block(child_id)
     return block and block.subagent and block.subagent.label or child_id
 end
@@ -1081,7 +1142,7 @@ function Subagents:_relay_to_agent(child_id, text)
     if not text:find("%S") then
         return false
     end
-    local label = self:_agent_label(child_id)
+    local label = self:agent_label(child_id)
     local instruction = not self:_confirmed_blocking(child_id)
         and self._host
             .agent()

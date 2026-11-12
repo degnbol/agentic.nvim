@@ -1,4 +1,5 @@
 local ACPPayloads = require("agentic.acp.acp_payloads")
+local BufferNames = require("agentic.utils.buffer_names")
 local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
@@ -143,22 +144,44 @@ function SessionResume.list(scope, callback)
     end
 end
 
---- Show the chat of the open session that holds `ref.session_id`. Else create
---- a session on `ref.provider`, apply `sessions.cd_on_load`, load the
---- saved session into it (ACP `session/load`) and show its chat. A nil `cwd`,
---- `provider` or `model` takes the value of the saved file, when there is one.
---- A provider that is not configured warns and uses the default provider.
+--- @class agentic.SessionResume.ResumeOpts
+--- @field mods? vim.api.keyset.cmd_mods A split or tab modifier shows the chat in a new window
+--- @field winid? integer Show the chat in this window; `mods` is then ignored
+--- @field on_shown? fun(session: agentic.SessionManager, winid: integer) Runs once the chat shows the session, with the window it was shown in: at once for an open session, else when the load ends
+
+--- Show `session`'s chat as `opts` places it.
+--- @param session agentic.SessionManager
+--- @param opts agentic.SessionResume.ResumeOpts
+--- @return integer winid The window it shows in
+local function show_chat(session, opts)
+    if opts.winid then
+        session.widget:show_in(opts.winid)
+        return opts.winid
+    end
+    session.widget:show(opts.mods, SessionRegistry.target_win())
+    -- `show` focuses the window it shows the chat in.
+    return vim.api.nvim_get_current_win()
+end
+
+--- Show the chat of the open session that holds `ref.session_id`
+--- (`SessionRegistry.session_for_key`). Else create a session on
+--- `ref.provider`, apply `sessions.cd_on_load`, load the saved session into
+--- it (ACP `session/load`) and show its chat. A nil `cwd`, `provider` or
+--- `model` takes the value of the saved file, when there is one. A provider
+--- that is not configured warns and uses the default provider.
 --- @param ref agentic.ui.ChatHistory.SessionRef
---- @param mods vim.api.keyset.cmd_mods|nil A split or tab modifier shows the chat in a new window
---- @param on_shown fun(session: agentic.SessionManager, winid: integer)|nil Runs once the chat shows the session, with the window it was shown in: at once for an open session, else when the load ends
-function SessionResume.resume(ref, mods, on_shown)
-    local open_session = SessionRegistry.session_for_acp_id(ref.session_id)
+--- @param opts agentic.SessionResume.ResumeOpts|nil
+--- @return agentic.SessionManager|nil session The session shown, open or created; nil when none could be created
+function SessionResume.resume(ref, opts)
+    opts = opts or {}
+    local on_shown = opts.on_shown
+    local open_session = SessionRegistry.session_for_key(ref.session_id)
     if open_session then
-        open_session.widget:show(mods, SessionRegistry.target_win())
+        local winid = show_chat(open_session, opts)
         if on_shown then
-            on_shown(open_session, vim.api.nvim_get_current_win())
+            on_shown(open_session, winid)
         end
-        return
+        return open_session
     end
 
     local cwd, provider, model = ref.cwd, ref.provider, ref.model
@@ -175,7 +198,7 @@ function SessionResume.resume(ref, mods, on_shown)
         or nil
     local session = SessionRegistry.create(configured)
     if not session then
-        return
+        return nil
     end
     if Config.sessions.cd_on_load and cwd then
         local st = vim.uv.fs_stat(cwd)
@@ -204,9 +227,102 @@ function SessionResume.resume(ref, mods, on_shown)
                 on_shown(loaded, shown_win)
             end
     )
-    session.widget:show(mods, SessionRegistry.target_win())
-    -- `show` focuses the window it shows the chat in.
-    shown_win = vim.api.nvim_get_current_win()
+    shown_win = show_chat(session, opts)
+    return session
+end
+
+--- Delete the buffer `:e` made for a name, once it is valid and no window
+--- shows it: a window that refused the shown buffer (`'winfixbuf'`) keeps it.
+--- @param bufnr integer
+local function drop_placeholder(bufnr)
+    if vim.api.nvim_buf_is_valid(bufnr) and #vim.fn.win_findbuf(bufnr) == 0 then
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+    end
+end
+
+--- `BufReadCmd` of `agentic://*` names (`agentic.BufferNames`): show the
+--- buffer the name stands for in the window reading it. A live session shows
+--- its buffer, made again when wiped; a closed one is resumed when the name
+--- is its chat's or a transcript's. Notifies an error for a name that stands
+--- for no such buffer. Does nothing for a background transcript,
+--- for a session buffer reloading after an unload (its own `BufReadCmd`
+--- refills it), and for a read in no window or the autocmd window (`bufload`).
+--- @param args vim.api.keyset.create_autocmd.callback_args
+function SessionResume.open_name(args)
+    local parts = BufferNames.parse(args.match)
+    if not parts or parts.part == "background" then
+        return
+    end
+    -- Any session's: across a provider switch, a name keeps the old session
+    -- id until the new session is adopted.
+    for _, live in pairs(SessionRegistry.by_id) do
+        if live:buf_of(parts.sub_id, parts.part) == args.buf then
+            return
+        end
+    end
+    local winid = vim.fn.bufwinid(args.buf)
+    -- `bufload` and `nvim_buf_call` read in the autocmd window.
+    if winid == -1 or vim.fn.win_gettype(winid) == "autocmd" then
+        return
+    end
+
+    local session = SessionRegistry.session_for_key(parts.key)
+    if session then
+        local bufnr = session:open_buf(parts.sub_id, parts.part)
+        if not bufnr then
+            local what = parts.part == "input" and "No message input: "
+                or "No such subagent: "
+            Logger.notify(what .. args.match, vim.log.levels.ERROR)
+            return
+        end
+        -- Made under the name, the buffer took its window already.
+        if bufnr == session.widget.buf_nrs.agent then
+            session.widget:show_in(winid)
+        elseif vim.api.nvim_win_get_buf(winid) ~= bufnr then
+            vim.api.nvim_win_set_buf(winid, bufnr)
+        end
+        drop_placeholder(args.buf)
+        return
+    end
+
+    local saved = not parts.part and ChatHistory.read_saved(parts.key)
+    if not saved then
+        Logger.notify(
+            "No Agentic session to open: " .. args.match,
+            vim.log.levels.ERROR
+        )
+        return
+    end
+    local sub_id = parts.sub_id
+    SessionResume.resume({
+        session_id = parts.key,
+        cwd = saved.cwd,
+        provider = saved.provider,
+        model = saved.model,
+    }, {
+        winid = winid,
+        on_shown = sub_id and function(loaded, shown_win)
+            -- The load can end after the user moved on from the window.
+            if
+                not vim.api.nvim_win_is_valid(shown_win)
+                or vim.api.nvim_win_get_buf(shown_win)
+                    ~= loaded.widget.buf_nrs.agent
+            then
+                return
+            end
+            local transcript = loaded:open_buf(sub_id, nil)
+            if transcript then
+                vim.api.nvim_win_set_buf(shown_win, transcript)
+            else
+                Logger.notify(
+                    "No such subagent: " .. args.match,
+                    vim.log.levels.ERROR
+                )
+            end
+        end,
+    })
+    -- Until the load names the chat, the name must reach no stale buffer.
+    drop_placeholder(args.buf)
 end
 
 --- Saved sessions of all projects whose id starts with `query`, else whose
@@ -252,7 +368,7 @@ function SessionResume.show_picker(opts)
 
         --- @param item agentic.SessionResume.PickerItem
         local function on_select(item)
-            SessionResume.resume(item, opts.mods)
+            SessionResume.resume(item, { mods = opts.mods })
         end
 
         -- Three genuinely different backends (builtin quickfix, fzf-lua,
@@ -319,7 +435,7 @@ function SessionResume.pick(query, opts)
     end
     SessionResume.find(query, function(matches)
         if #matches == 1 then
-            SessionResume.resume(matches[1], opts.mods)
+            SessionResume.resume(matches[1], { mods = opts.mods })
         elseif #matches > 1 then
             SessionResume.show_picker({
                 scope = "all",
@@ -383,14 +499,14 @@ function SessionResume.end_state(row)
     return row.state == "cancelled" and "interrupted" or row.state
 end
 
---- Write a session message or a subagent end as a notice. A message shows the
---- other end's buffer name, else the sender's name, under its heading. A
---- launch's reply is instead one closed folded row.
+--- Write a session message or a subagent end as a notice. A message shows
+--- `peer_detail` of the other end, else the sender's name, under its
+--- heading. A launch's reply is instead one closed folded row.
 --- @param writer agentic.ui.MessageWriter
 --- @param row agentic.ui.ChatHistory.SessionMessage|agentic.ui.ChatHistory.SubagentEnd
 --- @param mid_turn boolean The writer's turn is still running, so the row must not finalize it
---- @param buffer_name fun(session_id: string): string|nil Name of a session's buffer, nil when it has none
-function SessionResume.write_row(writer, row, mid_turn, buffer_name)
+--- @param peer_detail fun(session_id: string): string|nil Who a session is, then the name of its buffer; nil shows the sender's name
+function SessionResume.write_row(writer, row, mid_turn, peer_detail)
     if row.type == "subagent_end" then
         local state = SessionResume.end_state(row)
         local icon = (Config.status_icons or {})[state]
@@ -410,7 +526,7 @@ function SessionResume.write_row(writer, row, mid_turn, buffer_name)
     local title, rest = SessionResume.message_title(row.text, row.summary)
     local peer = row.view == "sent" and row.recipient_session_id
         or row.sender_session_id
-    local detail = peer and buffer_name(peer) or row.sender_name
+    local detail = peer and peer_detail(peer) or row.sender_name
     local glyph = Glyphs.MESSAGE[row.kind == "message" and row.view or row.kind]
     if row.launch_reply then
         writer:write_folded_row(title, vim.list_extend({ detail }, rest), glyph)
@@ -434,8 +550,8 @@ end
 --- prompt's message is its payload in the writer.
 --- @param writer agentic.ui.MessageWriter
 --- @param messages agentic.ui.ChatHistory.Message[]
---- @param buffer_name fun(session_id: string): string|nil Name of a session's buffer, nil when it has none
-function SessionResume.replay_messages(writer, messages, buffer_name)
+--- @param peer_detail fun(session_id: string): string|nil See `write_row`
+function SessionResume.replay_messages(writer, messages, peer_detail)
     for _, msg in ipairs(messages) do
         if msg.type == "user" and not msg.synthetic then
             writer:write_user_prompt(msg.text, nil, msg.author, msg)
@@ -455,7 +571,7 @@ function SessionResume.replay_messages(writer, messages, buffer_name)
             local record = CanonicalToolCall.split_read_range(msg, msg.kind)
             writer:write_tool_call_block(ChatHistory.to_tool_call_block(record))
         elseif msg.type == "session_message" or msg.type == "subagent_end" then
-            SessionResume.write_row(writer, msg, true, buffer_name)
+            SessionResume.write_row(writer, msg, true, peer_detail)
         elseif msg.type == "side_records" then
             SideRecords.write(writer, msg.records)
         elseif msg.type == "fork_link" then

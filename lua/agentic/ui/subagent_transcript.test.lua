@@ -42,21 +42,26 @@ describe("agentic.ui.SubagentTranscript", function()
     local function new_transcript(session_id)
         --- @type agentic.ui.SubagentTranscript
         local transcript
-        transcript = SubagentTranscript:new(session_id, info, widget, {
-            setup_buf = function()
-                calls.setup_buf = calls.setup_buf + 1
-            end,
-            on_reload = function()
-                calls.on_reload = calls.on_reload + 1
-                transcript:restart(info)
-            end,
-            on_write = function()
-                calls.on_write = calls.on_write + 1
-            end,
-            on_wipeout = function()
-                calls.on_wipeout = calls.on_wipeout + 1
-            end,
-        })
+        transcript = SubagentTranscript:new(
+            widget:buffer_name(session_id),
+            info,
+            widget,
+            {
+                setup_buf = function()
+                    calls.setup_buf = calls.setup_buf + 1
+                end,
+                on_reload = function()
+                    calls.on_reload = calls.on_reload + 1
+                    transcript:restart(info)
+                end,
+                on_write = function()
+                    calls.on_write = calls.on_write + 1
+                end,
+                on_wipeout = function()
+                    calls.on_wipeout = calls.on_wipeout + 1
+                end,
+            }
+        )
         table.insert(transcripts, transcript)
         return transcript
     end
@@ -85,15 +90,15 @@ describe("agentic.ui.SubagentTranscript", function()
         return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
     end
 
-    it("is named after the session id's tail and the label", function()
-        local transcript = new_transcript("aa11bb22cc33dd44")
-        local name = vim.api.nvim_buf_get_name(transcript.bufnr)
+    it("takes the name it is given from a plain buffer holding it", function()
+        local name = widget:buffer_name("aa11bb22cc33dd44")
+        local stray = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_buf_set_name(stray, name)
 
-        assert.equal(
-            ("agentic://%d/subagent/cc33dd44-map-the-UI"):format(owner_id),
-            name
-        )
-        assert.is_nil(name:find("%s"))
+        local transcript = new_transcript("aa11bb22cc33dd44")
+
+        assert.equal(name, vim.api.nvim_buf_get_name(transcript.bufnr))
+        assert.is_false(vim.api.nvim_buf_is_valid(stray))
     end)
 
     it("opens with gf from any column of its name", function()

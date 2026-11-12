@@ -124,6 +124,22 @@ function SessionRegistry.session_for_acp_id(session_id)
     return nil
 end
 
+--- The live session a buffer-name `key` (`agentic.BufferNames.Parts`) stands
+--- for: the one whose ACP session id, or whose pending load's, is `key`, else
+--- the one whose `SessionManager.id` is `key` while it has no ACP session id.
+--- A numeric key from an earlier editor reaches no later session that took an id.
+--- @param key string
+--- @return agentic.SessionManager|nil
+function SessionRegistry.session_for_key(key)
+    for _, session in pairs(SessionRegistry.by_id) do
+        if session:target_session_id() == key then
+            return session
+        end
+    end
+    local session = SessionRegistry.by_id[tonumber(key)]
+    return session and not session.session_id and session or nil
+end
+
 --- @param current agentic.UserConfig.ProviderName Provider to mark "(current)"
 --- @param on_selected fun(provider_name: agentic.UserConfig.ProviderName|nil) Callback that will be called with the selected provider name, if any
 function SessionRegistry.select_provider(current, on_selected)

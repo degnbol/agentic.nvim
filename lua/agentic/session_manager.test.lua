@@ -319,6 +319,7 @@ describe("agentic.SessionManager", function()
                 widget = {
                     buf_nrs = {},
                     set_chat_title = set_title_spy,
+                    rename_buffers = function() end,
                 },
                 _sync_history_context = function() end,
                 _persist_history = SessionManager._persist_history,
@@ -385,6 +386,7 @@ describe("agentic.SessionManager", function()
                 widget = {
                     buf_nrs = { input = 0 },
                     set_chat_title = function() end,
+                    rename_buffers = function() end,
                     set_running = function() end,
                     set_idle = function() end,
                 },
@@ -439,6 +441,7 @@ describe("agentic.SessionManager", function()
                         buf_nrs = { input = 0 },
                         clear = noop,
                         set_chat_title = noop,
+                        rename_buffers = noop,
                         set_running = noop,
                         set_idle = noop,
                     },
@@ -508,6 +511,7 @@ describe("agentic.SessionManager", function()
                     buf_nrs = { input = 0 },
                     clear = noop,
                     set_chat_title = noop,
+                    rename_buffers = noop,
                     set_running = noop,
                     set_idle = noop,
                 },
@@ -696,6 +700,7 @@ describe("agentic.SessionManager", function()
                 widget = {
                     buf_nrs = { input = 0 },
                     set_chat_title = function() end,
+                    rename_buffers = function() end,
                     set_running = function() end,
                     set_idle = function() end,
                 },
@@ -786,6 +791,7 @@ describe("agentic.SessionManager", function()
                 widget = {
                     clear = noop,
                     set_chat_title = noop,
+                    rename_buffers = noop,
                     set_running = noop,
                     set_idle = noop,
                     buf_nrs = { agent = 0, input = 0 },
@@ -1881,7 +1887,10 @@ describe("agentic.SessionManager", function()
             local session = with_turn_state(vim.tbl_extend("force", {
                 is_generating = false,
                 chat_history = ChatHistory:new(),
-                widget = { set_chat_title = function() end },
+                widget = {
+                    set_chat_title = function() end,
+                    rename_buffers = function() end,
+                },
                 message_writer = { write_notice = notice_spy },
                 _persist_history = function() end,
                 _rename_session = SessionManager._rename_session,
@@ -3809,6 +3818,7 @@ describe("agentic.SessionManager", function()
                     set_waiting = noop,
                     set_running = noop,
                     set_chat_title = noop,
+                    rename_buffers = noop,
                     input_dispatch = {
                         next_queued_block = function()
                             return nil
@@ -4005,6 +4015,7 @@ describe("agentic.SessionManager", function()
                     set_waiting = noop,
                     set_running = noop,
                     set_chat_title = noop,
+                    rename_buffers = noop,
                     input_dispatch = {
                         next_queued_block = function()
                             sink.drains = (sink.drains or 0) + 1
@@ -5465,6 +5476,7 @@ describe("agentic.SessionManager", function()
                     buf_nrs = { input = 0 },
                     set_idle = noop,
                     set_chat_title = noop,
+                    rename_buffers = noop,
                     input_dispatch = {
                         cancel_queue = noop,
                         next_queued_block = function()
@@ -5962,6 +5974,7 @@ describe("agentic.SessionManager", function()
                 widget = {
                     buf_nrs = { input = 0 },
                     set_chat_title = function() end,
+                    rename_buffers = function() end,
                     set_running = function() end,
                     set_idle = function() end,
                 },

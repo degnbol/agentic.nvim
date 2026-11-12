@@ -661,9 +661,9 @@ with `<C-w>g` in a tab, as |CTRL-W_f| and |CTRL-W_gf| open a file.
 The new chat continues on the model of the changed prompt. A provider
 without a native fork gets the conversation as text with the first prompt.
 
-Each chat gets a link row to the other: the original above the changed
-prompt, the fork at its top. On a link row, |gf|, |CTRL-W_f| and
-|CTRL-W_gf| open the other chat at its link row.
+Each chat gets a link row to the other, holding the other chat's buffer
+name (|agentic-buffer-names|): the original above the changed prompt, the
+fork at its top.
 
 On `/skill` in the chat, the transcripts, the input and the todos, |gf|,
 |CTRL-W_f| and |CTRL-W_gf| open that skill's SKILL.md. On a diff row where
@@ -1034,6 +1034,22 @@ resume do not render them again.
 A session with no messages and an empty input ends when no window shows its
 chat.
 
+                                                       *agentic-buffer-names*
+Buffers are named after the ACP session id, `<sid>`; before the session has
+one, its `#<id>` number stands in:
+
+    Buffer                         Name ~
+    Chat                           `agentic://<sid>`
+    Panel                          `agentic://<sid>/<panel>`
+    Subagent transcript            `agentic://<sid>/<agent id>`
+    Subagent message input         `agentic://<sid>/<agent id>/input`
+    Background session             `agentic://<background sid>/background`
+
+|:edit|, |:split|, |:tabedit|, |gf|, |CTRL-W_f| and |CTRL-W_gf| on a name
+show that buffer, made again if it was wiped. On the name of a chat or a
+transcript of a session no chat holds, they resume the saved session
+(|agentic-commands-resume|) in the window they open.
+
 The chat shows in any window, like any buffer. Its panels attach to one
 window showing it, the chat's window: the first window the chat enters
 while it has none, or the window |agentic.open()| opens. In a tabpage
@@ -1184,7 +1200,7 @@ limits.
 9.7 SUBAGENTS                                              *agentic-subagents*
 
 With claude-agent-acp, each subagent has its own transcript: a listed buffer
-named `agentic://<id>/subagent/<agent id tail>-<name>` holding its prose,
+(|agentic-buffer-names|) holding its prose,
 thinking and tool calls under a `##` heading like its block's. A transcript
 shows its subagent as working while it works, and the model of a running
 subagent in a `Loaded` line. It also has a row for each end
@@ -1192,16 +1208,14 @@ of a run, titled `completed`, `interrupted`, `failed`, `ended`, `unknown` or
 the provider's stop reason, and signed with that status's icon
 (|agentic-config-status_icons|), else 󰈼. The header reads
 `#<id> › <heading>`, shows 󰔟 while the subagent works, and how the last run
-ended. A resumed subagent continues in the same transcript. The main agent's
-buffer is `agentic://<id>/agent`, or `agentic://<id>/agent/<title>` once the
-session has a title; its header reads `#<id> <title>`, with 󰔟 while a turn
-runs.
+ended. A resumed subagent continues in the same transcript. The chat's
+header reads `#<id> <title>`, with 󰔟 while a turn runs.
 
 A message between agents, the launch prompt included, has a row in the chat
 or transcript of each agent it joins. A message from another session, or a
 subagent's message to its parent, has a received row in the chat only. Each
-row holds the message: a heading, the buffer name of the other end under it,
-else the sender's name, and the rest folded closed. The provider's reply to a
+row holds the message: a heading, the other end's name and buffer name
+under it, else the sender's name, and the rest folded closed. The provider's reply to a
 launch is one closed fold instead, led by its first sentence. The launch
 prompt is headed by the subagent's description when it has one, any other
 message by its first sentence. The sign gives the kind:

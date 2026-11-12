@@ -1,6 +1,7 @@
 local AcpKind = require("agentic.utils.acp_kind")
 local AgentInstance = require("agentic.acp.agent_instance")
 local BufHelpers = require("agentic.utils.buf_helpers")
+local BufferNames = require("agentic.utils.buffer_names")
 local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
@@ -215,7 +216,10 @@ end
 
 function BackgroundSession:_open_transcript()
     local transcript = SubagentTranscript:new(
-        self._session_id,
+        BufferNames.format({
+            key = self._session_id --[[@as string]],
+            part = "background",
+        }),
         subagent_info(self._opts.label),
         self._opts.widget,
         {

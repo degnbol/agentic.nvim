@@ -681,8 +681,8 @@ _G.title = function()
     local title = vim.api.nvim_win_get_config(_G.float._winid).title
     return title and title[1][1]
 end
-_G.name_tail = function()
-    return vim.fn.fnamemodify(vim.api.nvim_buf_get_name(_G.transcript("c1").bufnr), ":t")
+_G.label = function()
+    return _G.s._subagents:agent_label("c1")
 end
 ]])
         end)
@@ -706,10 +706,8 @@ end
                 child.lua_get("_G.chat_win()"),
                 child.lua_get("_G.float_win()")
             )
-            assert.equal(
-                child.lua_get("_G.name_tail()"),
-                child.lua_get("_G.title()")
-            )
+            assert.equal("find it", child.lua_get("_G.label()"))
+            assert.equal("find it", child.lua_get("_G.title()"))
             assert.is_false(child.lua_get("_G.s.permission_manager._hidden"))
             assert.equal(
                 "c1",
@@ -840,7 +838,7 @@ _G.request()
                 assert.is_true(child.lua_get("_G.waiting()"))
                 assert.is_true(
                     child.lua_get(
-                        "_G.notices[#_G.notices]:find(_G.name_tail(), 1, true) ~= nil"
+                        "_G.notices[#_G.notices]:find('subagent ' .. _G.label(), 1, true) ~= nil"
                     )
                 )
 

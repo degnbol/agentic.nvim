@@ -321,7 +321,7 @@ providers don't advertise them in `available_commands_update`):
   fresh session is the only reliable way to clear context via ACP.
 - **`/rename <name>`**: Updates `chat_history.title`, sets `session_name` in
   headers state (for external UI plugins via `AgenticHeadersChanged`), persists
-  to the session JSON, and updates the buffer name. Resets on `/new`.
+  to the session JSON. Resets on `/new`.
 
 Providers intercept a line-start `/word` whether or not they advertised it,
 which is why `PromptBlocks.command` classifies on line shape and the advertised

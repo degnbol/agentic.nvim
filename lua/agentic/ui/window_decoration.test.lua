@@ -36,25 +36,6 @@ describe("agentic.ui.WindowDecoration", function()
         end
     end)
 
-    describe("buffer_name", function()
-        it("keeps a `/` in the title out of the name's tail", function()
-            local name = WindowDecoration.buffer_name(bufnr, "fix a/b")
-            assert.equal("agentic://7/agent/fix a-b", name)
-            assert.equal("fix a-b", vim.fn.fnamemodify(name, ":t"))
-        end)
-
-        it("keeps a title apart from a panel's name", function()
-            assert.equal(
-                "agentic://7/agent",
-                WindowDecoration.buffer_name(bufnr)
-            )
-            assert.equal(
-                "agentic://7/agent/input",
-                WindowDecoration.buffer_name(bufnr, "input")
-            )
-        end)
-    end)
-
     describe("headers", function()
         it("default to the panel's icon and title", function()
             local header = WindowDecoration.get_header(bufnr)
