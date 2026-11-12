@@ -999,6 +999,9 @@ function ClaudeAgentACPAdapter:__handle_tool_call_update(session_id, update)
         and (not update.rawInput or vim.tbl_isempty(update.rawInput))
         -- The end of a background command comes without either.
         and not meta.terminal_exit
+        -- So does an ACP v2 Edit's patch, from the PreToolUse preview hook
+        -- (`previewFileChange`).
+        and not self:find_content_diff(update)
     then
         return
     end

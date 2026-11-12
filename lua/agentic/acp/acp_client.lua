@@ -54,7 +54,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field provider_config agentic.acp.ACPProviderConfig
 --- @field id_counter number
 --- @field state agentic.acp.ClientConnectionState
---- @field protocol_version number
+--- @field protocol_version number The ACP version `initialize` asks for, then the one the agent answered with
 --- @field client_info agentic.acp.ClientInfo
 --- @field capabilities agentic.acp.ClientCapabilities
 --- @field agent_capabilities? agentic.acp.AgentCapabilities
@@ -78,6 +78,8 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field _children table<string, string> Child session id → the subscribed root session that spawned it, directly or through other children
 --- @field _session_roots table<string, string[]> Skill-search roots per session, from the cwd and additional directories that session was opened with
 --- @field _tool_call_kinds agentic.acp.ToolCallKinds
+--- @field _v2_states table<string, agentic.acp.ClaudeV2Codec.State> Per session id, the codec state of the current connection while it speaks v2
+--- @field v2_codec? agentic.acp.ClaudeV2Codec The ACP v2 codec of the class's provider. A client whose class has one asks for v2 in `initialize`, and translates every message it then gets and sends
 local ACPClient = {}
 ACPClient.__index = ACPClient
 
@@ -111,7 +113,7 @@ function ACPClient:new(config, on_ready)
         provider_config = config,
         subscribers = {},
         id_counter = 0,
-        protocol_version = 1,
+        protocol_version = self.v2_codec and 2 or 1,
         client_info = {
             name = "Agentic.nvim",
             version = "0.0.1",
@@ -141,6 +143,7 @@ function ACPClient:new(config, on_ready)
     client._children = {}
     client._session_roots = {}
     client._tool_call_kinds = ToolCallKinds:new()
+    client._v2_states = {}
     client._notified_output = {}
     client:_setup_usage_limit()
 
@@ -173,6 +176,24 @@ end
 function ACPClient:_attach_session(session_id, handlers, cwd, additional_dirs)
     self:_subscribe(session_id, handlers)
     self._session_roots[session_id] = SkillPath.roots(cwd, additional_dirs)
+end
+
+--- Give the subscriber of `session_id` the commands a session setup result
+--- lists, as an `available_commands_update`. An agent that sends the update
+--- itself lists none in the result.
+--- @param session_id string
+--- @param result table The result of `session/new`, `session/load` or `session/fork`
+function ACPClient:_emit_setup_commands(session_id, result)
+    local commands = result.availableCommands
+    if not commands then
+        return
+    end
+    self:__with_subscriber(session_id, function(subscriber)
+        subscriber.on_session_update({
+            sessionUpdate = "available_commands_update",
+            availableCommands = commands,
+        })
+    end)
 end
 
 --- Stop routing this session's notifications, and drop the per-session state
@@ -622,16 +643,65 @@ function ACPClient:_next_id()
     return self.id_counter
 end
 
+--- The codec state of `session_id` on the current connection, created on
+--- first use.
+--- @param session_id string
+--- @return agentic.acp.ClaudeV2Codec.State
+function ACPClient:_v2_state(session_id)
+    local codec = self.v2_codec --[[@as agentic.acp.ClaudeV2Codec]]
+    local state = self._v2_states[session_id] or codec.state()
+    self._v2_states[session_id] = state
+    return state
+end
+
+--- The v2 form of a v1 request, and a callback that gives `callback` the v1
+--- form of its result. An `initialize` answered with another version fails:
+--- the request went out in v2 form, without the v1 capabilities.
+--- @param method string
+--- @param params table
+--- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil)
+--- @return string method
+--- @return table params
+--- @return fun(result: table|nil, err: agentic.acp.ACPError|nil) callback
+function ACPClient:_encode_v2_request(method, params, callback)
+    local codec = self.v2_codec --[[@as agentic.acp.ClaudeV2Codec]]
+    -- Not `_v2_state`: a request leaves nothing to decode later, so a
+    -- session the client holds no state for needs none kept.
+    local state = self._v2_states[params.sessionId] or codec.state()
+    local v2_method, v2_params = codec.encode_request(state, method, params)
+    return v2_method,
+        v2_params,
+        function(result, err)
+            local version = result and result.protocolVersion
+            if result and v2_method == "initialize" and version ~= 2 then
+                err = self:__create_error(
+                    self.ERROR_CODES.PROTOCOL_ERROR,
+                    "The agent answered an ACP v2 initialize with version "
+                        .. tostring(version)
+                )
+                result = nil
+            elseif result then
+                result = codec.decode_result(v2_method, result)
+            end
+            callback(result, err)
+        end
+end
+
 --- @param method string
 --- @param params table|nil
 --- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil)
 function ACPClient:_send_request(method, params, callback)
+    params = params or {}
+    if self.protocol_version == 2 then
+        method, params, callback =
+            self:_encode_v2_request(method, params, callback)
+    end
     local id = self:_next_id()
     local message = {
         jsonrpc = "2.0",
         id = id,
         method = method,
-        params = params or {},
+        params = params,
     }
 
     local data = vim.json.encode(message)
@@ -773,9 +843,27 @@ end
 --- @param method string
 --- @param params table
 function ACPClient:_handle_notification(message_id, method, params)
-    if method == "session/update" then
+    local codec = self.v2_codec --[[@as agentic.acp.ClaudeV2Codec]]
+    local v2 = self.protocol_version == 2
+        and type(params) == "table"
+        and params.sessionId ~= nil
+    if method == "session/update" and v2 and params.update then
+        local state = self:_v2_state(params.sessionId)
+        for _, update in ipairs(codec.decode_update(state, params.update)) do
+            self:__handle_session_update({
+                sessionId = params.sessionId,
+                update = update,
+            })
+        end
+    elseif method == "session/update" then
         self:__handle_session_update(params)
     elseif method == "session/request_permission" then
+        if v2 then
+            params = codec.decode_permission(
+                self:_v2_state(params.sessionId),
+                params
+            )
+        end
         --- @diagnostic disable-next-line: param-type-mismatch
         self:__handle_request_permission(message_id, params)
     elseif method == "fs/read_text_file" then
@@ -829,6 +917,11 @@ function ACPClient:__handle_session_update(params)
         and self.subscribers[root]
     then
         self._children[update.sessionId] = root
+    end
+
+    -- The parent's `subagent_update` carries the same state.
+    if session_update_type == "state_update" and self._children[session_id] then
+        return
     end
 
     if session_update_type == "user_message_chunk" then
@@ -1241,6 +1334,8 @@ function ACPClient:_connect(on_start)
     -- connection has started. Their callbacks must not act on the new one.
     self._connection = self._connection + 1
     local connection = self._connection
+    -- A new process holds none of the old one's tool call `_meta`.
+    self._v2_states = {}
 
     self.transport:start()
 
@@ -1442,6 +1537,7 @@ function ACPClient:create_session(cwd, handlers, callback)
                 cwd,
                 additional_dirs
             )
+            self:_emit_setup_commands(result.sessionId, result)
         end
 
         --- @cast result agentic.acp.SessionCreationResponse
@@ -1495,6 +1591,8 @@ function ACPClient:load_session(
         self._loading_sessions[session_id] = nil
         if err then
             self:unsubscribe(session_id)
+        elseif result then
+            self:_emit_setup_commands(session_id, result)
         end
         callback(result, err)
     end)
@@ -1565,6 +1663,7 @@ function ACPClient:fork_session(
             return
         end
         self:_attach_session(result.sessionId, handlers, cwd, additional_dirs)
+        self:_emit_setup_commands(result.sessionId, result)
         --- @cast result agentic.acp.ForkSessionResponse
         callback(result, nil)
     end)
@@ -1664,6 +1763,10 @@ function ACPClient:close_session(session_id, on_closed)
     end
 
     self:unsubscribe(session_id)
+    -- Not in `unsubscribe`: claude-agent-acp keeps a session's tool call
+    -- `_meta` until `session/close`, and replays a later load as patches
+    -- against it.
+    self._v2_states[session_id] = nil
     self:_send_request("session/close", {
         sessionId = session_id,
     }, function(_result, err)
