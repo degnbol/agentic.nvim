@@ -601,7 +601,7 @@ local ConfigDefault = {
     skeptic = {
         enabled = false,
         reporting_criteria = "agree",
-        extractor = { model = "deepseek-v4.1-flash" },
+        extractor = { model = "nebius-deepseek-v4.1-flash-1017" },
         skeptics = {
             { provider = "opencode-acp", model = "litellm/glm-5.3" },
             { provider = "opencode-acp", model = "litellm/kimi-k3" },

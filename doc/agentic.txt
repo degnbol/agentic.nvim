@@ -1303,11 +1303,10 @@ Requires:
     `reporting_criteria`  "agree" | "either" (default: "agree")
         "agree" forwards a claim every skeptic refuted, "either" one any
         skeptic refuted with evidence.
-    `extractor`           table (default: `{ model = "deepseek-v4.1-flash" }`)
+    `extractor`           table
         `model` is the `text_model` model that extracts the claims.
     `skeptics`            table[]
         One `{ provider = "opencode-acp", model = "..." }` per skeptic.
-        Default: `litellm/glm-5.3` and `litellm/kimi-k3`.
     `turn_timeout_ms`     integer (default: 300000)
         Per skeptic turn, and for a skeptic to start.
     `max_refusals`        integer (default: 3)
