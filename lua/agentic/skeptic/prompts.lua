@@ -12,31 +12,28 @@ local M = {}
 M.DEFAULTS = {
     -- System prompt of the claim extractor.
     extract = [[
-You extract checkable claims from a coding agent's work.
+You extract claims.
 
 The input has sections: the user's prompts, the agent's text, reports from
 its subagents, the diffs it made, and claims already checked.
 
-List every factual claim in the agent's text and the subagent reports that
-someone with the repository could check: what code does, where something is,
-what a change fixes, what a test or command showed, what a tool or library
-does. State each claim on its own, so it reads without the input. Leave out
-plans, opinions, questions, and claims that repeat one already checked.
+List major factual claims in the agent's text and the subagent reports.
+State each claim on its own, so it reads without the input.
+Leave out plans, opinions, questions, and already checked claims.
 
 Answer with a JSON array of strings and nothing else. Answer [] for no
 claims.]],
 
     -- `%s`: the user's prompts, the numbered claims and the diffs.
     verify = [[
-Check the numbered claims below against the repository. Another agent made
-them while working for the user; you see the user's prompts and the diffs it
-made, not its reasoning. Read the code, and do not change anything.
+Check the numbered claims.
+You may only modify tmp.
 
 For each claim decide:
-- "refuted": the code or docs show it is wrong. Give the evidence: file and
-  line, or what you ran and saw.
 - "supported": you checked it and it holds.
-- "unsure": you could not check it.
+- "unsure": you could not find out with reasonable effort.
+- "unfalsifiable": claim cannot be proven wrong.
+- "refuted": shown to be wrong. Give the evidence: file and line, or what you ran and saw.
 
 End with one fenced json block: an array of objects with the keys "claim"
 (its number), "verdict" and "evidence".
@@ -45,10 +42,7 @@ End with one fenced json block: an array of objects with the keys "claim"
 
     -- `%s`: the findings, one per claim.
     deliver = [[
-Background skeptics on other models checked claims from your recent work,
-seeing only the user's prompts, your claims and your diffs. They dispute the claims below. Decide for each whether it needs checking;
-check those that do, and correct what turns out wrong. Do not just accept
-or dismiss them.
+Background skeptics dispute your recent claims.
 
 %s]],
 
