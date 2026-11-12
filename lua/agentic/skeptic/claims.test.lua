@@ -77,6 +77,43 @@ describe("agentic.skeptic.Claims", function()
             assert.same({ claims = { "x is 2" } }, result)
         end)
 
+        describe("reasoning_effort", function()
+            local original_extractor
+
+            before_each(function()
+                original_extractor = Config.skeptic.extractor
+            end)
+
+            after_each(function()
+                Config.skeptic.extractor = original_extractor
+            end)
+
+            --- The request `extract` sends with `extractor` as the config.
+            --- @param extractor table The `Config.skeptic.extractor` value
+            --- @return agentic.utils.TextModel.Request
+            local function request_with(extractor)
+                Config.skeptic.extractor = extractor
+                Claims.extract(
+                    { prompts = {}, text = "t", diffs = {}, reports = {} },
+                    {},
+                    function() end
+                )
+                return complete_stub.calls[1][1]
+            end
+
+            it("is sent from the config", function()
+                local request =
+                    request_with({ model = "m", reasoning_effort = "low" })
+                assert.equal("low", request.reasoning_effort)
+            end)
+
+            it("is not sent when false", function()
+                local request =
+                    request_with({ model = "m", reasoning_effort = false })
+                assert.is_nil(request.reasoning_effort)
+            end)
+        end)
+
         it("passes on the text model's error", function()
             complete_stub:invokes(function(_request, on_done)
                 on_done(nil, "timeout")

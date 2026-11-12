@@ -593,7 +593,7 @@ local ConfigDefault = {
     --- @class agentic.UserConfig.Skeptic
     --- @field enabled boolean On in every new session; `/skeptic on|off` sets one session
     --- @field reporting_criteria "agree"|"either" Forward a claim when every skeptic refutes it, or when any skeptic refutes it with evidence
-    --- @field extractor { model: string } The `text_model` model that extracts claims
+    --- @field extractor { model: string, reasoning_effort?: string|false } The `text_model` model that extracts claims, and the request's `reasoning_effort`. `false` leaves the field out of the request, since nil cannot unset the default
     --- @field skeptics agentic.UserConfig.SkepticModel[]
     --- @field turn_timeout_ms integer Per skeptic turn, and for a skeptic session to become ready
     --- @field max_refusals integer Refusal prompts per check before a skeptic gives up
@@ -601,7 +601,10 @@ local ConfigDefault = {
     skeptic = {
         enabled = false,
         reporting_criteria = "agree",
-        extractor = { model = "nebius-deepseek-v4.1-flash-1017" },
+        extractor = {
+            model = "nebius-deepseek-v4.1-flash-1017",
+            reasoning_effort = "none",
+        },
         skeptics = {
             { provider = "opencode-acp", model = "litellm/glm-5.3" },
             { provider = "opencode-acp", model = "litellm/kimi-k3" },

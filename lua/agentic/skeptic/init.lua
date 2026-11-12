@@ -11,6 +11,7 @@ local ReportingCriteria = require("agentic.skeptic.reporting_criteria")
 local SessionManager = require("agentic.session_manager")
 local SessionRegistry = require("agentic.session_registry")
 local TextModel = require("agentic.utils.text_model")
+local TextWrap = require("agentic.utils.text_wrap")
 local Turn = require("agentic.skeptic.turn")
 local Verdicts = require("agentic.skeptic.verdicts")
 
@@ -298,8 +299,10 @@ function Skeptic:_check(turn)
             return
         end
         if not claims then
+            local msg = "Skeptic: claim extraction failed: " .. tostring(err)
+            Logger.debug_to_file(msg)
             Logger.notify(
-                "Skeptic: claim extraction failed: " .. tostring(err),
+                TextWrap.truncate_to_width(msg, 200),
                 vim.log.levels.WARN
             )
             self:_finish()

@@ -114,6 +114,15 @@ describe("agentic.utils.TextModel", function()
     it("sends only the user message without a system prompt", function()
         TextModel.complete({ model = "m", input = "hi" }, function() end)
         assert.same({ { role = "user", content = "hi" } }, body.messages)
+        assert.is_nil(body.reasoning_effort)
+    end)
+
+    it("sends reasoning_effort when set", function()
+        TextModel.complete(
+            { model = "m", input = "hi", reasoning_effort = "none" },
+            function() end
+        )
+        assert.equal("none", body.reasoning_effort)
     end)
 
     it("passes the key on stdin, escaped, never on argv", function()
@@ -232,6 +241,54 @@ describe("agentic.utils.TextModel", function()
         finish({ stdout = reply })
         assert.is_nil(got.text)
         assert.truthy(got.err:find(reply, 1, true))
+    end)
+
+    describe("a reply cut off at the output limit", function()
+        --- Completes a request whose reply has one choice with
+        --- `finish_reason = "length"`.
+        --- @param content string|nil The choice's message content, nil for a JSON null
+        --- @param usage table|nil The reply's `usage` object
+        --- @return table got The `on_done` arguments
+        local function cut_off(content, usage)
+            local got, on_done = collector()
+            TextModel.complete({ model = "m", input = "hi" }, on_done)
+            finish({
+                stdout = vim.json.encode({
+                    choices = {
+                        {
+                            finish_reason = "length",
+                            message = { content = content or vim.NIL },
+                        },
+                    },
+                    usage = usage,
+                }),
+            })
+            return got
+        end
+
+        it("is an error, not text, with partial content", function()
+            local got = cut_off('["a", "b', { completion_tokens = 8192 })
+            assert.is_nil(got.text)
+            assert.equal(
+                "reply cut off at the output limit (8192 tokens)",
+                got.err
+            )
+        end)
+
+        it("is an error with null content", function()
+            local got = cut_off(nil, { completion_tokens = 8192 })
+            assert.is_nil(got.text)
+            assert.equal(
+                "reply cut off at the output limit (8192 tokens)",
+                got.err
+            )
+        end)
+
+        it("leaves out the count without usage", function()
+            local got = cut_off("[", nil)
+            assert.is_nil(got.text)
+            assert.equal("reply cut off at the output limit", got.err)
+        end)
     end)
 
     it("reports missing choices", function()

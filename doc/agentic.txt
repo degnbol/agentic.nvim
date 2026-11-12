@@ -1305,6 +1305,8 @@ Requires:
         skeptic refuted with evidence.
     `extractor`           table
         `model` is the `text_model` model that extracts the claims.
+        `reasoning_effort` (default: "none") is sent as the request's
+        `reasoning_effort`; `false` leaves the field out of the request.
     `skeptics`            table[]
         One `{ provider = "opencode-acp", model = "..." }` per skeptic.
     `turn_timeout_ms`     integer (default: 300000)

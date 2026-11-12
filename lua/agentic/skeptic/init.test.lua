@@ -387,6 +387,16 @@ describe("agentic.skeptic.Skeptic", function()
         assert.equal(2, #extracts)
     end)
 
+    it("shortens a long extraction error in the notify", function()
+        local _, session = enabled_skeptic()
+        end_turn(session, add_prompt(session, "one"))
+
+        extracts[1].on_done(nil, string.rep("x", 10000))
+
+        local msg = notify_stub.calls[1][1]
+        assert.truthy(vim.api.nvim_strwidth(msg) <= 200)
+    end)
+
     it("keeps a held delivery for the next normal turn end", function()
         local _, session = enabled_skeptic()
         session.held_cause = "the session is still loading"

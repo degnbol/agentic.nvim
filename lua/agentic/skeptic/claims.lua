@@ -48,6 +48,7 @@ end
 function M.extract(turn, checked, on_done)
     TextModel.complete({
         model = Config.skeptic.extractor.model,
+        reasoning_effort = Config.skeptic.extractor.reasoning_effort or nil,
         system = Prompts.text("extract"),
         input = extract_input(turn, checked),
     }, function(text, err)

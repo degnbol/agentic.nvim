@@ -8,6 +8,7 @@ local Json = require("agentic.utils.json")
 --- @field system? string
 --- @field input string
 --- @field max_tokens? integer
+--- @field reasoning_effort? string The OpenAI-compatible `reasoning_effort` request field
 
 --- @class agentic.utils.TextModel
 local M = {}
@@ -30,6 +31,7 @@ local function encode_body(request)
         model = request.model,
         messages = messages,
         max_tokens = request.max_tokens,
+        reasoning_effort = request.reasoning_effort,
     })
 end
 
@@ -51,6 +53,15 @@ local function parse_reply(stdout)
         return nil, "undecodable reply: " .. stdout
     end
     local choice = type(decoded.choices) == "table" and decoded.choices[1]
+    if type(choice) == "table" and choice.finish_reason == "length" then
+        local usage = Json.present(decoded.usage)
+        local tokens = type(usage) == "table" and usage.completion_tokens
+        if type(tokens) == "number" then
+            return nil,
+                ("reply cut off at the output limit (%d tokens)"):format(tokens)
+        end
+        return nil, "reply cut off at the output limit"
+    end
     local message = type(choice) == "table" and Json.present(choice.message)
     local content = type(message) == "table" and Json.present(message.content)
     if type(content) ~= "string" then
