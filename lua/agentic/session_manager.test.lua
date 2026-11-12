@@ -814,6 +814,7 @@ describe("agentic.SessionManager", function()
                 _session_epoch = 0,
                 _is_first_message = true,
                 agent = {
+                    state = "ready",
                     agent_capabilities = { loadSession = true },
                     subscribers = {},
                     load_session = function(
@@ -922,7 +923,7 @@ describe("agentic.SessionManager", function()
 
         it("defers a load until the agent is ready", function()
             local session = make_load_session()
-            session.agent.agent_capabilities = nil
+            session.agent.state = "initializing"
             session.load_acp_session = SessionManager.load_acp_session
 
             session:load_acp_session("test-session-id", "/tmp", "m")
@@ -934,6 +935,28 @@ describe("agentic.SessionManager", function()
             }, session._pending_load)
             assert.is_nil(session._load_state)
             assert.is_nil(captured_load_cb)
+        end)
+
+        it("loads at once on a ready agent", function()
+            local session = make_load_session()
+            session.load_acp_session = SessionManager.load_acp_session
+
+            session:load_acp_session("test-session-id", "/tmp", "m")
+
+            assert.is_not_nil(captured_load_cb)
+            assert.is_nil(session._pending_load)
+        end)
+
+        it("sends a load for an agent with no capabilities", function()
+            local saved = ChatHistory:new("chat-1")
+            saved.session_id = "acp-1"
+            assert.is_nil(saved:save(vim.uv.fs_realpath("/tmp")))
+            local session = make_load_session()
+            session.agent.agent_capabilities = nil
+
+            session:_do_load_acp_session("chat-1", "/tmp")
+
+            assert.is_not_nil(captured_load_cb)
         end)
 
         it("enters a load state while the load is in flight", function()

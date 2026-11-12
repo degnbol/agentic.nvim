@@ -12,6 +12,7 @@ vim.cmd("Agentic")
 _G.s = require("agentic.session_registry").current()
 _G.persists = 0
 _G.s._persist_history = function() _G.persists = _G.persists + 1 end
+_G.s.agent.state = "ready"
 _G.s.agent.agent_capabilities = { loadSession = true }
 _G.s.agent._send_request = function(_, method, _, cb)
     if method == "session/load" then _G.load_cb = cb end
@@ -75,6 +76,38 @@ _G.load_cb({}, nil)
                 "vim.api.nvim_buf_get_name(_G.s.widget.buf_nrs.agent)"
             )
         )
+    end)
+
+    it("sends a load deferred until the agent is ready", function()
+        child.lua([[
+local agent = _G.s.agent
+agent._send_request = function(_, method, params, cb)
+    if method == "initialize" then
+        cb({ protocolVersion = 1, agentCapabilities = { loadSession = true } }, nil)
+    end
+    if method == "session/load" then _G.load_params = params end
+end
+agent.transport = { start = function() agent.state = "connected" end }
+local saved = require("agentic.ui.chat_history"):new()
+saved.chat_id = "chat-1"
+saved.session_id = "acp-2"
+saved:add_message({ type = "user", text = "q", timestamp = 0, provider_name = "p" })
+assert(saved:save(vim.uv.fs_realpath("/tmp")) == nil)
+agent.state = "initializing"
+vim.cmd("tabnew")
+require("agentic").load_acp_session("chat-1")
+_G.l = require("agentic.session_registry").session_for_key("chat-1")
+_G.deferred = _G.l._pending_load ~= nil
+_G.sent_early = _G.load_params ~= nil
+agent.state = "disconnected"
+agent:_connect()
+]])
+        child.flush()
+
+        assert.is_true(child.lua_get("_G.deferred"))
+        assert.is_false(child.lua_get("_G.sent_early"))
+        assert.equal("acp-2", child.lua_get("_G.load_params.sessionId"))
+        assert.is_true(child.lua_get("_G.l._pending_load == nil"))
     end)
 
     it("records the replayed and the later tool calls", function()

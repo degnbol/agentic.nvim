@@ -3831,15 +3831,15 @@ end
 
 --- Load a saved chat, or an existing ACP session with no saved file (e.g.
 --- from claude-agent-acp), with ACP `session/load`. The agent replays the
---- conversation via session/update notifications. If the agent isn't ready
---- yet (fresh SessionManager), the load is deferred until the on_ready
---- callback fires.
+--- conversation via session/update notifications. Call it only while the
+--- agent is ready, or before this session first sees it ready (just
+--- created). Otherwise the load is deferred and may never run.
 --- @param chat_id string The chat id, or the full ACP session id of a session with no saved file, which loads into a new chat
 --- @param cwd? string Original working directory for the session.
 ---   When nil, the cwd recorded in the saved session file, else vim.fn.getcwd().
 --- @param model? string Model id saved with the session, applied after load
 function SessionManager:load_acp_session(chat_id, cwd, model)
-    if self.agent and self.agent.agent_capabilities then
+    if self.agent and self.agent.state == "ready" then
         self:_do_load_acp_session(chat_id, cwd, model)
     else
         self._pending_load = {
@@ -3911,7 +3911,8 @@ function SessionManager:_do_load_acp_session(chat_id, cwd, model)
     -- file's end. Without `loadSession` the load fails at once, and the
     -- fallback renders the file.
     local from_file = saved_history ~= nil
-        and self.agent.agent_capabilities.loadSession == true
+        and vim.tbl_get(self.agent, "agent_capabilities", "loadSession")
+            == true
 
     -- The load state stops the constructor's deferred new_session, the epoch
     -- rejects an in-flight one.

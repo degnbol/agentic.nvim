@@ -138,12 +138,12 @@ _G.tabs = #vim.api.nvim_list_tabpages()
 
     it("a second :e during a deferred load shows the same chat", function()
         child.lua([[
-_G.agent.agent_capabilities = nil
+_G.agent.state = "initializing"
 vim.cmd("edit agentic://sid-saved")
 _G.first = vim.api.nvim_get_current_buf()
 vim.cmd("tabedit agentic://sid-saved")
 _G.second = vim.api.nvim_get_current_buf()
-_G.agent.agent_capabilities = { loadSession = true }
+_G.agent.state = "ready"
 ]])
 
         assert.equal(2, child.lua_get("vim.tbl_count(_G.Registry.by_id)"))
