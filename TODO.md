@@ -76,6 +76,8 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 
 ### Bugs
 
+- P1 [FIX-tripwire-uncalled-opencode-call.md](notes/FIX-tripwire-uncalled-opencode-call.md): Mark an opencode call that failed before it got its input as not run — spec
+- P2 [FIX-cancel-request-handler.md](notes/FIX-cancel-request-handler.md): Handle `$/cancel_request` for permission requests — spec
 - P2 [FIX-deny-gate-flag-cap.md](notes/FIX-deny-gate-flag-cap.md): exact multi-element positional matching (remove the flag cap) — reviewed (open questions)
 - P2 [FIX-v2-edit-write-gaps.md](notes/FIX-v2-edit-write-gaps.md): ACP v2 Edit/Write diffs — every hunk, and the patch facts — draft
 - P3 [BUG-glob-redirect-as-argument.md](notes/BUG-glob-redirect-as-argument.md): a redirect with no space before a glob or brace target auto-approves

@@ -78,10 +78,6 @@ an `IDEA-` note in `notes/`.
   bindings.
 - **Hex, base and exponent literals**: `$((0x1F))`, `$((16#ff))`, `$((1e3))`
   prompt because `reads_value` sees letters; they are numbers.
-- **`$/cancel_request` and the permission float**: claude-agent-acp attaches
-  a `cancellationSignal` to `session/request_permission`, so a cancelled
-  turn should retract an open float. Never observed (0 of 1331 requests in
-  7.9 M debug-log lines); confirm it arrives before building a handler.
 - **Status label from permission state**: show "pending" while a permission
   request is open for a `toolCallId`, instead of the opencode adapter's
   `in_progress` → `pending` relabel (acp skill `references/opencode.md` §
