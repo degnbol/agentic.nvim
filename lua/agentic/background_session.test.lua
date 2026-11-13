@@ -402,7 +402,8 @@ describe("agentic.BackgroundSession", function()
         --- @param argument string
         --- @param status string|nil Its end; default completed
         --- @param kind string|nil Default execute
-        local function run_unasked(id, argument, status, kind)
+        --- @param rejection string|nil The end's rejection line
+        local function run_unasked(id, argument, status, kind, rejection)
             client.handlers.on_tool_call({
                 tool_call_id = id,
                 kind = kind or "execute",
@@ -412,6 +413,7 @@ describe("agentic.BackgroundSession", function()
             client.handlers.on_tool_call_update({
                 tool_call_id = id,
                 status = status or "completed",
+                rejection = rejection,
             })
         end
 
@@ -424,6 +426,11 @@ describe("agentic.BackgroundSession", function()
         it("stops on an unasked write that failed after it ran", function()
             run_unasked("t1", "rm -r src; false", "failed")
             assert.same({ "bg-1" }, client.closes)
+        end)
+
+        it("ignores an unasked write rejected before it ran", function()
+            run_unasked("t1", "rm -r src", "failed", nil, "Rejected")
+            assert.same({}, client.closes)
         end)
 
         it("stops on an unasked edit outside the temp dirs", function()

@@ -197,6 +197,30 @@ describe("agentic.acp.CanonicalToolCall", function()
         end)
     end)
 
+    describe("ran", function()
+        it("counts a completed call", function()
+            assert.is_true(CanonicalToolCall.ran({ status = "completed" }))
+        end)
+
+        it("counts a failed call without a rejection", function()
+            assert.is_true(CanonicalToolCall.ran({ status = "failed" }))
+        end)
+
+        it("does not count a failed call with a rejection", function()
+            assert.is_false(CanonicalToolCall.ran({
+                status = "failed",
+                rejection = "Rejected",
+            }))
+        end)
+
+        it("does not count a failed call with causes", function()
+            assert.is_false(CanonicalToolCall.ran({
+                status = "failed",
+                causes = { { code = "prompt-reject" } },
+            }))
+        end)
+    end)
+
     describe("status_word", function()
         it("says rejected for a rejected call", function()
             assert.equal(
