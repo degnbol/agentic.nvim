@@ -3,6 +3,7 @@ local BufferNames = require("agentic.utils.buffer_names")
 local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local ChatBuffer = require("agentic.ui.chat_buffer")
 local Config = require("agentic.config")
+local Duration = require("agentic.utils.duration")
 local ErrorReport = require("agentic.acp.error_report")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
 local FenceRows = require("agentic.ui.fence_rows")
@@ -82,20 +83,37 @@ local function materialize_injections(bufnr, start_row, end_row)
 end
 
 --- The status footer note of a tool call: the distinct words of its causes,
---- in order, or nil when it has none. A cause's word is its code, or the kind
---- it names for a `kind` cause.
+--- in order, then its run time when that is at or above the clocks'
+--- threshold, joined by ` · `. Nil when it has neither. A cause's word is its
+--- code, or the kind it names for a `kind` cause. The run time is
+--- `duration_ms`, else the running clock's time in whole seconds.
 --- @param block agentic.ui.MessageWriter.ToolCallBase
+--- @param run_clocks agentic.ui.RunClocks|nil nil shows no run time
 --- @return string|nil note
-local function footer_note(block)
+local function footer_note(block, run_clocks)
     local words = vim.iter(block.causes or {})
         :map(function(cause)
             return cause.code == "kind" and cause.subject or cause.code
         end)
         :totable()
-    if #words == 0 then
+    local parts = {}
+    if #words > 0 then
+        table.insert(parts, table.concat(vim.list.unique(words), ", "))
+    end
+
+    if run_clocks then
+        local elapsed = run_clocks:elapsed(block.tool_call_id)
+        local time = block.duration_ms
+            or (elapsed and math.floor(elapsed / 1000) * 1000)
+        if time and time >= run_clocks.threshold_ms then
+            table.insert(parts, Duration.format_ms(time))
+        end
+    end
+
+    if #parts == 0 then
         return nil
     end
-    return table.concat(vim.list.unique(words), ", ")
+    return table.concat(parts, " · ")
 end
 
 --- The word a tool call's status footer shows: `stopped` when the call
@@ -181,6 +199,7 @@ end
 --- @field stopped_job_output_file? string `output_file` of the job this call stops
 --- @field stopped_by? string Tool call id of the call that stopped this call's background job
 --- @field provider_note? agentic.ui.MessageWriter.ProviderNote
+--- @field duration_ms? integer How long the call ran, from its allow answer when the client gave one
 
 --- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
 --- @field kind agentic.acp.ToolKind
@@ -222,6 +241,7 @@ end
 --- @class agentic.ui.MessageWriter
 --- @field bufnr integer
 --- @field tool_call_blocks table<string, agentic.ui.MessageWriter.ToolCallBlock>
+--- @field run_clocks? agentic.ui.RunClocks nil shows and stamps no run times
 --- @field _thought_run? string Thinking streamed since the last flush, held back until the run ends because its fence has to reach the buffer in one write (see `flush_thought_run`). Dropped rather than rendered when the widget closes mid-run; the text is in `chat_history`.
 --- @field _rebuild_armed boolean True while a ModeChanged autocmd waits for insert mode to end to rebuild the chat windows' folds. Guards against arming a second one.
 --- @field _augroup integer The writer's autocmd group, deleted with the buffer
@@ -296,8 +316,9 @@ function MessageWriter:reset()
 end
 
 --- @param bufnr integer
+--- @param run_clocks agentic.ui.RunClocks|nil
 --- @return agentic.ui.MessageWriter
-function MessageWriter:new(bufnr)
+function MessageWriter:new(bufnr, run_clocks)
     if not vim.api.nvim_buf_is_valid(bufnr) then
         error("Invalid buffer number: " .. tostring(bufnr))
     end
@@ -305,6 +326,7 @@ function MessageWriter:new(bufnr)
     local instance = setmetatable({
         bufnr = bufnr,
         tool_call_blocks = {},
+        run_clocks = run_clocks,
         _thought_run = nil,
         _rebuild_armed = false,
         _replay_held = {},
@@ -3009,12 +3031,7 @@ end
 --- @param footer_row integer 0-indexed footer row
 --- @param folds agentic.ui.ToolCallLayout.Fold[] fold states for a final status
 function MessageWriter:_write_status_and_settle_folds(block, footer_row, folds)
-    Renderer.apply_status_footer(
-        self.bufnr,
-        footer_row,
-        footer_status(block),
-        footer_note(block)
-    )
+    self:_write_footer(block, footer_row)
     if is_final_status(block.status) then
         self:_settle_block_folds(block, folds)
     end
@@ -3207,14 +3224,40 @@ function MessageWriter:_paint_tool_call_block(block, start_row, layout)
         table.insert(block.decoration_extmark_ids, dim_id)
     end
 
-    Renderer.apply_status_footer(
-        bufnr,
-        end_row,
-        footer_status(block),
-        footer_note(block)
-    )
+    self:_write_footer(block, end_row)
 
     materialize_injections(bufnr, start_row, end_row)
+end
+
+--- Write a block's status footer: its status word and footer note.
+--- @param block agentic.ui.MessageWriter.ToolCallBlock
+--- @param footer_row integer 0-indexed footer row
+function MessageWriter:_write_footer(block, footer_row)
+    Renderer.apply_status_footer(
+        self.bufnr,
+        footer_row,
+        footer_status(block),
+        footer_note(block, self.run_clocks)
+    )
+end
+
+--- Rewrite a tracked block's status footer, so its running time shows the
+--- clock's current value. No-op for an untracked block or one whose rows
+--- are gone.
+--- @param tool_call_id string
+function MessageWriter:refresh_status(tool_call_id)
+    local block = self.tool_call_blocks[tool_call_id]
+    if not block then
+        return
+    end
+    local _, footer_row = self:_block_rows(block)
+    if not footer_row then
+        return
+    end
+    self:_schedule_follow()
+    self:_own_edit(function()
+        self:_write_footer(block, footer_row)
+    end)
 end
 
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBlock
@@ -3318,6 +3361,8 @@ local function shift_across_block(row, start_row, old_end_row, new_end_row)
     return new_end_row + 1
 end
 
+--- Apply an update to its tracked block, and stamp `duration_ms` on the
+--- given update when it ends the call: the time its run clock measured.
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBase
 function MessageWriter:update_tool_call_block(tool_call_block)
     local tracker = self.tool_call_blocks[tool_call_block.tool_call_id]
@@ -3330,6 +3375,15 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             { title = "Agentic sync: missing tracker" }
         )
         return
+    end
+
+    if
+        self.run_clocks
+        and is_final_status(tool_call_block.status)
+        and not is_final_status(tracker.status)
+    then
+        tool_call_block.duration_ms =
+            self.run_clocks:finish(tool_call_block.tool_call_id)
     end
 
     -- Some ACP providers don't send the diff on the first tool_call
@@ -3430,6 +3484,9 @@ function MessageWriter:_rerender_tool_call_block(tracker, diff_frozen)
             )
         end
         self.tool_call_blocks[tracker.tool_call_id] = nil
+        if self.run_clocks then
+            self.run_clocks:drop(tracker.tool_call_id)
+        end
         return
     end
 
@@ -3467,12 +3524,7 @@ function MessageWriter:_rerender_tool_call_block(tracker, diff_frozen)
             -- Decorations (kind glyph, │, ╰─) are stable — leave them in place.
             -- A non-failed diff's fold state does not depend on the status,
             -- so the state stored at render still holds.
-            Renderer.apply_status_footer(
-                bufnr,
-                old_end_row,
-                footer_status(tracker),
-                footer_note(tracker)
-            )
+            self:_write_footer(tracker, old_end_row)
             return false
         end
 

@@ -89,7 +89,6 @@ their plans)
 - P3 [`refactor-acp-kind-normalisation.md`](notes/refactor-acp-kind-normalisation.md)
 - P3 [`feature-diff-line-numbers.md`](notes/feature-diff-line-numbers.md)
 - P3 [`feature-context-usage.md`](notes/feature-context-usage.md)
-- P3 [`feature-timing.md`](notes/feature-timing.md)
 - P3 [`REFACTOR-claude-agent-reference.md`](notes/REFACTOR-claude-agent-reference.md)
   (global `acp` skill, dotfiles repo)
 

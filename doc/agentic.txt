@@ -276,6 +276,11 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     `background_tail_lines`    integer (default: 10)
         Last lines of a background command's output file to show, never
         folded.
+    `elapsed_threshold_ms`     integer | false (default: 5000)
+        A tool call that runs at least this many milliseconds shows its
+        run time in its footer, and the next prompt tells the agent that
+        time. A call whose permission request the plugin answered is timed
+        from the answer. `false` shows and tells no times.
 
 ------------------------------------------------------------------------------
 4.5 PERMISSIONS                                   *agentic-config-permissions*

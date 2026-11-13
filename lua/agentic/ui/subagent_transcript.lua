@@ -26,15 +26,16 @@ SubagentTranscript.__index = SubagentTranscript
 --- @param subagent agentic.ui.MessageWriter.SubagentInfo|nil Nil for output saved without a block, headed `Agent`
 --- @param widget agentic.ui.ChatWidget
 --- @param handlers agentic.ui.SubagentTranscript.Handlers
+--- @param run_clocks agentic.ui.RunClocks|nil nil shows no run times
 --- @return agentic.ui.SubagentTranscript
-function SubagentTranscript:new(name, subagent, widget, handlers)
+function SubagentTranscript:new(name, subagent, widget, handlers, run_clocks)
     local bufnr = vim.api.nvim_create_buf(true, true)
     widget:setup_panel_buf(bufnr, "subagent")
     -- After the b-vars: its BufWinEnter reads the panel.
     ChatBuffer.setup(bufnr)
     BufHelpers.claim_name(bufnr, name)
 
-    local view = AgentView:new(bufnr)
+    local view = AgentView:new(bufnr, run_clocks)
     local writer = view.writer
 
     self = setmetatable({

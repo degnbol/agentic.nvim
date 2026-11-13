@@ -3815,6 +3815,113 @@ describe("agentic.ui.MessageWriter", function()
         )
     end)
 
+    describe("run time in the footer", function()
+        local RunClocks = require("agentic.ui.run_clocks")
+        local now_ms
+        --- @type TestStub
+        local schedule_stub
+        --- @type agentic.ui.RunClocks
+        local clocks
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+            now_ms = 0
+            clocks = RunClocks:new(5000, function() end)
+            -- Each running clock reads `now_ms`.
+            function clocks:elapsed(id)
+                return RunClocks.elapsed(self, id) and now_ms
+            end
+            writer.run_clocks = clocks
+        end)
+
+        after_each(function()
+            clocks:destroy()
+            schedule_stub:revert()
+        end)
+
+        --- @param id string
+        --- @return string footer The tracked block's footer row
+        local function footer(id)
+            local _, end_row = writer:_block_rows(writer.tool_call_blocks[id])
+            local row = end_row --[[@as integer]]
+            return vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
+        end
+
+        it("shows no time below the threshold", function()
+            clocks:start("t", true)
+            writer:write_tool_call_block(make_tool_call_block("t", "pending"))
+            now_ms = 4999
+            writer:refresh_status("t")
+            assert.truthy(footer("t"):find(" pending $"))
+        end)
+
+        it(
+            "shows whole seconds at and above the threshold while running",
+            function()
+                clocks:start("t", true)
+                writer:write_tool_call_block(
+                    make_tool_call_block("t", "pending")
+                )
+                now_ms = 7900
+                writer:refresh_status("t")
+                assert.truthy(footer("t"):find("pending · 7.0 s $"))
+            end
+        )
+
+        it("follows the causes", function()
+            clocks:start("t", true)
+            writer:write_tool_call_block(make_tool_call_block("t", "pending"))
+            now_ms = 6000
+            writer:update_tool_call_block({
+                tool_call_id = "t",
+                status = "in_progress",
+                causes = { { code = "grant", subject = "/a" } },
+            })
+            assert.truthy(footer("t"):find("in_progress · grant · 6.0 s $"))
+        end)
+
+        it("stamps duration_ms on the ending update and keeps it", function()
+            clocks:start("t", true)
+            writer:write_tool_call_block(make_tool_call_block("t", "pending"))
+            now_ms = 192500
+            --- @type agentic.ui.MessageWriter.ToolCallBase
+            local update = { tool_call_id = "t", status = "completed" }
+            writer:update_tool_call_block(update)
+            assert.equal(192500, update.duration_ms)
+            now_ms = 999999
+            writer:update_tool_call_block({
+                tool_call_id = "t",
+                status = "completed",
+                body = { "late" },
+            })
+            assert.truthy(footer("t"):find("completed · 3m12s $"))
+        end)
+
+        it("stamps the calls stamp_open_calls ends", function()
+            clocks:start("t", true)
+            writer:write_tool_call_block(make_tool_call_block("t", "pending"))
+            now_ms = 8000
+            local updates = writer:stamp_open_calls("interrupted", "failed")
+            assert.equal(8000, updates[1].duration_ms)
+        end)
+
+        it("shows a written block's saved time without a clock", function()
+            local block = make_tool_call_block("t", "completed")
+            block.duration_ms = 61000
+            writer:write_tool_call_block(block)
+            assert.truthy(footer("t"):find("completed · 1m01s $"))
+            assert.is_nil(clocks:elapsed("t"))
+        end)
+
+        it("shows no time without clocks", function()
+            writer.run_clocks = nil
+            local block = make_tool_call_block("t", "completed")
+            block.duration_ms = 61000
+            writer:write_tool_call_block(block)
+            assert.truthy(footer("t"):find(" completed $"))
+        end)
+    end)
+
     describe("status footer as direct buffer text", function()
         --- @type TestStub
         local schedule_stub

@@ -7599,6 +7599,112 @@ describe("agentic.SessionManager", function()
             assert.is_nil(footer():find("·", 1, true))
             assert.is_nil(session.chat_history.messages[1].causes)
         end)
+
+        describe("run clocks", function()
+            local RunClocks = require("agentic.ui.run_clocks")
+            --- @type agentic.ui.RunClocks
+            local clocks
+            --- The prompt's callback, once `request_permission` prompted.
+            --- @type fun(option_id: string|nil)
+            local answer
+
+            local request = {
+                sessionId = "s-1",
+                toolCall = { toolCallId = "tc-1" },
+                options = {
+                    { optionId = "yes", kind = "allow_once", name = "Yes" },
+                    { optionId = "no", kind = "reject_once", name = "No" },
+                },
+            } --[[@as agentic.acp.RequestPermission]]
+
+            before_each(function()
+                clocks = RunClocks:new(5000, function() end)
+                session._run_clocks = clocks
+                session.message_writer.run_clocks = clocks
+                session._on_request_permission =
+                    SessionManager._on_request_permission
+                session._refresh_status = SessionManager._refresh_status
+                answer = function(_)
+                    error("not prompted")
+                end
+            end)
+
+            after_each(function()
+                clocks:destroy()
+            end)
+
+            --- Send `request`, prompting the user, or answering it at once
+            --- with `option_id` like an auto-approval.
+            --- @param option_id string|nil Answer at once; nil prompts
+            local function request_permission(option_id)
+                session.permission_manager.add_request = function(_, _, cb)
+                    if option_id then
+                        cb(option_id)
+                        return false
+                    end
+                    answer = cb
+                    return true
+                end
+                session:_on_request_permission(request, function() end)
+            end
+
+            it("runs a live call's clock", function()
+                tool_call("tc-1")
+                assert.is_not_nil(clocks:elapsed("tc-1"))
+            end)
+
+            it("starts no clock during a load's replay", function()
+                session._load_state = "loading"
+                tool_call("tc-1")
+                assert.is_nil(clocks:elapsed("tc-1"))
+            end)
+
+            it("waits on a prompt and runs from an allow", function()
+                tool_call("tc-1")
+                request_permission(nil)
+                assert.is_nil(clocks:elapsed("tc-1"))
+                answer("yes")
+                assert.is_not_nil(clocks:elapsed("tc-1"))
+            end)
+
+            it("restarts at an auto-approval", function()
+                tool_call("tc-1")
+                local restart = spy.on(clocks, "restart")
+                request_permission("yes")
+                restart:revert()
+                assert.spy(restart).was.called_with(clocks, "tc-1")
+            end)
+
+            for name, option_id in pairs({ reject = "no", cancel = false }) do
+                it("keeps waiting after a " .. name, function()
+                    tool_call("tc-1")
+                    request_permission(nil)
+                    answer(option_id or nil)
+                    assert.is_nil(clocks:elapsed("tc-1"))
+                end)
+            end
+
+            it(
+                "keeps waiting when the request comes before its call",
+                function()
+                    request_permission(nil)
+                    tool_call("tc-1")
+                    assert.is_nil(clocks:elapsed("tc-1"))
+                end
+            )
+
+            it("reports no call a load replayed", function()
+                session._load_state = "loading"
+                tool_call("tc-1")
+                session._load_state = nil
+                session:_on_tool_call_update({
+                    tool_call_id = "tc-1",
+                    status = "completed",
+                })
+                assert.same({}, clocks:take_reports())
+                assert.is_nil(session.chat_history.messages[1].duration_ms)
+            end)
+        end)
     end)
 
     describe("submit gating", function()

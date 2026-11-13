@@ -29,8 +29,10 @@ local Json = require("agentic.utils.json")
 local Listeners = require("agentic.utils.listeners")
 local Logger = require("agentic.utils.logger")
 local MessageWriter = require("agentic.ui.message_writer")
+local PermissionOptions = require("agentic.acp.permission_options")
 local PromptBlocks = require("agentic.utils.prompt_blocks")
 local Recovery = require("agentic.session_recovery")
+local RunClocks = require("agentic.ui.run_clocks")
 local SessionRegistry = require("agentic.session_registry")
 local SessionResume = require("agentic.session_resume")
 local SequenceTail = require("agentic.utils.sequence_tail")
@@ -39,6 +41,7 @@ local SideRecords = require("agentic.ui.side_records")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
 local Subagents = require("agentic.subagents")
+local ToolTimings = require("agentic.tool_timings")
 local WidgetLayout = require("agentic.ui.widget_layout")
 local WindowDecoration = require("agentic.ui.window_decoration")
 
@@ -114,6 +117,7 @@ end
 --- @field _grant_command agentic.GrantCommand
 --- @field tail_lines agentic.ui.TailLines `main_view.tail_lines`
 --- @field _subagents agentic.Subagents
+--- @field _run_clocks? agentic.ui.RunClocks How long each live tool call runs. Nil when `tool_call_display.elapsed_threshold_ms` is false
 --- @field _output_tails table<string, agentic.utils.FileTail> toolCallId -> tail of the output file of a command still running
 --- @field _held_tool_call_updates table<string, { update: agentic.ui.MessageWriter.ToolCallBase, child_id?: string }> toolCallId -> fields a side record gave a call the chat does not show yet, and the subagent whose records gave them. Dropped at the turn's end for the main agent, at the subagent's end for a subagent
 --- @field file_list agentic.ui.FileList
@@ -434,7 +438,15 @@ function SessionManager:new(provider)
         end
     end
 
-    self.main_view = AgentView:new(self.widget.buf_nrs.agent)
+    local threshold_ms = Config.tool_call_display.elapsed_threshold_ms
+    if threshold_ms then
+        self._run_clocks = RunClocks:new(threshold_ms, function(ids)
+            for _, id in ipairs(ids) do
+                self:_refresh_status(id)
+            end
+        end)
+    end
+    self.main_view = AgentView:new(self.widget.buf_nrs.agent, self._run_clocks)
     self.tail_lines = self.main_view.tail_lines
     self.message_writer = self.main_view.writer
     self._subagents =
@@ -1062,6 +1074,16 @@ function SessionManager:_view_for(tool_call_id)
     return self.main_view
 end
 
+--- Rewrite a tool call's status footer, where its buffer is loaded. Loads
+--- no transcript: one loaded later renders the call from the history.
+--- @param tool_call_id string
+function SessionManager:_refresh_status(tool_call_id)
+    local writer = self._subagents:loaded_writer_of(tool_call_id)
+    if writer then
+        writer:refresh_status(tool_call_id)
+    end
+end
+
 --- The id of the main chat's block for a tool call: the id itself when the
 --- call has a block of its own, else the child id of the subagent the id
 --- delegated to, else the id itself.
@@ -1147,6 +1169,7 @@ function SessionManager:_subagents_host()
                 self:render_agents()
             end
         end,
+        run_clocks = self._run_clocks,
         return_prompt = function(text, bufnr, reason)
             local return_prompt = reason == "refusal"
                     and Recovery.restore_refused_prompt
@@ -1824,6 +1847,13 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
         self.permission_manager:take_causes(id),
         agent_key
     )
+    if
+        self._run_clocks
+        and not self:_replaying()
+        and not has_ended(tool_call.status)
+    then
+        self._run_clocks:start(id, child_id == nil)
+    end
     self:_sync_job_stop(id)
     if agent_key then
         self:_sync_modified(self.chat_history)
@@ -2193,6 +2223,14 @@ function SessionManager:_on_request_permission(request, callback)
             return
         end
 
+        -- The tool runs from the answer on.
+        local kind = PermissionOptions.option_kind(request.options, option_id)
+        if
+            self._run_clocks
+            and (kind == "allow_once" or kind == "allow_always")
+        then
+            self._run_clocks:restart(tool_call_id)
+        end
         callback(option_id)
     end
 
@@ -2205,6 +2243,11 @@ function SessionManager:_on_request_permission(request, callback)
         self.permission_manager:add_request(request, wrapped_callback)
 
     if prompted then
+        if self._run_clocks then
+            self._run_clocks:wait(tool_call_id)
+            self:_refresh_status(tool_call_id)
+        end
+
         -- Notifications and hooks are non-essential UI; a throw here must not
         -- escape (add_request has already run, so the callback is safe).
         local ok, err = pcall(function()
@@ -3349,6 +3392,17 @@ function SessionManager:_handle_input_submit_inner(input_text)
         })
     end
 
+    local timings = not is_command
+        and self._run_clocks
+        and ToolTimings.prompt_text(
+            self._run_clocks:take_reports(),
+            self.message_writer.tool_call_blocks,
+            self._run_clocks.threshold_ms
+        )
+    if timings then
+        table.insert(prompt, { type = "text", text = timings })
+    end
+
     --- Display-only lines appended after the prompt body in the chat widget
     --- (heading and region signs are owned by MessageWriter:write_user_prompt)
     local extra_lines = {}
@@ -4285,12 +4339,17 @@ end
 --- The one place those three come apart safely. Clearing the text alone leaves
 --- every extmark collapsed on row 0, where a stale tracker resolves to the top
 --- of the next conversation.
+---
+--- The run clocks of its calls go too: no update ends them now.
 function SessionManager:clear_chat()
     self:_stop_output_tails(false)
     self.widget:clear()
     self.message_writer:reset()
     self._subagents:reset()
     self._held_tool_call_updates = {}
+    if self._run_clocks then
+        self._run_clocks:clear()
+    end
 end
 
 --- Return the session to an empty conversation with no ACP session. Sends
@@ -4493,6 +4552,9 @@ function SessionManager:destroy()
 
     self:_cancel_session()
     self.widget:destroy()
+    if self._run_clocks then
+        self._run_clocks:destroy()
+    end
 end
 
 --- Replace the conversation with `history` in a new ACP session: clear the

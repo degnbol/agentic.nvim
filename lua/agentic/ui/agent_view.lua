@@ -16,12 +16,13 @@ local AgentView = {}
 AgentView.__index = AgentView
 
 --- @param bufnr integer A chat-style buffer
+--- @param run_clocks agentic.ui.RunClocks|nil nil shows no run times
 --- @return agentic.ui.AgentView
-function AgentView:new(bufnr)
+function AgentView:new(bufnr, run_clocks)
     return setmetatable({
         bufnr = bufnr,
         tail_lines = TailLines:new(bufnr),
-        writer = MessageWriter:new(bufnr),
+        writer = MessageWriter:new(bufnr, run_clocks),
         response_boundary = ResponseBoundary:new(),
     }, self)
 end

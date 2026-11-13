@@ -502,6 +502,7 @@ local ConfigDefault = {
     --- @field diff_context_max_lines integer Skip context-aware diff highlighting when the target file exceeds this many lines (each Edit render reparses the whole file). Set to 0 to disable the feature entirely.
     --- @field create_max_lines integer Fold a created-file diff closed when it exceeds this many lines (0 = always open). An edit diff stays open unless the edit failed.
     --- @field background_tail_lines integer Last lines of a background command's output file shown under its block
+    --- @field elapsed_threshold_ms integer|false A tool call that runs at least this long shows its run time in its footer, and the agent gets the time with the next prompt. false shows and tells no times.
     tool_call_display = {
         search_max_lines = 8,
         execute_max_lines = 25,
@@ -510,6 +511,7 @@ local ConfigDefault = {
         diff_context_max_lines = 10000,
         create_max_lines = 50,
         background_tail_lines = 10,
+        elapsed_threshold_ms = 5000,
     },
 
     --- Notification settings

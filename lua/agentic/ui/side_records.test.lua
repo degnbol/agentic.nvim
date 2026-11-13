@@ -275,7 +275,7 @@ describe("SideRecords.write", function()
                 failed = false,
             },
             {
-                text = "`/hooks/lint.sh` · 2.8 s",
+                text = "`/hooks/lint.sh` · 2.7 s",
                 tool_call_id = "toolu_1",
                 failed = false,
             },

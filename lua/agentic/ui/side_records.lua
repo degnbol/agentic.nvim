@@ -1,20 +1,10 @@
+local Duration = require("agentic.utils.duration")
 local FileSystem = require("agentic.utils.file_system")
 local MarkdownGuard = require("agentic.utils.markdown_guard")
 local ShellParse = require("agentic.utils.shell_parse")
 
 --- @class agentic.ui.SideRecords
 local SideRecords = {}
-
---- A duration for reading at a glance: milliseconds below a second, then
---- seconds to one decimal.
---- @param ms number
---- @return string
-local function format_duration(ms)
-    if ms < 1000 then
-        return ("%d ms"):format(ms)
-    end
-    return ("%.1f s"):format(ms / 1000)
-end
 
 --- @type table<agentic.acp.HookOutcome, string>
 local OUTCOME_WORDS = {
@@ -55,7 +45,7 @@ local function hook_title(record)
         title = title .. " · " .. OUTCOME_WORDS[record.outcome]
     end
     if record.duration_ms then
-        title = title .. " · " .. format_duration(record.duration_ms)
+        title = title .. " · " .. Duration.format_ms(record.duration_ms)
     end
     return title
 end

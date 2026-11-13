@@ -37,6 +37,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field relay fun(instruction: string, on_returned: agentic.OnReturned|nil): string|nil Send a prompt on the user's behalf; when held, returns the cause, as a phrase
 --- @field return_prompt fun(text: string, bufnr: integer|nil, reason: agentic.ReturnReason) Give a returned message back, at the top of `bufnr` or of the session's input
 --- @field agents_changed fun() What `entries` gives may have changed
+--- @field run_clocks? agentic.ui.RunClocks The session's run clocks, which the transcripts show
 
 --- A subagent as a row of the agents panel.
 --- @class agentic.Subagents.Entry
@@ -218,7 +219,8 @@ function Subagents:_new_transcript(child_id, subagent)
             on_listed_change = function()
                 self._host.agents_changed()
             end,
-        }
+        },
+        self._host.run_clocks
     )
     return transcript
 end
@@ -292,6 +294,22 @@ function Subagents:loaded_transcript_of_key(agent_key)
         return transcript
     end
     return nil
+end
+
+--- The writer of the buffer that shows a tool call, when that buffer is
+--- loaded: its subagent's transcript's, else the chat's. Makes, loads and
+--- renders nothing.
+--- @param tool_call_id string
+--- @return agentic.ui.MessageWriter|nil writer Nil when the call's transcript does not exist or is not loaded
+function Subagents:loaded_writer_of(tool_call_id)
+    local child_id = self:owner_of(tool_call_id)
+    if not child_id then
+        return self._main_view.writer
+    end
+    local agent = self._agents[child_id]
+    local transcript = agent and agent.transcript
+    return transcript and transcript:is_loaded() and transcript.view.writer
+        or nil
 end
 
 --- The writer of the buffer that renders a tool call record: the chat's, or
