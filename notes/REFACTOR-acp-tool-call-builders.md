@@ -76,8 +76,7 @@ Claude has the same pattern four times:
   gives one kind per-tool heads).
 - Both builders run the same five `__apply_*` steps in the same order.
 - `__handle_tool_call_update` ends with a copy of the base handler's build
-  and send (`claude_agent_acp_adapter.lua:927-931`,
-  `acp_client.lua:1011-1015`). It overrides the handler for its own drop
+  and send. It overrides the handler for its own drop
   rule: it keeps a status-less update that has `rawInput` or
   `terminal_exit`, which the base drops.
 
@@ -115,7 +114,9 @@ switches use the base, both paths keep the body.
   function ACPClient:__shows_tool_call_update(update)
   ```
   `__handle_tool_call_update` returns when it is false, else builds and
-  sends as today.
+  sends as today. Unlike `__handle_tool_call`, it stays an override point
+  for steps with side effects before the gate (claude's hook patch and
+  held terminal output); its docstring says so.
 - `exec_shell` docstring: delete "Reaches only blocks built by the base
   `__build_tool_call_message`".
 
@@ -210,7 +211,8 @@ its `body`.
 ### Docs (`provider-system` skill)
 - Frontmatter description, pipeline diagram and routing table: the
   tool-call override points become `__shows_tool_call`,
-  `__build_tool_call_message` and `__build_tool_call_update`.
+  `__build_tool_call_message`, `__shows_tool_call_update` and
+  `__build_tool_call_update`.
 - § "Adapter override points": document `__shows_tool_call` and
   `__shows_tool_call_update`. In the
   paragraph "Override a `__` handler when …", Gemini's synthetic
@@ -221,6 +223,11 @@ its `body`.
 ## Callers to audit
 - `ACPClient:__handle_session_update` (`tool_call` dispatch) and gemini's
   `__handle_request_permission` call `__handle_tool_call`.
+- `ACPClient:__handle_session_update` (`tool_call_update` dispatch) and
+  gemini's `__on_permission_resolved` (synthetic `failed` update on a
+  rejected permission) call `__handle_tool_call_update`; both have a
+  status, so the default predicate shows them. Opencode's `__handle_tool_call_update` override
+  keeps its own `status` gate (Non-goals).
 - Codex's and mistral's `__build_tool_call_update` call
   `ACPClient.__build_tool_call_update`; unchanged.
 - Direct builder calls in tests: `claude_agent_acp_adapter.test.lua`,

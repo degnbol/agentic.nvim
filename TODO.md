@@ -38,6 +38,14 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 2. P3 [`FEAT-per-agent-file-activity.md`](notes/FEAT-per-agent-file-activity.md):
    binds its key in the shared-keys method
 
+**ACP v2 (claude-agent-acp)**
+1. P2 [`FIX-v2-edit-write-gaps.md`](notes/FIX-v2-edit-write-gaps.md):
+   multi-hunk diffs render hunk 1 only; no `hunk_ranges`/`file_created`
+
+**opencode adapter**
+1. P2 [`FIX-opencode-child-title-prefix.md`](notes/FIX-opencode-child-title-prefix.md)
+2. P2 [`FEAT-opencode-subagent-transcripts.md`](notes/FEAT-opencode-subagent-transcripts.md)
+
 **No ordering:**
 - P3 [`FEAT-to-chat-key.md`](notes/FEAT-to-chat-key.md)
 - P3 [`REFACTOR-blocking-stopped-name.md`](notes/REFACTOR-blocking-stopped-name.md)
@@ -77,8 +85,10 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 - P3 [`permission-always-allow-wording.md`](notes/permission-always-allow-wording.md)
 - P3 [`refactor-acp-kind-normalisation.md`](notes/refactor-acp-kind-normalisation.md)
 - P3 [`feature-diff-line-numbers.md`](notes/feature-diff-line-numbers.md)
-- P3 [`feature-context-threshold-notice.md`](notes/feature-context-threshold-notice.md)
+- P3 [`feature-context-usage.md`](notes/feature-context-usage.md)
 - P3 [`feature-timing.md`](notes/feature-timing.md)
+- P3 [`REFACTOR-claude-agent-reference.md`](notes/REFACTOR-claude-agent-reference.md)
+  (global `acp` skill, dotfiles repo)
 
 ## Bugs
 
@@ -218,6 +228,12 @@ to all ACPs.
   "todowrite"` to `kind = "todowrite"` and stripping the body in
   `MessageWriter`. But the plan/todo list is shown in its dedicated panel,
   so the chat entry is redundant. Suppress it (claude doesn't emit one).
+
+- **Subagent calls render in the main chat**:
+  [`notes/FEAT-opencode-subagent-transcripts.md`](notes/FEAT-opencode-subagent-transcripts.md).
+
+- **Background tripwire judges the display path** (P3): a false stop
+  [`notes/bug-tripwire-display-path.md`](notes/bug-tripwire-display-path.md).
 
 ### Queue
 

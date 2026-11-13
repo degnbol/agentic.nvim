@@ -37,7 +37,17 @@ Facts that decide the cases below (Neovim 0.12.6 runtime):
 7. **`pcall(vim.treesitter.start, …, "markdown")`** at **`chat_widget.lua:1377`**, **`:1442-1445`**, **`floating_message.lua:28`**, and the inner fallback at **`chat_buffer.lua:66`** (same call, not in the report) — see Open question 3.
 
 ### Notified errors
-8. **`permission_manager.lua:1174-1189`** (`reject_and_cancel_remaining`) — keep both `pcall`s (one throwing callback must not leave the other requests unresolved; an unresolved request locks the session, `session_manager.lua:2265-2269`). Replace both `Logger.debug` calls with `Logger.notify(…, vim.log.levels.ERROR)`, worded as in `cancel_requests` (`:1107-1126`): "Permission callback error during reject: " / "Queued permission callback error during reject: ". The callback is `wrapped_callback` (`session_manager.lua:2214-2262`), which runs plugin code that can raise. Not new noise: `cancel_requests` already notifies the same failure.
+8. **`permission_manager.lua` `reject_and_cancel_remaining`** — its `Logger.debug` calls are the one difference from `cancel_requests`, which notifies. The two are one routine: close the prompt, answer the current request and record its cause, answer every queued request with nil and record `prompt-cancel`. Only the current request's option id and cause differ. One method replaces both copies:
+   ```lua
+   --- Close the prompt, answer the current request (if any) with `option_id`
+   --- (nil: cancelled) and record `code` for it, then answer every queued
+   --- request with nil and record `prompt-cancel`. A raising callback is
+   --- reported with `Logger.notify` at ERROR and does not stop the others.
+   --- @param option_id string|nil
+   --- @param code agentic.PermissionCauseCode
+   function PermissionManager:_resolve_all(option_id, code)
+   ```
+   `cancel_requests` becomes `self:_resolve_all(nil, "prompt-cancel")`. `reject_and_cancel_remaining` keeps its early return and its reject_once lookup, then calls `self:_resolve_all(reject_option_id, reject_option_id and "prompt-reject" or "prompt-cancel")`. Both `pcall`s stay (one throwing callback must not leave the other requests unresolved; an unresolved request locks the session: the comment above the `add_request` call in `SessionManager:_on_request_permission`). The notify text drops the "during cancel"/"during reject" suffix: "Permission callback error: " / "Queued permission callback error: ". The callback is `wrapped_callback` (in `SessionManager:_on_request_permission`), which runs plugin code that can raise. Not new noise: `cancel_requests` already notifies the same failure.
 9. **`permission_manager.lua:843-848`** (`add_request`, not in the report) — a request without `toolCall.toolCallId` logs `Logger.debug` and returns `false` without calling `callback`, so the request is never answered and the session locks (`session_manager.lua:2265-2269`). Replace with `Logger.notify(…, vim.log.levels.ERROR)` and call `callback(nil)` (answers "cancelled", as `cancel_requests` does) before `return false`.
 
 ### No change
@@ -46,7 +56,7 @@ Facts that decide the cases below (Neovim 0.12.6 runtime):
 12. **`permission_manager.lua:651-656`** — see Open questions.
 
 ### Tests
-- `permission_manager.test.lua`: `reject_and_cancel_remaining` with a current and a queued callback that both raise → both resolve and `Logger.notify` is called twice at ERROR.
+- `permission_manager.test.lua`: `reject_and_cancel_remaining` with a current and a queued callback that both raise → the current one gets the reject_once id, the queued one nil, and `Logger.notify` is called twice at ERROR. The `cancel_requests` describe and the existing `reject_and_cancel_remaining` cases (in "causes") pass unchanged.
 - `permission_manager.test.lua`: `add_request` without `toolCallId` → `callback(nil)` and one ERROR notify.
 - Run `make validate`.
 

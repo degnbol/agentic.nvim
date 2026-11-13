@@ -1,133 +1,106 @@
-# Plan: inject a context-usage notice past a threshold
+# Plan: tell the agent its context usage past a threshold
+Status: reviewed spec
 
-> **Scope.** Tell the *model* how full its context window is, but only when it
-> crosses a usage threshold — so it can adjust behaviour near a handover
-> boundary (plan instead of implement, checkpoint a handoff to disk before
-> compaction). Pull-on-demand (an MCP tool the model calls) was rejected: the
-> model has no trigger to ask, so it never would. This is push, gated to fire
-> only when the number becomes decision-relevant. Provider-agnostic in
-> principle, but built in the plugin because the authoritative `used`/`size`
-> already arrives via `usage_update` — a Claude hook would have to reparse the
-> transcript JSONL and hardcode the window size per model.
+## Relevant files
+- `lua/agentic/session_manager.lua` — `usage_update` branch of
+  `_on_session_update` (stores `self._usage`), `_handle_input_submit_inner`
+  (assembles the prompt's context blocks), `_update_chat_header` (the `Nk`
+  header figure), `create_session` callback (`self._is_first_message = true`)
+- `lua/agentic/environment_info.lua` — model for a prompt context block
+- `lua/agentic/ui/info_panel.lua` — usage formatters (`context_totals`)
+- `lua/agentic/config_default.lua`, `doc/agentic.txt` (`*agentic-config-*`)
+- `lua/agentic/session_manager.test.lua`
+- Skills: `session-lifecycle`, `provider-system`; rules: `tests.md`, `help.md`
 
-## What we already have
+## Background
+Agent performance degrades past ~200k tokens of context, whatever the
+model's window. An agent that knows its usage can choose at decision
+points: hand new work to a subagent, write a plan or handover instead of
+implementing, or wrap up. Below the threshold the number is noise.
 
-- `usage_update` is handled in `SessionManager:_handle_session_update`
-  (`session_manager.lua:421`). It stores
-  `self._usage = { used, size, cost }` — `used` = tokens currently in
-  context, `size` = window size — and refreshes the chat header.
-- The same numbers are already shown to the *user* via the intercepted
-  `/context` command (`:461`) and the header footer (`:1203`). The model
-  never sees them.
-- Prompt context is assembled in `SessionManager:_build_environment_info`
-  (returns the `<environment_info>` block, `:2181`). This is the natural
-  injection site — it already carries cwd, git status, recent commits,
-  project root, and is sent with the prompt.
+The plugin already has the number for every provider: `usage_update.used`
+arrives from claude-agent-acp (after each assistant message, each result,
+and at a compaction boundary with the post-compaction count) and from
+opencode (at turn end), and `_update_chat_header` shows it to the user. The
+model never sees it. Building this in the plugin makes it provider-neutral;
+a Claude Code hook would cover Claude only and would reparse the transcript
+JSONL for a number the plugin already holds.
 
-## Design
+`<context_usage>` goes in its own text block before the user text, like
+`<environment_info>`, which is sent with the first prompt only, so it
+cannot carry this. Slash commands get no context blocks (opencode joins all
+text blocks to find the leading `/`).
 
-Two small pieces, plus config.
+The guidance is sent once per crossing; later prompts carry only the
+number. A prompt sent below the threshold re-arms the guidance, so after
+compaction the next crossing gets it again, as the compaction summary may
+have dropped the earlier copy.
 
-### 1. Threshold detection in the `usage_update` handler
+The guidance names the configured threshold, not a fixed figure, so it
+stays true when the user changes the option.
 
-Track which 10%-bucket (configurable step) the usage has reached. When it
-advances to a new bucket *and* is at/above the floor threshold, set a pending
-flag. Bucket state lives on the per-tabpage `SessionManager` instance
-(`self._usage_bucket`) — correct under multi-tabpage isolation, where a global
-hook could not cleanly track per-session state.
+## Changes
+- `config_default.lua`: `--- @type integer|false` option
+  `context_usage_threshold = 150000` — used-token count from which user
+  prompts carry `<context_usage>`; `false` disables. Help entry
+  `*agentic-config-context_usage_threshold*` in `doc/agentic.txt`.
+- `ui/info_panel.lua`: `InfoPanel.tokens_k(used: integer): string` →
+  `"172k"`. `_update_chat_header` uses it instead of its inline rounding.
+- New `lua/agentic/context_usage.lua`:
+  - `M.build(used: integer, threshold: integer, guidance: boolean): string`
+    — `<context_usage>Context usage: 172k tokens.</context_usage>`; with
+    `guidance`, adds: `Past <threshold>k, agent performance degrades.
+    Before starting new work, prefer handing it to a subagent, writing a
+    plan or handover doc instead of implementing, or wrapping up.`
+- `session_manager.lua`:
+  - Field `--- @field _context_guidance_sent? boolean The context-usage guidance went out since usage last fell below the threshold`.
+  - `SessionManager:_take_context_usage(): string|nil` — nil when the
+    threshold is `false` or `self._usage` is nil; when `used` is below the
+    threshold, also clears `_context_guidance_sent`. Otherwise returns
+    `ContextUsage.build(used, threshold, not self._context_guidance_sent)`
+    and sets `_context_guidance_sent`.
+  - `_handle_input_submit_inner`: inside `if not is_command`, after the
+    `<environment_info>` block, insert a text block with
+    `self:_take_context_usage()` when non-nil.
+  - `create_session` callback, next to `self._is_first_message = true`:
+    `self._usage = nil`, `self._context_guidance_sent = nil`. This covers
+    every new ACP session, including `switch_provider`, which bypasses
+    `_reset_conversation` and today keeps the old provider's figure in the
+    header.
+  - `usage_update` branch: ignore updates whose `source_session_id` is set
+    and differs from `self.session_id`, as the `config_option_update`
+    branch does. A subagent's child-session figure must not replace the
+    root's.
+- Tests:
+  - `lua/agentic/context_usage.test.lua`: with and without guidance;
+    threshold rendered in `k`.
+  - `info_panel` test for `tokens_k` rounding.
+  - `session_manager.test.lua`, new `describe` driving
+    `_handle_input_submit_inner` and inspecting the sent prompt (as the
+    cases near :7057): below threshold → none; first crossing →
+    guidance; next prompt → number only; a prompt below then above →
+    guidance again; slash command → none; `<context_usage>` precedes the
+    user text; `false` threshold → none; child-session `usage_update` does
+    not change `_usage`.
 
-```lua
-elseif update.sessionUpdate == "usage_update" then
-    self._usage = { used = update.used, size = update.size, cost = update.cost }
+## Expected outcome
+User prompts sent at or above 150k carry `<context_usage>`: with
+the guidance on the first, the number alone after that. Below 150k, and for
+slash commands, nothing changes. Works for every provider that sends
+`usage_update`. The header no longer shows a figure from a previous
+provider or from a subagent.
 
-    local pct = update.size and update.size > 0 and update.used / update.size or 0
-    local step = Config.context_notice_step or 0.1
-    local floor = Config.context_notice_threshold or 0.5
-    local bucket = math.floor(pct / step)
-    if pct >= floor and bucket > (self._usage_bucket or 0) then
-        self._usage_bucket = bucket
-        self._pending_usage_notice = true
-    end
+Accepted gaps: no `<context_usage>` on the first prompt of a session before its first
+`usage_update` (fork, re-create from history, load/resume, provider
+switch), though a history prefix can make that prompt large; and a refused
+or limit-returned prompt that is resubmitted carries the number only, as
+its guidance was already taken.
 
-    self:_update_chat_header()
-```
-
-Notes:
-- Bucket only ever advances, so the notice fires once per crossing, never
-  every turn → no spam below the line, no repeat within a band.
-- A new session starts with `_usage_bucket = nil` → first crossing fires.
-- After compaction `used` drops; the bucket falls, and the *next* crossing
-  upward re-arms naturally. (If we want an explicit "context was compacted"
-  notice later, that's a separate follow-up — out of scope.)
-
-### 2. Emit the line in `_build_environment_info`
-
-Append one line, then clear the flag, just before the `<environment_info>`
-wrap (`:2181`):
-
-```lua
-if self._pending_usage_notice and self._usage and self._usage.size > 0 then
-    res = res .. string.format(
-        "\n- Context: %.0fk/%.0fk tokens (%.0f%% full) — near a handover"
-            .. " boundary; consider checkpointing a plan/handoff to disk.",
-        self._usage.used / 1000,
-        self._usage.size / 1000,
-        self._usage.used / self._usage.size * 100
-    )
-    self._pending_usage_notice = false
-end
-```
-
-Consuming the flag here (not in the handler) couples the notice to an actual
-prompt send — if several `usage_update`s arrive before the next prompt, the
-user still sees exactly one line, reflecting the latest usage.
-
-### 3. Config
-
-In `config_default.lua`:
-
-```lua
---- Inject a context-usage notice into environment_info when usage first
---- crosses this fraction of the window, and again at each `context_notice_step`
---- band above it. Set to false to disable.
-context_notice_threshold = 0.5,
---- Band width for repeat notices above the threshold (0.1 = every 10%).
-context_notice_step = 0.1,
-```
-
-Gate both reads on `Config.context_notice_threshold ~= false` so a single
-`false` disables the feature.
-
-## Field declarations
-
-Add to the `SessionManager` class block (LuaCATS, contiguous):
-
-```lua
---- @field _usage? { used: number, size: number, cost?: number }   -- if not already typed
---- @field _usage_bucket? number Highest usage band already announced this session
---- @field _pending_usage_notice? boolean Emit a context notice on the next prompt
-```
-
-(`_usage` may already be implicitly typed — check before adding.)
-
-## Test
-
-`session_manager.test.lua` (or a focused new spec): drive
-`_handle_session_update` with synthetic `usage_update`s and assert
-`_pending_usage_notice`:
-
-- below threshold (e.g. 0.4 with floor 0.5) → not set
-- first crossing (0.55) → set; `_build_environment_info` contains "Context:"
-  and clears the flag
-- second `usage_update` in the same band (0.58) → not re-set
-- next band up (0.65) → set again
-- drop after compaction (0.30) then back up across floor → re-arms
-
-Mock `Config` values in the test so it doesn't depend on defaults.
-
-## Out of scope
-
-- MCP `context_usage()` tool for explicit mid-task queries. Add only if a
-  workflow ever instructs the model to poll its own context.
-- A distinct post-compaction notice.
-- Surfacing cost (`self._usage.cost`) to the model — the user already sees it.
+## Non-goals
+- Mid-turn polling. Opencode reports usage only at turn end, so a poll
+  inside a long turn would be stale for it; one provider-neutral
+  `<context_usage>` at turn start covers the decision points.
+- Background sessions (`BackgroundSession`) and synthetic prompts: own
+  prompt paths without context blocks.
+- Sessions outside agentic.nvim (Claude Code TUI).
+- Estimating the size of a history prefix before the first `usage_update`.
