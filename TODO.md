@@ -118,6 +118,8 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 
 - P1 [TRACK-token-usage.md](notes/TRACK-token-usage.md): Reduce token usage — reviewed
 - P2 [FEAT-auto-mode-integration.md](notes/FEAT-auto-mode-integration.md): deterministic permission ladder as a PreToolUse hook, classifier as fallback
+- P2 [FEAT-budget-limit-eta.md](notes/FEAT-budget-limit-eta.md): budget lines show the time to the limit, in aligned columns — reviewed spec
+- P2 [FEAT-skeptic-adversarial-gate.md](notes/FEAT-skeptic-adversarial-gate.md): skeptics attack each other's refutations instead of voting — reviewed spec
 - P2 [FEAT-stale-read-warning.md](notes/FEAT-stale-read-warning.md): stale-read warning on Edit/Write
 - P3 [FEAT-context-usage.md](notes/FEAT-context-usage.md): tell the agent its context usage past a threshold — reviewed spec
 - P3 [FEAT-diff-line-numbers.md](notes/FEAT-diff-line-numbers.md): line numbers in Edit tool diff previews
@@ -157,9 +159,11 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 ### Ideas and audits
 
 - [AUDIT-edge-cases.md](notes/AUDIT-edge-cases.md): edge-case code (2026-10-26)
+- P2 [AUDIT-reviewer-models.md](notes/AUDIT-reviewer-models.md): can an opencode model replace Opus as reviewer — draft
 - [IDEA-archive-pre-compaction-sessions.md](notes/IDEA-archive-pre-compaction-sessions.md): archive sessions from before a compaction
 - [IDEA-auto-allow-non-zsh.md](notes/IDEA-auto-allow-non-zsh.md): auto-allow beyond zsh
 - [IDEA-background-processes-window.md](notes/IDEA-background-processes-window.md): background processes window
+- [IDEA-budget-sessions-left.md](notes/IDEA-budget-sessions-left.md): estimate how many sessions the budget has left
 - [IDEA-cross-provider-editing-guidance.md](notes/IDEA-cross-provider-editing-guidance.md): editing guidance for every provider
 - [IDEA-login-service-check.md](notes/IDEA-login-service-check.md): check the provider service before offering a login
 - [IDEA-lsp-rename-tooling.md](notes/IDEA-lsp-rename-tooling.md): LSP rename and lookup tools for the agent
@@ -169,7 +173,7 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 - [IDEA-queue-overlooked-question.md](notes/IDEA-queue-overlooked-question.md): a queued message answers a question that was never seen
 - [IDEA-scoped-cancel-subagents.md](notes/IDEA-scoped-cancel-subagents.md): Scoping `<C-c>` — sparing subagents from the interrupt
 - [IDEA-session-retention.md](notes/IDEA-session-retention.md): session retention
-- [IDEA-session-stats-logging.md](notes/IDEA-session-stats-logging.md): more session logging, and a stats panel apart from the info panel
+- [IDEA-session-stats-logging.md](notes/IDEA-session-stats-logging.md): a usage panel, and session logging
 - [IDEA-token-cost-profiler.md](notes/IDEA-token-cost-profiler.md): per-message token cost and session profiler
 - [IDEA-tui-parity.md](notes/IDEA-tui-parity.md): slash command parity with the Claude Code TUI
 

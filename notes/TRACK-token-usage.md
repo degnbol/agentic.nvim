@@ -135,20 +135,33 @@ Priority: P1 large measured cost; P2 moderate; P3 small or speculative.
 6. P2 **Model and effort routing.** Plan: (to write)
    - Claude side: `model:` and `effort:` frontmatter for mechanical agents
      in `agents/*.md` (learning-reviewer, docstring-reviewer, researcher);
-     keep reviewers that judge correctness on the parent model. Built-in
+     keep reviewers that judge correctness on the parent model unless
+     `AUDIT-reviewer-models.md` shows an opencode model is good enough, in
+     which case they go through the delegation below. Built-in
      agents (Explore) have no frontmatter here: the plan decides between a
      own search agent and `CLAUDE_CODE_SUBAGENT_MODEL` (which applies to
      all subagents). `CLAUDE_CODE_EFFORT_LEVEL` must stay unset.
    - Cross-provider delegation in agentic.nvim, generalising the skeptic
      pattern: the main agent hands a bounded task to a `BackgroundSession`
      on a LiteLLM model (`glm-5.3`), and the result returns to the main
-     agent. The plan decides:
+     agent. Checks (reviews of code, plans, prose; the skeptic's claim
+     checks) share one pipeline: two models from different labs check the
+     input in parallel, each attacks the other's findings once (no debate;
+     dropping a finding needs evidence), and one joint report goes to the
+     main agent. The skeptic and a review request are two triggers of it;
+     what is checked only changes the prompt. A finding is a defect
+     (falsifiable; an attack with evidence drops it) or a suggestion (an
+     opinion; an attack only adds a counterpoint, never drops it). The
+     skeptic is unsolicited and raises only defects with evidence; a review
+     is requested and raises both kinds. Skeptic side:
+     `FEAT-skeptic-adversarial-gate.md`. The plan decides:
      - Trigger: how the main agent asks for it (a tool the plugin exposes,
        a slash command, or a request file the plugin watches).
      - Channel: in-process (as skeptic) or markdown files in a cache dir
        (`~/.cache/nvim/agentic/…`), which also lets any provider read the
        result and keeps it out of the main context until asked for.
      - Thought level per task (set next to `_set_model`).
+     - Which models form the pair, from `AUDIT-reviewer-models.md`.
      - Which tasks qualify: read-only research, summaries, mechanical
        edits; nothing permission-sensitive without the normal permission
        flow.
