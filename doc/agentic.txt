@@ -1386,8 +1386,8 @@ Grep output ~
 Input buffer ~
     AgenticSlashCommandPrefix  `@punctuation.special`   `/` prefix
     AgenticSlashCommand        `@function.call`         Command body
-    AgenticMentionPrefix       `@punctuation.special`   `@` prefix
-    AgenticMention             `@string.special.path`   Mention body
+    AgenticMentionPrefix       `@punctuation.special`   `@` of a mention
+    AgenticMention             `@string.special.path`   Mention path that exists
     AgenticQueuedRegion        |hl-DiffChange|          Queued region
 
 File activity ~

@@ -104,6 +104,30 @@ describe("FileSystem", function()
         end)
     end)
 
+    describe("resolve", function()
+        it("joins a relative path to cwd", function()
+            assert.equal(
+                "/cwd/a/b.lua",
+                FileSystem.resolve("a/./b.lua", "/cwd")
+            )
+        end)
+
+        it("keeps an absolute path", function()
+            assert.equal("/x/y", FileSystem.resolve("/x/y", "/cwd"))
+        end)
+
+        it("expands ~", function()
+            assert.equal(
+                vim.fs.normalize("~") .. "/x",
+                FileSystem.resolve("~/x", "/cwd")
+            )
+        end)
+
+        it("keeps $VAR as text", function()
+            assert.equal("/cwd/$HOME/x", FileSystem.resolve("$HOME/x", "/cwd"))
+        end)
+    end)
+
     describe("to_smart_path", function()
         it("returns relative path for files in cwd", function()
             local cwd = vim.fn.getcwd()

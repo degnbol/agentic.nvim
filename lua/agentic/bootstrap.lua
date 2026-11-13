@@ -2,13 +2,14 @@ local AgentInstance = require("agentic.acp.agent_instance")
 local Budget = require("agentic.budget")
 local Config = require("agentic.config")
 local EdgeConceal = require("agentic.ui.edge_conceal")
+local MentionHighlight = require("agentic.ui.mention_highlight")
 local SessionRegistry = require("agentic.session_registry")
 local SessionResume = require("agentic.session_resume")
 local Logger = require("agentic.utils.logger")
 
---- Process-wide initialization: treesitter languages, the edge conceal
---- decoration provider, global autocmds, image paste, signal handlers, the
---- skeptic extension, the shared budget file.
+--- Process-wide initialization: treesitter languages, the edge conceal and
+--- mention highlight decoration providers, global autocmds, image paste,
+--- signal handlers, the skeptic extension, the shared budget file.
 --- @class agentic.Bootstrap
 local Bootstrap = {}
 
@@ -172,6 +173,7 @@ function Bootstrap.ensure()
 
     register_languages()
     EdgeConceal.register()
+    MentionHighlight.register()
     create_global_autocmds()
     if Config.image_paste.enabled then
         wrap_paste()

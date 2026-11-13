@@ -345,6 +345,20 @@ function FileSystem.to_absolute_path(path)
     return vim.fn.fnamemodify(path, ":p")
 end
 
+--- Absolute, normalized form of `path`, where a relative `path` is taken
+--- relative to `cwd`. `~` is expanded. `$VAR` is kept as text.
+--- @param path string
+--- @param cwd string absolute
+--- @return string
+function FileSystem.resolve(path, cwd)
+    local opts = { expand_env = false }
+    local normalized = vim.fs.normalize(path, opts)
+    if normalized:sub(1, 1) == "/" then
+        return normalized
+    end
+    return vim.fs.normalize(vim.fs.joinpath(cwd, normalized), opts)
+end
+
 --- Convert a path to a "smart" path, which is:
 --- - absolute if outside the current working directory
 --- - relative to the current working directory
