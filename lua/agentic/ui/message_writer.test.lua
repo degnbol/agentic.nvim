@@ -212,6 +212,39 @@ describe("agentic.ui.MessageWriter", function()
         end
     end
 
+    describe("range parse of a tool call block", function()
+        --- Writes a completed tool call block and counts the `parse` calls
+        --- the write runs that process injections: those with a row range
+        --- or `true`.
+        --- @return integer
+        local function n_range_parses()
+            local parser = vim.treesitter.get_parser(bufnr) --[[@as vim.treesitter.LanguageTree]]
+            local parse = spy.on(parser, "parse")
+            MiniTest.finally(function()
+                parse:revert()
+            end)
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            return #vim.tbl_filter(function(call)
+                return call[2] ~= nil and call[2] ~= false
+            end, parse.calls)
+        end
+
+        it("runs in a buffer a window shows", function()
+            as_chat()
+
+            assert.is_true(n_range_parses() > 0)
+        end)
+
+        it("is skipped in a buffer no window shows", function()
+            as_chat()
+            vim.api.nvim_win_close(winid, true)
+
+            assert.equal(0, n_range_parses())
+        end)
+    end)
+
     describe("wrap_width", function()
         local PARAGRAPH = string.rep("word ", 30) .. "end"
 

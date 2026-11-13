@@ -17,12 +17,11 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- below it for the rest of the session. That is how a heredoc's fold ends up
 --- swallowing the rest of the transcript.
 ---
---- The injected trees exist here regardless — `MessageWriter`'s
---- `materialize_injections` creates them on every content write. What excludes
---- them is iterating `parser:parse()`'s return value, which is this
---- LanguageTree's own trees only (`LanguageTree:trees()` — "Does not include
---- child languages"). Core reaches the children because `_fold.lua` walks
---- `parser:for_each_tree` instead.
+--- What excludes the injected trees is iterating `parser:parse()`'s return
+--- value, which is this LanguageTree's own trees only
+--- (`LanguageTree:trees()` — "Does not include child languages"). Core
+--- reaches the children because `_fold.lua` walks `parser:for_each_tree`
+--- instead.
 ---
 --- So folds here come only from `queries/agentic/folds.scm` — one per
 --- writer-marked `*-fold` body, one from each `*-foldnext`

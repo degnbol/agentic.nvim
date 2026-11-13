@@ -76,7 +76,6 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 
 ### Bugs
 
-- P1 [FIX-hidden-transcript-write-cost.md](notes/FIX-hidden-transcript-write-cost.md): Tool call writes cost O(buffer) in a large chat buffer — reviewed spec
 - P1 [FIX-tripwire-uncalled-opencode-call.md](notes/FIX-tripwire-uncalled-opencode-call.md): Mark an opencode call that failed before it got its input as not run — spec
 - P2 [FIX-cancel-request-handler.md](notes/FIX-cancel-request-handler.md): Handle `$/cancel_request` for permission requests — spec
 - P2 [FIX-deny-gate-flag-cap.md](notes/FIX-deny-gate-flag-cap.md): exact multi-element positional matching (remove the flag cap) — reviewed (open questions)

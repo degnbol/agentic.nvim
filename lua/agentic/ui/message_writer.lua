@@ -50,13 +50,6 @@ end
 --- callback-less `parse(range)` runs to completion with no time budget, so the
 --- injection child trees are created deterministically.
 ---
---- Called after every content `set_lines`, not just on a finalised block, so a
---- block that is rewritten mid-stream is re-highlighted with each version of
---- its content. After a `set_lines` the range is dirty, so this is a real
---- range-parse (one per block update); `parse` short-circuits only when the
---- range is already valid. Folds do not depend on this — `agentic.ui.folds`
---- reads the root tree only.
----
 --- Also parses the rows on view in every window showing `bufnr`, each taken
 --- as `TSHighlighter._on_start` takes them. A range parse replaces each
 --- injected tree's regions with the injections found in its range, so a parse
@@ -64,16 +57,26 @@ end
 --- would parse them again. The ranges are joined where they overlap: core
 --- injects a row once per range that holds it, and treats a range that only
 --- overlaps a parsed one as not parsed.
+---
+--- A no-op for a buffer that no window shows. When a window first draws the
+--- buffer, only the highlighter's async parse covers the rows on view; an
+--- unfinished parse there has not been seen. A range parse costs O(buffer) in
+--- core's injection pass whatever the range, so in a large hidden buffer each
+--- call would block the main loop.
 --- @param bufnr integer
 --- @param start_row integer 0-indexed first row of the block
 --- @param end_row integer 0-indexed last row of the block
 local function materialize_injections(bufnr, start_row, end_row)
+    local winids = vim.fn.win_findbuf(bufnr)
+    if #winids == 0 then
+        return
+    end
     local ok, parser = pcall(vim.treesitter.get_parser, bufnr)
     if not (ok and parser) then
         return
     end
     local ranges = { { start_row, end_row } }
-    for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
+    for _, winid in ipairs(winids) do
         table.insert(ranges, {
             vim.fn.line("w0", winid) - 1,
             vim.fn.line("w$", winid) + 1,

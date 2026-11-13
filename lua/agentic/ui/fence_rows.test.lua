@@ -94,6 +94,22 @@ describe("agentic.ui.FenceRows", function()
         assert.same({ 0, 4 }, marked_rows())
     end)
 
+    it("marks again only the fenced block an edit meets", function()
+        local fence_rows = FenceRows:new(bufnr)
+        set_lines(
+            0,
+            -1,
+            { "```lua", "x", "```", "", "```bash", "a", "b", "```" }
+        )
+        fence_rows:sync()
+        vim.api.nvim_buf_clear_namespace(bufnr, FenceRows.NS, 0, -1)
+
+        set_lines(6, 7, { "c" })
+        fence_rows:sync()
+
+        assert.same({ 4, 7 }, marked_rows())
+    end)
+
     describe("in a markdown body", function()
         local lines = {
             "````markdown-fold",

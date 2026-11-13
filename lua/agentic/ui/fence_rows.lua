@@ -124,7 +124,7 @@ function FenceRows:sync()
     local widened = vim.tbl_map(function(span)
         local first, last = span[1], span[2]
         for _, block in ipairs(blocks_in(parser, first, last)) do
-            first = math.min(first, block:start())
+            first = math.min(first, (block:start()))
             last = math.max(last, Treesitter.last_row(block))
         end
         return { first, last }
