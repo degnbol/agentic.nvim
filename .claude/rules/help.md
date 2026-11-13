@@ -25,4 +25,5 @@ It does not:
 
 Any exception requires express permission.
 
-Also applies here: the global `edit-docs` and `lang-vimdoc` rules.
+Also applies here: the global `writing` skill and the `neovim` skill's
+`references/vimdoc.md`.
