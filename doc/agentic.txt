@@ -1074,9 +1074,7 @@ panels open while they list something. The input opens on the first
 activity panel, `toggle_info` the session info panel, `toggle_agents` the
 agents panel.
 
-When the chat's window closes or shows another buffer, its panels close.
-|:q| in the chat's window closes its panels first; when vim refuses the
-quit, they open again.
+When the chat's window shows another buffer, its panels close.
 
 A panel window can show any buffer. While it shows a buffer that is not its
 panel's, it is not a panel window.

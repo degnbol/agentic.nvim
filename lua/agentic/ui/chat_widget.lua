@@ -40,7 +40,6 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field on_goto_bottom? fun(winid: integer) external callback that moves a window showing the chat or a transcript to its last line
 --- @field on_panel_buf? fun(panel: agentic.ui.ChatWidget.StackPanel, bufnr: integer) external callback for a buffer `panel_buf` made in place of a wiped one, already in `buf_nrs`
 --- @field _home_win? integer The window the panels attach to
---- @field _home_closed_autocmd? integer The WinClosed autocmd of `_home_win`
 local ChatWidget = {}
 ChatWidget.__index = ChatWidget
 
@@ -83,8 +82,7 @@ function ChatWidget:home_win()
 end
 
 --- Make `winid` home, closing the panels of a previous home, and sync the
---- content panels. When `winid` closes, its panels close and the home clears.
---- No-op for a floating window.
+--- content panels. No-op for a floating window.
 --- @param winid integer
 function ChatWidget:_adopt_home(winid)
     -- A float has no column to stack panels in.
@@ -94,21 +92,6 @@ function ChatWidget:_adopt_home(winid)
     if self._home_win ~= winid then
         self:close_panels()
         self._home_win = winid
-        if self._home_closed_autocmd then
-            pcall(vim.api.nvim_del_autocmd, self._home_closed_autocmd)
-        end
-        self._home_closed_autocmd = vim.api.nvim_create_autocmd("WinClosed", {
-            pattern = tostring(winid),
-            once = true,
-            callback = function()
-                self._home_closed_autocmd = nil
-                -- WinClosed does not nest: a panel closed in here would not
-                -- run its own WinClosed.
-                vim.schedule(function()
-                    self:_release_home(winid)
-                end)
-            end,
-        })
     end
     self:sync_panels()
 end
@@ -311,14 +294,6 @@ function ChatWidget:close_panels()
     WidgetLayout.close(self.win_nrs, self.buf_nrs)
 end
 
---- The panels with an open window.
---- @return agentic.ui.ChatWidget.StackPanel[]
-function ChatWidget:_open_panels()
-    return vim.tbl_filter(function(panel)
-        return self:panel_win(panel) ~= nil
-    end, Config.windows.stack)
-end
-
 --- Open the `panel` window below the home window, unless it is open. No-op
 --- without a home window.
 --- @param panel agentic.ui.ChatWidget.StackPanel
@@ -384,10 +359,6 @@ end
 --- The chat is wiped on the next tick, so this can run from the chat's own
 --- `BufDelete`, where wiping the chat raises E937.
 function ChatWidget:destroy()
-    if self._home_closed_autocmd then
-        pcall(vim.api.nvim_del_autocmd, self._home_closed_autocmd)
-        self._home_closed_autocmd = nil
-    end
     self._home_win = nil
     -- Clear the chat first: `panel_buf` then gives nil, so an autocmd that
     -- the deletes below trigger makes no new panel buffer.
@@ -458,9 +429,8 @@ function ChatWidget:input_win()
 end
 
 --- Buffer-local autocmds on the chat that tie the home window to it: a
---- window the chat enters becomes home while there is none, a home that
---- shows another buffer loses its panels, and `:q` on the home closes its
---- panels first, so it quits as on a single window.
+--- window the chat enters becomes home while there is none, and a home that
+--- shows another buffer loses its panels.
 --- @param chat integer
 function ChatWidget:_track_home(chat)
     vim.api.nvim_create_autocmd("BufWinEnter", {

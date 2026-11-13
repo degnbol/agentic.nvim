@@ -451,9 +451,8 @@ describe("agentic.ui.ChatWidget", function()
                 end
             )
 
-            it("closing the home closes its panels", function()
+            it("closing the home leaves its panels open", function()
                 fill_buffer(widget, "code", { "line1" })
-                vim.cmd("vsplit")
                 local home = show(widget)
                 local code_win = widget.win_nrs.code
                 local deferred = capture_deferred()
@@ -462,72 +461,7 @@ describe("agentic.ui.ChatWidget", function()
                 deferred.drain()
 
                 assert.is_nil(widget:home_win())
-                assert.is_false(vim.api.nvim_win_is_valid(code_win))
-                assert.is_nil(widget.win_nrs.code)
-            end)
-
-            it(":q on the home closes its panels with it", function()
-                fill_buffer(widget, "code", { "line1" })
-                vim.cmd("vsplit")
-                local other = vim.fn.win_getid(vim.fn.winnr("l"))
-                local home = show(widget)
-                local code_win = widget.win_nrs.code
-                local input_win = widget:input_win()
-                local deferred = capture_deferred()
-
-                vim.api.nvim_set_current_win(home)
-                vim.cmd("quit")
-                deferred.drain()
-
-                assert.is_false(vim.api.nvim_win_is_valid(home))
-                assert.is_false(vim.api.nvim_win_is_valid(code_win))
-                assert.is_false(vim.api.nvim_win_is_valid(input_win))
-                assert.is_true(vim.api.nvim_win_is_valid(other))
-                assert.is_nil(widget:home_win())
-                assert.is_true(vim.api.nvim_buf_is_valid(widget.buf_nrs.agent))
-            end)
-
-            it("a refused :q on the home brings its panels back", function()
-                fill_buffer(widget, "code", { "line1" })
-                fill_buffer(widget, "activity", { "a.lua" })
-                local home = show(widget)
-                widget:input_win()
-                widget:toggle_panel("activity")
-                local deferred = capture_deferred()
-
-                vim.api.nvim_set_current_win(home)
-                -- QuitPre without the quit, as when vim refuses it.
-                vim.api.nvim_exec_autocmds(
-                    "QuitPre",
-                    { buffer = widget.buf_nrs.agent }
-                )
-                assert.is_nil(widget.win_nrs.code)
-                assert.is_nil(widget.win_nrs.input)
-                assert.is_nil(widget.win_nrs.activity)
-                deferred.drain()
-
-                assert.equal(home, widget:home_win())
-                assert.is_true(vim.api.nvim_win_is_valid(widget.win_nrs.code))
-                assert.is_true(vim.api.nvim_win_is_valid(widget.win_nrs.input))
-                assert.is_true(
-                    vim.api.nvim_win_is_valid(widget.win_nrs.activity)
-                )
-            end)
-
-            it("a refused :q leaves a closed input closed", function()
-                fill_buffer(widget, "code", { "line1" })
-                local home = show(widget)
-                local deferred = capture_deferred()
-
-                vim.api.nvim_set_current_win(home)
-                vim.api.nvim_exec_autocmds(
-                    "QuitPre",
-                    { buffer = widget.buf_nrs.agent }
-                )
-                deferred.drain()
-
-                assert.is_true(vim.api.nvim_win_is_valid(widget.win_nrs.code))
-                assert.is_nil(widget.win_nrs.input)
+                assert.equal(code_win, widget:panel_win("code"))
             end)
 
             describe("target_win", function()
