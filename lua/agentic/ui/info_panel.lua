@@ -100,42 +100,47 @@ local function percent(fraction)
     return string.format("%d%%", math.floor(fraction * 100 + 0.5))
 end
 
---- A window's line: its use, coloured by the provider's state, reset time and
---- pace, coloured above 1. Once the reset has passed, its label and 0% only.
+--- Columns of `window_cells` aligned to the right: the use and the times.
+local RIGHT_COLUMNS = { [4] = true, [6] = true, [8] = true, [12] = true }
+
+--- A window's cells: label, use, reset time, time to the reset, and time to
+--- the limit, with the text between them as cells of its own. Label and use
+--- are coloured by the window's state, the time to the limit when it is
+--- before the reset. Once the reset has passed, label and 0% only. Without a
+--- known limit, no limit cells.
 --- @param window agentic.acp.BudgetWindow
 --- @param now integer Epoch seconds
 --- @return agentic.ui.Chunk[]
-local function window_line(window, now)
+local function window_cells(window, now)
     local resets_in = Budget.resets_in(window, now)
     if resets_in == 0 then
-        return { { "- " .. window.label .. ": 0% used" } }
+        return { { "- " }, { window.label }, { "  " }, { "0% used" } }
     end
+    local hl = Budget.hl(window.state)
     local reset =
         os.date(resets_in > DAY and "%a %H:%M" or "%H:%M", window.resets_at) --[[@as string]]
-    local pace = Budget.pace(window, now)
     --- @type agentic.ui.Chunk[]
-    local parts = {
-        {
-            window.label .. ": " .. percent(window.utilization) .. " used",
-            Budget.hl(window.state),
-        },
-        { "resets " .. reset .. " (in " .. Duration.format(resets_in) .. ")" },
+    local cells = {
+        { "- " },
+        { window.label, hl },
+        { "  " },
+        { percent(window.utilization) .. " used", hl },
+        { "  resets " },
+        { reset },
+        { " (in " },
+        { Duration.format(resets_in) },
+        { ")" },
     }
-    if pace then
-        table.insert(parts, {
-            "on pace for " .. percent(pace),
-            pace > 1 and Budget.hl("warning") or nil,
+    local limit_in = Budget.limit_in(window, now)
+    if limit_in then
+        local limit_hl = limit_in < resets_in and Budget.hl("warning") or nil
+        vim.list_extend(cells, {
+            { "  " },
+            { "limit in ", limit_hl },
+            { "~" .. Duration.format(limit_in), limit_hl },
         })
     end
-    --- @type agentic.ui.Chunk[]
-    local chunks = { { "- " } }
-    for i, part in ipairs(parts) do
-        if i > 1 then
-            table.insert(chunks, { " · " })
-        end
-        table.insert(chunks, part)
-    end
-    return chunks
+    return cells
 end
 
 --- The panel's lines for a snapshot, each as chunks of text and highlight.
@@ -162,10 +167,10 @@ function InfoPanel.lines(snap, now)
     local lines = vim.tbl_map(function(text)
         return { { text } }
     end, texts)
-    for _, window in ipairs(snap.budget or {}) do
-        table.insert(lines, window_line(window, now))
-    end
-    return lines
+    local window_rows = vim.tbl_map(function(window)
+        return window_cells(window, now)
+    end, snap.budget or {})
+    return vim.list_extend(lines, Chunks.columns(window_rows, RIGHT_COLUMNS))
 end
 
 local NS = vim.api.nvim_create_namespace("agentic_info_panel")

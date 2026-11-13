@@ -201,12 +201,13 @@ describe("agentic.ui.InfoPanel", function()
             }, "- Context:"))
         end)
 
-        it("rounds the window percent and shows the reset time", function()
+        it("rounds the window percent and shows the reset and limit", function()
             local window = five_hour(0.026, HOUR)
             assert.equal(
-                "- 5h: 3% used · resets "
+                "- 5h  3% used  resets "
                     .. os.date("%H:%M", window.resets_at)
-                    .. " (in 1h00m) · on pace for 3%",
+                    -- 97.4 % left at 2.6 % per 4 hours passed.
+                    .. " (in 1h00m)  limit in ~149h50m",
                 line_starting(
                     { provider = "Claude", budget = { window } },
                     "- 5h"
@@ -230,25 +231,19 @@ describe("agentic.ui.InfoPanel", function()
             )
         end)
 
-        it("shows the pace as a percent", function()
-            -- 3 of 5 hours passed.
-            local slow = five_hour(0.3, 2 * HOUR)
+        it("shows the time to the limit", function()
+            -- 90 % used in the 3 hours passed: the last 10 % in 20 minutes.
             local fast = five_hour(0.9, 2 * HOUR)
-            assert.truthy(
-                line_starting(
-                    { provider = "Claude", budget = { slow } },
-                    "- 5h"
-                ):find("· on pace for 50%%$")
-            )
             assert.truthy(
                 line_starting(
                     { provider = "Claude", budget = { fast } },
                     "- 5h"
-                ):find("· on pace for 150%%$")
+                ):find("%)  limit in ~20m$")
             )
         end)
 
-        it("colours a pace above 100% only", function()
+        it("colours a limit before the reset only", function()
+            -- 30 % used in 3 hours: the limit in 7 hours, after the reset.
             local slow = five_hour(0.3, 2 * HOUR)
             local fast = five_hour(0.9, 2 * HOUR)
             assert.same(
@@ -261,7 +256,10 @@ describe("agentic.ui.InfoPanel", function()
                 )
             )
             assert.same(
-                { ["on pace for 150%"] = "AgenticBudgetWarning" },
+                {
+                    ["limit in "] = "AgenticBudgetWarning",
+                    ["~20m"] = "AgenticBudgetWarning",
+                },
                 highlighted(
                     chunks_starting(
                         { provider = "Claude", budget = { fast } },
@@ -277,7 +275,10 @@ describe("agentic.ui.InfoPanel", function()
             local exhausted = five_hour(0.3, 2 * HOUR)
             exhausted.state = "exhausted"
             assert.same(
-                { ["5h: 30% used"] = "AgenticBudgetWarning" },
+                {
+                    ["5h"] = "AgenticBudgetWarning",
+                    ["30% used"] = "AgenticBudgetWarning",
+                },
                 highlighted(
                     chunks_starting(
                         { provider = "Claude", budget = { warned } },
@@ -286,7 +287,10 @@ describe("agentic.ui.InfoPanel", function()
                 )
             )
             assert.same(
-                { ["5h: 30% used"] = "AgenticBudgetExhausted" },
+                {
+                    ["5h"] = "AgenticBudgetExhausted",
+                    ["30% used"] = "AgenticBudgetExhausted",
+                },
                 highlighted(
                     chunks_starting(
                         { provider = "Claude", budget = { exhausted } },
@@ -296,23 +300,45 @@ describe("agentic.ui.InfoPanel", function()
             )
         end)
 
-        it("leaves out a pace that is not known yet", function()
+        it("leaves out a limit that is not known yet", function()
             local fresh = five_hour(0.01, 5 * HOUR - 60)
             local line = line_starting(
                 { provider = "Claude", budget = { fresh } },
                 "- 5h"
             ) or ""
-            assert.is_nil(line:find("on pace", 1, true))
+            assert.is_nil(line:find("limit in", 1, true))
         end)
 
         it("shows a passed reset as 0% with no reset", function()
             assert.equal(
-                "- 5h: 0% used",
+                "- 5h  0% used",
                 line_starting(
                     { provider = "Claude", budget = { five_hour(0.8, -60) } },
                     "- 5h"
                 )
             )
+        end)
+
+        it("aligns the columns of the windows", function()
+            local short = five_hour(0.43, 2 * HOUR + 52 * 60)
+            --- @type agentic.acp.BudgetWindow
+            local long = {
+                label = "7d",
+                utilization = 0.96,
+                resets_at = NOW + 50 * HOUR + 42 * 60,
+                window_s = 7 * 24 * HOUR,
+                state = "ok",
+            }
+            local lines =
+                texts({ provider = "Claude", budget = { short, long } })
+            local first, second = lines[#lines - 1], lines[#lines]
+            for _, part in ipairs({ "resets", " (in", ")", "limit in" }) do
+                assert.equal(
+                    first:find(part, 1, true),
+                    second:find(part, 1, true)
+                )
+            end
+            assert.equal(#first, #second)
         end)
     end)
 
@@ -364,8 +390,10 @@ describe("agentic.ui.InfoPanel", function()
                 }
             end, marks)
             assert.same({
-                { 2, "5h: 90% used", "AgenticBudgetWarning" },
-                { 2, "on pace for 150%", "AgenticBudgetWarning" },
+                { 2, "5h", "AgenticBudgetWarning" },
+                { 2, "90% used", "AgenticBudgetWarning" },
+                { 2, "limit in ", "AgenticBudgetWarning" },
+                { 2, "~20m", "AgenticBudgetWarning" },
             }, spans)
         end)
     end)

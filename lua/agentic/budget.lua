@@ -189,23 +189,20 @@ function Budget.resets_in(window, now)
     return math.max(0, math.floor(window.resets_at - now))
 end
 
---- Projected use of the window at its reset, extrapolating linearly at the
---- usage rate over the trailing span `[now − window_s, now]`:
+--- Usage rate over the trailing span `[now − window_s, now]`:
 ---
----     utilization + usage ÷ known × resets_in
+---     usage ÷ known
 ---
---- `utilization` is the window's, `resets_in` the seconds until its reset.
 --- `usage` is the window's utilization plus the part of `previous`'s that
---- falls in the span. `known` is the span's length without the time that is
---- blocked, or whose usage is unknown: before the window's start without a
---- `previous`, or before `previous`'s first sample. Above 1 the limit is hit
---- before the reset.
+--- falls in the span. `known` is the span's length in seconds without the
+--- time that is blocked, or whose usage is unknown: before the window's start
+--- without a `previous`, or before `previous`'s first sample.
 --- @param window agentic.acp.BudgetWindow
 --- @param previous agentic.BudgetHistory.Span|nil The window that reset before `window`, ignored unless it reset at or before `window`'s start
 --- @param blocked agentic.Interval[] Times when the account could not be used
 --- @param now integer Epoch seconds
---- @return number|nil pace Nil when less than 5 % of the span is known, where the rate is noise
-function Budget.trailing_pace(window, previous, blocked, now)
+--- @return number|nil rate Fraction of the window used per second; nil when less than 5 % of the span is known, where the rate is noise
+function Budget.trailing_rate(window, previous, blocked, now)
     local length = window.window_s
     local span_start = now - length
     local window_start = window.resets_at - length
@@ -238,22 +235,46 @@ function Budget.trailing_pace(window, previous, blocked, now)
     if known < 0.05 * length then
         return nil
     end
-    local usage = window.utilization + previous_usage
-    return window.utilization + usage / known * Budget.resets_in(window, now)
+    return (window.utilization + previous_usage) / known
 end
 
---- `trailing_pace` of the window with the recorded history.
+--- `trailing_rate` of the window with the recorded history.
 --- @param window agentic.acp.BudgetWindow
 --- @param now integer Epoch seconds
---- @return number|nil pace
-function Budget.pace(window, now)
+--- @return number|nil rate
+function Budget.rate(window, now)
     local entry = history.windows[window.label]
-    return Budget.trailing_pace(
+    return Budget.trailing_rate(
         window,
         entry and entry.previous,
         history.blocked,
         now
     )
+end
+
+--- Projected utilization of the window at its reset, at `Budget.rate`. Above
+--- 1 the limit is hit before the reset.
+--- @param window agentic.acp.BudgetWindow
+--- @param now integer Epoch seconds
+--- @return number|nil pace Nil when the rate is nil
+function Budget.pace(window, now)
+    local rate = Budget.rate(window, now)
+    return rate and window.utilization + rate * Budget.resets_in(window, now)
+end
+
+--- Seconds from `now` until the window's utilization reaches 1 at
+--- `Budget.rate`, rounded to the nearest. Less than `Budget.resets_in` when
+--- the pace is above 1.
+--- @param window agentic.acp.BudgetWindow
+--- @param now integer Epoch seconds
+--- @return integer|nil seconds Nil when the rate is nil or 0, or the window is used up
+function Budget.limit_in(window, now)
+    local rate = Budget.rate(window, now)
+    if not rate or rate <= 0 or window.utilization >= 1 then
+        return nil
+    end
+    -- Not floored: float error puts an exact 1200 at 1199.999….
+    return math.floor((1 - window.utilization) / rate + 0.5)
 end
 
 --- A fraction in eighths, rounded to the nearest and clamped to 0-8.

@@ -588,6 +588,13 @@ budget.pace({window}, {now})
     exhausted. Above 1 the limit is hit before the reset. nil when less than
     5% of that span has known usage.
 
+                                                  *agentic.budget.limit_in()*
+budget.limit_in({window}, {now})
+    Seconds from {now} until {window} is used up, at the usage rate that
+    |agentic.budget.pace()| projects. Less than |agentic.budget.resets_in()|
+    when the pace is above 1. nil when the pace is nil, {window} is used up,
+    or no further use is projected.
+
                                                  *agentic.budget.resets_in()*
 budget.resets_in({window}, {now})
     Seconds from {now} until {window} refills, 0 once `resets_at` has passed.

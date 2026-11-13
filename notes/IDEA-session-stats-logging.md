@@ -7,7 +7,7 @@ are the second kind. The context line duplicates the chat title.
 
 ## Usage panel
 A panel for the numbers a user reads during a session:
-- The budget lines (`FEAT-budget-limit-eta.md`), updated live.
+- The budget lines (`window_cells` in `info_panel.lua`), updated live.
 - This session's share of each window, e.g. `this session: 8% of 5h in 40m`,
   so a user can see whether this session uses up the budget.
 - Later, the sessions-left estimate (`IDEA-budget-sessions-left.md`).

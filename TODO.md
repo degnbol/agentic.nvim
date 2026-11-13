@@ -116,7 +116,6 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 
 - P1 [TRACK-token-usage.md](notes/TRACK-token-usage.md): Reduce token usage — reviewed
 - P2 [FEAT-auto-mode-integration.md](notes/FEAT-auto-mode-integration.md): deterministic permission ladder as a PreToolUse hook, classifier as fallback
-- P2 [FEAT-budget-limit-eta.md](notes/FEAT-budget-limit-eta.md): budget lines show the time to the limit, in aligned columns — reviewed spec
 - P2 [FEAT-skeptic-adversarial-gate.md](notes/FEAT-skeptic-adversarial-gate.md): skeptics attack each other's refutations instead of voting — reviewed spec
 - P2 [FEAT-stale-read-warning.md](notes/FEAT-stale-read-warning.md): stale-read warning on Edit/Write
 - P3 [FEAT-context-usage.md](notes/FEAT-context-usage.md): tell the agent its context usage past a threshold — reviewed spec
