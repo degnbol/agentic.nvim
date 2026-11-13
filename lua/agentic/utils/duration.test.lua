@@ -37,6 +37,13 @@ describe("agentic.utils.Duration", function()
             assert.equal("2.8 s", Duration.format_ms(2849))
         end)
 
+        it("formats whole seconds below a minute when asked", function()
+            assert.equal("0 s", Duration.format_ms(999, true))
+            assert.equal("7 s", Duration.format_ms(7900, true))
+            assert.equal("59 s", Duration.format_ms(59999, true))
+            assert.equal("3m12s", Duration.format_ms(192500, true))
+        end)
+
         it("rounds down, so just below a minute stays in seconds", function()
             assert.equal("59.9 s", Duration.format_ms(59950))
             assert.equal("59.9 s", Duration.format_ms(59999))

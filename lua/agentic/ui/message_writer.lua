@@ -86,7 +86,8 @@ end
 --- in order, then its run time when that is at or above the clocks'
 --- threshold, joined by ` · `. Nil when it has neither. A cause's word is its
 --- code, or the kind it names for a `kind` cause. The run time is
---- `duration_ms`, else the running clock's time in whole seconds.
+--- `duration_ms`, else the running clock's time, in whole seconds below a
+--- minute.
 --- @param block agentic.ui.MessageWriter.ToolCallBase
 --- @param run_clocks agentic.ui.RunClocks|nil nil shows no run time
 --- @return string|nil note
@@ -102,11 +103,11 @@ local function footer_note(block, run_clocks)
     end
 
     if run_clocks then
-        local elapsed = run_clocks:elapsed(block.tool_call_id)
-        local time = block.duration_ms
-            or (elapsed and math.floor(elapsed / 1000) * 1000)
+        local running = not block.duration_ms
+        local time = block.duration_ms or run_clocks:elapsed(block.tool_call_id)
         if time and time >= run_clocks.threshold_ms then
-            table.insert(parts, Duration.format_ms(time))
+            -- A running time is shown once a second.
+            table.insert(parts, Duration.format_ms(time, running))
         end
     end
 

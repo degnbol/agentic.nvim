@@ -3864,7 +3864,7 @@ describe("agentic.ui.MessageWriter", function()
                 )
                 now_ms = 7900
                 writer:refresh_status("t")
-                assert.truthy(footer("t"):find("pending · 7.0 s $"))
+                assert.truthy(footer("t"):find("pending · 7 s $"))
             end
         )
 
@@ -3877,7 +3877,18 @@ describe("agentic.ui.MessageWriter", function()
                 status = "in_progress",
                 causes = { { code = "grant", subject = "/a" } },
             })
-            assert.truthy(footer("t"):find("in_progress · grant · 6.0 s $"))
+            assert.truthy(footer("t"):find("in_progress · grant · 6 s $"))
+        end)
+
+        it("shows tenths once the call ends", function()
+            clocks:start("t", true)
+            writer:write_tool_call_block(make_tool_call_block("t", "pending"))
+            now_ms = 6340
+            writer:update_tool_call_block({
+                tool_call_id = "t",
+                status = "completed",
+            })
+            assert.truthy(footer("t"):find("completed · 6.3 s $"))
         end)
 
         it("stamps duration_ms on the ending update and keeps it", function()
