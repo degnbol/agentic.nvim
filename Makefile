@@ -117,8 +117,12 @@ validate:
 	make test > .local/agentic_test_output.log 2>&1; \
 	rc_test=$$?; \
 	echo "test: $$rc_test (took $$(($$(date +%s) - start))s) - log: .local/agentic_test_output.log"; \
+	start=$$(date +%s); \
+	make plan-index-check > .local/agentic_plans_output.log 2>&1; \
+	rc_plans=$$?; \
+	echo "plans: $$rc_plans (took $$(($$(date +%s) - start))s) - log: .local/agentic_plans_output.log"; \
 	echo "Total: $$(($$(date +%s) - total_start))s"; \
-	if [ $$rc_format -ne 0 ] || [ $$rc_luals -ne 0 ] || [ $$rc_selene -ne 0 ] || [ $$rc_helptags -ne 0 ] || [ $$rc_test -ne 0 ]; then \
+	if [ $$rc_format -ne 0 ] || [ $$rc_luals -ne 0 ] || [ $$rc_selene -ne 0 ] || [ $$rc_helptags -ne 0 ] || [ $$rc_test -ne 0 ] || [ $$rc_plans -ne 0 ]; then \
 		echo "Validation failed! Check log files for details."; \
 		exit 1; \
 	fi

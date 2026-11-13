@@ -18,11 +18,11 @@ Not covered: `lua/agentic/utils/permission_rules.lua` (its reviewer did not fini
 
 Reports, each getting a plan:
 - 0.2, 0.3 (git fails open; same-second cache) → fixed
-- 0.9 (failed execute row offset) → `bug-failed-execute-body-offset.md`
-- 0.12 (`$5 and $10` as math) → `bug-inline-math-dollar-pairing.md`
-- 0.13 (deny gate over the flag cap) → `bug-deny-gate-flag-cap.md`
+- 0.9 (failed execute row offset) → `FIX-failed-execute-body-offset.md`
+- 0.12 (`$5 and $10` as math) → `FIX-inline-math-dollar-pairing.md`
+- 0.13 (deny gate over the flag cap) → `FIX-deny-gate-flag-cap.md`
 - 0.14 (completion reads the current buffer) → fixed: `lsp_server.lua` takes the buffer from the request's `textDocument.uri`.
-- 0.16 (errors only in the debug log) → `bug-silent-errors.md`
+- 0.16 (errors only in the debug log) → `FIX-silent-errors.md`
 
 Questions for the user:
 - 0.10 `claude_utils.lua:11`: `EnterWorktree` is mapped to a mode switch labelled "Normal", which hides its body. Intended?

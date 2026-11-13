@@ -1,4 +1,5 @@
 # Plan: make lowercase an invariant of a tool-call `kind`
+Priority: P3
 
 > **Scope.** Six byte-identical `kind_key` locals existed because `kind` reaches
 > its readers in inconsistent casing. The inconsistency is **self-inflicted** —

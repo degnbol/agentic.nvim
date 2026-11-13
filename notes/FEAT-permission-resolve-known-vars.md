@@ -1,4 +1,5 @@
 # Plan: resolve known-literal vars before the safety check
+Priority: P3
 
 ## Problem
 

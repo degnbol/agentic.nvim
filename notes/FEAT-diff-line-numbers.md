@@ -1,4 +1,5 @@
 # Plan: line numbers in Edit tool diff previews
+Priority: P3
 
 ## Problem
 

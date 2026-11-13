@@ -16,8 +16,10 @@ Tags are `v<MAJOR>.<MINOR>.<PATCH>` (`v0.1.0`, etc.).
 
 ## Path to 0.1.0
 
-Goal: drive the **Bugs** section of `TODO.md` to empty (or to
-"Known minor") and cut `v0.1.0` as the first stable release. Until then
+Goal: no `BUG-` or `FIX-` note left in `notes/` (a `FIX-` plan means the
+bug is still there), including a `FIX-` listed under a track, and no bug
+left in the **Inline bugs** list of `TODO.md`. Then cut `v0.1.0` as the first
+stable release. Until then
 the plugin is pre-release — config keys and behaviour may still shift
 without a major bump.
 

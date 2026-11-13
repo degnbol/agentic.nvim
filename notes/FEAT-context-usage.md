@@ -1,5 +1,6 @@
 # Plan: tell the agent its context usage past a threshold
 Status: reviewed spec
+Priority: P3
 
 ## Relevant files
 - `lua/agentic/session_manager.lua` — `usage_update` branch of

@@ -1,4 +1,5 @@
 # Bug: a redirect with no space before a glob or brace target auto-approves
+Priority: P3
 
 ## Observed
 `PermissionRules.should_auto_approve` (default settings) and `extract_commands`:

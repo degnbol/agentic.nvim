@@ -1,5 +1,6 @@
 # Plan: exact multi-element positional matching (remove the flag cap)
 Status: reviewed (open questions)
+Priority: P2
 
 ## Relevant files
 - `lua/agentic/utils/permission_structured.lua` — `MULTI_ELEMENT_FLAG_CAP`, `absorbable_flag_count`, `some_stream_matches`, `gate_matches_existential`, `every_stream_matches`, `deny_leaf`, `decide_leaf`, `classify_leaf`
@@ -7,7 +8,6 @@ Status: reviewed (open questions)
 - `lua/agentic/utils/permission_rules.lua` — `command_is_denied`, `should_auto_reject`, the approve walk's `decide_leaf` call
 - `lua/agentic/ui/permission_manager.lua` — `PermissionManager:decide` returns `"deny"` on `should_auto_reject` before any prompt
 - `.claude/skills/permissions/references/parsing.md` — § "Arity — absorption parses", existential bullet
-- `notes/bug-deny-gate-flag-cap.md` — the audit report this plan replaces
 - Skills: `permissions` (project), `implement`
 
 ## Background
@@ -26,7 +26,7 @@ At N=25 the command never contains `danger now` but is rejected without a prompt
 
 Allow side: `gate_matches_universal` has no cap. `every_stream_matches` memoises on `(i, pos, state_key)`, so it is polynomial and exact. Over 24 flags an allow gate is evaluated normally; it is not affected.
 
-Bundled rules (`lua/agentic/permissions.json`) have no multi-element `deny` gate (26 multi-element `ask`, 50 `read_only`), so the reject bug is reachable only through `Config.permissions.structured`. Bundled multi-element `ask` gates over the cap force a prompt today. Exact matching stops that for commands whose parses never expose the gated stream. This is intended: the cap's docstring gives cost as its only purpose, and the audit's "fall back to asking" (`bug-deny-gate-flag-cap.md` § Expected) describes the cap's fallback, which the memo makes unnecessary.
+Bundled rules (`lua/agentic/permissions.json`) have no multi-element `deny` gate (26 multi-element `ask`, 50 `read_only`), so the reject bug is reachable only through `Config.permissions.structured`. Bundled multi-element `ask` gates over the cap force a prompt today. Exact matching stops that for commands whose parses never expose the gated stream. This is intended: the cap's docstring gives cost as its only purpose, and the audit's "fall back to asking" describes the cap's fallback, which the memo makes unnecessary.
 
 Root cause: the cap exists because `some_stream_matches` is an unmemoised DFS. Its cost is about C(#absorbable flags, #patterns − 1), not 2^#flags: an absorb-0 branch dies at once unless the flag's value matches the next pattern element. Measured without the cap: 200 `-x v` pairs with gate `{danger, now}` take 2 ms; `-x a` pairs with gate `{*,*,*,*,*,*,b}` and tail `x` take 21 ms at 20 pairs, 2.8 s at 40. `rec(i, pos)` is a pure function of `(i, pos)` — `patterns`, `words`, `dynamic`, `dashdash_value`, `n`, `nw` are fixed for the call, and the `--` branch only mutates its own `pos` parameter. A memo on `(i, pos)` bounds the work to O(#words × #patterns) states, plus one O(#words) scan per `--` state. Measured with the memo: the 7-element case takes 0.9 ms at 200 pairs; 5000 `-x v` pairs take 6 ms.
 
@@ -46,7 +46,7 @@ Rejected alternative: keep the cap and make the over-cap path return "unknown" s
 
 `.claude/skills/permissions/references/parsing.md`, existential bullet: "enumerates parses (bounded)" → "searches parses (memoised)". The next sentence, "An over-match only over-prompts", is false for `deny_leaf` regardless of the cap (Open question 1); its rewrite depends on that answer.
 
-When this lands, delete `notes/bug-deny-gate-flag-cap.md` and its entry 0.13 in `notes/audit-edge-cases.md`.
+When this lands, delete entry 0.13 in `notes/AUDIT-edge-cases.md`.
 
 ## Expected outcome
 - Multi-element `deny` and `ask` gates match exactly at any flag count. A command whose parses never expose the gated stream is not rejected and not forced to prompt by these gates.

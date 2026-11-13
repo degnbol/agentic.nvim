@@ -1,8 +1,9 @@
 # Plan: Failed execute block body offset
-Status: reviewed (open questions)
+Status: reviewed (open questions); the offset is fixed, open question 2 stays; may retire: a rejected call no longer draws the deny-rule merged body, its only reachable case
+Priority: P3
+Depends: FIX-silent-errors.md
 
 ## Relevant files
-- `notes/bug-failed-execute-body-offset.md` (the report)
 - `lua/agentic/ui/tool_call_renderer.lua` — `prepare_block_lines`: execute fence unwrap :825-834, failure-reason branch :1003-1033, `body_start_offset` :1433-1441, ANSI rewrite :1446-1458, grep highlights :1462-1501
 - `lua/agentic/acp/adapters/claude_agent_acp_adapter.lua` — `__build_tool_call_update` :256-272; `__apply_raw_input` returns early on empty `rawInput` :332-334
 - `lua/agentic/acp/acp_client.lua` — `extract_content_body` :704-717 (reads `content[1]` only), `extract_failure_reason` :741-765, base `__build_tool_call_update` :833-844, client capabilities `terminal = false`, no `_meta.terminal_output` :123-137

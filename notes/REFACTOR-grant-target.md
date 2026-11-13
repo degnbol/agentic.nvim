@@ -1,5 +1,6 @@
 # Plan: one per-path grant step for Bash effects and file tool calls
 Status: spec
+Priority: P3
 
 ## Relevant files
 - `lua/agentic/ui/permission_manager.lua` — `_bash_effects_clear`,

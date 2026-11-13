@@ -1,4 +1,5 @@
 # Plan: per-kind wording for the "Allow always" permission option
+Priority: P3
 
 ## Problem
 

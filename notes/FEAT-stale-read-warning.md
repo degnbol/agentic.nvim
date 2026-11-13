@@ -1,4 +1,5 @@
 # Plan: stale-read warning on Edit/Write
+Priority: P2
 
 ## Problem
 

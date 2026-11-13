@@ -1,4 +1,5 @@
 # PLAN: deterministic permission ladder as a PreToolUse hook, classifier as fallback
+Priority: P2
 
 ## Goal
 

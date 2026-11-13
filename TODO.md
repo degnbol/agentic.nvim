@@ -1,732 +1,185 @@
 # TODO
 
-Release strategy and versioning: see [`RELEASING.md`](RELEASING.md). The
-path to `v0.1.0` is to drive the Bugs section below to empty (or "Known
-minor").
-
-## Plan order
-
-Plans in `notes/`. Within a track, each plan needs the ones above it.
-Tracks are independent unless a note says otherwise. Priority: P1 high
-(breakage, security), P2 medium, P3 low (cosmetic, refactor, perf).
-
-**Session log:**
-1. P3 [`PERF-append-session-log.md`](notes/PERF-append-session-log.md)
-
-**Chat writer**
-1. P3 [`REFACTOR-prose-run-rows.md`](notes/REFACTOR-prose-run-rows.md)
-2. P3 [`REFACTOR-tool-block-rows.md`](notes/REFACTOR-tool-block-rows.md)
-3. P3 [`REFACTOR-collapsed-region-layout.md`](notes/REFACTOR-collapsed-region-layout.md)
-
-**Tool call rendering**
-1. P2 [`FIX-silent-errors.md`](notes/FIX-silent-errors.md)
-2. P3 [`FIX-failed-execute-body-offset.md`](notes/FIX-failed-execute-body-offset.md):
-   the offset is fixed; open question 2 stays. May retire: a rejected call
-   no longer draws the deny-rule merged body, its only reachable case.
-
-**Auto mode**
-1. P2 [`FEAT-auto-mode-integration.md`](notes/FEAT-auto-mode-integration.md)
-
-**Shell walk** (1 and 2 in either order; 3 needs both)
-1. P3 [`REFACTOR-leaf-classification.md`](notes/REFACTOR-leaf-classification.md)
-2. P3 [`REFACTOR-redirect-effect.md`](notes/REFACTOR-redirect-effect.md)
-3. P3 [`REFACTOR-one-shell-walk.md`](notes/REFACTOR-one-shell-walk.md)
-
-**Subagent buffers**
-1. P3 [`REFACTOR-subagent-shared-keys.md`](notes/REFACTOR-subagent-shared-keys.md)
-2. P3 [`FEAT-per-agent-file-activity.md`](notes/FEAT-per-agent-file-activity.md):
-   binds its key in the shared-keys method
-
-**ACP v2 (claude-agent-acp)**
-1. P2 [`FIX-v2-edit-write-gaps.md`](notes/FIX-v2-edit-write-gaps.md):
-   multi-hunk diffs render hunk 1 only; no `hunk_ranges`/`file_created`
-
-**opencode adapter**
-1. P2 [`FIX-opencode-child-title-prefix.md`](notes/FIX-opencode-child-title-prefix.md)
-2. P2 [`FEAT-opencode-subagent-transcripts.md`](notes/FEAT-opencode-subagent-transcripts.md)
-
-**Token usage** (mostly dotfiles repo; master plan lists the parts and
-their plans)
-1. P1 [`TRACK-token-usage.md`](notes/TRACK-token-usage.md)
-
-**No ordering:**
-- P3 [`FEAT-to-chat-key.md`](notes/FEAT-to-chat-key.md)
-- P3 [`REFACTOR-blocking-stopped-name.md`](notes/REFACTOR-blocking-stopped-name.md)
-- P3 [`REFACTOR-grant-target.md`](notes/REFACTOR-grant-target.md)
-- P3 [`REFACTOR-substitution-word.md`](notes/REFACTOR-substitution-word.md)
-- P3 [`REFACTOR-redirect-expansions.md`](notes/REFACTOR-redirect-expansions.md)
-- P3 [`REFACTOR-acp-tool-call-builders.md`](notes/REFACTOR-acp-tool-call-builders.md)
-- P3 [`REFACTOR-option-selector.md`](notes/REFACTOR-option-selector.md)
-  (shares code with `FIX-model-selector-order.md`; either first)
-- P3 [`REFACTOR-show-session-opts.md`](notes/REFACTOR-show-session-opts.md)
-- P3 [`REFACTOR-file-scan-result.md`](notes/REFACTOR-file-scan-result.md)
-- P3 [`REFACTOR-slash-command-items.md`](notes/REFACTOR-slash-command-items.md)
-- P3 [`REFACTOR-agent-chunk-filter.md`](notes/REFACTOR-agent-chunk-filter.md)
-- P3 [`REFACTOR-chat-replay.md`](notes/REFACTOR-chat-replay.md)
-- P3 [`REFACTOR-tool-call-record-lookup.md`](notes/REFACTOR-tool-call-record-lookup.md)
-  (shares code with `REFACTOR-agent-scoped-lookups.md`; either first)
-- P3 [`REFACTOR-session-list-order.md`](notes/REFACTOR-session-list-order.md)
-- P3 [`REFACTOR-preview-message-sections.md`](notes/REFACTOR-preview-message-sections.md)
-- P3 [`REFACTOR-ansi-parse-copies.md`](notes/REFACTOR-ansi-parse-copies.md)
-- P3 [`REFACTOR-agent-config-lookup.md`](notes/REFACTOR-agent-config-lookup.md)
-- P3 [`REFACTOR-agent-scoped-lookups.md`](notes/REFACTOR-agent-scoped-lookups.md)
-- P3 [`REFACTOR-return-prompt.md`](notes/REFACTOR-return-prompt.md)
-- P3 [`REFACTOR-read-range-on-load.md`](notes/REFACTOR-read-range-on-load.md)
-- P3 [`REFACTOR-fence-parse.md`](notes/REFACTOR-fence-parse.md)
-- P2 [`FIX-deny-gate-flag-cap.md`](notes/FIX-deny-gate-flag-cap.md)
-- P2 [`FIX-placeholder-titles.md`](notes/FIX-placeholder-titles.md)
-- P3 [`REFACTOR-widget-clear-chat.md`](notes/REFACTOR-widget-clear-chat.md)
-- P3 [`FEAT-gutter-identity.md`](notes/FEAT-gutter-identity.md)
-- P3 [`FIX-heading-command-flag.md`](notes/FIX-heading-command-flag.md) (on
-  hold; after `FIX-placeholder-titles.md`)
-- P3 [`FEAT-updated-input-display.md`](notes/FEAT-updated-input-display.md)
-- P3 [`FIX-inline-math-dollar-pairing.md`](notes/FIX-inline-math-dollar-pairing.md)
-- P3 [`FIX-context-highlight-parser-gate.md`](notes/FIX-context-highlight-parser-gate.md)
-- P3 [`FIX-model-selector-order.md`](notes/FIX-model-selector-order.md)
-- P2 [`feature-stale-read-warning.md`](notes/feature-stale-read-warning.md)
-- P3 [`permission-resolve-known-vars.md`](notes/permission-resolve-known-vars.md)
-- P3 [`permission-always-allow-wording.md`](notes/permission-always-allow-wording.md)
-- P3 [`refactor-acp-kind-normalisation.md`](notes/refactor-acp-kind-normalisation.md)
-- P3 [`feature-diff-line-numbers.md`](notes/feature-diff-line-numbers.md)
-- P3 [`feature-context-usage.md`](notes/feature-context-usage.md)
-- P3 [`REFACTOR-claude-agent-reference.md`](notes/REFACTOR-claude-agent-reference.md)
-  (global `acp` skill, dotfiles repo)
-
-## Bugs
-
-### File viewer listener
-
-The panel that shows edited files in the current session needs to be toggled off and on again to reveal that some files have been deleted.
-Can we get it to listen for the files it lists to see if they get deleted, and then remove them from the panel?
-The current check runs once per toggle by design: `FileActivity:reconcile`
-(`lua/agentic/ui/file_activity.lua`).
-
-### `<Plug>(agentic-send)` in visual mode adds to context instead of sending
-
-`plugin/agentic.lua:52` maps the visual-mode form to `add_selection`,
-byte-identical to `<Plug>(agentic-add-selection)` at `:31` — two `<Plug>`
-names for one action, one of them called "send". `:help
-agentic-plug-mappings` documents the intended behaviour (send the selection
-as a prompt) and is correct as written; fix the mapping, not the help.
-
-### Rendering
-
-- cursor flickers sometimes when running a command, e.g. running a git push with heavy hooks attached in ~/Documents/xyme-tools/
-
-- **Cancel sweep misses errored turns**: it keys on `stopReason == "cancelled"`,
-  so an errored turn strands the same footers. A provider that never answers at
-  all needs a sweep in `SessionManager:_refresh`. A tool call cut off
-  mid-flight by a cancel also keeps a status line that never reaches a final
-  status.
-
-- After auto-continue after reaching a limit the "Continue" is sent correctly to chat but then nothing appears in chat from the model.
-  After closing the program (nvim), restarting and resuming the session a response is visible immediately in chat, i.e. the continue was successful but the chat didn't show the response from the model.
-  This is a long standing and difficult bug.
-
-- Context amount and percentage occasionally missing or stale in incline,
-  with the float's area sometimes sized noticeably wider than the visible
-  text. Suspected cause: the incline render closure in
-  `~/dotfiles/config/nvim/lua/plugins/ui.lua` read `vim.t.agentic_headers`
-  (current tab) instead of the tab owning `props.win`, so the AgenticChat
-  float in a backgrounded tab could pick up another tab's headers state at
-  debounce-fire time. Fix applied: incline now reads the header from the
-  buffer it renders, `vim.b[props.buf].agentic_header`. Verify the symptom is
-  gone over normal multi-tab use before closing.
-
-- Doesn't always show the search tool command correctly, e.g. bad display of nested quotes:
-```markdown
-### Search
-```bash
-rg -n ""todowrite"|@alias|@class.*ToolCall" lua/agentic/ui/message_writer.lua
-```
-```console
-26:--- @class agentic.ui.MessageWriter.ToolCallDiff
-31:--- @class agentic.ui.MessageWriter.ToolCallBase
-42:--- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
-694:        or tool_call_block.kind == "todowrite"
-782:    if tracker.kind == "switch_mode" or tracker.kind == "todowrite" then
-```
- ✔ completed
-```
-
-- AgenticClean__punctuation_special_markdown is showing up in seemingly random places in markdown tables.
-  My guess is it's placed correctly for the `|` delimiters before we do my custom auto-align of tables which then leaves it highlighting random letters.
-  The fix might simply be to remove the code adding AgenticClean__punctuation_special_markdown, what is it used for? We have proper hl of `|` in md tables already.
-
-- **Markdown formatting leak**: md formatting leaks from chat blocks since we
-  often write directly to chat without protection. E.g. `##` in a prompt
-  injects a heading. Same happens with colours breaking in rare cases from the
-  ACP's side. Fix: always put contents in a protected block, or detect special
-  characters before pasting and protect more targeted.
-
-- **Streamed code lines get hard-wrapped**: a code line inside a prose ` ``` `
-  fence that outgrows the wrap width mid-stream is split into two buffer lines
-  and stays split, so copying it out of the chat yields broken code. Mechanism
-  and fix sketch in
-  [`notes/bug-streamed-code-lines-get-hard-wrapped.md`](notes/bug-streamed-code-lines-get-hard-wrapped.md).
-
-- **Syntax highlighting overflow**: rare issue where treesitter syntax
-  highlighting from a previous block bleeds into the permission prompt,
-  colouring parts of it incorrectly.
-
-- **Fetch shows wrong title**: the format varies. Probably need to reproduce
-  the issue unless we can do something more stable/clever in how that task is
-  presented in chat.
-
-### Streaming / performance
-
-- **Large tool call outputs** (e.g. long file reads) can cause visible lag
-  when writing to the chat buffer. Investigate.
-
-- **Edit diff highlighting rebuilds the file per hunk**: each render
-  reconstructs and parses the file once per hunk per side
-  (`highlight_map_in_context` from `hunk_rows` in `tool_call_layout.lua`).
-  Splice every hunk into one reconstruction per side.
-
-### Interactions
-
-- The terminal bell rings at every turn end while the chat is unfocused, not
-  only when the user's input is needed.
-
-- Insert mode in AgenticInput then mouse click in AgenticChat leaves cursor in input mode in chat which is never valid.
-  I think we should switch to normal mode automatically when changing window focus to AgenticChat (regardless of the way focus was changed).
-
-- **Ctrl-c behaviour**: while claude is writing prose, ctrl-c works — it
-  stops claude completely. While claude prompts for allow for editing a file,
-  ctrl-c rejects, but then claude starts thinking and gives a response like
-  "I was trying to do x and since I couldn't here's the instructions for you
-  to do it". Intended behaviour: ctrl-c stops and blocks claude fully in all
-  scenarios (but not persistent stopping based on task etc.). The numbered
-  options are for other reject behaviours.
-
-- **Resume after compacting**: resume right after compacting doesn't show
-  history from before compacting, just the compacting summary. Both would be
-  ideal.
-
-- **A `/command` line inside a fenced block splits**: block dispatch and the
-  `syntax/AgenticChat.vim` highlight both read line shape, so a `/word` line
-  inside a prompt's own code fence becomes its own prompt (and highlights as a
-  command). A treesitter-markdown pass over the input buffer would fix both.
-  Related: the highlight's `\s` word boundary is space/tab while the splitter's
-  Lua `%s` also matches `\r`, so a pasted CRLF line classifies differently in
-  the two.
-
-### OpenCode adapter
-
-Several issues cluster here; suggests work done for claude wasn't generalised
-to all ACPs.
-
-- **Write is empty**: a full write of a new file shows just `### Edit` with
-  the file path, not the written content. Suspected cause: the diff is null
-  for the "before" state and the code can't find a match since there's no
-  file yet. Claude does not have this problem.
-
-- **Parallel tasks not showing in chat**: previously fixed for claude, now
-  reappearing for opencode. Audit claude-specific fixes for ones that should
-  have been general across adapters.
-
-- **Hide `todowrite` tool call from chat**: not strictly a bug — opencode's
-  `todowrite` tool call already renders cleanly after mapping `title ==
-  "todowrite"` to `kind = "todowrite"` and stripping the body in
-  `MessageWriter`. But the plan/todo list is shown in its dedicated panel,
-  so the chat entry is redundant. Suppress it (claude doesn't emit one).
-
-- **Subagent calls render in the main chat**:
-  [`notes/FEAT-opencode-subagent-transcripts.md`](notes/FEAT-opencode-subagent-transcripts.md).
-
-- **Background tripwire judges the display path** (P3): a false stop
-  [`notes/bug-tripwire-display-path.md`](notes/bug-tripwire-display-path.md).
-
-### Queue
-
-A partial send of a charwise range can cut a multibyte character or drop the
-last character:
-[`notes/bug-partial-send-char-range.md`](notes/bug-partial-send-char-range.md).
-
-A usage limit without a reset clause renders as a raw error naming the org
-monthly spend limit:
-[`notes/bug-error-classification-structured-errorkind.md`](notes/bug-error-classification-structured-errorkind.md).
-
-### A redirect glued to a glob or brace target auto-approves (P1, security)
-
-`echo a >{a,b}` writes two files with no prompt and no grant:
-[`notes/bug-glob-redirect-as-argument.md`](notes/bug-glob-redirect-as-argument.md).
-
-### Permission matchers overflow on long commands
-
-On the hook path the overflow returns undecided, so the auto-mode classifier
-decides: [`notes/bug-matcher-depth-overflow.md`](notes/bug-matcher-depth-overflow.md).
-
-### A background or piped write lists its grant cause twice
-
-`echo a > /tmp/f & echo b` gives two `grant /tmp/f` causes:
-[`notes/bug-duplicate-unordered-effect.md`](notes/bug-duplicate-unordered-effect.md).
-
-### `ExitWorktree` renders as an unrecognised tool
-
-`ClaudeUtils.MODE_SWITCH_TOOLS` (`claude_utils.lua:6-10`) maps `EnterPlanMode`,
-`ExitPlanMode` and `EnterWorktree`, but not `ExitWorktree` — which the SDK does
-define (`sdk-tools.d.ts:56`). It falls to the generic branch and takes the gear
-with a title-derived head. Never once observed in the session cache, which is
-why it was flagged rather than fixed with the rest of the family.
-
-### `allow_always` caches on kinds its own table cannot match
-
-Four CamelCase rows of `CACHE_KEY_FIELDS` never match. Mechanism and the
-scoping decision: [`notes/refactor-acp-kind-normalisation.md`](notes/refactor-acp-kind-normalisation.md) §1d.
-
-## Refactors
-
-### Claude-specific code behind the adapter
-
-General modules still hold claude-agent-acp knowledge. Move each part behind a
-neutral `ACPClient` default that `ClaudeAgentACPAdapter` overrides:
-
-- `ACPClient:claude_config_dir()`, called for every provider by
-  `create_session`, `load_session` and `SessionManager`.
-- `_session_roots` and `SkillPath` in `acp_client.lua`, used only by the
-  Claude adapter.
-- `AGENTIC_SOCK` in `acp_transport.lua`, exported to every provider; only the
-  Claude hooks read it.
-
-## Feature ideas
-
-### TUI parity — missing slash commands
-
-Full comparison is in `doc/agentic.txt §12.4`. Ordered by value-to-effort.
-
-**Already works — just undocumented**
-
-Verified via a live `available_commands_update` probe of claude-agent-acp:
-these commands forward through and the plugin does not intercept them,
-so typing them in the input buffer runs the TUI flow via the LLM.
-
-- **`/init`** — generates a project `CLAUDE.md`.
-- **`/review`** — pull-request review.
-- **`/security-review`** — security review of pending changes.
-- **`/compact`**, **`/extra-usage`**, **`/insights`**,
-  **`/team-onboarding`**, **`/heapdump`** — all forwarded.
-
-**Maybe**
-
-- **PDF attachments**: the plugin supports image paste (see `image_paste`
-  config). PDF support depends on provider capability advertised through
-  ACP.
-
-- **Background jobs**: see "Background processes window" under
-  Session/workflow.
-
-**Blocked upstream or out of scope**
-
-- **`/permissions`**: no ACP surface for reading or writing persistent
-  rules. Users edit `settings.json` directly.
-
-- **`/cost`, `/login`, `/logout`**: explicitly filtered out by the bridge
-  (`UNSUPPORTED_COMMANDS` in `getAvailableSlashCommands`).
-
-- **`/status`, `/stats`, `/usage`, `/doctor`, `/mcp`, `/agents`,
-  `/skills`, `/config`, `/bug`, `/memory`, `/hooks`, `/bashes`,
-  `/pr-comments`, `/vim`, `/ide`**: not advertised by the bridge at all
-  (verified absent from `available_commands_update`). These rely on TUI
-  interactive I/O that doesn't map to the ACP chat stream. The session
-  info panel (`:h agentic-info-panel`) covers the runtime-state subset.
-
-- **`/diff`, `/teleport`**: provider-level features
-  or conversation-state primitives not exposed through ACP.
-
-### Gutter identity glyphs
-
-One rule — *the sign column says what a region is, the buffer text says what it
-contains*. Foldable prose regions remain:
-[`notes/FEAT-gutter-identity.md`](notes/FEAT-gutter-identity.md).
-
-### Rendering
-
-- If we can distinguish text coming into chat from Stop event then maybe we 
-could stop scrolling when the model is writing a stop even block of text? Could 
-be useful to auto-scroll as the model goes through reading/exploration/etc but 
-have the scroll stop with the first line of a stop paragraph at the top of 
-screen so we can read it.
-
-- **Nested fence treesitter injection**: tool output that contains its own
-  triple-backtick fences (e.g. `cat README.md`, edits to files with embedded
-  markdown samples) is wrapped in a `safe_fence` that bumps fence width to
-  avoid leakage, but the inner ` ```bash `/` ```python ` blocks lose
-  syntax injection because the outer fence is wider. Standard markdown
-  treesitter only injects on exact-width nested fences. Low priority since
-  the fenced content is usually `console`/code that the user mostly reads
-  raw.
-
-- **Edit tool preview folding**: long Edit tool previews need a folding
-  mechanism — not folded by default but `zc` works.
-
-- **Line numbers in diff previews**: when an Edit moves a line within a
-  file the diff alone gives little context — there's no positional anchor.
-  See `notes/feature-diff-line-numbers.md`.
-
-- **Strike-through for completed todo items**: opt-out config option.
-
-- Read tool should show the filepath captured as @string.special.path. Is there any default way in markdown for formatting filepath?
-
-### Input buffer
-
-- **Comment filtering**: HTML comments (`<!-- ... -->`) in the input buffer
-  should be rendered in the chat panel but stripped before sending to the
-  agent. Consider concealing the `<!--`/`-->` delimiters in both buffers.
-
-- **Selective queue cancel**: a quickfix-like window over the queued regions,
-  for dropping some of them. Today the choices are editing one region or the
-  cancel-all keymap.
-
-### Session / workflow
-
-- **Per-message token cost & session profiler**: surface how expensive
-  each prompt/turn is and which messages dominate the running context.
-  Two views: (1) inline indication per user prompt or assistant turn
-  (delta input/output tokens, maybe a sparkline in the gutter); (2) a
-  profiler view ranking top offenders for the session — large tool
-  outputs, long file reads, verbose build/test logs. Goal: spot when a
-  single `cargo build` blows the budget so the user can adjust workflow
-  (output filtering, smaller scope, manual context pruning) before
-  hitting auto-compact. Data is in `usage_update` deltas; attribution
-  needs to associate the delta with the preceding tool call or message.
-  Worth piloting against the Bevy project where `cargo` output is
-  suspected to be the main context eater. (Related: [rtk-ai/rtk](https://github.com/rtk-ai/rtk)
-  is an external CLI proxy that compresses verbose dev-command output —
-  if a profiler confirms `cargo`/`pytest` are the offenders, an in-plugin
-  filter or rtk-style wrapper could be a follow-up.)
-
-- **Background processes window**: a panel listing currently-running
-  background tool calls (Bash with `run_in_background: true`,
-  auto-backgrounded long bashes, web fetches still in flight, etc.)
-  with status, elapsed time, command/argument, and a kill keymap.
-  Provider-agnostic — track by watching the ACP `tool_call` /
-  `tool_call_update` stream rather than asking the provider, since the
-  SDK task registry is internal and not exposed via ACP. Motivation:
-  Claude legitimately forgets about running `local_bash` shells
-  (post-compact re-injection in claude-agent-acp filters
-  `local_agent` only — see claude skill `references/internals.md` §
-  "Background tasks"), and a `nvim --headless` orphaned by a hung
-  command leaves the harness showing "generating" indefinitely with
-  no surface telling the user *what* is still running. The window
-  also lets the user terminate stuck procs without dropping to a
-  shell.
-
-- **Edited line ranges in the file activity panel**: the panel lists files
-  only. The ranges are already recorded (`FileActivity.Op.ranges`, persisted);
-  show them per file (claude-owned vs other). A quickfix list of edits
-  conflicts with resume's quickfix use.
-
-- **Persistent undo integration**: opening a file in neovim allows for undo
-  via the persistent undo file. Optionally integrate so a user can step
-  through the edit history from claude with `u`.
-
-- **Archive pre-compaction sessions**: when the provider compacts and a new
-  session_id replaces the current one, the previous cache JSON keeps its
-  full message history but the new session inherits the same title (user
-  often `/rename`s the continuation to the same short name). Two cache
-  entries end up sharing a title; completion and the resume picker both
-  surface the older one. We usually don't want to resume a compacted
-  conversation — the provider only has the summary anyway. Idea: on
-  compaction, mark the pre-compaction session as archived (e.g. append
-  " (pre-compaction)" to its title, or move its JSON to an archive
-  subfolder) so the active session keeps the clean name. The full
-  pre-compaction history stays preserved as a record. Open questions:
-  how to detect the compaction event from ACP (session_update? title
-  change? new session_id under same tab?); cache filename uses
-  session_id, so archival requires a parallel naming scheme or a
-  marker field inside the JSON. Related to the "Resume after
-  compacting" bug above (showing full history alongside the summary).
-
-- **Session retention**: session files are never deleted. Add a config
-  option, e.g. `sessions.max_age_days` (default 60), that deletes session
-  files older than that when the sessions are listed. On 2026-10-03, 1774 of
-  2176 files (198 of 271 MB) were older than 60 days. Compression (gzip
-  about 3.8× smaller) was rejected for now: Neovim has no zlib, and every
-  reader (`list_sessions`, the fzf preview, grepping by title) would have to
-  decompress.
-
-- **Session completion heuristic**: some sessions are more clearly completed
-  than others. If the user prompt is last, the session is not completed.
-  If it ends in a commit etc., it probably is. Detection is heuristic;
-  alternatively a specific close keymap (instead of `:qa!`) could mark a
-  session for archive. For resume: list only unfinished work, or browse
-  the archive specifically.
-
-- **Cross-model / cross-provider resume**: auto-switch on resume is
-  implemented because resume fails otherwise. Is it possible to resume a
-  session with a different model, and even a different provider, on
-  purpose?
-
-- Consider benefits of supporting https://pi.dev/ and using it instead of opencode for the liteLLM models:
-  [`notes/pi-support.md`](notes/pi-support.md).
-
-### Permissions
-
-- **Arithmetic on number-bound variables**: arithmetic that reads a value (a
-  letter, or a `$` other than `$#`/`$?`/`$$`/`$!`) prompts, because zsh
-  evaluates the value as arithmetic and runs a subscript's `$(…)`. Approve a
-  name bound to a number literal in the same sequence (`i=3; echo $((i+1))`,
-  `for i in {1..3}; do echo $((i*2)); done`) using the walker's `known`
-  bindings.
-
-- **Hex, base and exponent literals prompt**: `$((0x1F))`, `$((16#ff))` and
-  `$((1e3))` contain letters, so `reads_value` treats them as variable reads.
-  They are numbers only and should approve.
-
-- **Stale-read warning on Edit/Write**: see
-  `notes/feature-stale-read-warning.md`.
-
-- **Permission float is not settled by `$/cancel_request`**: the ACP SDK
-  sends that notification when an outgoing request carrying a
-  `cancellationSignal` aborts, and claude-agent-acp attaches one to
-  `session/request_permission`. So cancelling a turn with a float open
-  should retract the request, and nothing acts on it. Reachable from
-  source but unobserved — zero occurrences across 7.9 M lines of debug
-  log against 1331 inbound permission requests, so confirm it arrives
-  before building the handler.
-
-- **Context-sensitive status label**: currently opencode's `in_progress`
-  is relabelled to `pending` in the opencode adapter (since opencode flips
-  status to `in_progress` *before* `execute()` runs and before raising the
-  permission ask — the tool is not actually executing). A more accurate
-  alternative is to drive the label from PermissionManager state: while a
-  pending permission request exists for a `toolCallId`, render the footer
-  as "pending"; once it resolves, render the real status. Works correctly
-  for any provider that interleaves `in_progress` with permission asks,
-  not just opencode. Requires PermissionManager → renderer plumbing or a
-  per-tracker `awaiting_permission` flag. See acp skill
-  `references/opencode.md` § "Premature `in_progress`".
-
-### Error display
-
-- Errors are currently shown inline in the chat buffer with red highlighting
-  (`AgenticErrorHeading`/`AgenticErrorBody`). A future option could use
-  neovim's native error display (`vim.notify`, `vim.diagnostic`, or a
-  floating window) instead of or in addition. Config toggle:
-  `error_display = "chat" | "notify" | "both"`.
-
-### Cross-provider editing guidance
-
-User-level editing guidance (per-language conventions, prose
-discipline) lives in skills and skill references. Under Claude Code,
-PreToolUse hooks point to them when the model Reads a matching file
-and deny edits until they are loaded; the path tables are
-`~/.claude/hooks/lib/skill-paths.zsh` and `ref-paths.zsh`. Project
-`.claude/rules/*.md` with `paths:` frontmatter still auto-attach on
-Read (mechanism in `.claude/skills/acp/references/claude-agent.md §
-"Path-scoped rules"`). Non-Claude providers (Codex, Gemini, opencode,
-Mistral) inherit nothing from `~/.claude/` and get neither.
-
-Consider reimplementing client-side in agentic.nvim: watch
-`tool_call`/`tool_call_update` events for read and edit kinds across
-all providers, match the target path against the same tables, and
-inject the pointer or hold the edit. The skills themselves already
-reach non-Claude providers via the Skill tool.
-
-For Claude specifically the hooks already fire, so the gate should be
-"skip if provider is Claude (any harness)" — duplicating the injection
-would double the content.
-
-Open questions:
-
-- table source: parse the zsh tables, or move them to a format both
-  read (TSV, JSON)
-- scope: the hook tables only, or also project `.claude/rules/`
-  (`paths` CSV / YAML array, brace expansion, `ignore`-style globs)?
-- dedup: once per session per pointer, matching the hooks
-- injection point: tool result, system reminder, or user message —
-  pick the one that survives compaction and isn't lost across
-  cross-model resume
-- interaction with the existing `read_only_commands` /
-  `read_only_commands_deny` config patterns: rules are content not
-  policy, so probably separate
-
-### LSP
-
-If claude is refactoring, e.g. renaming all occurrences of a variable it essentially does a search/replace plus looking at context around word to understand.
-Why not rename like I would in the editor using the LSP?
-The LSP is often a program that can be run from the shell, it's almost a CLI, but not quite.
-I think we should be able to write some thin wrapper around LSPs to call them like CLIs (like `lsp rename <old name, row and col?> <new name> <filename>`) that then writes a bit of json(?) boilerplate and sends it to based-pyright if `<filename>` is python etc.
-
-cclsp (MCP) rename, `find_references`, `find_implementation` and `get_incoming_calls` are denied
-in `~/.config/claude/settings.json`: cclsp uses the session cwd as the workspace root for every
-file (results outside it miss other files), a lookup by name on a Lua `Foo:method` targets `Foo`,
-and `rename_symbol_strict` takes a bare line/column, so one column off renames `Foo` without
-saying so. Brainstorm LSP tools that avoid all three, e.g.:
-
-- headless nvim calling `vim.lsp.buf.rename` (or `textDocument/rename` via `vim.lsp`) — reuses
-  the real per-file root detection and server config; take the old name as well as the position
-  and refuse when the identifier there differs; print the edits per file.
-- agentic.nvim could expose the running nvim's LSP clients to the agent instead (already
-  attached, already indexed).
-
-### Quick resume
-
-When closing opencode or claude TUI there's a message left in the shell about the session id with a command hint to resume the session.
-We could consider an opt-out feature where something like this is written to stdout on nvim close with a session active.
-
-### argument-hint
-
-Skills can have argument-hint field, currently e.g. `[message]` for /commit.
-Completion should show this, e.g. the menu entry and might need snippet.
-
-### better titles
-
-Do some processing on the first prompt to generate a title rather than just dumping the prompt.
-E.g. extract all non-basic words ("can", "let's", "this", ... are basic), convert to lowercase and chain together with some delimiter.
-
-### Failed edits
-
-An edit may fail, e.g. due to search pattern not found, a hook blocking for 
-whatever reason (bad pattern detected, etc.) and then the agent may retry an 
-improved edit.
-Showing edits that are pending and edits that actually took place is more useful in chat than showing a large diff for an edit that never happened.
-Same applies to bash commands.
-Idea: if an edit fail, wrap the diff in folding markers to hide it. Similar could be done for failed bash commands.
-Both of these could be controlled by a threshold for min number of lines before a fold is warranted. Always folding could also be warranted, to clearly indicate that the hidden contents never happened. With a configurable threshold this could also be done by simply defaulting it to 0 (or 1).
-
-### Simpler chat
-
-Loading a skill looks like:
-````markdown
-### Skill
-`neovim`
-```console
-Launching skill: neovim
-```
- ✔ completed
-````
-It seems it always says "Launching skill: " which is redundant. Could we simply say:
-````markdown
-### Skill
-`neovim`
- ✔ completed
-````
-
-### Pending
-
-Hide `pending...` from opencode when it's about to make an edit.
-Similarly, the execute block shows `bash` while the command is being generated. This should also be hidden, but also makes me concerned about the claim that opencode is using zsh.
-
-### Subagent ID in its buffer
-
-A subagent's heading shows its name and mode, not its ID. The ID
-(`SubagentInfo.agent_id`) arrives with the Agent tool's result, about 2 s after
-launch, which is usually after the heading. When it arrives, append a line with
-the ID to the agent's buffer. Do not edit the heading line.
-
-## Folded Read block
-For reading parts of a file, e.g. a small number of lines, it could be nice to have a pre-folded block in the tool block to expand and see exactly the context claude read.
-We wouldn't want this if the whole file is read (since we can just <c-w>gf to it), and if it's a "large" number of lines it might be unnecessary bloat in the chat (would take longer to resume a session, bigger storage).
-
-### No output
-
-Running a command with no output looks like this in chat:
-````markdown
-### Execute
-Sleep for 10 seconds
-```zsh
-sleep 10
-```
-```console
-(Bash completed with no output)
-```
- ✔ completed
-````
-The `(Bash completed with no output)` is redundant, given we always show completion status of command (" ✔ completed").
-So, I think we should not be showing this output. If it originates from our code, delete, if it is given by acp, etc. then I think we may have to detect it and suppress. The wording varies, so if we have to detect on wording alone, then consider if this work is worth it.
-
-### Peek file
-
-When being prompted for running a script it would be useful to see what that script actually contains.
-A hover peek window would be one solution. The regular hover keymap `K` isn't used here for anything else, so that could be the config default.
-
-### Hooks
-
-Claude hook system is complicated right now. I have made a lib/ and there's many files.
-There is a fair bit of regex. I wonder if a move to treesitter could improve the code.
-There might be a nice abstraction split with parsing logic and all the lib work moved into this repo, while tiny config patterns utilising the parsing code lives in personal nvim config.
-If that would make the config explode, then a better option might be to consider treesitter for ~/dotfiles/config/claude/hooks/ instead of for here.
-
-### Queue message: the overlooked-question risk
-
-The queue itself shipped in `f170629` and `19fa6d6`. The risk that motivated
-holding it back is only partly addressed.
-
-Queueing is for releasing the next task without interrupting the agent, but the
-turn may end with a question rather than finished work — and the queued message
-answers a question that was never asked. Narrowing the drain to a normal Stop
-covers the cases where the turn visibly did not finish (`<C-c>`, `refusal`,
-`max_tokens`, an error): those park the queue. It does not cover a turn that
-ends `end_turn` *with* a question in its summary, which is the common shape.
-
-The agent may or may not repeat an unanswered question. Mitigating this needs a
-way to tell "finished" from "asked" at Stop — worth solving before leaning on
-the queue harder.
-
-### Grey out agentic inner thinking
-
-A thought run now collapses to one dimmed, folded row instead of being dimmed
-in place. The "sentences that look like noise" half is unaddressed — it needs a
-definition of noise before it is actionable.
-
-### Permission system arity
-
-Consider making the permission system one step more advanced.
-E.g. to be able to indicate arity, if term is first, last, if there's exactly n terms.
-Brainstorm ideas for the simplest increase in code complexity and usage in 
-permissions.json complexity that generalises to the most useful use cases.
-
-Concrete need: a gate field matching a pattern against any argument
-(`any_positional: ["*;"]`). tmux chains commands with `;`/`\;` tokens at
-any index (`tmux capture-pane -p \; run-shell …` runs the shell command),
-so a read-only tmux entry is unsound until `ask` can catch them.
-
-### bacground running
-
-Still open: a spinner mode for a background job, since it currently shows as if
-the agent stopped its turn (which I suppose it did, so we also don't want to lie.)
-
-### context polling
-
-Maybe have a way for an agent to check how much context it's used so it can 
-know not to start new work after 200k but aim to wrap up and write handover, 
-plans, etc. instead.
-
-## Auto-allow non-zsh
-
-Consider if it would be a huge unrealistic endevour to extend the auto-allow system from zsh to other languages.
-python injected code snippets are common, and for me so are lua through headless nvim.
-Is there any pre-existing tool, etc., that can check safety of a python snippet so we don't have to write checks for every possible command or function?
-
-## grant git rm
-
-`/grant` covers Edit calls, Bash redirects and plain `rm` of a tracked, clean
-file. `git rm` is the same recoverable delete (without -f/--force) but still
-prompts: it emits no delete effect.
-This may just be expanding the permissions.json list to have a new category, so it's read_only, safe_write, recoverable, ask, then deny.
-
-## Agents don't understand handover
-
-When talking to one agent then switching the new one doesn't understand a change of model occurred. Update: the models really have no idea who they are.
-I think this is usually not impportant. A model doesn't need to know who they are to do a task with some meta exceptions.
-We could consider adding a code comment or some other acp docs to point this out.
-
-## Investigations
-
-- **Manual code review**: this repo is heavily vibe-coded.
-
+Release goal and versioning: [`RELEASING.md`](RELEASING.md).
+
+Priority: P1 high (breakage), P2 medium (cosmetic), P3 low (edge-case). A
+note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
+
+## Inline bugs
+
+- File activity panel keeps a deleted file until toggled off and on
+  (`FileActivity:reconcile` runs once per toggle).
+- Visual-mode `<Plug>(agentic-send)` adds the selection to context instead
+  of sending it (`plugin/agentic.lua:52`); `:h agentic-plug-mappings` is right.
+- Cursor flickers while a command runs, e.g. a `git push` with heavy hooks.
+- The cancel sweep keys on `stopReason == "cancelled"`: an errored turn, a
+  provider that never answers (needs a sweep in `SessionManager:_refresh`),
+  or a call cut off by a cancel keeps a status line that never reaches a
+  final status.
+- A search command with nested quotes displays wrong:
+  `rg -n ""todowrite"|@alias" …`.
+- Markdown in a prompt leaks into the chat (`##` makes a heading); provider
+  colours sometimes break the same way.
+- Treesitter highlighting from a previous block sometimes bleeds into the
+  permission prompt.
+- A Fetch tool call shows a wrong title; the format varies.
+- Large tool outputs (long file reads) lag the chat write.
+- Edit diff highlighting reconstructs and parses the file once per hunk per
+  side (`highlight_map_in_context` from `hunk_rows`, `tool_call_layout.lua`).
+- The terminal bell rings at every turn end while the chat is unfocused,
+  not only when input is needed.
+- A mouse click from insert mode in the input into the chat leaves insert
+  mode on in the chat. Leave insert mode whenever the chat gets focus.
+- Resume right after compacting shows only the compaction summary, not the
+  history before it.
+- A `/word` line inside a prompt's code fence dispatches and highlights as a
+  command; a CRLF line classifies differently in the two (`\s` vs `%s`).
+- opencode: a write of a new file shows only `### Edit` and the path.
+- opencode: parallel tasks do not show in the chat (fixed for claude; audit
+  the claude-only fixes).
+- `ExitWorktree` is missing from `ClaudeUtils.MODE_SWITCH_TOOLS` and renders
+  as an unrecognised tool (never observed).
+- `allow_always` caches on kinds its own table cannot match:
+  [`REFACTOR-acp-kind-normalisation.md`](notes/REFACTOR-acp-kind-normalisation.md) §1d.
+
+## Index
+
+<!-- BEGIN plan-index -->
+
+### Tracks
+
+**Failed execute block body offset**
+1. P2 [FIX-silent-errors.md](notes/FIX-silent-errors.md): no error reported only through `Logger.debug` — reviewed — blocked on open questions 2 and 3 (items 1 and 7 wait on them); items 2-6, 8-9 ready
+2. P3 [FIX-failed-execute-body-offset.md](notes/FIX-failed-execute-body-offset.md): Failed execute block body offset — reviewed (open questions); the offset is fixed, open question 2 stays; may retire: a rejected call no longer draws the deny-rule merged body, its only reachable case (after 1)
+
+**Guard a heading whole when the adapter knows it is a command**
+1. P2 [FIX-placeholder-titles.md](notes/FIX-placeholder-titles.md): Claude tool call heads from rawInput, not the bridge title — reviewed (open questions)
+2. P3 [FIX-heading-command-flag.md](notes/FIX-heading-command-flag.md): Guard a heading whole when the adapter knows it is a command — reviewed spec — on hold, no reproducer (after 1)
+
+**opencode subagents in their own transcripts**
+1. P2 [FIX-opencode-child-title-prefix.md](notes/FIX-opencode-child-title-prefix.md): opencode child-call titles without the subagent prefix — reviewed spec
+2. P2 [FEAT-opencode-subagent-transcripts.md](notes/FEAT-opencode-subagent-transcripts.md): opencode subagents in their own transcripts — reviewed spec (after 1)
+
+**one approve walk; the tally is that walk with no effects pinned**
+1. P3 [REFACTOR-leaf-classification.md](notes/REFACTOR-leaf-classification.md): one structured classification and one leaf front per command leaf — spec
+2. P3 [REFACTOR-redirect-effect.md](notes/REFACTOR-redirect-effect.md): one classifier for what a file redirect does — spec
+3. P3 [REFACTOR-one-shell-walk.md](notes/REFACTOR-one-shell-walk.md): one approve walk; the tally is that walk with no effects pinned — spec (after 1, 2)
+
+**one file activity tally per agent**
+1. P3 [REFACTOR-subagent-shared-keys.md](notes/REFACTOR-subagent-shared-keys.md): one binding of a subagent's keys on its transcript and its input — spec
+2. P3 [FEAT-per-agent-file-activity.md](notes/FEAT-per-agent-file-activity.md): one file activity tally per agent — draft (after 1)
+
+**one-row fold rule and collapsed-region layout**
+1. P3 [REFACTOR-prose-run-rows.md](notes/REFACTOR-prose-run-rows.md): one shift rule for prose-run rows, one end-of-run reflow — spec
+2. P3 [REFACTOR-tool-block-rows.md](notes/REFACTOR-tool-block-rows.md): one reader of a tool call block's rows; the diff freeze recorded on the block — reviewed spec (after 1)
+3. P3 [REFACTOR-collapsed-region-layout.md](notes/REFACTOR-collapsed-region-layout.md): one-row fold rule and collapsed-region layout — spec (after 2)
+
+### Bugs
+
+- P2 [FIX-deny-gate-flag-cap.md](notes/FIX-deny-gate-flag-cap.md): exact multi-element positional matching (remove the flag cap) — reviewed (open questions)
+- P2 [FIX-v2-edit-write-gaps.md](notes/FIX-v2-edit-write-gaps.md): ACP v2 Edit/Write diffs — every hunk, and the patch facts — draft
+- P3 [BUG-glob-redirect-as-argument.md](notes/BUG-glob-redirect-as-argument.md): a redirect with no space before a glob or brace target auto-approves
+- P3 [BUG-tripwire-display-path.md](notes/BUG-tripwire-display-path.md): the background-session tripwire judges an edit by its display path
+- P3 [FIX-context-highlight-parser-gate.md](notes/FIX-context-highlight-parser-gate.md): check that a parser exists before context highlighting — reviewed spec
+- P3 [FIX-inline-math-dollar-pairing.md](notes/FIX-inline-math-dollar-pairing.md): inline-math dollar pairing in prose wrap — reviewed (open questions)
+- P3 [FIX-model-selector-order.md](notes/FIX-model-selector-order.md): Model selector order — reviewed spec
+- [BUG-bd-panel-loses-state.md](notes/BUG-bd-panel-loses-state.md): main panels lose buffer options, b-vars and keymaps after `:bd`
+- [BUG-child-todowrite-overwrites-todos.md](notes/BUG-child-todowrite-overwrites-todos.md): a subagent's TodoWrite list replaces the main agent's todos
+- [BUG-create-fold-never-fires.md](notes/BUG-create-fold-never-fires.md): `create_max_lines` folds a created file only on the streaming path
+- [BUG-ctrl-c-reject-continues.md](notes/BUG-ctrl-c-reject-continues.md): `<C-c>` at a permission prompt rejects, and the agent continues
+- [BUG-duplicate-unordered-effect.md](notes/BUG-duplicate-unordered-effect.md): an unordered walk lists a write effect twice — draft
+- [BUG-error-classification-structured-errorkind.md](notes/BUG-error-classification-structured-errorkind.md): Usage-limit errors without a reset clause are not classified
+- [BUG-family-head-reset.md](notes/BUG-family-head-reset.md): a family kind's head drops its detail on a later update
+- [BUG-header-defaults-missing-panels.md](notes/BUG-header-defaults-missing-panels.md): panels missing from the `headers` defaults get a winbar
+- [BUG-matcher-depth-overflow.md](notes/BUG-matcher-depth-overflow.md): a long command overflows the permission matchers' stack
+- [BUG-no-reply-after-auto-continue.md](notes/BUG-no-reply-after-auto-continue.md): no reply shown after auto-continue
+- [BUG-partial-send-char-range.md](notes/BUG-partial-send-char-range.md): a charwise partial send cuts or drops the last char — draft
+- [BUG-path-b-replay-empty-argument.md](notes/BUG-path-b-replay-empty-argument.md): Path B replays tool calls with an empty argument
+- [BUG-project-root-from-process-cwd.md](notes/BUG-project-root-from-process-cwd.md): project root comes from the process cwd, not the session's cwd
+- [BUG-reject-pass-value-words.md](notes/BUG-reject-pass-value-words.md): the reject pass rejects on an ambiguous parse — draft
+- [BUG-replayed-subagent-empty-transcript.md](notes/BUG-replayed-subagent-empty-transcript.md): a subagent block from a session/load replay points to an empty transcript
+- [BUG-streamed-code-lines-get-hard-wrapped.md](notes/BUG-streamed-code-lines-get-hard-wrapped.md): a long code line inside a streamed prose fence is hard-wrapped into two
+- [BUG-subagent-unknown-state-ends.md](notes/BUG-subagent-unknown-state-ends.md): a provider's `unknown` subagent state ends the subagent
+- [BUG-table-punctuation-highlight.md](notes/BUG-table-punctuation-highlight.md): punctuation highlight lands on random cells of markdown tables
+- [BUG-tar-bundle-ask.md](notes/BUG-tar-bundle-ask.md): tar ask gates miss letters in an old-style bundle — draft
+- [BUG-unknown-jsonrpc-method-handling.md](notes/BUG-unknown-jsonrpc-method-handling.md): unknown JSON-RPC method dispatch
+- [FIX-ansi-escape-payload-shown.md](notes/FIX-ansi-escape-payload-shown.md): Strip every escape sequence whole in `Ansi` — spec
+- [FIX-comment-code-conflicts.md](notes/FIX-comment-code-conflicts.md): Resolve three comment/code conflicts — spec
+- [FIX-permission-setup-failure.md](notes/FIX-permission-setup-failure.md): Resolve a permission request whose prompt setup fails — reviewed spec
+- [FIX-prefix-match-suffix-offset.md](notes/FIX-prefix-match-suffix-offset.md): cut the prefix-boundary suffix where the match ends — spec
+- [FIX-record-cwd-scope.md](notes/FIX-record-cwd-scope.md): record cwd that the command ends in — reviewed spec
+- [FIX-xargs-highlight-range.md](notes/FIX-xargs-highlight-range.md): Clip wrapper-inner highlight ranges to the command — reviewed spec
+
+### Plans
+
+- P1 [TRACK-token-usage.md](notes/TRACK-token-usage.md): Reduce token usage — reviewed
+- P2 [FEAT-auto-mode-integration.md](notes/FEAT-auto-mode-integration.md): deterministic permission ladder as a PreToolUse hook, classifier as fallback
+- P2 [FEAT-stale-read-warning.md](notes/FEAT-stale-read-warning.md): stale-read warning on Edit/Write
+- P3 [FEAT-context-usage.md](notes/FEAT-context-usage.md): tell the agent its context usage past a threshold — reviewed spec
+- P3 [FEAT-diff-line-numbers.md](notes/FEAT-diff-line-numbers.md): line numbers in Edit tool diff previews
+- P3 [FEAT-gutter-identity.md](notes/FEAT-gutter-identity.md): gutter identity glyphs — reviewed (open questions)
+- P3 [FEAT-permission-always-allow-wording.md](notes/FEAT-permission-always-allow-wording.md): per-kind wording for the "Allow always" permission option
+- P3 [FEAT-permission-resolve-known-vars.md](notes/FEAT-permission-resolve-known-vars.md): resolve known-literal vars before the safety check
+- P3 [FEAT-to-chat-key.md](notes/FEAT-to-chat-key.md): key from a subagent to its chat — spec
+- P3 [FEAT-updated-input-display.md](notes/FEAT-updated-input-display.md): show when a hook rewrote a tool call's input — reviewed (open questions)
+- P3 [PERF-append-session-log.md](notes/PERF-append-session-log.md): append finished messages to the session file — reviewed (open questions)
+- P3 [REFACTOR-acp-kind-normalisation.md](notes/REFACTOR-acp-kind-normalisation.md): make lowercase an invariant of a tool-call `kind`
+- P3 [REFACTOR-acp-tool-call-builders.md](notes/REFACTOR-acp-tool-call-builders.md): adapters extend the base tool-call builders — reviewed spec
+- P3 [REFACTOR-agent-chunk-filter.md](notes/REFACTOR-agent-chunk-filter.md): `ResponseBoundary:filter_chunk` takes any agent chunk — spec
+- P3 [REFACTOR-agent-config-lookup.md](notes/REFACTOR-agent-config-lookup.md): AgentConfigOptions — one entry lookup, and callbacks given once — spec
+- P3 [REFACTOR-agent-scoped-lookups.md](notes/REFACTOR-agent-scoped-lookups.md): one side-record drain and one transcript lookup per agent — reviewed spec
+- P3 [REFACTOR-ansi-parse-copies.md](notes/REFACTOR-ansi-parse-copies.md): one extended-colour parse and one text emit in `Ansi` — spec
+- P3 [REFACTOR-blocking-stopped-name.md](notes/REFACTOR-blocking-stopped-name.md): name the blocking-subagent stop by the plugin's mode — spec
+- P3 [REFACTOR-chat-replay.md](notes/REFACTOR-chat-replay.md): one replay of the history into the main chat — spec
+- P3 [REFACTOR-claude-agent-reference.md](notes/REFACTOR-claude-agent-reference.md): tidy the `acp` skill's claude-agent-acp reference — draft
+- P3 [REFACTOR-fence-parse.md](notes/REFACTOR-fence-parse.md): one fence-line parse in `TextWrap` — spec
+- P3 [REFACTOR-file-scan-result.md](notes/REFACTOR-file-scan-result.md): one handler for a file scan's output in `FilePicker` — spec
+- P3 [REFACTOR-grant-target.md](notes/REFACTOR-grant-target.md): one per-path grant step for Bash effects and file tool calls — spec
+- P3 [REFACTOR-option-selector.md](notes/REFACTOR-option-selector.md): one option selector for modes, models and config options — spec
+- P3 [REFACTOR-preview-message-sections.md](notes/REFACTOR-preview-message-sections.md): one layout for prompt and reply in the session preview — spec
+- P3 [REFACTOR-read-range-on-load.md](notes/REFACTOR-read-range-on-load.md): split old read ranges once, where a session file is read — reviewed spec
+- P3 [REFACTOR-redirect-expansions.md](notes/REFACTOR-redirect-expansions.md): the expanded part of each redirect in `RedirectedParts` — spec
+- P3 [REFACTOR-return-prompt.md](notes/REFACTOR-return-prompt.md): one draft return for a returned prompt — reviewed spec
+- P3 [REFACTOR-session-list-order.md](notes/REFACTOR-session-list-order.md): one order for session lists — spec
+- P3 [REFACTOR-show-session-opts.md](notes/REFACTOR-show-session-opts.md): one reading of `OpenOpts` in `init.lua` — spec
+- P3 [REFACTOR-slash-command-items.md](notes/REFACTOR-slash-command-items.md): one builder of slash command completion items — spec
+- P3 [REFACTOR-substitution-word.md](notes/REFACTOR-substitution-word.md): one branch for a `$(…)` argument word in `extract_args` — spec
+- P3 [REFACTOR-tool-call-record-lookup.md](notes/REFACTOR-tool-call-record-lookup.md): one newest-record search over the history's tool calls — spec
+- P3 [REFACTOR-widget-clear-chat.md](notes/REFACTOR-widget-clear-chat.md): the widget clears only the chat buffer — reviewed spec
+- [FEAT-file-activity-reads.md](notes/FEAT-file-activity-reads.md): file activity lists files the agent read — draft
+- [FEAT-record-bare-name.md](notes/FEAT-record-bare-name.md): bare program name in shell_parse command records — spec
+- [FEAT-shell-changes-from-git.md](notes/FEAT-shell-changes-from-git.md): file activity infers shell-command changes from git — draft
+
+### Ideas and audits
+
+- [AUDIT-edge-cases.md](notes/AUDIT-edge-cases.md): edge-case code (2026-10-26)
+- [IDEA-archive-pre-compaction-sessions.md](notes/IDEA-archive-pre-compaction-sessions.md): archive sessions from before a compaction
+- [IDEA-auto-allow-non-zsh.md](notes/IDEA-auto-allow-non-zsh.md): auto-allow beyond zsh
+- [IDEA-background-processes-window.md](notes/IDEA-background-processes-window.md): background processes window
+- [IDEA-cross-provider-editing-guidance.md](notes/IDEA-cross-provider-editing-guidance.md): editing guidance for every provider
+- [IDEA-login-service-check.md](notes/IDEA-login-service-check.md): check the provider service before offering a login
+- [IDEA-lsp-rename-tooling.md](notes/IDEA-lsp-rename-tooling.md): LSP rename and lookup tools for the agent
+- [IDEA-permission-arity.md](notes/IDEA-permission-arity.md): permission rules with arity
+- [IDEA-pi-support.md](notes/IDEA-pi-support.md): Pi coding agent support in agentic.nvim
+- [IDEA-provider-drift-detection.md](notes/IDEA-provider-drift-detection.md): detect provider drift
+- [IDEA-queue-overlooked-question.md](notes/IDEA-queue-overlooked-question.md): a queued message answers a question that was never seen
+- [IDEA-scoped-cancel-subagents.md](notes/IDEA-scoped-cancel-subagents.md): Scoping `<C-c>` — sparing subagents from the interrupt
+- [IDEA-session-retention.md](notes/IDEA-session-retention.md): session retention
+- [IDEA-session-stats-logging.md](notes/IDEA-session-stats-logging.md): more session logging, and a stats panel apart from the info panel
+- [IDEA-token-cost-profiler.md](notes/IDEA-token-cost-profiler.md): per-message token cost and session profiler
+- [IDEA-tui-parity.md](notes/IDEA-tui-parity.md): slash command parity with the Claude Code TUI
+
+<!-- END plan-index -->
 
 ## Housekeeping
 
-- **README demos**: images or gifs in the readme or elsewhere demoing the differences
-  between this plugin and the stock TUI.
-
-- **Claude tool-name vocabulary lives in two places**: `ClaudeUtils` now holds
-  `tool_name` and `MODE_SWITCH_TOOLS`, while `permission_hook.lua:18` keeps its
-  own `NAME_TO_KIND` for `Bash`/`Edit`/`Write`. Either give the vocabulary one
-  home, or record that the hook's table is deliberately scoped to the three
-  tools it registers for — leaving it undecided is how the two drift apart.
-
-- Should we switch to `just` instead of `make`?
+- **README demos**: images or gifs showing the differences from the TUI.
+- **Claude tool-name vocabulary in two places**: `ClaudeUtils` (`tool_name`,
+  `MODE_SWITCH_TOOLS`) and `NAME_TO_KIND` in `permission_hook.lua`. Give it
+  one home, or record that the hook's table is scoped to its three tools.
+- **Manual code review**: this repo is heavily vibe-coded.
+- **Claude-specific code behind the adapter**: move each behind a neutral
+  `ACPClient` default that `ClaudeAgentACPAdapter` overrides:
+  `ACPClient:claude_config_dir()` (called for every provider);
+  `_session_roots` and `SkillPath` in `acp_client.lua`; `AGENTIC_SOCK` in
+  `acp_transport.lua` (only the Claude hooks read it).
