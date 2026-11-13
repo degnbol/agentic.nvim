@@ -42,6 +42,7 @@ ACPTransport      -- parses JSON, calls callbacks.on_message()
   |
   v
 ACPClient         -- routes by message type (notification vs response)
+  |  on ACP v2: the class's `v2_codec` (below)
   |  adapter override point: __handle_tool_call,
   |  __handle_tool_call_update, __build_tool_call_update
   v
@@ -53,6 +54,16 @@ MessageWriter     -- writes to chat buffer, tracks tool call state
 PermissionManager -- queues permission prompts, manages keymaps
 ChatHistory       -- accumulates messages for persistence
 ```
+
+### ACP v2
+
+An adapter class asks for v2 by setting `v2_codec`: claude-agent-acp's is
+`adapters/claude_v2_codec.lua`. `ACPClient` then passes session updates,
+permission requests, and its own requests and their results through it.
+Adapters and `SessionManager` see the v1 shapes the bridge sends a v1
+client, except `state_update` and `user_message`, which only v2 has, and
+`notice` and `compaction_*`, which a v1 client gets only by asking. What each
+v1 shape comes from: the codec's docstrings.
 
 ## Session update routing
 
@@ -222,7 +233,10 @@ The claude adapter declares `clientCapabilities._meta.terminal_output`
 (`capability_meta`). The bridge then sends a command's content as
 `{ type = "terminal" }` only, and its raw output as a separate status-less
 `tool_call_update` carrying `_meta.terminal_output.data`, just before the
-status update of the same result (`tool-calls/renderer.js` `result()`). So:
+status update of the same result (`tool-calls/renderer.js` `result()`). On
+v2, output and exit arrive as `terminal_update`s ahead of the report they
+came from (`v2Updates` in `dist/v2/agent.js`), which the codec decodes to the
+same status-less updates. So:
 
 - **Description** comes from `rawInput.description` (or
   `command_description`) into `ToolCallBase.description`, which names the

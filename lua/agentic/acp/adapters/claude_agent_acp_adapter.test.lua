@@ -2379,4 +2379,64 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             assert.is_nil(updates[1].argument)
         end)
     end)
+
+    describe("on a recorded ACP v2 turn, decoded", function()
+        it(
+            "renders the Edit's diff and follows the background command",
+            function()
+                local ClaudeV2Codec =
+                    require("agentic.acp.adapters.claude_v2_codec")
+                local adapter = make_adapter()
+                local blocks, updates = {}, {}
+                adapter.__with_subscriber = function(_self, _session_id, fn)
+                    fn({
+                        on_tool_call = function(block)
+                            table.insert(blocks, block)
+                        end,
+                        on_tool_call_update = function(message)
+                            table.insert(updates, message)
+                        end,
+                    })
+                end
+
+                local state = ClaudeV2Codec.state()
+                for line in io.lines("tests/fixtures/acp_v2_turn.jsonl") do
+                    local message = vim.json.decode(line)
+                    if message.method == "session/update" then
+                        for _, update in
+                            ipairs(
+                                ClaudeV2Codec.decode_update(
+                                    state,
+                                    message.params.update
+                                )
+                            )
+                        do
+                            if update.sessionUpdate == "tool_call" then
+                                adapter:__handle_tool_call("s-1", update)
+                            elseif
+                                update.sessionUpdate == "tool_call_update"
+                            then
+                                adapter:__handle_tool_call_update("s-1", update)
+                            end
+                        end
+                    end
+                end
+
+                local diff, job_id, ended
+                for _, message in
+                    ipairs(
+                        vim.list_extend(vim.list_extend({}, blocks), updates)
+                    )
+                do
+                    diff = message.diff or diff
+                    job_id = message.background_job_id or job_id
+                    ended = ended or message.output_ended
+                end
+                assert.same({ "alpha line" }, diff.old)
+                assert.same({ "beta line" }, diff.new)
+                assert.truthy(job_id)
+                assert.is_true(ended)
+            end
+        )
+    end)
 end)

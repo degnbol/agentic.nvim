@@ -1247,6 +1247,7 @@ describe("agentic.acp.ACPClient", function()
                 _session_roots = {},
                 _children = {},
                 _tool_call_kinds = ToolCallKinds:new(),
+                _v2_states = {},
             }, { __index = ACPClient }) --[[@as agentic.acp.ACPClient]]
             client._send_request = function(_self, method, params, cb)
                 table.insert(
@@ -2100,6 +2101,203 @@ describe("agentic.acp.ACPClient", function()
 
             table.sort(reached)
             assert.same({ "a", "b" }, reached)
+        end)
+    end)
+
+    describe("on ACP v2", function()
+        --- @type tests.helpers.Deferred
+        local deferred
+        --- @type table[] Decoded JSON of each message sent
+        local sent
+
+        before_each(function()
+            deferred = Deferred.capture()
+            sent = {}
+        end)
+
+        after_each(function()
+            deferred.revert()
+        end)
+
+        local ClaudeV2Codec = require("agentic.acp.adapters.claude_v2_codec")
+
+        --- A connected client of a class that asks for v2.
+        --- @return agentic.acp.ACPClient client
+        local function make_client()
+            local Child = ACPClient.extend()
+            Child.v2_codec = ClaudeV2Codec
+            --- @type agentic.acp.ACPClient
+            local client
+            client = setmetatable({
+                state = "disconnected",
+                callbacks = {},
+                subscribers = {},
+                id_counter = 0,
+                protocol_version = 2,
+                client_info = { name = "n", version = "1" },
+                capabilities = { auth = { terminal = true } },
+                provider_config = { name = "test-provider" },
+                agent_capabilities = { loadSession = true },
+                transport = {
+                    start = function()
+                        client.state = "connected"
+                    end,
+                    send = function(_self, data)
+                        table.insert(sent, vim.json.decode(data))
+                        return true
+                    end,
+                },
+                _connection = 0,
+                _ready_waiters = {},
+                _loading_sessions = {},
+                _children = {},
+                _session_roots = {},
+                _tool_call_kinds = ToolCallKinds:new(),
+                _v2_states = {},
+            }, { __index = Child }) --[[@as agentic.acp.ACPClient]]
+            return client
+        end
+
+        --- Deliver `update` as a v2 `session/update` of `session_id`.
+        --- @param client agentic.acp.ACPClient
+        --- @param session_id string
+        --- @param update table
+        local function notify(client, session_id, update)
+            client:_handle_message({
+                jsonrpc = "2.0",
+                method = "session/update",
+                params = { sessionId = session_id, update = update },
+            })
+        end
+
+        it("asks for v2 when its class has a v2 codec", function()
+            local setup_stub = spy.stub(ACPClient, "_setup_transport")
+            local connect_stub = spy.stub(ACPClient, "_connect")
+            MiniTest.finally(function()
+                setup_stub:revert()
+                connect_stub:revert()
+            end)
+            local Child = ACPClient.extend()
+            Child.v2_codec = ClaudeV2Codec
+
+            local client = Child:new({ command = "x" }, function() end)
+            local v1_client = ACPClient:new({ command = "x" }, function() end)
+
+            assert.equal(2, client.protocol_version)
+            assert.equal(1, v1_client.protocol_version)
+        end)
+
+        it("sends protocolVersion 2 in a v2 initialize", function()
+            local client = make_client()
+            client:_connect()
+
+            assert.equal("initialize", sent[1].method)
+            assert.equal(2, sent[1].params.protocolVersion)
+            assert.same({ name = "n", version = "1" }, sent[1].params.info)
+        end)
+
+        it("fails a v2 initialize answered with v1", function()
+            local notify_stub = spy.stub(Logger, "notify")
+            MiniTest.finally(function()
+                notify_stub:revert()
+            end)
+            local client = make_client()
+            client:_connect()
+            client:_handle_message({
+                jsonrpc = "2.0",
+                id = sent[1].id,
+                result = { protocolVersion = 1 },
+            })
+            deferred.drain()
+
+            assert.equal("error", client.state)
+        end)
+
+        it("encodes session/load as session/resume", function()
+            local client = make_client()
+            client:load_session(
+                "s",
+                "/c",
+                nil,
+                RecordingHandlers.new(),
+                function() end
+            )
+
+            assert.equal("session/resume", sent[1].method)
+            assert.same({ type = "start" }, sent[1].params.replayFrom)
+        end)
+
+        it("dispatches the decoded updates of one update in order", function()
+            local client = make_client()
+            local handlers, calls = RecordingHandlers.new()
+            client:_subscribe("s", handlers)
+
+            -- A replayed start is held until the next update.
+            notify(client, "s", {
+                sessionUpdate = "tool_call_update",
+                toolCallId = "t1",
+                kind = "read",
+                status = "completed",
+                _meta = vim.NIL,
+            })
+            notify(
+                client,
+                "s",
+                { sessionUpdate = "state_update", state = "idle" }
+            )
+            deferred.drain()
+
+            assert.same(
+                { "on_tool_call", "on_session_update" },
+                vim.tbl_map(function(call)
+                    return call[1]
+                end, calls)
+            )
+            assert.equal("t1", calls[1][2].tool_call_id)
+            assert.equal("state_update", calls[2][2].sessionUpdate)
+        end)
+
+        it("drops a child's state_update", function()
+            local client = make_client()
+            local handlers, calls = RecordingHandlers.new()
+            client:_subscribe("s", handlers)
+            client._children["child"] = "s"
+
+            notify(
+                client,
+                "child",
+                { sessionUpdate = "state_update", state = "idle" }
+            )
+            deferred.drain()
+
+            assert.same({}, calls)
+        end)
+
+        it("emits a setup result's commands after attaching", function()
+            local client = make_client()
+            local handlers, calls = RecordingHandlers.new()
+            local commands = { { name = "review", description = "d" } }
+            local done = spy.new(function() end)
+
+            client:create_session("/c", handlers, done --[[@as function]])
+            client:_handle_message({
+                jsonrpc = "2.0",
+                id = sent[1].id,
+                result = { sessionId = "s", availableCommands = commands },
+            })
+            deferred.drain()
+
+            assert.equal(1, done.call_count)
+            assert.same({
+                {
+                    "on_session_update",
+                    {
+                        sessionUpdate = "available_commands_update",
+                        availableCommands = commands,
+                    },
+                    "s",
+                },
+            }, calls)
         end)
     end)
 end)

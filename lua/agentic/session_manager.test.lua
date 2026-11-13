@@ -397,6 +397,114 @@ describe("agentic.SessionManager", function()
             assert.spy(set_title_spy).was.called(0)
             assert.spy(save_spy).was.called(0)
         end)
+    end)
+
+    describe("_on_session_update: notices and compaction", function()
+        --- @type agentic.ui.MessageWriter.Notice[]
+        local notices
+        --- @type TestStub
+        local notify_stub
+
+        local function make_session()
+            notices = {}
+            local session = {
+                _prompt_pending = 0,
+                agent = { provider_config = { name = "claude-agent-acp" } },
+                message_writer = {
+                    write_notice = function(_self, notice)
+                        table.insert(notices, notice)
+                    end,
+                },
+                _replaying = SessionManager._replaying,
+                _turn_open = SessionManager._turn_open,
+                _on_notice = SessionManager._on_notice,
+                _on_compaction_update = SessionManager._on_compaction_update,
+                _on_session_update = SessionManager._on_session_update,
+            } --[[@as agentic.SessionManager]]
+            return session
+        end
+
+        before_each(function()
+            notify_stub = spy.stub(Logger, "notify")
+        end)
+
+        after_each(function()
+            notify_stub:revert()
+        end)
+
+        it("names the provider in a notice's title", function()
+            make_session():_on_session_update({
+                sessionUpdate = "notice",
+                severity = "warning",
+                title = "Rate limited",
+                description = "Retrying\nsoon",
+            })
+
+            assert.same({
+                {
+                    glyph = Glyphs.PROVIDER,
+                    title = "claude-agent-acp: Rate limited",
+                    fold_body = { "Retrying", "soon" },
+                    mid_turn = false,
+                },
+            }, notices)
+        end)
+
+        it(
+            "writes a compaction's start, then its end with the streamed summary",
+            function()
+                local session = make_session()
+                session:_on_session_update({
+                    sessionUpdate = "compaction_update",
+                    compactionId = "c",
+                    status = "in_progress",
+                })
+                for _, text in ipairs({ "Line one\n", "Line two" }) do
+                    session:_on_session_update({
+                        sessionUpdate = "compaction_summary_chunk",
+                        compactionId = "c",
+                        content = { type = "text", text = text },
+                    })
+                end
+                session:_on_session_update({
+                    sessionUpdate = "compaction_update",
+                    compactionId = "c",
+                    status = "completed",
+                })
+
+                assert.equal("Compacting conversation", notices[1].title)
+                assert.equal("Conversation compacted", notices[2].title)
+                assert.same({ "Line one", "Line two" }, notices[2].fold_body)
+            end
+        )
+
+        it("shows why a compaction failed", function()
+            make_session():_on_session_update({
+                sessionUpdate = "compaction_update",
+                compactionId = "c",
+                status = "failed",
+                error = "Prompt too long",
+            })
+
+            assert.equal("Compaction failed", notices[1].title)
+            assert.equal("Prompt too long", notices[1].detail)
+            assert.is_nil(notices[1].fold_body)
+        end)
+
+        it("takes no action on state_update and user_message", function()
+            local session = make_session()
+            session:_on_session_update({
+                sessionUpdate = "state_update",
+                state = "idle",
+            })
+            session:_on_session_update({
+                sessionUpdate = "user_message",
+                messageId = "m",
+            })
+
+            assert.same({}, notices)
+            assert.spy(notify_stub).was.called(0)
+        end)
 
         it("clears _title_user_set on session reset (/new, /clear)", function()
             local SlashCommands = require("agentic.acp.slash_commands")

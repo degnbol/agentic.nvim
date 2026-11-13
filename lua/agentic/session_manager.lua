@@ -125,6 +125,7 @@ end
 --- @field agents_panel agentic.ui.AgentsPanel
 --- @field chat_history agentic.ui.ChatHistory
 --- @field _thought_response_id? string `messageId` of the main agent's last thought chunk
+--- @field _compaction_summary? string Summary text of the running compaction streamed so far
 --- @field _title_user_set? boolean Set once the user picks a title via /rename; blocks the provider's auto-summary from overriding it
 --- @field _history_to_send? agentic.ui.ChatHistory History whose messages to prepend on next prompt submit, as a text transcript (the history prefix)
 --- @field _session_epoch integer Monotonic counter incremented on each new_session/load; guards stale create_session callbacks
@@ -1316,6 +1317,22 @@ function SessionManager:_on_session_update(update, source_session_id)
             self.widget:set_chat_title(update.title)
             self:_history_changed(self.chat_history)
         end
+    elseif update.sessionUpdate == "notice" then
+        self:_on_notice(update)
+    elseif update.sessionUpdate == "compaction_update" then
+        self:_on_compaction_update(update)
+    elseif update.sessionUpdate == "compaction_summary_chunk" then
+        local text = vim.tbl_get(update, "content", "text")
+        if text then
+            self._compaction_summary = (self._compaction_summary or "") .. text
+        end
+    elseif
+        update.sessionUpdate == "state_update"
+        or update.sessionUpdate == "user_message"
+    then
+        -- Unused: no adapter asks for ACP v2, the only protocol that sends
+        -- them.
+        return
     else
         -- TODO: Move this to Logger from notify to debug when confidence is high
         Logger.notify(
@@ -1328,6 +1345,59 @@ function SessionManager:_on_session_update(update, source_session_id)
             { title = "⚠️ Unknown session update" }
         )
     end
+end
+
+--- Write the provider's notice, its title named with the provider so it
+--- cannot read as the agent's, its description folded under it.
+--- @param notice agentic.acp.Notice
+function SessionManager:_on_notice(notice)
+    local description = Json.present(notice.description)
+    self.message_writer:write_notice({
+        glyph = Glyphs.PROVIDER,
+        title = self.agent.provider_config.name .. ": " .. notice.title,
+        fold_body = description
+                and vim.split(description, "\n", { plain = true })
+            or nil,
+        mid_turn = self:_turn_open(),
+    })
+end
+
+--- The notice titles of a compaction's end, by status.
+--- @type table<string, string>
+local COMPACTION_ENDS = {
+    completed = "Conversation compacted",
+    failed = "Compaction failed",
+    cancelled = "Compaction cancelled",
+}
+
+--- Write a notice at a compaction's start, and one at its end that holds the
+--- summary folded: the one the update gives, else the chunks streamed.
+--- @param update agentic.acp.CompactionUpdate
+function SessionManager:_on_compaction_update(update)
+    local mid_turn = self:_turn_open()
+    if update.status == "in_progress" then
+        self._compaction_summary = nil
+        self.message_writer:write_notice({
+            glyph = Glyphs.COMMAND.compact,
+            title = "Compacting conversation",
+            mid_turn = mid_turn,
+        })
+        return
+    end
+    local summary = vim.tbl_map(function(block)
+        return block.text or ""
+    end, Json.present(update.summary) or {})
+    local text = #summary > 0 and table.concat(summary)
+        or self._compaction_summary
+    self._compaction_summary = nil
+    self.message_writer:write_notice({
+        glyph = Glyphs.COMMAND.compact,
+        title = COMPACTION_ENDS[update.status] or update.status,
+        detail = Json.present(update.error),
+        fold_body = text and vim.split(vim.trim(text), "\n", { plain = true })
+            or nil,
+        mid_turn = mid_turn,
+    })
 end
 
 --- Manual refresh: reset stale generating state.
@@ -1507,6 +1577,9 @@ local CONVERSATION_UPDATES = {
     agent_thought_chunk = true,
     subagent_update = true,
     session_message = true,
+    notice = true,
+    compaction_update = true,
+    compaction_summary_chunk = true,
 }
 
 --- Run a replay update through its handler's method.

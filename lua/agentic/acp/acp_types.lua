@@ -13,7 +13,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field fs agentic.acp.FileSystemCapability
 --- @field terminal boolean
 --- @field auth { terminal: boolean } `terminal`: the client runs `terminal` auth methods
---- @field _meta? table
+--- @field public _meta? table
 --- @field subagents? table Empty object that opts into native subagent sessions, unstable in the ACP schema
 
 --- @class agentic.acp.InitializeParams
@@ -302,7 +302,44 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field recipientMessageId? string
 --- @field senderMessageId? string
 
+--- An advisory the agent shows the user, outside the conversation.
+--- @class agentic.acp.Notice
+--- @field sessionUpdate "notice"
+--- @field severity "info"|"warning"|"error"|string
+--- @field title string
+--- @field description? string
+
+--- A compaction of the conversation started or ended.
+--- @class agentic.acp.CompactionUpdate
+--- @field sessionUpdate "compaction_update"
+--- @field compactionId string
+--- @field status "in_progress"|"completed"|"failed"|"cancelled"|string
+--- @field summary? agentic.acp.Content[]|vim.NIL The summary the conversation continues from
+--- @field error? string|vim.NIL Why a `failed` compaction failed
+
+--- A chunk of the summary of the running compaction.
+--- @class agentic.acp.CompactionSummaryChunk
+--- @field sessionUpdate "compaction_summary_chunk"
+--- @field compactionId string
+--- @field content agentic.acp.Content
+
+--- The foreground work state of a session (ACP v2).
+--- @class agentic.acp.StateUpdate : agentic.acp.SubagentWorkState
+--- @field sessionUpdate "state_update"
+
+--- A prompt the agent took in (ACP v2), or with empty `content` a replayed
+--- message cleared.
+--- @class agentic.acp.UserMessage
+--- @field sessionUpdate "user_message"
+--- @field messageId string
+--- @field content? agentic.acp.Content[]|vim.NIL
+
 --- @alias agentic.acp.SessionUpdateMessage
+--- | agentic.acp.Notice
+--- | agentic.acp.CompactionUpdate
+--- | agentic.acp.CompactionSummaryChunk
+--- | agentic.acp.StateUpdate
+--- | agentic.acp.UserMessage
 --- | agentic.acp.SubagentUpdate
 --- | agentic.acp.SessionMessage
 --- | agentic.acp.UserMessageChunk
@@ -326,6 +363,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field options agentic.acp.PermissionOption[]
 --- @field sessionId string
 --- @field toolCall agentic.acp.ToolCall
+--- @field public _meta? table
 
 --- @class agentic.acp.RequestPermissionOutcome
 --- @field outcome "cancelled" | "selected"
