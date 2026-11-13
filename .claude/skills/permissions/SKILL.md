@@ -28,11 +28,13 @@ exception that *grants* new authorisation is `/grant`, which compensates
 with git-recoverability gates.
 
 For the claude provider, a PreToolUse hook (`permission_hook.lua`, matcher
-`Bash|Write|Edit`) also runs `decide` before the SDK's check. Its `deny`
+`Bash|Write|Edit`) also runs `decide` before the SDK's check, which in auto
+mode is an LLM classifier in place of the `canUseTool` prompt. Its `deny`
 always holds; its `allow` can still fall through to the SDK (`claude` skill
-`references/hooks.md` § permissionDecision is not always final). It also
-reports the directory each Bash call starts in (§ Executed code in
-`references/parsing.md`).
+`references/hooks.md` § permissionDecision is not always final). In auto
+mode it answers `ask` for an undecided call with an `ask` cause (§ Causes),
+which sends the call to the plugin's prompt instead of the classifier. It also reports the directory
+each Bash call starts in (§ Executed code in `references/parsing.md`).
 
 Without the hook, our `deny` is a backstop on the escalation surface only: a
 command the SDK auto-approves never reaches us. An unconditional block needs

@@ -3,7 +3,7 @@
 #
 # Runs the plugin's deterministic permission ladder inside the live nvim,
 # ahead of auto-mode's SDK classifier, and maps the verdict onto a PreToolUse
-# permissionDecision (allow / deny / undecided). See permission_hook.lua.
+# permissionDecision (allow / deny / ask / undecided). See permission_hook.lua.
 #
 # Self-scoping: only fires inside an nvim that exported AGENTIC_SOCK. A plain
 # `claude` CLI run in the same cwd never gets the var, so this no-ops for it.
@@ -21,11 +21,8 @@ expr="luaeval('require(\"agentic.permission_hook\").evaluate(_A)', '${payload}')
 verdict=$(nvim --server "$AGENTIC_SOCK" --remote-expr "$expr" 2>/dev/null) || exit 0
 
 case "$verdict" in
-    allow)
-        printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"agentic.nvim permission ladder"}}\n'
-        ;;
-    deny)
-        printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"agentic.nvim permission ladder"}}\n'
+    allow | deny | ask)
+        printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"%s","permissionDecisionReason":"agentic.nvim permission ladder"}}\n' "$verdict"
         ;;
     *)
         : # undecided -> no output, classifier decides

@@ -2155,6 +2155,32 @@ describe("agentic.ui.PermissionManager", function()
             pm:_complete_request("reject-once")
         end)
 
+        -- The PreToolUse hook reads an `ask` cause as "only the user may
+        -- approve", so it must mark a concrete ask match and nothing else.
+        for command, codes in pairs({
+            ["git commit -m x"] = { "ask" },
+            ["timeout 5 git commit -m x"] = { "ask" },
+            ["git $x -m x"] = { "dynamic" },
+            ["some-unknown-tool"] = { "no-allow" },
+        }) do
+            it(
+                "gives " .. command .. " the causes it is undecided by",
+                function()
+                    local verdict = pm:decide(
+                        "execute",
+                        make_execute_request(command, "t").toolCall
+                    )
+                    assert.is_nil(verdict.allow)
+                    assert.same(
+                        codes,
+                        vim.tbl_map(function(cause)
+                            return cause.code
+                        end, verdict.causes)
+                    )
+                end
+            )
+        end
+
         describe("bash cwds", function()
             --- @type string
             local dir

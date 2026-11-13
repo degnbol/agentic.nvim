@@ -26,7 +26,6 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 
 **Auto mode**
 1. P2 [`FEAT-auto-mode-integration.md`](notes/FEAT-auto-mode-integration.md)
-2. P1 [`FIX-auto-mode-fix.md`](notes/FIX-auto-mode-fix.md), which extends it
 
 **Shell walk** (1 and 2 in either order; 3 needs both)
 1. P3 [`REFACTOR-leaf-classification.md`](notes/REFACTOR-leaf-classification.md)
@@ -45,6 +44,10 @@ Tracks are independent unless a note says otherwise. Priority: P1 high
 **opencode adapter**
 1. P2 [`FIX-opencode-child-title-prefix.md`](notes/FIX-opencode-child-title-prefix.md)
 2. P2 [`FEAT-opencode-subagent-transcripts.md`](notes/FEAT-opencode-subagent-transcripts.md)
+
+**Token usage** (mostly dotfiles repo; master plan lists the parts and
+their plans)
+1. P1 [`TRACK-token-usage.md`](notes/TRACK-token-usage.md)
 
 **No ordering:**
 - P3 [`FEAT-to-chat-key.md`](notes/FEAT-to-chat-key.md)
