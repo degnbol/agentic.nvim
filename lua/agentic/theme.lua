@@ -23,6 +23,7 @@ Theme.HL_GROUPS = {
     GLYPH_AGENT = "AgenticGlyphAgent",
     GLYPH_OFF = "AgenticGlyphOff",
     DIMMED_BLOCK = "AgenticDimmedBlock",
+    UNTAKEN_PROMPT = "AgenticUntakenPrompt",
     SEARCH_MATCH = "AgenticSearchMatch",
     GREP_PATH = "AgenticGrepPath",
     GREP_LINE_NR = "AgenticGrepLineNr",
@@ -185,6 +186,8 @@ function Theme.setup()
 
         -- Sidecar body dim (fetch/WebSearch/SubAgent output)
         { Theme.HL_GROUPS.DIMMED_BLOCK, { link = "Comment" } },
+        -- A prompt sent and not yet taken in, glyph and text alike
+        { Theme.HL_GROUPS.UNTAKEN_PROMPT, { link = "Comment" } },
 
         -- Search match highlight
         { Theme.HL_GROUPS.SEARCH_MATCH, { link = "Search" } },

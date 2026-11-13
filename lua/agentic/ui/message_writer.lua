@@ -1722,7 +1722,7 @@ end
 --- @param text string Raw prompt text
 --- @param author string|nil Key of `Glyphs.AUTHOR`; nil for the user
 --- @return string sign
-local function prompt_sign(text, author)
+function MessageWriter.prompt_sign(text, author)
     if author then
         -- A saved row can name an author no longer registered.
         return (Glyphs.AUTHOR[author] or Glyphs.PROMPT) .. " "
@@ -1780,7 +1780,7 @@ function MessageWriter:write_user_prompt(text, extra_lines, author, payload)
             0,
             {
                 right_gravity = false,
-                sign_text = prompt_sign(text, author),
+                sign_text = MessageWriter.prompt_sign(text, author),
                 sign_hl_group = Theme.HL_GROUPS.GLYPH_USER,
             }
         )

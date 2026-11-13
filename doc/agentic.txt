@@ -1366,6 +1366,7 @@ Chat text ~
     AgenticCodeBlockFence     |hl-NonText|             Fences, region rails
     AgenticProseCursor        |hl-NonText|             End of streaming prose
     AgenticDimmedBlock        `Comment`                Dimmed fence lines
+    AgenticUntakenPrompt      `Comment`                Prompt not yet taken in
     AgenticTurnUsage          `Comment`                Token-usage footer
     AgenticSearchMatch        |hl-Search|              Search match
     AgenticTableRowEnd        dashed underline         End of a wrapped table row

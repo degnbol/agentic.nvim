@@ -1,14 +1,25 @@
---- Dimmed lines below the end of a buffer, in a `virt_lines` extmark on the
---- last line: prompts sent and not yet taken in, then the plugin's own step
---- in progress (starting, loading or forking a session). Writes that append
---- lines leave them behind until `reposition`.
+--- Lines below the end of a buffer, in a `virt_lines` extmark on the last
+--- line: prompts sent and not yet taken in, then the plugin's own step in
+--- progress (starting, loading or forking a session). Writes that append lines
+--- leave them behind until `reposition`.
+
+local Theme = require("agentic.theme")
 
 local NS_TAIL_LINES = vim.api.nvim_create_namespace("agentic_tail_lines")
+
+--- Screen cells of the sign column (`signcolumn=yes:1`), which the lines
+--- start in.
+local SIGN_WIDTH = 2
+
+--- A prompt sent and not yet taken in.
+--- @class agentic.ui.TailLines.Prompt
+--- @field sign string Its identity sign, as the prompt's row in the buffer will carry it
+--- @field text string
 
 --- @class agentic.ui.TailLines
 --- @field _bufnr integer
 --- @field _step? string The step shown, nil when none
---- @field _prompts string[] The prompts shown, oldest first
+--- @field _prompts agentic.ui.TailLines.Prompt[] The prompts shown, oldest first
 --- @field _extmark_id? integer
 local TailLines = {}
 TailLines.__index = TailLines
@@ -33,23 +44,30 @@ function TailLines:clear_step()
 end
 
 --- Show `prompts`, replacing the prompts shown. Empty shows none.
---- @param prompts string[] Prompt texts, oldest first
+--- @param prompts agentic.ui.TailLines.Prompt[] Oldest first
 function TailLines:show_prompts(prompts)
     self._prompts = prompts
     self:reposition()
 end
 
---- The virtual lines of what is shown.
+--- The virtual lines of what is shown, from the sign column on: each prompt
+--- dimmed, its sign in the sign column, then the step.
 --- @return [string, string][][] virt_lines
 function TailLines:_virt_lines()
+    local pad = string.rep(" ", SIGN_WIDTH)
     local lines = {}
     for _, prompt in ipairs(self._prompts) do
-        for _, line in ipairs(vim.split(prompt, "\n", { plain = true })) do
-            table.insert(lines, { { line, "NonText" } })
+        local rows = vim.split(prompt.text, "\n", { plain = true })
+        for i, row in ipairs(rows) do
+            local sign = i == 1 and prompt.sign or pad
+            table.insert(
+                lines,
+                { { sign .. row, Theme.HL_GROUPS.UNTAKEN_PROMPT } }
+            )
         end
     end
     if self._step then
-        table.insert(lines, { { " " .. self._step, "NonText" } })
+        table.insert(lines, { { pad .. " " .. self._step, "NonText" } })
     end
     return lines
 end
@@ -77,6 +95,7 @@ function TailLines:reposition()
         vim.api.nvim_buf_set_extmark(self._bufnr, NS_TAIL_LINES, last_row, 0, {
             id = self._extmark_id,
             virt_lines = virt_lines,
+            virt_lines_leftcol = true,
         })
 end
 

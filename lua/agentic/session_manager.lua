@@ -3628,13 +3628,17 @@ end
 --- Show the prompts not yet taken in below the chat, the user's own (not
 --- synthetic ones), and sync the chat's `modified` flag.
 function SessionManager:_untaken_changed()
-    local texts = {}
+    --- @type agentic.ui.TailLines.Prompt[]
+    local prompts = {}
     for _, sent in ipairs(self._untaken) do
         if not sent.user_msg.synthetic then
-            table.insert(texts, sent.input_text)
+            table.insert(prompts, {
+                sign = MessageWriter.prompt_sign(sent.input_text, sent.author),
+                text = sent.input_text,
+            })
         end
     end
-    self.tail_lines:show_prompts(texts)
+    self.tail_lines:show_prompts(prompts)
     self:_sync_modified(self.chat_history)
 end
 

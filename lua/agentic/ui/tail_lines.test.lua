@@ -72,28 +72,37 @@ describe("agentic.ui.TailLines", function()
         assert.is_nil(shown())
     end)
 
-    it("shows each prompt's lines, oldest first, above the step", function()
-        local tail_lines = TailLines:new(bufnr)
-        tail_lines:show_step("forking")
+    it(
+        "shows each prompt dimmed from the sign column, oldest first, above the step",
+        function()
+            local tail_lines = TailLines:new(bufnr)
+            tail_lines:show_step("forking")
 
-        tail_lines:show_prompts({ "first\nsecond", "third" })
+            tail_lines:show_prompts({
+                { sign = "> ", text = "first\nsecond" },
+                { sign = "/ ", text = "third" },
+            })
 
-        local mark = vim.api.nvim_buf_get_extmarks(
-            bufnr,
-            vim.api.nvim_get_namespaces().agentic_tail_lines,
-            0,
-            -1,
-            { details = true }
-        )[1]
-        local texts = vim.tbl_map(function(line)
-            return vim.trim(line[1][1])
-        end, mark[4].virt_lines)
-        assert.same({ "first", "second", "third", "forking" }, texts)
-    end)
+            local details = vim.api.nvim_buf_get_extmarks(
+                bufnr,
+                vim.api.nvim_get_namespaces().agentic_tail_lines,
+                0,
+                -1,
+                { details = true }
+            )[1][4] --[[@as vim.api.keyset.extmark_details]]
+            assert.is_true(details.virt_lines_leftcol)
+            assert.same({
+                { { "> first", "AgenticUntakenPrompt" } },
+                { { "  second", "AgenticUntakenPrompt" } },
+                { { "/ third", "AgenticUntakenPrompt" } },
+                { { "   forking", "NonText" } },
+            }, details.virt_lines)
+        end
+    )
 
     it("shows nothing once the prompts and the step are gone", function()
         local tail_lines = TailLines:new(bufnr)
-        tail_lines:show_prompts({ "first" })
+        tail_lines:show_prompts({ { sign = "> ", text = "first" } })
 
         tail_lines:show_prompts({})
 

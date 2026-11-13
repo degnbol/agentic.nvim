@@ -5645,7 +5645,10 @@ describe("agentic.SessionManager", function()
                     answers[1]({ messageId = "m" }, nil)
 
                     assert.same({}, sink.headings)
-                    assert.same({ "hello" }, shown.calls[#shown.calls][2])
+                    assert.same(
+                        { { sign = "❯ ", text = "hello" } },
+                        shown.calls[#shown.calls][2]
+                    )
 
                     session:_on_prompt_taken()
                     session:_on_turn_state({ state = "running" })
