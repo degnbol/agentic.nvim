@@ -6,6 +6,7 @@ local FileSystem = require("agentic.utils.file_system")
 local ClaudeTranscriptReader =
     require("agentic.acp.adapters.claude_transcript_reader")
 local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
+local ClaudeV2Codec = require("agentic.acp.adapters.claude_v2_codec")
 local SkillPath = require("agentic.utils.skill_path")
 
 local HOOKS_DIR = vim.fs.root(debug.getinfo(1, "S").source:sub(2), "hooks")
@@ -88,6 +89,7 @@ end
 --- @field _terminal_output table<string, table<string, string>> Root session id -> tool call id -> a command's output, held until the status update that follows it
 --- @field _exec_shell? "bash"|"zsh"
 local ClaudeAgentACPAdapter = ACPClient.extend()
+ClaudeAgentACPAdapter.v2_codec = ClaudeV2Codec
 
 --- Spawn the bridge with a copy of `config`, so edits to the config table
 --- reach the next spawn, not this instance. With `todo_tools` set, the

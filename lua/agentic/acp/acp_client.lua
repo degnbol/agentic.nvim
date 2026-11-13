@@ -2,6 +2,7 @@ local AcpKind = require("agentic.utils.acp_kind")
 local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
 local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
+local Json = require("agentic.utils.json")
 local LogLine = require("agentic.utils.log_line")
 local Logger = require("agentic.utils.logger")
 local PermissionRules = require("agentic.utils.permission_rules")
@@ -34,6 +35,8 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field on_tool_call_update fun(tool_call: agentic.ui.MessageWriter.ToolCallBase, source_session_id: string|nil): nil
 --- @field on_disconnect? fun(): nil The provider process died or failed
 --- @field on_usage_lifted? fun(): nil The provider account's usage limit lifted
+--- @field on_turn_state? fun(state: agentic.acp.TurnState): nil The root session's foreground work changed state
+--- @field on_prompt_taken? fun(): nil The agent took in the oldest prompt sent to the root session and not yet taken
 
 --- @class agentic.acp.ACPProviderConfig
 --- @field name? string Provider name
@@ -79,6 +82,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field _session_roots table<string, string[]> Skill-search roots per session, from the cwd and additional directories that session was opened with
 --- @field _tool_call_kinds agentic.acp.ToolCallKinds
 --- @field _v2_states table<string, agentic.acp.ClaudeV2Codec.State> Per session id, the codec state of the current connection while it speaks v2
+--- @field _unanswered table<string, integer> ACP v1: per session id, the prompts sent and not yet answered
 --- @field v2_codec? agentic.acp.ClaudeV2Codec The ACP v2 codec of the class's provider. A client whose class has one asks for v2 in `initialize`, and translates every message it then gets and sends
 local ACPClient = {}
 ACPClient.__index = ACPClient
@@ -89,6 +93,7 @@ ACPClient.ERROR_CODES = {
     AUTH_REQUIRED = -32000,
     INVALID_PARAMS = -32602,
     INTERNAL_ERROR = -32603,
+    REQUEST_CANCELLED = -32800,
     -- Client-side only, never sent: outside the JSON-RPC reserved range
     TRANSPORT_ERROR = -1,
     PROTOCOL_ERROR = -2,
@@ -144,6 +149,7 @@ function ACPClient:new(config, on_ready)
     client._session_roots = {}
     client._tool_call_kinds = ToolCallKinds:new()
     client._v2_states = {}
+    client._unanswered = {}
     client._notified_output = {}
     client:_setup_usage_limit()
 
@@ -203,6 +209,7 @@ end
 function ACPClient:unsubscribe(session_id)
     self.subscribers[session_id] = nil
     self._session_roots[session_id] = nil
+    self._unanswered[session_id] = nil
     self._tool_call_kinds:forget_session(session_id)
     for child, root in pairs(self._children) do
         if root == session_id then
@@ -919,8 +926,27 @@ function ACPClient:__handle_session_update(params)
         self._children[update.sessionId] = root
     end
 
-    -- The parent's `subagent_update` carries the same state.
-    if session_update_type == "state_update" and self._children[session_id] then
+    if
+        session_update_type == "state_update"
+        or session_update_type == "user_message"
+    then
+        -- A child's state comes on the parent's `subagent_update`.
+        if not self._children[session_id] then
+            self:__with_subscriber(session_id, function(subscriber)
+                if session_update_type == "user_message" then
+                    if subscriber.on_prompt_taken then
+                        subscriber.on_prompt_taken()
+                    end
+                elseif subscriber.on_turn_state then
+                    subscriber.on_turn_state({
+                        state = update.state,
+                        stop_reason = Json.present(update.stopReason),
+                        usage = Json.present(update.usage),
+                        error = Json.present(update.error),
+                    })
+                end
+            end)
+        end
         return
     end
 
@@ -1669,16 +1695,61 @@ function ACPClient:fork_session(
     end)
 end
 
---- @param session_id string
+--- Send `prompt` to the session `session_id`. The subscriber's
+--- `on_prompt_taken` and `on_turn_state` report what becomes of it. ACP v2
+--- sends both; for ACP v1 they are derived here: the prompt is taken in when
+--- sent, which starts a turn when none runs, and each answer ends the turn
+--- `idle` with the answer's stop reason, then starts the next while prompts
+--- are still unanswered.
+--- @param session_id string A root session
 --- @param prompt agentic.acp.Content[]
---- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil)
+--- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil) Gets the answer. ACP v2 answers `{messageId}` once the prompt is taken in, or an error when it never is (`REQUEST_CANCELLED` when a cancel ended it before)
 function ACPClient:send_prompt(session_id, prompt, callback)
     local params = {
         sessionId = session_id,
         prompt = prompt,
     }
 
-    self:_send_request("session/prompt", params, callback)
+    if self.protocol_version == 2 then
+        self:_send_request("session/prompt", params, callback)
+        return
+    end
+
+    -- Called directly, not through `__with_subscriber`: a later update must
+    -- not reach the subscriber ahead of these.
+    local subscriber = self.subscribers[session_id] or {}
+    local unanswered = self._unanswered[session_id] or 0
+    self._unanswered[session_id] = unanswered + 1
+    if subscriber.on_prompt_taken then
+        subscriber.on_prompt_taken()
+    end
+    if unanswered == 0 and subscriber.on_turn_state then
+        subscriber.on_turn_state({ state = "running" })
+    end
+
+    self:_send_request("session/prompt", params, function(result, err)
+        local left = math.max(0, (self._unanswered[session_id] or 0) - 1)
+        self._unanswered[session_id] = left > 0 and left or nil
+        -- Looked up again: the session may have been unsubscribed meanwhile.
+        local on_turn_state = (self.subscribers[session_id] or {}).on_turn_state
+        if on_turn_state then
+            on_turn_state({
+                state = "idle",
+                stop_reason = err and "error"
+                    or type(result) == "table" and Json.present(
+                        result.stopReason
+                    )
+                    or nil,
+                usage = type(result) == "table" and result.usage or nil,
+                error = err,
+                more = left > 0,
+            })
+            if left > 0 then
+                on_turn_state({ state = "running" })
+            end
+        end
+        callback(result, err)
+    end)
 end
 
 --- Set the agent mode for a session

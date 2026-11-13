@@ -1,6 +1,6 @@
 ---
 name: session-lifecycle
-description: Session lifecycle races, epoch guard, cross-turn MessageWriter state, and header state pipeline. Use when editing SessionManager, ChatHistory, session creation, load (Path A) or re-create-from-history (Path B) paths, the _pending_load/_load_state/_session_epoch/destroyed guards, the _prompt_pending counter or _turn_open, MessageWriter cross-turn flags (reset at turn boundary), ChatWidget header rendering, WindowDecoration, or vim.b[buf].agentic_header. Covers "session resume", "epoch guard", "MessageWriter cross-turn state", and "header state pipeline".
+description: Session lifecycle races, epoch guard, cross-turn MessageWriter state, and header state pipeline. Use when editing SessionManager, ChatHistory, session creation, load (Path A) or re-create-from-history (Path B) paths, the _pending_load/_load_state/_session_epoch/destroyed guards, turn state (_foreground, _untaken, _in_flight, _turn_open), MessageWriter cross-turn flags (reset at turn boundary), ChatWidget header rendering, WindowDecoration, or vim.b[buf].agentic_header. Covers "session resume", "epoch guard", "MessageWriter cross-turn state", and "header state pipeline".
 ---
 
 # Session lifecycle
@@ -67,18 +67,27 @@ Two races leave a callback acting on a session that has moved on:
   `_apply_session_options` on success (as `new_session` does) —
   otherwise a loaded session has no config options.
 
-## Turn state: the in-flight counter and `_turn_open`
+## Turn state: `_foreground`, `_untaken`, `_turn_open`
 
-`_prompt_pending` counts outstanding prompt callbacks. It gates no submit — the
-provider runs a mid-turn prompt as the next turn — only `_drain_queue`, which
-advances the queue one block per turn. The prompt callback reads it as "a turn is still
-streaming": it runs the turn boundary below but not the idle signals
-(`_set_generating(false)`, indicator, `_notify_attention`). An epoch mismatch runs neither.
-Whatever asks whether the writer's turn will still be finalized (`mid_turn`
-of `write_notice` and chat rows, history saves, side-record drains) reads
-`_turn_open`: a prompt's turn or a load's replay, each of which finalizes the
-writer when it ends. Not `is_generating`, the header's running state, which
-`stop_generation` and `_refresh` clear while the prompt callback is pending.
+A turn follows the client's `on_prompt_taken` and `on_turn_state`
+(`ACPClient:send_prompt` derives both on ACP v1), not the prompt answer.
+A sent prompt waits in `_untaken`; `_on_prompt_taken` writes it to the chat
+(user prompts) and history and moves it to `_taken`. The turn boundary is `_on_turn_state` `idle` while
+`_foreground` is not idle (`_end_turn`); an `idle` while idle is a snapshot
+and ends nothing. A turn no prompt started has no `_taken` entry.
+
+`_in_flight` (`_foreground` not idle, or a prompt untaken) gates no submit,
+only `_drain_queue`, which advances the queue one block per turn. A turn end
+with a prompt still to run (`#_untaken > 0`, or v1's `more`) runs the
+boundary but not the idle signals (`_set_generating(false)`,
+`_notify_attention`) or the drain; `_dispatch_turn`'s error path sends the
+signals when a failed untaken prompt was the last thing in flight. Whatever asks whether the writer's turn
+will still be finalized (`mid_turn` of `write_notice` and chat rows, history
+saves, side-record drains) reads `_turn_open`: foreground work or a load's
+replay. Not `is_generating`, the header's running state, which
+`stop_generation` clears before the turn's `idle`. `_reset_turn_state`
+(`_refresh`, `_advance_session_epoch`) sets idle and returns untaken prompts
+to the input.
 
 ## Cross-turn state hazards in MessageWriter
 
@@ -95,9 +104,9 @@ Known hazards (and their reset points):
 | `_error_responses` | `write_error_message` | `finalize_turn`, `reset_turn_state` |
 
 When adding new per-turn state to MessageWriter, always ensure it resets at the
-turn boundary. The `send_prompt` response callback (which calls
-`finalize_turn`) runs inside `vim.schedule` from `_handle_message` — do not
-add another `vim.schedule` wrapper or the cleanup races with the next turn.
+turn boundary. The turn end (which calls `finalize_turn`) already runs on the
+main loop in wire order with the session updates — do not add another
+`vim.schedule` wrapper or the cleanup races with the next turn.
 
 ## Header state and external UI plugins
 

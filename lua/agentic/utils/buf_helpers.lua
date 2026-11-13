@@ -535,7 +535,8 @@ function BufHelpers.set_fold(winid, lnum, open)
     end)
 end
 
---- Screen rows of lines `first` through `last` in `winid`, fold-aware.
+--- Screen rows of lines `first` through `last` in `winid`, fold-aware. With
+--- `last` the buffer's last line, the virtual lines below it count too.
 --- @param winid integer
 --- @param first integer 1-indexed
 --- @param last integer 1-indexed, inclusive; 0 rows when below `first`
@@ -545,9 +546,12 @@ local function screen_rows(winid, first, last, max_height)
     if last < first then
         return 0
     end
+    local line_count =
+        vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
     return vim.api.nvim_win_text_height(winid, {
         start_row = first - 1,
-        end_row = last - 1,
+        -- Omitted, it counts the virtual lines below the last line.
+        end_row = last < line_count and last - 1 or nil,
         max_height = max_height,
     }).all
 end

@@ -21,8 +21,9 @@ _G.config_dir = vim.fn.tempname()
 _G.s.agent.provider_config.env = { CLAUDE_CONFIG_DIR = _G.config_dir }
 
 _G.sent = {}
-_G.s._dispatch_turn = function(_, prompt)
+_G.s._dispatch_turn = function(self, prompt, sent)
     table.insert(_G.sent, prompt)
+    table.insert(self._untaken, sent)
 end
 _G.cancels = {}
 _G.s.agent.stop_generation = function(_, session_id)
@@ -350,11 +351,12 @@ _G.file = vim.fn.tempname()
 vim.fn.writefile({ "x" }, _G.file)
 _G.s.file_list:add(_G.file)
 _G.had_file = not _G.s.file_list:is_empty()
-_G.s._prompt_pending = 1
+_G.s._foreground = "running"
 _G.s._is_first_message = true
 _G.s._history_to_send = require("agentic.ui.chat_history"):new()
 _G.s._history_to_send.messages = { { type = "user", text = "earlier" } }
 _G.s._subagents:_relay_to_agent("c1", "hi")
+_G.s:_on_prompt_taken()
 ]])
 
             assert.equal(1, child.lua_get("#_G.sent"))

@@ -37,6 +37,7 @@ describe("agentic.acp.adapters.GeminiACPAdapter", function()
                 _children = {},
                 _loading_sessions = {},
                 _session_roots = {},
+                _unanswered = {},
                 _tool_call_kinds = ToolCallKinds:new(),
                 __send_result = function(_, _, result)
                     table.insert(results, result)

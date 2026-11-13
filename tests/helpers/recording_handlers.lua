@@ -15,6 +15,8 @@ function M.new()
         on_tool_call = record("on_tool_call"),
         on_tool_call_update = record("on_tool_call_update"),
         on_request_permission = record("on_request_permission"),
+        on_turn_state = record("on_turn_state"),
+        on_prompt_taken = record("on_prompt_taken"),
     },
         calls
 end

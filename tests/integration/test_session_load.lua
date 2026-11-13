@@ -357,11 +357,14 @@ _G.tool("t3", "pending", { kind = "edit", argument = _G.path,
     diff = { old = { "foo" }, new = { "foo", "bar" } } })
 ]])
         child.flush()
-        assert.equal("loading session", child.lua_get([[_G.s.step_line._text]]))
+        assert.equal(
+            "loading session",
+            child.lua_get([[_G.s.tail_lines._step]])
+        )
         child.lua([[_G.load_cb({}, nil)]])
         child.flush()
 
-        assert.is_true(child.lua_get([[_G.s.step_line._text == nil]]))
+        assert.is_true(child.lua_get([[_G.s.tail_lines._step == nil]]))
         assert.is_false(
             child.lua_get([[_G.s.permission_manager:has_edit_range("t3")]])
         )
@@ -489,6 +492,8 @@ _G.agent("live reply")
 _G.s:_do_load_acp_session("sid-x", "/tmp")
 _G.s:_refresh()
 _G.s:_send_synthetic_prompt("go on")
+_G.s:_on_prompt_taken()
+_G.s:_on_turn_state({ state = "running" })
 _G.replay_tail()
 ]])
         child.flush()

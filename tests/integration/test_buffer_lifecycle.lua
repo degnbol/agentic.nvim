@@ -53,7 +53,7 @@ end
     local function mutate(mid_turn)
         child.lua(
             [[
-_G.s._prompt_pending = ... and 1 or 0
+_G.s._foreground = ... and "running" or "idle"
 _G.s.chat_history:add_message(_G.user_msg("hello"))
 _G.s:_history_changed(_G.s.chat_history)
 ]],
@@ -195,7 +195,7 @@ _G.new_cb({ sessionId = "sid-2" }, nil)
 _G.sent = {}
 _G.s.widget.input_dispatch.on_submit = function(text)
     table.insert(_G.sent, text)
-    _G.s:_set_prompt_pending(1)
+    _G.s:_on_turn_state({ state = "running" })
     return true
 end
 ]])
@@ -748,7 +748,7 @@ end)(...)]]):format(bufnr_expr or "_G.sub"),
 
         it("refuses :e and :bd mid-turn", function()
             open_prompted_session()
-            child.lua([[_G.s:_set_prompt_pending(1)]])
+            child.lua([[_G.s:_on_turn_state({ state = "running" })]])
             open_task("task-1")
             subagent_call("c-1", "task-1")
             local lines = sub_lines()
@@ -765,7 +765,7 @@ end)(...)]]):format(bufnr_expr or "_G.sub"),
 
         it(":e! mid-turn re-renders the same content", function()
             open_prompted_session()
-            child.lua([[_G.s:_set_prompt_pending(1)]])
+            child.lua([[_G.s:_on_turn_state({ state = "running" })]])
             open_task("task-1")
             subagent_call("c-1", "task-1")
             local lines = sub_lines()
@@ -785,7 +785,7 @@ end)(...)]]):format(bufnr_expr or "_G.sub"),
 
         it(":bd! mid-turn reloads the buffer on a later update", function()
             open_prompted_session()
-            child.lua([[_G.s:_set_prompt_pending(1)]])
+            child.lua([[_G.s:_on_turn_state({ state = "running" })]])
             open_task("task-1")
             subagent_call("c-1", "task-1")
             capture_notify()

@@ -1,4 +1,4 @@
---- @diagnostic disable: invisible, missing-fields, assign-type-mismatch, cast-local-type, param-type-mismatch, need-check-nil
+--- @diagnostic disable: invisible, missing-fields, assign-type-mismatch, cast-local-type, param-type-mismatch, need-check-nil, inject-field
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
@@ -41,7 +41,7 @@ end
 local function fake_main_view(session)
     return setmetatable({
         writer = session.message_writer,
-        step_line = session.step_line,
+        tail_lines = session.tail_lines,
     }, { __index = AgentView }) --[[@as agentic.ui.AgentView]]
 end
 
@@ -53,8 +53,13 @@ end
 --- @return agentic.SessionManager session
 local function with_subagents(session)
     local noop = function() end
-    session.step_line = session.step_line
-        or { show = noop, clear = noop, reposition = noop }
+    session.tail_lines = session.tail_lines
+        or {
+            show_step = noop,
+            clear_step = noop,
+            show_prompts = noop,
+            reposition = noop,
+        }
     session.main_view = session.main_view or fake_main_view(session)
     session.render_agents = function() end
     session._subagents = Subagents:new(
@@ -87,14 +92,52 @@ local function with_names(session)
     return session
 end
 
---- Give a fake session the turn predicates of `SessionManager`, with no
---- prompt in flight unless it already counts one.
+--- Give a fake session the turn predicates of `SessionManager`, idle with no
+--- prompt sent unless it already has a turn state.
 --- @param session agentic.SessionManager
 --- @return agentic.SessionManager session
 local function with_turn_state(session)
-    session._prompt_pending = session._prompt_pending or 0
+    session._foreground = session._foreground or "idle"
+    session._untaken = session._untaken or {}
+    session._taken = session._taken or {}
     session._replaying = SessionManager._replaying
     session._turn_open = SessionManager._turn_open
+    session._in_flight = SessionManager._in_flight
+    return session
+end
+
+--- Make a fake session's agent speak ACP v1 through `ACPClient.send_prompt`,
+--- which derives the turn states from each answer. The agent's own
+--- `send_prompt` becomes `prompt_answer`, which gives the answer. The session
+--- gets the turn methods of `SessionManager`, and its handlers subscribe to
+--- its session id.
+--- @param session agentic.SessionManager
+--- @return agentic.SessionManager session
+local function speak_v1(session)
+    local agent = session.agent --[[@as table]]
+    agent.prompt_answer = agent.prompt_answer or rawget(agent, "send_prompt")
+    agent.send_prompt = nil
+    agent.protocol_version = 1
+    agent._unanswered = {}
+    agent._send_request = function(this, _method, params, cb)
+        this.prompt_answer(this, params.sessionId, params.prompt, cb)
+    end
+    setmetatable(agent, { __index = ACPClient })
+    for _, name in ipairs({
+        "_dispatch_turn",
+        "_drop_untaken",
+        "_untaken_changed",
+        "_on_prompt_taken",
+        "_on_turn_state",
+        "_end_turn",
+        "_reset_turn_state",
+    }) do
+        session[name] = session[name] or SessionManager[name]
+    end
+    with_turn_state(session)
+    agent.subscribers = {
+        [session.session_id] = SessionManager._build_handlers(session),
+    }
     return session
 end
 
@@ -341,7 +384,9 @@ describe("agentic.SessionManager", function()
             chat_history.save = save_spy
             local session = {
                 _title_user_set = user_renamed,
-                _prompt_pending = 0,
+                _foreground = "idle",
+                _untaken = {},
+                _taken = {},
                 chat_history = chat_history,
                 widget = {
                     buf_nrs = {},
@@ -354,7 +399,9 @@ describe("agentic.SessionManager", function()
                 _turn_open = SessionManager._turn_open,
                 _history_changed = SessionManager._history_changed,
                 _sync_modified = SessionManager._sync_modified,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
                 _on_session_update = SessionManager._on_session_update,
                 render_info = function() end,
             } --[[@as agentic.SessionManager]]
@@ -408,7 +455,9 @@ describe("agentic.SessionManager", function()
         local function make_session()
             notices = {}
             local session = {
-                _prompt_pending = 0,
+                _foreground = "idle",
+                _untaken = {},
+                _taken = {},
                 agent = { provider_config = { name = "claude-agent-acp" } },
                 message_writer = {
                     write_notice = function(_self, notice)
@@ -491,21 +540,6 @@ describe("agentic.SessionManager", function()
             assert.is_nil(notices[1].fold_body)
         end)
 
-        it("takes no action on state_update and user_message", function()
-            local session = make_session()
-            session:_on_session_update({
-                sessionUpdate = "state_update",
-                state = "idle",
-            })
-            session:_on_session_update({
-                sessionUpdate = "user_message",
-                messageId = "m",
-            })
-
-            assert.same({}, notices)
-            assert.spy(notify_stub).was.called(0)
-        end)
-
         it("clears _title_user_set on session reset (/new, /clear)", function()
             local SlashCommands = require("agentic.acp.slash_commands")
             local stubs = {
@@ -535,7 +569,9 @@ describe("agentic.SessionManager", function()
                 _sync_modified = SessionManager._sync_modified,
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
             } --[[@as agentic.SessionManager]]
             with_names(with_subagents(session))
 
@@ -590,7 +626,9 @@ describe("agentic.SessionManager", function()
                 _sync_modified = SessionManager._sync_modified,
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
             } --[[@as agentic.SessionManager]]
             with_names(with_subagents(session))
 
@@ -656,7 +694,9 @@ describe("agentic.SessionManager", function()
                 _sync_modified = SessionManager._sync_modified,
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
             } --[[@as agentic.SessionManager]]))
         end
 
@@ -875,7 +915,9 @@ describe("agentic.SessionManager", function()
                 _update_chat_header = function() end,
                 chat_history = ChatHistory:new(),
                 _sync_modified = SessionManager._sync_modified,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
                 _set_load_state = SessionManager._set_load_state,
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
@@ -944,7 +986,12 @@ describe("agentic.SessionManager", function()
                     reset = noop,
                     tool_call_blocks = {},
                 },
-                step_line = { show = noop, clear = noop },
+                tail_lines = {
+                    show_step = noop,
+                    clear_step = noop,
+                    show_prompts = noop,
+                    reposition = noop,
+                },
                 chat_history = {
                     session_id = nil,
                     timestamp = nil,
@@ -983,7 +1030,9 @@ describe("agentic.SessionManager", function()
                 _reapply_model = SessionManager._reapply_model,
                 announce_model_loaded = SessionManager.announce_model_loaded,
                 _advance_session_epoch = SessionManager._advance_session_epoch,
-                _prompt_pending = 0,
+                _foreground = "idle",
+                _untaken = {},
+                _taken = {},
                 _drain_queue = noop,
                 _refresh_name = noop,
                 _cancel_session = SessionManager._cancel_session,
@@ -995,7 +1044,9 @@ describe("agentic.SessionManager", function()
                 _install_history = SessionManager._install_history,
                 _render_history = noop,
                 _sync_modified = SessionManager._sync_modified,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
                 _set_load_state = SessionManager._set_load_state,
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
@@ -1253,8 +1304,7 @@ describe("agentic.SessionManager", function()
         -- session_id is assigned before the load RPC, so without this flag the
         -- readiness check reads clear while the session is still replaying.
         it("defers submits for the length of the load", function()
-            local session = make_load_session()
-            session._prompt_pending = 0
+            local session = with_turn_state(make_load_session())
             session.agent.state = "ready"
             session.agent.usage_limit = UsageLimit:new(function() end)
             session._submit_defer_reason = SessionManager._submit_defer_reason
@@ -1709,21 +1759,19 @@ describe("agentic.SessionManager", function()
     end)
 
     describe("_send_synthetic_prompt", function()
-        it("records the prompt as a synthetic user row", function()
+        it("sends the prompt with a synthetic user row", function()
             local dispatch = spy.new(function() end)
             local session = {
-                chat_history = ChatHistory:new(),
                 agent = { provider_config = { name = "Test" } },
                 _dispatch_turn = dispatch,
-                _history_changed = function() end,
             } --[[@as agentic.SessionManager]]
 
             SessionManager._send_synthetic_prompt(session, "continue")
 
-            local row = session.chat_history.messages[1]
-            assert.equal("continue", row.text)
-            assert.is_true(row.synthetic)
             assert.spy(dispatch).was.called(1)
+            local sent = dispatch.calls[1][3]
+            assert.equal("continue", sent.user_msg.text)
+            assert.is_true(sent.user_msg.synthetic)
         end)
     end)
 
@@ -1779,7 +1827,9 @@ describe("agentic.SessionManager", function()
                 },
                 announce_model_loaded = SessionManager.announce_model_loaded,
                 _notice_model_switched = SessionManager._notice_model_switched,
-                _prompt_pending = 0,
+                _foreground = "idle",
+                _untaken = {},
+                _taken = {},
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
             } --[[@as agentic.SessionManager]]
@@ -1845,7 +1895,7 @@ describe("agentic.SessionManager", function()
             local session, _, notice_spy = make_session({
                 ["m"] = { value = "m", name = "M" },
             })
-            session._prompt_pending = 1
+            session._foreground = "running"
 
             session:_notice_model_switched("m")
 
@@ -2098,7 +2148,7 @@ describe("agentic.SessionManager", function()
 
         -- `stop_generation` clears `is_generating` before the callback runs.
         it("leaves a stopped turn open until its callback", function()
-            assert.is_true(notice_for({ _prompt_pending = 1 }).mid_turn)
+            assert.is_true(notice_for({ _foreground = "running" }).mid_turn)
         end)
 
         it("ends the turn between turns", function()
@@ -2120,7 +2170,9 @@ describe("agentic.SessionManager", function()
                 message_writer = { write_notice = spy.new(function() end) },
                 render_info = spy.new(function() end),
                 _refresh_name = SessionManager._refresh_name,
-                _prompt_pending = 0,
+                _foreground = "idle",
+                _untaken = {},
+                _taken = {},
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
             }
@@ -2295,7 +2347,9 @@ describe("agentic.SessionManager", function()
                 _set_session_option = SessionManager._set_session_option,
                 render_info = function() end,
                 _notice_mode_switched = SessionManager._notice_mode_switched,
-                _prompt_pending = 0,
+                _foreground = "idle",
+                _untaken = {},
+                _taken = {},
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
             } --[[@as agentic.SessionManager]]
@@ -2498,7 +2552,9 @@ describe("agentic.SessionManager", function()
                 _set_session_option = SessionManager._set_session_option,
                 _handle_thought_level_change = SessionManager._handle_thought_level_change,
                 _notice_thought_level_switched = SessionManager._notice_thought_level_switched,
-                _prompt_pending = 0,
+                _foreground = "idle",
+                _untaken = {},
+                _taken = {},
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
             } --[[@as agentic.SessionManager]]
@@ -2566,7 +2622,9 @@ describe("agentic.SessionManager", function()
                     end,
                 },
                 _display_context_usage = SessionManager._display_context_usage,
-                _prompt_pending = 0,
+                _foreground = "idle",
+                _untaken = {},
+                _taken = {},
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
             } --[[@as agentic.SessionManager]]
@@ -2957,7 +3015,9 @@ describe("agentic.SessionManager", function()
                 _sync_modified = SessionManager._sync_modified,
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
                 switch_provider = SessionManager.switch_provider,
             } --[[@as agentic.SessionManager]]
             with_subagents(session)
@@ -3000,7 +3060,7 @@ describe("agentic.SessionManager", function()
                 },
                 _try_record_edit_range = function() end,
                 _record_file_op = function() end,
-                step_line = { reposition = function() end },
+                tail_lines = { reposition = function() end },
                 chat_history = { update_tool_call = function() end },
                 _history_changed = function() end,
                 _view_for = SessionManager._view_for,
@@ -3023,7 +3083,7 @@ describe("agentic.SessionManager", function()
                             update_tool_call_block = function() end,
                             tool_call_blocks = tool_call_blocks,
                         },
-                        step_line = { reposition = function() end },
+                        tail_lines = { reposition = function() end },
                     }, { __index = AgentView }),
                 }
             end
@@ -4037,7 +4097,7 @@ describe("agentic.SessionManager", function()
             local empty = function()
                 return true
             end
-            return with_events(with_subagents({
+            return speak_v1(with_events(with_subagents({
                 session_id = "s-1",
                 id = 1,
                 is_generating = false,
@@ -4071,7 +4131,12 @@ describe("agentic.SessionManager", function()
                 _refresh_name = noop,
                 _drain_side_records = SessionManager._drain_side_records,
                 _held_tool_call_updates = {},
-                step_line = { show = noop, clear = noop },
+                tail_lines = {
+                    show_step = noop,
+                    clear_step = noop,
+                    show_prompts = noop,
+                    reposition = noop,
+                },
                 chat_history = {
                     session_id = "s-1",
                     add_message = noop,
@@ -4123,12 +4188,16 @@ describe("agentic.SessionManager", function()
                 _turn_open = SessionManager._turn_open,
                 _history_changed = SessionManager._history_changed,
                 _sync_modified = SessionManager._sync_modified,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
                 _drain_queue = SessionManager._drain_queue,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _busy_reason = SessionManager._busy_reason,
-                _prompt_pending = 0,
-            } --[[@as agentic.SessionManager]]))
+                _foreground = "idle",
+                _untaken = {},
+                _taken = {},
+            } --[[@as agentic.SessionManager]])))
         end
 
         it("calls _ring_bell on response complete", function()
@@ -4177,10 +4246,12 @@ describe("agentic.SessionManager", function()
             schedule_stub:revert()
         end)
 
-        --- Minimal session whose send_prompt errors and whose
-        --- write_error_message reports the given class. `send_err` overrides the
-        --- error object the provider callback reports; `sink` collects the
-        --- writes and prompts the turn tail produces.
+        --- Minimal session whose prompts fail and whose write_error_message
+        --- reports the given class. `send_err` overrides the error object the
+        --- provider answers with; `sink` collects the writes and prompts the
+        --- turn tail produces. Its agent speaks ACP v1 through
+        --- `ACPClient.send_prompt`, which derives the turn states from the
+        --- answer `agent.prompt_answer` gives.
         --- @param error_type string|nil
         --- @param send_err table|nil
         --- @param sink table|nil
@@ -4225,7 +4296,7 @@ describe("agentic.SessionManager", function()
                 agent = {
                     state = "ready",
                     provider_config = { name = "Test" },
-                    send_prompt = function(_self, _sid, prompt, cb)
+                    prompt_answer = function(_self, _sid, prompt, cb)
                         sink.saves_at_send = sink.saves_at_send
                             or (sink.saves or 0)
                         table.insert(sink.prompts, prompt)
@@ -4260,7 +4331,12 @@ describe("agentic.SessionManager", function()
                 _refresh_name = noop,
                 _drain_side_records = SessionManager._drain_side_records,
                 _held_tool_call_updates = {},
-                step_line = { show = noop, clear = noop },
+                tail_lines = {
+                    show_step = noop,
+                    clear_step = noop,
+                    show_prompts = noop,
+                    reposition = noop,
+                },
                 chat_history = {
                     session_id = "s-1",
                     add_message = function(_self, msg)
@@ -4325,13 +4401,17 @@ describe("agentic.SessionManager", function()
                 _turn_open = SessionManager._turn_open,
                 _history_changed = SessionManager._history_changed,
                 _sync_modified = SessionManager._sync_modified,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
                 _drain_queue = SessionManager._drain_queue,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _busy_reason = SessionManager._busy_reason,
-                _prompt_pending = 0,
+                _foreground = "idle",
+                _untaken = {},
+                _taken = {},
             } --[[@as agentic.SessionManager]])
-            with_events(session)
+            speak_v1(with_events(session))
             session.agent.usage_limit = UsageLimit:new(function() end)
             -- A running subagent.
             session._subagents._agents.c1 = {
@@ -4353,42 +4433,42 @@ describe("agentic.SessionManager", function()
         end
 
         describe("in-flight gate accounting", function()
-            it("releases the gate when the turn's callback lands", function()
+            it("releases the gate when the turn ends", function()
                 local session = make_session(nil, nil, {})
-                session.agent.send_prompt = function(_self, _sid, _p, cb)
-                    assert.equal(1, session._prompt_pending)
+                session.agent.prompt_answer = function(_self, _sid, _p, cb)
+                    assert.equal("in_flight", session:_busy_reason())
                     cb({ stopReason = "end_turn" }, nil)
                 end
 
                 session:_handle_input_submit("hello")
 
-                assert.equal(0, session._prompt_pending)
+                assert.is_nil(session:_busy_reason())
             end)
 
-            -- A cancelled prompt's callback outlives /new or a resume.
-            -- Decrementing then would report the session idle while the turn
-            -- that replaced it is still running.
-            it("ignores a callback from a superseded session", function()
+            -- A cancelled prompt's answer outlives /new or a resume. Ending a
+            -- turn then would report the session idle while the turn that
+            -- replaced it is still running.
+            it("ignores an answer for an unsubscribed session", function()
                 local session = make_session(nil, nil, {})
                 local resolve
-                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                session.agent.prompt_answer = function(_self, _sid, _p, cb)
                     resolve = cb
                 end
 
                 session:_handle_input_submit("hello")
-                -- /new or a resume between send and callback.
-                session._session_epoch = session._session_epoch + 1
-                session._prompt_pending = 1 -- the replacement turn
+                -- /new or a resume between send and answer.
+                session.agent.subscribers["s-1"] = nil
+                session._foreground = "running" -- the replacement turn
                 resolve({ stopReason = "cancelled" }, nil)
 
-                assert.equal(1, session._prompt_pending)
+                assert.equal("running", session._foreground)
             end)
 
             -- A subagent's tool calls resolve their writer through this table
             -- for as long as it runs, so a turn dispatched over it leaves it.
             it("leaves the running subagents' tool state alone", function()
                 local session = make_session(nil, nil, {})
-                session.agent.send_prompt = function() end
+                session.agent.prompt_answer = function() end
 
                 session:_handle_input_submit("first")
                 session._subagents._tool_call_owner["tc-1"] = "c1"
@@ -4403,7 +4483,7 @@ describe("agentic.SessionManager", function()
                 function()
                     local sink = {}
                     local session = make_session(nil, nil, sink)
-                    session.agent.send_prompt = function(_self, _sid, prompt)
+                    session.agent.prompt_answer = function(_self, _sid, prompt)
                         table.insert(sink.prompts, prompt)
                     end
 
@@ -4411,7 +4491,8 @@ describe("agentic.SessionManager", function()
                     assert.is_true(session:_handle_input_submit("second"))
 
                     assert.equal(2, #sink.prompts)
-                    assert.equal(2, session._prompt_pending)
+                    assert.equal(2, #session._taken)
+                    assert.equal("in_flight", session:_busy_reason())
                 end
             )
 
@@ -4422,9 +4503,9 @@ describe("agentic.SessionManager", function()
             it("ends its own turn without ending the session's", function()
                 local sink = {}
                 local session = make_session(nil, nil, sink)
-                local resolve
-                session.agent.send_prompt = function(_self, _sid, _p, cb)
-                    resolve = cb
+                local resolves = {}
+                session.agent.prompt_answer = function(_self, _sid, _p, cb)
+                    table.insert(resolves, cb)
                 end
                 local finalized = 0
                 session.message_writer.finalize_turn = function()
@@ -4439,9 +4520,8 @@ describe("agentic.SessionManager", function()
                 end
 
                 session:_handle_input_submit("hello")
-                session._prompt_pending = 2 -- the mid-turn submit's own turn
-                session.is_generating = true
-                resolve({ stopReason = "end_turn" }, nil)
+                session:_handle_input_submit("mid-turn")
+                resolves[1]({ stopReason = "end_turn" }, nil)
 
                 assert.equal(1, finalized)
                 assert.is_true(session.is_generating)
@@ -4469,7 +4549,7 @@ describe("agentic.SessionManager", function()
                         ["sub-running"] = { status = "in_progress" },
                         ["sub-done"] = { status = "completed" },
                     }
-                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                session.agent.prompt_answer = function(_self, _sid, _p, cb)
                     cb(response, nil)
                 end
                 session:_handle_input_submit("hello")
@@ -4557,7 +4637,7 @@ describe("agentic.SessionManager", function()
             local function drains_after(response)
                 local sink = {}
                 local session = make_session(nil, nil, sink)
-                session.agent.send_prompt = function(_self, _sid, prompt, cb)
+                session.agent.prompt_answer = function(_self, _sid, prompt, cb)
                     table.insert(sink.prompts, prompt)
                     cb(response, nil)
                 end
@@ -4593,7 +4673,7 @@ describe("agentic.SessionManager", function()
             --- @return agentic.SessionManager session
             local function refusing_session(response, err)
                 local session = make_session(nil, nil, {})
-                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                session.agent.prompt_answer = function(_self, _sid, _p, cb)
                     cb(response, err)
                 end
                 session._relay = SessionManager._relay
@@ -4680,17 +4760,18 @@ describe("agentic.SessionManager", function()
 
             it("returns the prompt with a later turn outstanding", function()
                 local session = refusing_session()
-                --- @type function
-                local resolve
-                session.agent.send_prompt = function(_self, _sid, _p, cb)
-                    resolve = cb
+                --- @type function[]
+                local resolves = {}
+                session.agent.prompt_answer = function(_self, _sid, _p, cb)
+                    table.insert(resolves, cb)
                 end
 
                 session:_handle_input_submit("hello")
-                session._prompt_pending = 2
-                resolve({ stopReason = "refusal" }, nil)
+                session:_handle_input_submit("later")
+                resolves[1]({ stopReason = "refusal" }, nil)
 
                 assert.spy(restore_stub).was.called(1)
+                assert.equal("hello", restore_stub.calls[1][2])
             end)
 
             it("returns nothing to a destroyed or replaced session", function()
@@ -4699,13 +4780,13 @@ describe("agentic.SessionManager", function()
                         session.destroyed = true
                     end,
                     function(session)
-                        session._session_epoch = 1
+                        session.agent.subscribers["s-1"] = nil
                     end,
                 }) do
                     local session = refusing_session()
                     --- @type function
                     local resolve
-                    session.agent.send_prompt = function(_self, _sid, _p, cb)
+                    session.agent.prompt_answer = function(_self, _sid, _p, cb)
                         resolve = cb
                     end
 
@@ -4862,7 +4943,7 @@ describe("agentic.SessionManager", function()
             it("carries the prompt row and the stop reason", function()
                 local sink = {}
                 local session = make_session(nil, nil, sink)
-                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                session.agent.prompt_answer = function(_self, _sid, _p, cb)
                     cb({ stopReason = "max_tokens" }, nil)
                 end
                 local events = turn_ends(session)
@@ -4876,7 +4957,7 @@ describe("agentic.SessionManager", function()
 
             it("reads a response without a stop reason as end_turn", function()
                 local session = make_session(nil, nil, {})
-                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                session.agent.prompt_answer = function(_self, _sid, _p, cb)
                     cb({}, nil)
                 end
                 local events = turn_ends(session)
@@ -4910,7 +4991,7 @@ describe("agentic.SessionManager", function()
                     }
                     local session = make_session(nil, nil, {})
                     local sent = 0
-                    session.agent.send_prompt = function(_self, _sid, _p, cb)
+                    session.agent.prompt_answer = function(_self, _sid, _p, cb)
                         sent = sent + 1
                         cb(
                             { stopReason = "end_turn" },
@@ -4939,7 +5020,7 @@ describe("agentic.SessionManager", function()
 
             it("stops after unsubscribe", function()
                 local session = make_session(nil, nil, {})
-                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                session.agent.prompt_answer = function(_self, _sid, _p, cb)
                     cb({ stopReason = "end_turn" }, nil)
                 end
                 local listener = spy.new(function() end)
@@ -5002,7 +5083,7 @@ describe("agentic.SessionManager", function()
 
             before_each(function()
                 requeue_stub = spy.stub(Recovery, "requeue_limited_prompt")
-                draft_stub = spy.stub(Recovery, "return_limited_prompt")
+                draft_stub = spy.stub(Recovery, "return_as_draft")
             end)
 
             after_each(function()
@@ -5029,7 +5110,7 @@ describe("agentic.SessionManager", function()
                 session.message_writer.write_error_message = function()
                     return "usage_limit", reset_epoch
                 end
-                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                session.agent.prompt_answer = function(_self, _sid, _p, cb)
                     for _, reply in ipairs(replies) do
                         history:add_message(reply)
                     end
@@ -5199,7 +5280,7 @@ describe("agentic.SessionManager", function()
             it("clears attempts after a success while not held", function()
                 local session = make_session(nil, nil, {})
                 session.agent.usage_limit.attempt = 2
-                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                session.agent.prompt_answer = function(_self, _sid, _p, cb)
                     cb({ stopReason = "end_turn" }, nil)
                 end
 
@@ -5212,7 +5293,7 @@ describe("agentic.SessionManager", function()
                 local session = make_session(nil, nil, {})
                 session.agent.usage_limit.attempt = 2
                 session.agent.usage_limit.resets_at = os.time() + 600
-                session.agent.send_prompt = function(_self, _sid, _p, cb)
+                session.agent.prompt_answer = function(_self, _sid, _p, cb)
                     cb({ stopReason = "end_turn" }, nil)
                 end
 
@@ -5239,7 +5320,7 @@ describe("agentic.SessionManager", function()
         it("clears a spent live re-auth retry on success", function()
             local session = make_session(nil, nil, {})
             session._reauth_live_retry = true
-            session.agent.send_prompt = function(_self, _sid, _p, cb)
+            session.agent.prompt_answer = function(_self, _sid, _p, cb)
                 cb({ stopReason = "end_turn" }, nil)
             end
 
@@ -5279,7 +5360,7 @@ describe("agentic.SessionManager", function()
                 local sink = {}
                 local session = make_session(nil, TRANSIENT, sink)
                 local sent = 0
-                session.agent.send_prompt = function(_self, _sid, prompt, cb)
+                session.agent.prompt_answer = function(_self, _sid, prompt, cb)
                     sink.saves_at_send = sink.saves_at_send or (sink.saves or 0)
                     sent = sent + 1
                     table.insert(sink.prompts, prompt)
@@ -5334,7 +5415,7 @@ describe("agentic.SessionManager", function()
                 local sink = {}
                 local session = make_session(nil, TRANSIENT, sink)
                 local sent = 0
-                session.agent.send_prompt = function(_self, _sid, prompt, cb)
+                session.agent.prompt_answer = function(_self, _sid, prompt, cb)
                     sent = sent + 1
                     table.insert(sink.prompts, prompt)
                     cb(
@@ -5393,24 +5474,25 @@ describe("agentic.SessionManager", function()
             it("does not retry into a session replaced mid-flight", function()
                 local sink = {}
                 local session = make_session(nil, TRANSIENT, sink)
-                session.agent.send_prompt = function(_self, _sid, prompt, cb)
+                session.agent.prompt_answer = function(_self, _sid, prompt, cb)
                     table.insert(sink.prompts, prompt)
                     -- /new, a resume or a provider switch between send and
-                    -- callback: the pending callback outlives cancel_session.
+                    -- answer: the answer outlives cancel_session, which
+                    -- unsubscribes the session.
+                    session.agent.subscribers["s-1"] = nil
                     session.session_id = "s-2"
                     cb(nil, TRANSIENT)
                 end
                 session:_handle_input_submit("hello")
 
                 assert.equal(0, #sink.synthetic)
-                assert.equal(1, #sink.errors)
                 assert.equal(0, sink.drains)
             end)
 
             it("does not retry when the agent is not ready", function()
                 local sink = {}
                 local session = make_session(nil, TRANSIENT, sink)
-                session.agent.send_prompt = function(_self, _sid, prompt, cb)
+                session.agent.prompt_answer = function(_self, _sid, prompt, cb)
                     table.insert(sink.prompts, prompt)
                     session.agent.state = "connecting"
                     cb(nil, TRANSIENT)
@@ -5426,12 +5508,14 @@ describe("agentic.SessionManager", function()
             it("does not retry under a turn the user submitted", function()
                 local sink = {}
                 local session = make_session(nil, TRANSIENT, sink)
-                session.agent.send_prompt = function(_self, _sid, prompt, cb)
+                local resolves = {}
+                session.agent.prompt_answer = function(_self, _sid, prompt, cb)
                     table.insert(sink.prompts, prompt)
-                    session._prompt_pending = 2 -- the mid-turn submit's turn
-                    cb(nil, TRANSIENT)
+                    table.insert(resolves, cb)
                 end
                 session:_handle_input_submit("hello")
+                session:_handle_input_submit("mid-turn")
+                resolves[1](nil, TRANSIENT)
 
                 assert.equal(0, #sink.synthetic)
                 assert.equal(1, #sink.errors)
@@ -5463,7 +5547,7 @@ describe("agentic.SessionManager", function()
                     local sink = {}
                     local session = make_session(nil, TRANSIENT, sink)
                     local sent = 0
-                    session.agent.send_prompt = function(
+                    session.agent.prompt_answer = function(
                         _self,
                         _sid,
                         prompt,
@@ -5485,6 +5569,237 @@ describe("agentic.SessionManager", function()
                         sink.actions
                     )
                     assert.equal(0, session._transient_attempt)
+                end
+            )
+        end)
+
+        describe("turn state from the agent (ACP v2)", function()
+            local ResponseBoundary = require("agentic.acp.response_boundary")
+            --- @type TestStub
+            local bell_stub
+            --- @type TestStub
+            local draft_stub
+
+            before_each(function()
+                bell_stub = spy.stub(SessionManager, "_ring_bell")
+                draft_stub = spy.stub(Recovery, "return_as_draft")
+            end)
+
+            after_each(function()
+                bell_stub:revert()
+                draft_stub:revert()
+            end)
+
+            --- A session whose agent speaks ACP v2: its turn states come
+            --- only from `_on_prompt_taken` and `_on_turn_state`, and each
+            --- prompt's answer waits in `answers`. `log` records turn ends,
+            --- prompt writes and idle marks in order.
+            --- @return agentic.SessionManager session
+            --- @return table sink
+            --- @return fun(result: table|nil, err: table|nil)[] answers
+            --- @return string[] log
+            local function v2_session()
+                local sink = {}
+                local session = make_session(nil, nil, sink)
+                local answers, log = {}, {}
+                session.agent.protocol_version = 2
+                session.agent.prompt_answer = function(_self, _sid, _p, cb)
+                    table.insert(answers, cb)
+                end
+                session.message_writer.any_following = function()
+                    return false
+                end
+                session.message_writer.finalize_turn = function()
+                    table.insert(log, "end")
+                end
+                session.message_writer.write_user_prompt = function(_, text)
+                    table.insert(sink.headings, text)
+                    table.insert(log, "prompt " .. text)
+                end
+                session.widget.set_idle = function(_, idle)
+                    table.insert(log, idle and "idle" or "not idle")
+                end
+                return session, sink, answers, log
+            end
+
+            --- The turn_end events `session` emits.
+            --- @param session agentic.SessionManager
+            --- @return agentic.SessionEventData[]
+            local function turn_ends(session)
+                local ends = {}
+                session:on("turn_end", function(_, data)
+                    table.insert(ends, data)
+                end)
+                return ends
+            end
+
+            it(
+                "writes the prompt at take-in and ends the turn at idle",
+                function()
+                    local session, sink, answers = v2_session()
+                    local shown = spy.new(function() end)
+                    session.tail_lines.show_prompts = shown
+                    local ends = turn_ends(session)
+
+                    session:_handle_input_submit("hello")
+                    answers[1]({ messageId = "m" }, nil)
+
+                    assert.same({}, sink.headings)
+                    assert.same({ "hello" }, shown.calls[#shown.calls][2])
+
+                    session:_on_prompt_taken()
+                    session:_on_turn_state({ state = "running" })
+
+                    assert.same({ "hello" }, sink.headings)
+                    assert.equal("hello", sink.history[1].text)
+                    assert.same({}, shown.calls[#shown.calls][2])
+                    assert.is_true(session.is_generating)
+                    assert.equal(0, #ends)
+
+                    session:_on_turn_state({
+                        state = "idle",
+                        stop_reason = "end_turn",
+                    })
+
+                    assert.is_false(session.is_generating)
+                    assert.equal(1, #ends)
+                    assert.equal("hello", ends[1].user_msg.text)
+                    assert.equal(1, sink.drains)
+                end
+            )
+
+            it("writes a prompt sent mid-turn after the turn's end", function()
+                local session, _, _, log = v2_session()
+                session:_handle_input_submit("first")
+                session:_on_prompt_taken()
+                session:_on_turn_state({ state = "running" })
+
+                session:_handle_input_submit("second")
+                session:_on_turn_state({
+                    state = "idle",
+                    stop_reason = "end_turn",
+                })
+                session:_on_prompt_taken()
+                session:_on_turn_state({ state = "running" })
+
+                assert.same({ "prompt first", "end", "prompt second" }, log)
+            end)
+
+            it("ends work no prompt started like a prompt's turn", function()
+                local session, sink, _, log = v2_session()
+                local ends = turn_ends(session)
+                local chunk_live = spy.new(function() end)
+                session.message_writer.write_message_chunk = chunk_live
+                session.main_view.response_boundary = ResponseBoundary:new()
+                session.chat_history.append_agent_text = function() end
+                session._on_agent_chunk = SessionManager._on_agent_chunk
+
+                session:_on_turn_state({ state = "running" })
+                session:_on_agent_chunk({
+                    sessionUpdate = "agent_message_chunk",
+                    content = { type = "text", text = "done" },
+                    messageId = "m",
+                }, "s-1")
+                session:_on_turn_state({
+                    state = "idle",
+                    stop_reason = "end_turn",
+                })
+
+                -- The prose cursor shows on a live chunk.
+                assert.is_true(chunk_live.calls[1][4])
+                assert.same({ "end", "idle" }, log)
+                assert.spy(bell_stub).was.called(1)
+                assert.equal(1, sink.saves)
+                assert.equal(1, sink.drains)
+                assert.equal(1, #ends)
+                assert.is_nil(ends[1].user_msg)
+            end)
+
+            it(
+                "returns a prompt cancelled before take-in, writing nothing",
+                function()
+                    local session, sink, answers = v2_session()
+
+                    session:_handle_input_submit("hello")
+                    answers[1](nil, { code = -32800, message = "cancelled" })
+
+                    assert.same({}, sink.errors)
+                    assert.same({}, sink.headings)
+                    assert.same({}, session._untaken)
+                    assert.spy(draft_stub).was.called(1)
+                    assert.equal("hello", draft_stub.calls[1][2])
+                end
+            )
+
+            it("ends nothing at an idle while idle", function()
+                local session, sink, _, log = v2_session()
+                local ends = turn_ends(session)
+
+                session:_on_turn_state({ state = "idle" })
+                session:_on_turn_state({
+                    state = "idle",
+                    stop_reason = "end_turn",
+                })
+
+                assert.same({}, log)
+                assert.equal(0, #ends)
+                assert.equal(0, sink.drains)
+                assert.spy(bell_stub).was.called(0)
+            end)
+
+            it("holds the idle signals for a prompt not taken in", function()
+                local session, sink, _, log = v2_session()
+                session:_on_turn_state({ state = "running" })
+                session:_handle_input_submit("next")
+
+                session:_on_turn_state({
+                    state = "idle",
+                    stop_reason = "end_turn",
+                })
+
+                assert.same({ "end" }, log)
+                assert.spy(bell_stub).was.called(0)
+                assert.equal(0, sink.drains)
+                assert.is_true(session.is_generating)
+            end)
+
+            -- A cancel fails each prompt not taken in around its turn's
+            -- `idle cancelled`.
+            it(
+                "ends idle when a cancel fails the last prompt not taken in",
+                function()
+                    local session, _, answers, log = v2_session()
+                    session:_on_turn_state({ state = "running" })
+                    session:_handle_input_submit("next")
+
+                    session:_on_turn_state({
+                        state = "idle",
+                        stop_reason = "cancelled",
+                    })
+                    answers[1](nil, { code = -32800, message = "cancelled" })
+
+                    assert.same({ "end", "idle" }, log)
+                    assert.spy(bell_stub).was.called(1)
+                    assert.is_false(session.is_generating)
+                    assert.equal(nil, session:_busy_reason())
+                end
+            )
+
+            it(
+                "takes in a synthetic and a user prompt as themselves",
+                function()
+                    local session, sink = v2_session()
+                    session:_send_synthetic_prompt("continue")
+                    session:_handle_input_submit("hello")
+
+                    session:_on_prompt_taken()
+                    assert.same({}, sink.headings)
+                    assert.is_true(sink.history[1].synthetic)
+
+                    session:_on_prompt_taken()
+                    assert.same({ "hello" }, sink.headings)
+                    assert.equal("hello", sink.history[2].text)
+                    assert.is_nil(sink.history[2].synthetic)
                 end
             )
         end)
@@ -5651,7 +5966,12 @@ describe("agentic.SessionManager", function()
                 session_id = "s-1",
                 id = 1,
                 destroyed = false,
-                step_line = { show = noop, clear = noop },
+                tail_lines = {
+                    show_step = noop,
+                    clear_step = noop,
+                    show_prompts = noop,
+                    reposition = noop,
+                },
                 message_writer = { tool_call_blocks = {} },
                 _view_for = SessionManager._view_for,
                 -- chat not current => unfocused => bell would ring if notified
@@ -5730,7 +6050,9 @@ describe("agentic.SessionManager", function()
                 session_id = "s-1",
                 id = 1,
                 _is_first_message = false,
-                _prompt_pending = 0,
+                _foreground = "idle",
+                _untaken = {},
+                _taken = {},
                 agent = {
                     state = "ready",
                     provider_config = { name = "Test" },
@@ -5772,6 +6094,7 @@ describe("agentic.SessionManager", function()
                 _dispatch_turn = dispatch_spy,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _busy_reason = SessionManager._busy_reason,
+                _in_flight = SessionManager._in_flight,
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
                 _run_local_command = SessionManager._run_local_command,
@@ -5916,10 +6239,10 @@ describe("agentic.SessionManager", function()
         -- Local commands need no provider round-trip, so the gate must never
         -- park them: they are how a wedged session gets recovered.
         it("runs local commands mid-turn and before the session", function()
-            session._prompt_pending = 1
+            session._foreground = "running"
             assert.is_true(session:_handle_input_submit("/new"))
 
-            session._prompt_pending = 0
+            session._foreground = "idle"
             session.session_id = nil
             assert.is_true(session:_handle_input_submit("/delete"))
 
@@ -5954,9 +6277,12 @@ describe("agentic.SessionManager", function()
                     state = "ready",
                     usage_limit = UsageLimit:new(function() end),
                 },
-                _prompt_pending = 0,
+                _foreground = "idle",
+                _untaken = {},
+                _taken = {},
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _busy_reason = SessionManager._busy_reason,
+                _in_flight = SessionManager._in_flight,
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
             } --[[@as agentic.SessionManager]]
@@ -5968,7 +6294,7 @@ describe("agentic.SessionManager", function()
 
         it("defers while a prompt callback is outstanding", function()
             local session = ready_session()
-            session._prompt_pending = 1
+            session._foreground = "running"
             assert.equal("in_flight", session:_submit_defer_reason("hello"))
         end)
 
@@ -6022,7 +6348,7 @@ describe("agentic.SessionManager", function()
         it("releases the in-flight gate for the outgoing session", function()
             local session = {
                 _session_epoch = 3,
-                _prompt_pending = 2,
+                _foreground = "running",
                 agent = {
                     state = "ready",
                     usage_limit = UsageLimit:new(function() end),
@@ -6030,7 +6356,9 @@ describe("agentic.SessionManager", function()
                 session_id = "s-1",
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _set_load_state = SessionManager._set_load_state,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
                 _set_generating = function() end,
                 _sync_modified = function() end,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
@@ -6038,12 +6366,12 @@ describe("agentic.SessionManager", function()
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
             } --[[@as agentic.SessionManager]]
-            with_subagents(session)
+            with_turn_state(with_subagents(session))
 
             session:_advance_session_epoch()
 
             assert.equal(4, session._session_epoch)
-            assert.equal(0, session._prompt_pending)
+            assert.equal("idle", session._foreground)
             assert.is_nil(session:_submit_defer_reason("hello"))
         end)
 
@@ -6052,16 +6380,18 @@ describe("agentic.SessionManager", function()
             local running = spy.new(function() end)
             local session = {
                 _session_epoch = 0,
-                _prompt_pending = 1,
+                _foreground = "running",
                 is_generating = true,
                 widget = { set_running = running },
                 _advance_session_epoch = SessionManager._advance_session_epoch,
                 _set_load_state = SessionManager._set_load_state,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
                 _set_generating = SessionManager._set_generating,
                 _sync_modified = function() end,
             } --[[@as agentic.SessionManager]]
-            with_subagents(session)
+            with_turn_state(with_subagents(session))
 
             session:_advance_session_epoch()
 
@@ -6078,12 +6408,14 @@ describe("agentic.SessionManager", function()
                 _replay_hold = {},
                 widget = { set_running = function() end },
                 _advance_session_epoch = SessionManager._advance_session_epoch,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
                 _set_generating = SessionManager._set_generating,
                 _set_load_state = SessionManager._set_load_state,
                 _sync_modified = function() end,
             } --[[@as agentic.SessionManager]]
-            with_subagents(session)
+            with_turn_state(with_subagents(session))
 
             session:_advance_session_epoch()
 
@@ -6096,18 +6428,23 @@ describe("agentic.SessionManager", function()
             local session = {
                 _session_epoch = 0,
                 widget = { set_running = function() end },
-                step_line = { clear = spy.new(function() end) },
+                tail_lines = {
+                    clear_step = spy.new(function() end),
+                    show_prompts = function() end,
+                },
                 _advance_session_epoch = SessionManager._advance_session_epoch,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
                 _set_generating = SessionManager._set_generating,
                 _set_load_state = SessionManager._set_load_state,
                 _sync_modified = function() end,
             } --[[@as agentic.SessionManager]]
-            with_subagents(session)
+            with_turn_state(with_subagents(session))
 
             session:_advance_session_epoch()
 
-            assert.spy(session.step_line.clear).was.called(1)
+            assert.spy(session.tail_lines.clear_step).was.called(1)
         end)
     end)
 
@@ -6173,9 +6510,11 @@ describe("agentic.SessionManager", function()
                 _replay_hold = load_state == "holding" and {} or nil,
                 widget = {},
                 message_writer = { reset_turn_state = noop },
-                step_line = { clear = spy.new(noop) },
+                tail_lines = { clear_step = spy.new(noop), show_prompts = noop },
                 _refresh = SessionManager._refresh,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
                 _set_load_state = SessionManager._set_load_state,
                 _take_replay_update = SessionManager._take_replay_update,
                 _sync_modified = noop,
@@ -6208,7 +6547,33 @@ describe("agentic.SessionManager", function()
 
             session:_refresh()
 
-            assert.spy(session.step_line.clear).was.called(1)
+            assert.spy(session.tail_lines.clear_step).was.called(1)
+        end)
+
+        -- Each goes on top of the input, so the oldest must go last.
+        it("returns the prompts not taken in, newest first", function()
+            local session = make_session(nil)
+            local returned = {}
+            local function prompt(text)
+                return {
+                    input_text = text,
+                    user_msg = {},
+                    on_returned = function(reason)
+                        table.insert(returned, { text, reason })
+                    end,
+                }
+            end
+            session._untaken = { prompt("older"), prompt("newer") }
+            session._foreground = "running"
+
+            session:_refresh()
+
+            assert.same(
+                { { "newer", "untaken" }, { "older", "untaken" } },
+                returned
+            )
+            assert.same({}, session._untaken)
+            assert.equal("idle", session._foreground)
         end)
     end)
 
@@ -6291,7 +6656,9 @@ describe("agentic.SessionManager", function()
                 _sync_modified = SessionManager._sync_modified,
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
             } --[[@as agentic.SessionManager]]
             with_names(with_subagents(session))
 
@@ -6350,7 +6717,7 @@ describe("agentic.SessionManager", function()
                 message_writer = writer,
                 permission_manager = pm,
                 chat_history = ChatHistory:new(),
-                step_line = { reposition = noop },
+                tail_lines = { reposition = noop },
                 _held_tool_call_updates = {},
                 _drain_side_records = noop,
                 _drain_subagent_side_records = noop,
@@ -6361,7 +6728,9 @@ describe("agentic.SessionManager", function()
                 _try_record_edit_range = noop,
                 _record_file_op = noop,
                 _on_tool_call = SessionManager._on_tool_call,
-                _prompt_pending = 0,
+                _foreground = "idle",
+                _untaken = {},
+                _taken = {},
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
                 _on_tool_call_update = SessionManager._on_tool_call_update,
@@ -6908,7 +7277,7 @@ describe("agentic.SessionManager", function()
                                 bufnr = child_buf,
                                 view = setmetatable({
                                     writer = writer,
-                                    step_line = {
+                                    tail_lines = {
                                         reposition = noop,
                                     },
                                 }, {
@@ -7241,7 +7610,9 @@ describe("agentic.SessionManager", function()
                     state = "ready",
                     usage_limit = UsageLimit:new(function() end),
                 },
-                _prompt_pending = 0,
+                _foreground = "idle",
+                _untaken = {},
+                _taken = {},
                 message_writer = {
                     write_error_action = function(_self, text)
                         table.insert(sink.actions, text)
@@ -7258,6 +7629,7 @@ describe("agentic.SessionManager", function()
                 end,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _busy_reason = SessionManager._busy_reason,
+                _in_flight = SessionManager._in_flight,
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
                 _handle_input_submit = SessionManager._handle_input_submit,
@@ -7275,7 +7647,7 @@ describe("agentic.SessionManager", function()
         -- not cancel what is running to do it.
         it("sends past a running turn, leaving it alone", function()
             local session, sink = gated(function(sm)
-                sm._prompt_pending = 1
+                sm._foreground = "running"
             end)
 
             assert.is_true(session:_handle_input_submit("hi"))
@@ -7394,7 +7766,9 @@ describe("agentic.SessionManager", function()
                 session_id = "s-1",
                 id = 1,
                 _is_first_message = false,
-                _prompt_pending = 0,
+                _foreground = "idle",
+                _untaken = {},
+                _taken = {},
                 agent = {
                     state = "ready",
                     provider_config = { name = "Test" },
@@ -7448,6 +7822,7 @@ describe("agentic.SessionManager", function()
                 _dispatch_turn = dispatch_spy,
                 _submit_defer_reason = SessionManager._submit_defer_reason,
                 _busy_reason = SessionManager._busy_reason,
+                _in_flight = SessionManager._in_flight,
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
                 _run_local_command = SessionManager._run_local_command,
@@ -7948,7 +8323,9 @@ describe("agentic.SessionManager", function()
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
                 _sync_modified = SessionManager._sync_modified,
-                _set_prompt_pending = SessionManager._set_prompt_pending,
+                _in_flight = SessionManager._in_flight,
+                _untaken_changed = SessionManager._untaken_changed,
+                _reset_turn_state = SessionManager._reset_turn_state,
             } --[[@as agentic.SessionManager]])
         end
 
@@ -8026,7 +8403,7 @@ describe("agentic.SessionManager", function()
             local transcript = {
                 view = setmetatable({
                     writer = { write_message_chunk = subagent_write },
-                    step_line = { reposition = noop },
+                    tail_lines = { reposition = noop },
                     response_boundary = ResponseBoundary:new(),
                 }, { __index = AgentView }),
                 set_modified = noop,
@@ -8034,7 +8411,7 @@ describe("agentic.SessionManager", function()
             session = setmetatable({
                 main_view = setmetatable({
                     writer = { write_message_chunk = main_write },
-                    step_line = { reposition = noop },
+                    tail_lines = { reposition = noop },
                     response_boundary = ResponseBoundary:new(),
                 }, { __index = AgentView }),
                 chat_history = ChatHistory:new(),
@@ -8045,7 +8422,10 @@ describe("agentic.SessionManager", function()
                     end,
                 },
                 widget = { buf_nrs = {} },
-                _prompt_pending = 1,
+                -- A prompt's turn.
+                _foreground = "running",
+                _untaken = {},
+                _taken = { { user_msg = {} } },
                 _drain_side_records = drain,
             }, { __index = SessionManager }) --[[@as agentic.SessionManager]]
             with_subagents(session)
@@ -8173,7 +8553,7 @@ describe("agentic.SessionManager", function()
 
         it("writes the chat's chunks live while a turn is open", function()
             session:_on_session_update(chunk("X", "a"))
-            session._prompt_pending = 0
+            session._foreground = "idle"
             session:_on_session_update(chunk("X", "b"))
 
             assert.same({ true, false }, live(main_write))

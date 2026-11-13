@@ -9,7 +9,8 @@
 --   - Surfacing of "successful but empty" prompt responses.
 --   - Return of a refused prompt: its text and context go back to the input,
 --     and everything queued behind it becomes draft.
---   - Requeue of a prompt the usage limit turned away.
+--   - Requeue of a prompt the usage limit turned away, and return of one the
+--     agent never took in.
 -- All functions take the SessionManager (`sm`) as the first argument and
 -- read/write its fields (`_transient_attempt`, `_session_epoch`, `destroyed`, ...).
 -- LuaLS treats those underscore-prefixed fields as private to SessionManager;
@@ -36,19 +37,15 @@ local function runnable_auth_methods(methods)
     end, methods)
 end
 
---- Surface a successful prompt response with a non-terminal stopReason
---- (`max_tokens`, `max_turn_requests`, `refusal`). These arrive on the
---- success path of `session/prompt` — `err` is nil — so a chat that only
---- inspects errors would silently miss them. `end_turn` and `cancelled`
---- are the normal terminal/user-acknowledged reasons and are skipped.
+--- Surface a turn that ended with a non-terminal stop reason (`max_tokens`,
+--- `max_turn_requests`, `refusal`). These end the turn without an error, so
+--- a chat that only inspects errors would silently miss them. `end_turn` and
+--- `cancelled` are the normal terminal/user-acknowledged reasons and are
+--- skipped.
 --- @param sm agentic.SessionManager
---- @param response table|nil
-function M.surface_unexpected_response(sm, response)
-    if type(response) ~= "table" then
-        return
-    end
-
-    local stop_reason = response.stopReason
+--- @param state agentic.acp.TurnState The `idle` that ended the turn
+function M.surface_unexpected_response(sm, state)
+    local stop_reason = state.stop_reason
     if
         stop_reason == nil
         or stop_reason == "end_turn"
@@ -60,7 +57,7 @@ function M.surface_unexpected_response(sm, response)
     local lines = {
         string.format("stopReason: %s", tostring(stop_reason)),
     }
-    local usage = type(response.usage) == "table" and response.usage or nil
+    local usage = type(state.usage) == "table" and state.usage or nil
     if usage then
         for _, key in ipairs({ "inputTokens", "outputTokens", "totalTokens" }) do
             if usage[key] ~= nil then
@@ -166,14 +163,14 @@ function M.requeue_limited_prompt(sm, text, consumed)
     reattach_context(sm, consumed)
 end
 
---- Put a prompt the usage limit turned away back as a draft on top of the
---- input in `bufnr`, and attach the context panels it consumed again. Leaves
---- the queue alone. No-op once the widget is destroyed.
+--- Put a returned prompt back as a draft on top of the input in `bufnr`, and
+--- attach the context panels it consumed again. Leaves the queue alone. No-op
+--- once the widget is destroyed.
 --- @param sm agentic.SessionManager
 --- @param text string The prompt as the user wrote it
 --- @param consumed agentic.SessionManager.PanelContext What the prompt took from the context panels
 --- @param bufnr integer|nil Input to put the text in, default the session's input
-function M.return_limited_prompt(sm, text, consumed, bufnr)
+function M.return_as_draft(sm, text, consumed, bufnr)
     if sm.destroyed then
         return
     end
@@ -615,9 +612,9 @@ local MAX_TRANSIENT_RETRIES = 3
 --- a normal error block. Bridges that attach no `data` never retry.
 --- @param sm agentic.SessionManager
 --- @param err agentic.acp.ACPError
---- @param turn_session_id string|nil Session the failed turn was sent to
+--- @param prompts_waiting boolean Another prompt is still to run after the failed turn
 --- @return boolean should_retry
-function M.should_retry_transient(sm, err, turn_session_id)
+function M.should_retry_transient(sm, err, prompts_waiting)
     if not Config.auto_retry_on_transient_error then
         return false
     end
@@ -627,17 +624,14 @@ function M.should_retry_transient(sm, err, turn_session_id)
     if sm.destroyed or sm._transient_attempt >= MAX_TRANSIENT_RETRIES then
         return false
     end
-    -- A pending session/prompt callback outlives cancel_session, which drops
-    -- the subscriber but not ACPClient.callbacks. So this failure can arrive
-    -- after /new, a resume or a provider switch installed a different
-    -- session — resending would inject an unprompted turn into it.
-    if sm.session_id == nil or sm.session_id ~= turn_session_id then
+    -- A session renewal is under way.
+    if sm.session_id == nil then
         return false
     end
-    -- Another turn is already outstanding: the user submitted mid-turn and has
-    -- taken over. A silent resend would land behind their prompt and read as a
-    -- follow-up to it, so the failure is reported instead.
-    if sm._prompt_pending > 0 then
+    -- The user submitted mid-turn and has taken over. A silent resend would
+    -- land behind their prompt and read as a follow-up to it, so the failure
+    -- is reported instead.
+    if prompts_waiting then
         return false
     end
     -- send_prompt has no ready-state guard of its own (unlike

@@ -112,7 +112,7 @@ end
 --- @field message_writer agentic.ui.MessageWriter `main_view.writer`
 --- @field permission_manager agentic.ui.PermissionManager
 --- @field _grant_command agentic.GrantCommand
---- @field step_line agentic.ui.StepLine `main_view.step_line`
+--- @field tail_lines agentic.ui.TailLines `main_view.tail_lines`
 --- @field _subagents agentic.Subagents
 --- @field _output_tails table<string, agentic.utils.FileTail> toolCallId -> tail of the output file of a command still running
 --- @field _held_tool_call_updates table<string, { update: agentic.ui.MessageWriter.ToolCallBase, child_id?: string }> toolCallId -> fields a side record gave a call the chat does not show yet, and the subagent whose records gave them. Dropped at the turn's end for the main agent, at the subagent's end for a subagent
@@ -138,7 +138,9 @@ end
 --- @field _last_prompt? string
 --- @field destroyed boolean Flag set on destroy() to guard async callbacks
 --- @field _draining_queue? boolean A queued block is being taken; guards _drain_queue against re-entry
---- @field _prompt_pending integer Prompt callbacks still outstanding (the in_flight gate)
+--- @field _foreground "running"|"requires_action"|"idle" The agent's foreground work, as the last turn state reported it
+--- @field _untaken agentic.SessionManager.SentPrompt[] Prompts sent and not yet taken in, oldest first
+--- @field _taken agentic.SessionManager.SentPrompt[] Prompts taken in whose turn has not ended, oldest first. ACP v1 takes a prompt in when it is sent, so it can hold several
 --- @field _continue_mark? integer Queued-region tag of the automatic "continue"
 --- @field _load_state? agentic.SessionManager.LoadState How the replay of a session/load in flight is handled. Nil with no load, or once its replay was given up. Set only through `_set_load_state`
 --- @field _replay_hold? agentic.SessionManager.HeldUpdate[] Conversation updates of a session/load replay, held until the load completes. Set exactly while `_load_state` is `holding`
@@ -282,17 +284,17 @@ function SessionManager:_sync_modified(history)
     local chat = self.widget.buf_nrs.agent
     if chat and vim.api.nvim_buf_is_valid(chat) then
         vim.bo[chat].modified = unsaved
-            or self._prompt_pending > 0
+            or self:_in_flight()
             or self._subagents:any_open()
     end
     self._subagents:set_modified(unsaved)
 end
 
---- Set the in-flight prompt count, and with it the chat's `modified` flag.
---- @param count integer
-function SessionManager:_set_prompt_pending(count)
-    self._prompt_pending = count
-    self:_sync_modified(self.chat_history)
+--- Whether the agent works in the foreground or holds a prompt sent and not
+--- yet taken in.
+--- @return boolean
+function SessionManager:_in_flight()
+    return self._foreground ~= "idle" or #self._untaken > 0
 end
 
 --- Set the load state, and with it the replay hold (a new empty one for
@@ -310,12 +312,11 @@ function SessionManager:_replaying()
     return self._load_state == "loading" or self._load_state == "holding"
 end
 
---- Whether a prompt's turn or a load's replay is still arriving, whose own
---- end will finalize the writer. A turn no prompt started (such as one a
---- received message started) is not counted.
+--- Whether a turn or a load's replay is still arriving, whose own end will
+--- finalize the writer.
 --- @return boolean
 function SessionManager:_turn_open()
-    return self._prompt_pending > 0 or self:_replaying()
+    return self._foreground ~= "idle" or self:_replaying()
 end
 
 --- Set `is_generating` and show it in the chat header.
@@ -366,7 +367,9 @@ function SessionManager:new(provider)
         _last_edited_md = nil,
         _reauth_live_retry = false,
         _transient_attempt = 0,
-        _prompt_pending = 0,
+        _foreground = "idle",
+        _untaken = {},
+        _taken = {},
         _checktime_scheduled = false,
         _output_tails = {},
         _held_tool_call_updates = {},
@@ -432,7 +435,7 @@ function SessionManager:new(provider)
     end
 
     self.main_view = AgentView:new(self.widget.buf_nrs.agent)
-    self.step_line = self.main_view.step_line
+    self.tail_lines = self.main_view.tail_lines
     self.message_writer = self.main_view.writer
     self._subagents =
         Subagents:new(self.widget, self.main_view, self:_subagents_host())
@@ -958,7 +961,7 @@ function SessionManager:_write_session()
     self:_persist_history(self.chat_history)
     -- Vim gives no reason when `:wqa` stops on a buffer its write left
     -- modified.
-    if self._prompt_pending > 0 or self._subagents:any_open() then
+    if self:_in_flight() or self._subagents:any_open() then
         Logger.notify(
             "History written; the chat stays modified while a turn or a subagent runs",
             vim.log.levels.WARN
@@ -1030,7 +1033,7 @@ function SessionManager:_reload_chat()
             return self._subagents:peer_detail(id)
         end
     )
-    self.step_line:reposition()
+    self.tail_lines:reposition()
     self:_sync_modified(self.chat_history)
 end
 
@@ -1094,7 +1097,7 @@ function SessionManager:_write_chat_row(row)
     SessionResume.write_row(self.message_writer, row, mid_turn, function(id)
         return self._subagents:peer_detail(id)
     end)
-    self.step_line:reposition()
+    self.tail_lines:reposition()
     self.chat_history:add_message(row)
     self:_history_changed(self.chat_history)
 end
@@ -1145,9 +1148,9 @@ function SessionManager:_subagents_host()
             end
         end,
         return_prompt = function(text, bufnr, reason)
-            local return_prompt = reason == "usage_limit"
-                    and Recovery.return_limited_prompt
-                or Recovery.restore_refused_prompt
+            local return_prompt = reason == "refusal"
+                    and Recovery.restore_refused_prompt
+                or Recovery.return_as_draft
             return_prompt(
                 self,
                 text,
@@ -1185,9 +1188,10 @@ function SessionManager:_on_agent_chunk(update, source_session_id)
     end
     if not transcript then
         -- Records already recorded go above a new response, so a reply to
-        -- Stop hook feedback reads under that feedback. A turn no prompt
-        -- started, such as one a received message started, can open with
-        -- thinking, which marks no response start.
+        -- Stop hook feedback reads under that feedback. Work no prompt
+        -- started, such as a turn a received message started, can open with
+        -- thinking, which marks no response start; such work has no prompt
+        -- taken in.
         local starts_thinking = false
         if not is_message then
             local message_id = Json.present(update.messageId)
@@ -1196,7 +1200,7 @@ function SessionManager:_on_agent_chunk(update, source_session_id)
         end
         if
             not self:_replaying()
-            and (starts_response or (starts_thinking and not self:_turn_open()))
+            and (starts_response or (starts_thinking and #self._taken == 0))
         then
             self:_drain_side_records()
         end
@@ -1209,7 +1213,7 @@ function SessionManager:_on_agent_chunk(update, source_session_id)
         live = self:_turn_open() and not self:_replaying()
     end
     view.writer:write_message_chunk(chunk, starts_response, live)
-    view.step_line:reposition()
+    view.tail_lines:reposition()
     if chunk.content and chunk.content.text then
         self.chat_history:append_agent_text({
             type = is_message and "agent" or "thought",
@@ -1326,13 +1330,6 @@ function SessionManager:_on_session_update(update, source_session_id)
         if text then
             self._compaction_summary = (self._compaction_summary or "") .. text
         end
-    elseif
-        update.sessionUpdate == "state_update"
-        or update.sessionUpdate == "user_message"
-    then
-        -- Unused: no adapter asks for ACP v2, the only protocol that sends
-        -- them.
-        return
     else
         -- TODO: Move this to Logger from notify to debug when confidence is high
         Logger.notify(
@@ -1412,12 +1409,13 @@ function SessionManager:_refresh()
     end
     -- A lost session/new, session/load or session/fork callback leaves its
     -- step shown.
-    self.step_line:clear()
+    self.tail_lines:clear_step()
 
-    -- Release the gate states a lost callback can wedge. A prompt callback or
-    -- a session/load that never completes would otherwise defer every later
-    -- submit with no way back, and unwedging that is what this function is for.
-    self:_set_prompt_pending(0)
+    -- Release the gate states a lost update can wedge. A turn whose `idle`
+    -- never arrives, a prompt never taken in or a session/load that never
+    -- completes would otherwise defer every later submit with no way back,
+    -- and unwedging that is what this function is for.
+    self:_reset_turn_state()
     -- The rest of a held replay would otherwise render below the file and save
     -- as duplicates. A later load adds what the dropped part held.
     if self._load_state == "holding" then
@@ -1648,6 +1646,18 @@ function SessionManager:_build_handlers()
         on_usage_lifted = function()
             if not self.destroyed then
                 self:_drain_queue()
+            end
+        end,
+
+        on_turn_state = function(state)
+            if not self.destroyed then
+                self:_on_turn_state(state)
+            end
+        end,
+
+        on_prompt_taken = function()
+            if not self.destroyed then
+                self:_on_prompt_taken()
             end
         end,
     }
@@ -2899,9 +2909,10 @@ end
 
 --- @alias agentic.SubmitDeferReason "usage_limited"|"in_flight"|"loading"|"not_ready"
 
---- How a turn returned its prompt to the user: the model refused it, or the
---- provider's usage limit turned it away before it produced anything.
---- @alias agentic.ReturnReason "refusal"|"usage_limit"
+--- How a turn returned its prompt to the user: the model refused it, the
+--- provider's usage limit turned it away before it produced anything, or the
+--- agent never took it in.
+--- @alias agentic.ReturnReason "refusal"|"usage_limit"|"untaken"
 
 --- Called when a turn returns its prompt. `held`, for `"usage_limit"`: the
 --- limit still holds and a lift will drain the queue.
@@ -2945,8 +2956,8 @@ end
 
 --- Why the session cannot take a turn of its own right now, or nil if it
 --- can: `loading` while a session/load replays, `not_ready` without a
---- session or a ready agent, `in_flight` while a prompt's callback is
---- outstanding.
+--- session or a ready agent, `in_flight` while the agent works or holds a
+--- prompt not yet taken in.
 --- @return "loading"|"not_ready"|"in_flight"|nil
 function SessionManager:_busy_reason()
     -- session_id is assigned before the session/load RPC, so the readiness
@@ -2957,11 +2968,10 @@ function SessionManager:_busy_reason()
     if not (self.session_id and self.agent and self.agent.state == "ready") then
         return "not_ready"
     end
-    -- Not is_generating: stop_generation and _refresh both clear that flag
-    -- while the prompt callback is still pending, so a drain gated on it would
-    -- dispatch into a turn that is still resolving — and the drain is what
-    -- keeps one queued block per turn.
-    if self._prompt_pending > 0 then
+    -- Not is_generating: stop_generation clears that flag before the turn
+    -- ends, so a drain gated on it would dispatch into a turn that is still
+    -- resolving — and the drain is what keeps one queued block per turn.
+    if self:_in_flight() then
         return "in_flight"
     end
     return nil
@@ -3057,7 +3067,7 @@ end
 --- @alias agentic.SessionEvent "turn_end"|"session_changed"|"destroy"
 
 --- @class agentic.SessionEventData
---- @field user_msg? agentic.ui.ChatHistory.UserMessage turn_end: the turn's prompt row; nil for a synthetic prompt
+--- @field user_msg? agentic.ui.ChatHistory.UserMessage turn_end: the turn's prompt row; nil for work no prompt started
 --- @field stop_reason? string turn_end: the provider's stop reason; nil when the turn ended in an error
 --- @field continued? boolean session_changed: true when the conversation carries on in the new session (a re-create from history), false for a fresh session or a load
 
@@ -3088,22 +3098,37 @@ end
 --- Supersede the current session generation, so callbacks still in flight for
 --- the outgoing one are refused.
 ---
---- Releasing the in-flight gate belongs here rather than in `_cancel_session`:
---- every epoch bump strands whatever prompt callbacks the outgoing session had,
---- and their decrements are refused from now on, so nothing else would ever
---- bring the counter back down. A load or a re-create from history leaves
---- `_cancel_session` unrun.
+--- Resetting the turn state belongs here rather than in `_cancel_session`:
+--- every epoch bump strands the outgoing session's turn, whose `idle` no
+--- longer arrives, and the prompts it had not taken in, which go back to the
+--- input. A load or a re-create from history leaves `_cancel_session` unrun.
 --- The same holds for the load state of a load the refused callback would
---- have ended, and for `is_generating`, which the refused prompt callback
---- would have cleared, and for the step line, which the refused callback
---- would have cleared. The usage limit is the provider account's, and stays.
+--- have ended, and for `is_generating` and the step line, which the refused
+--- callbacks would have cleared. The usage limit is the provider account's,
+--- and stays.
 function SessionManager:_advance_session_epoch()
     self._session_epoch = self._session_epoch + 1
-    self.step_line:clear()
+    self.tail_lines:clear_step()
     self._subagents:forget()
-    self:_set_prompt_pending(0)
+    self:_reset_turn_state()
     self:_set_generating(false)
     self:_set_load_state(nil)
+end
+
+--- Forget the agent's foreground work and the prompts it took in, as idle,
+--- and return the prompts it has not taken in.
+function SessionManager:_reset_turn_state()
+    self._foreground = "idle"
+    self._taken = {}
+    local untaken = self._untaken
+    self._untaken = {}
+    self:_untaken_changed()
+    -- Newest first: each goes on top of the input, so the oldest ends on top.
+    for i = #untaken, 1, -1 do
+        if untaken[i].on_returned then
+            untaken[i].on_returned("untaken")
+        end
+    end
 end
 
 --- Stop the running turn without ending the session. Safe when nothing is
@@ -3111,10 +3136,10 @@ end
 --- running in the background, which the turn's cancel also stops, are marked
 --- `interrupted`, for when they fail.
 ---
---- Leaves `_prompt_pending` alone: the cancelled prompt's callback still
---- fires (with `stopReason = "cancelled"`) and decrements it there. Clearing
---- it here would report the session idle while the old turn is still
---- resolving, so the queue would drain into it.
+--- Leaves the turn state alone: the cancelled turn still ends `idle`, and
+--- each prompt not taken in still fails. Clearing it here would report the
+--- session idle while the old turn is still resolving, so the queue would
+--- drain into it.
 function SessionManager:stop_generation()
     if not self.session_id then
         return
@@ -3433,16 +3458,25 @@ function SessionManager:_handle_input_submit_inner(input_text)
             elseif held then
                 Recovery.requeue_limited_prompt(self, input_text, consumed)
             else
-                -- No lift to wait for.
-                Recovery.return_limited_prompt(self, input_text, consumed)
+                -- Never taken in, or no lift to wait for.
+                Recovery.return_as_draft(self, input_text, consumed)
             end
         end
     )
 end
 
+--- A prompt sent to the agent, from its send until its turn ends.
+--- @class agentic.SessionManager.SentPrompt
+--- @field input_text string
+--- @field extra_lines string[] Display-only lines below the prompt in the chat
+--- @field author? string Who wrote the prompt, a key of `Glyphs.AUTHOR`; nil for the user
+--- @field user_msg agentic.ui.ChatHistory.UserMessage Its history row; `synthetic` for a prompt the user did not author
+--- @field on_returned? agentic.OnReturned Called when the turn returns the prompt
+
 --- Send the user's prompt as a turn: `input_text` after the `prompt` blocks
---- assembled so far, shown in the chat with `extra_lines` below it and
---- recorded in the history as the user's message.
+--- assembled so far. Once the agent takes it in, it shows in the chat with
+--- `extra_lines` below it and is recorded in the history as the user's
+--- message.
 --- @param input_text string
 --- @param prompt agentic.acp.Content[] Blocks to send ahead of the text. The text block is appended to it
 --- @param extra_lines string[] Display-only lines below the prompt in the chat
@@ -3460,24 +3494,6 @@ function SessionManager:_send_user_prompt(
         text = input_text,
     })
 
-    --- @type agentic.ui.ChatHistory.UserMessage
-    local user_msg = {
-        type = "user",
-        text = input_text,
-        timestamp = os.time(),
-        provider_name = self.agent.provider_config.name,
-        author = author,
-        model = self.config_options:current_model_id(),
-    }
-    self.message_writer:write_user_prompt(
-        input_text,
-        extra_lines,
-        author,
-        user_msg
-    )
-    self.chat_history:add_message(user_msg)
-    self:_history_changed(self.chat_history)
-
     if not author then
         P.invoke_hook("on_prompt_submit", {
             prompt = input_text,
@@ -3485,7 +3501,20 @@ function SessionManager:_send_user_prompt(
         })
     end
 
-    self:_dispatch_turn(prompt, user_msg, on_returned)
+    self:_dispatch_turn(prompt, {
+        input_text = input_text,
+        extra_lines = extra_lines,
+        author = author,
+        on_returned = on_returned,
+        user_msg = {
+            type = "user",
+            text = input_text,
+            timestamp = os.time(),
+            provider_name = self.agent.provider_config.name,
+            author = author,
+            model = self.config_options:current_model_id(),
+        },
+    })
 end
 
 --- Send a prompt that the user did not author, recording nothing that would
@@ -3496,15 +3525,17 @@ end
 --- `synthetic` user row.
 --- @param text string
 function SessionManager:_send_synthetic_prompt(text)
-    self.chat_history:add_message({
-        type = "user",
-        text = text,
-        timestamp = os.time(),
-        provider_name = self.agent.provider_config.name,
-        synthetic = true,
+    self:_dispatch_turn({ { type = "text", text = text } }, {
+        input_text = text,
+        extra_lines = {},
+        user_msg = {
+            type = "user",
+            text = text,
+            timestamp = os.time(),
+            provider_name = self.agent.provider_config.name,
+            synthetic = true,
+        },
     })
-    self:_history_changed(self.chat_history)
-    self:_dispatch_turn({ { type = "text", text = text } })
 end
 
 --- History rows a turn holds that are not the agent's reply: hook records,
@@ -3536,220 +3567,272 @@ local function replied_only_with(messages, prompt, text)
     return false
 end
 
---- Send an assembled prompt as a turn and own the turn tail: per-turn state
---- reset, error dispatch, finalization, attention notification, hooks and
---- queue drain. Shared by user submits and synthetic prompts — everything
---- that records user intent happens before this is called.
+--- Send an assembled prompt and hold it as not yet taken in until the agent
+--- takes it in (`_on_prompt_taken`). Shared by user submits and synthetic
+--- prompts.
 ---
---- The turn returns its prompt when the model refuses it (`"refusal"`, after
---- the refusal is reported), or when the usage limit turns it away before any
---- reply (`"usage_limit"`). A turned-away prompt and the limit's notice are
---- removed from the chat history.
+--- A prompt the agent fails before taking it in goes back through its
+--- `on_returned` (`"untaken"`), with the error written to the chat unless a
+--- cancel ended it.
 --- @param prompt agentic.acp.Content[]
---- @param user_msg agentic.ui.ChatHistory.UserMessage|nil The prompt's history entry; nil for a prompt that cannot be returned
---- @param on_returned agentic.OnReturned|nil Called when the turn returns the prompt
-function SessionManager:_dispatch_turn(prompt, user_msg, on_returned)
-    local session_id = self.session_id
-    local epoch = self._session_epoch
-    -- Capture chat_history before send to avoid race with _cancel_session
-    -- replacing self.chat_history while the callback is pending
-    local chat_history = self.chat_history
-
+--- @param sent agentic.SessionManager.SentPrompt
+function SessionManager:_dispatch_turn(prompt, sent)
     -- What arrives from here on answers this turn, not a replay `_refresh`
     -- abandoned.
     if self._load_state == "dropping" then
         self:_set_load_state(nil)
     end
 
-    self:_set_generating(true)
+    -- Before the send: ACP v1 takes the prompt in within it.
+    table.insert(self._untaken, sent)
+    self:_untaken_changed()
 
-    self:_set_prompt_pending(self._prompt_pending + 1)
-
-    self.agent:send_prompt(self.session_id, prompt, function(response, err)
-        -- This callback already runs inside vim.schedule (from _handle_message).
-        -- Do NOT add another vim.schedule here — it delays cleanup by one tick,
-        -- creating a race where a fast follow-up prompt sets is_generating=true
-        -- before the previous turn's cleanup sets it back to false, permanently
-        -- desynchronising the generating state ("stuck 1 message behind").
-
-        -- Only this turn's own session may release the counter. A cancelled
-        -- prompt's callback outlives /new or a resume, and decrementing then
-        -- would report the session idle while the turn that replaced it is
-        -- still running. The floor covers _refresh, which zeroes the counter to
-        -- unwedge a lost callback without advancing the epoch.
-        if epoch == self._session_epoch then
-            self:_set_prompt_pending(math.max(0, self._prompt_pending - 1))
-        end
-
-        -- `:bd!` mid-turn ends the session under a running turn.
-        if self.destroyed then
+    self.agent:send_prompt(self.session_id, prompt, function(_answer, err)
+        -- Once taken in, the prompt's turn reports its own outcome. A prompt
+        -- `_reset_turn_state` returned is no longer held.
+        if self.destroyed or not err or not self:_drop_untaken(sent) then
             return
         end
-
-        -- Everything below ends *a* turn: the footer and separator, the
-        -- per-turn writer flags, the idle state and the completion hook. A
-        -- superseded turn must run none of it, or it ends the turn that
-        -- replaced it. Reachable from a resume mid-turn.
-        if epoch ~= self._session_epoch then
-            return
-        end
-
-        -- A turn that ends with a later one still outstanding — the user
-        -- submitted mid-turn and the provider ran the two in sequence — still
-        -- owes the reader its own boundary: the usage footer, the separator and
-        -- the per-turn writer flags, which corrupt the next turn if they carry
-        -- into it. What it does not owe is the signals that say the session went
-        -- idle, since the next turn is already running.
-        local session_busy = self._prompt_pending > 0
-
-        self:_set_generating(session_busy)
-
-        --- @type table|nil
-        local turn_usage
-        --- Set when this failure is being resent as a fresh turn. Everything
-        --- that would tell the user the turn ended is suppressed, so a
-        --- recovered failure leaves no trace but its calls left open, which end
-        --- `failed`: no error block, no bell or idle state, no
-        --- on_response_complete, and no queue drain.
-        local retrying = err ~= nil
-            and Recovery.should_retry_transient(self, err, session_id)
-
-        if not err then
-            -- A turn that started before another session's hit says nothing
-            -- about the limit.
-            if not self.agent.usage_limit:is_held() then
-                self.agent.usage_limit:clear_attempts()
+        if err.code ~= ACPClient.ERROR_CODES.REQUEST_CANCELLED then
+            self.message_writer:write_error_message(err)
+            if not self:_turn_open() then
+                self.message_writer:finalize_turn()
             end
-            self._transient_attempt = 0
-            self._reauth_live_retry = false
-            Recovery.surface_unexpected_response(self, response)
-            if type(response) == "table" then
-                turn_usage = response.usage
-                if on_returned and response.stopReason == "refusal" then
-                    on_returned("refusal")
-                end
-            end
-        elseif not retrying then
-            local error_type, reset_epoch =
-                self.message_writer:write_error_message(err)
-            -- Account for the retries the user never saw — otherwise this error
-            -- follows a multi-turn stall with nothing to explain it. Covers a
-            -- chain ending in a different error class too, so no branch below
-            -- can leave a stale budget behind.
-            if self._transient_attempt > 0 then
-                self.message_writer:write_error_action(
-                    string.format(
-                        "Auto-retry gave up (%d attempts).",
-                        self._transient_attempt
-                    )
-                )
-                self._transient_attempt = 0
-            end
-            if err.code == ACPClient.ERROR_CODES.AUTH_REQUIRED then
-                Recovery.offer_login(self)
-            elseif error_type == "usage_limit" then
-                -- claude-agent-acp reuses a stalled query after this error,
-                -- so the next prompt can end with no content. It keeps one
-                -- query per ACP session, so a new ACP session gets a fresh
-                -- one. See `.claude/skills/issues/references/chunk-flush.md`.
-                -- Hold before the renewal, not after: the renewal's
-                -- new_session drains when it completes, which would otherwise
-                -- dispatch into a still-limited provider.
-                local limit = self.agent.usage_limit
-                if reset_epoch then
-                    limit:hold(reset_epoch)
-                end
-                -- The turn's own records (its UserPromptSubmit hook) belong
-                -- under its prompt, so the cut below takes them with it.
-                self:_drain_side_records()
-                -- The bridge forwards the limit's notice as an ordinary agent
-                -- message (claude-agent-acp's legacy transcript behaviour, for
-                -- clients that do not advertise session failures), so "no
-                -- reply" means nothing but that notice. Truncated before the
-                -- renewal, so the prompt reaches no history prefix.
-                if
-                    on_returned
-                    and user_msg
-                    and replied_only_with(
-                        chat_history.messages,
-                        user_msg,
-                        err.message or ""
-                    )
-                    and chat_history:truncate_from(user_msg)
-                then
-                    self:_history_changed(chat_history)
-                    on_returned("usage_limit", limit:holds_drain())
-                end
-                Recovery.renew_session(self)
-                if reset_epoch then
-                    Recovery.offer_auto_continue(self, limit)
-                end
-            end
-            -- No other error clears the limit's attempts: a client restart
-            -- after a re-login fails sibling sessions' turns with transport
-            -- errors, which say nothing about the limit.
         end
-
-        -- Above the history save below, so the corrected statuses are the ones
-        -- persisted. `stop_generation` reaches this callback two ways — the
-        -- `session/cancel` it sends, and the outstanding permission request its
-        -- `permission_manager:cancel_requests()` resolves with nil.
-        -- A response without a stop reason ends the turn as a normal Stop.
-        local stop_reason = err and "error"
-            or type(response) == "table" and Json.present(response.stopReason)
-            or "end_turn"
-        if stop_reason ~= "end_turn" then
-            self:_end_open_tool_calls(
-                CanonicalToolCall.stop_reason_word(stop_reason)
-            )
+        if sent.on_returned then
+            sent.on_returned("untaken")
         end
-
-        self:_finalize_turn(turn_usage)
-        -- The provider can rename the session while it runs.
-        self:_refresh_name()
-
-        if not retrying then
-            if not session_busy then
-                self:_notify_attention(true)
-            end
-
-            -- Fires once per user turn, not once per provider turn: the
-            -- retried attempts are not outcomes the user asked about.
-            P.invoke_hook("on_response_complete", {
-                session_id = session_id,
-                success = err == nil,
-                error = err,
-            })
-            self:_emit("turn_end", {
-                user_msg = user_msg,
-                stop_reason = not err and stop_reason or nil,
-            })
-        end
-
-        -- Persist on failure too: the user prompt is already in `chat_history`,
-        -- so a turn that dies before the session's first success would
-        -- otherwise leave the conversation with no on-disk copy at all. Not
-        -- while retrying — the resent turn writes the same history at its own
-        -- completion, and each save is a synchronous disk write.
-        if not retrying then
-            self:_persist_history(chat_history)
-        end
-
-        if retrying then
-            -- The retry turn reaches its own Stop where the drain runs.
-            -- Draining here too would fire a second concurrent send_prompt,
-            -- so deferred prompts wait up to MAX_TRANSIENT_RETRIES turns
-            -- (one dispatch per Stop).
-            Recovery.retry_after_transient_error(self)
-        elseif stop_reason == "end_turn" then
-            -- Only a normal Stop. `cancelled` is <C-c>, where the user is
-            -- asking a question rather than queueing the next task; `refusal`,
-            -- `max_tokens` and `max_turn_requests` all left the work unfinished,
-            -- and launching a follow-up onto a truncated state is wrong.
-            -- Deferred prompts stay visible in the input buffer meanwhile.
-            self:_drain_queue()
+        -- The idle signals the turn's end held back for this prompt. A cancel
+        -- fails the prompts not taken in around the turn's `idle`.
+        if not self:_in_flight() then
+            self:_set_generating(false)
+            self:_notify_attention(true)
         end
     end)
+end
+
+--- Remove `sent` from the prompts not yet taken in.
+--- @param sent agentic.SessionManager.SentPrompt
+--- @return boolean removed False when it was not held
+function SessionManager:_drop_untaken(sent)
+    for i, held in ipairs(self._untaken) do
+        if held == sent then
+            table.remove(self._untaken, i)
+            self:_untaken_changed()
+            return true
+        end
+    end
+    return false
+end
+
+--- Show the prompts not yet taken in below the chat, the user's own (not
+--- synthetic ones), and sync the chat's `modified` flag.
+function SessionManager:_untaken_changed()
+    local texts = {}
+    for _, sent in ipairs(self._untaken) do
+        if not sent.user_msg.synthetic then
+            table.insert(texts, sent.input_text)
+        end
+    end
+    self.tail_lines:show_prompts(texts)
+    self:_sync_modified(self.chat_history)
+end
+
+--- Take the oldest prompt not yet taken in as taken: write a user's prompt
+--- to the chat, and add its row to the history. A no-op when none is held.
+function SessionManager:_on_prompt_taken()
+    local sent = table.remove(self._untaken, 1)
+    if not sent then
+        return
+    end
+    table.insert(self._taken, sent)
+    self:_untaken_changed()
+    if not sent.user_msg.synthetic then
+        self.message_writer:write_user_prompt(
+            sent.input_text,
+            sent.extra_lines,
+            sent.author,
+            sent.user_msg
+        )
+    end
+    self.chat_history:add_message(sent.user_msg)
+    self:_history_changed(self.chat_history)
+end
+
+--- Apply a change of the agent's foreground work. An `idle` ends the turn
+--- running, if one runs; an `idle` while idle is a snapshot and ends nothing.
+--- @param state agentic.acp.TurnState
+function SessionManager:_on_turn_state(state)
+    local was = self._foreground
+    self._foreground = state.state
+    self:_sync_modified(self.chat_history)
+    if state.state ~= "idle" then
+        self:_set_generating(true)
+    elseif was ~= "idle" then
+        self:_end_turn(state)
+    end
+end
+
+--- End the turn `state` reports `idle`: per-turn state reset, error
+--- dispatch, finalization, attention notification, hooks and queue drain. The
+--- turn's prompt is the oldest taken in; work no prompt started has none.
+---
+--- The turn returns its prompt when the model refuses it (`"refusal"`, after
+--- the refusal is reported), or when the usage limit turns it away before any
+--- reply (`"usage_limit"`). A turned-away prompt and the limit's notice are
+--- removed from the chat history.
+--- @param state agentic.acp.TurnState
+function SessionManager:_end_turn(state)
+    local sent = table.remove(self._taken, 1)
+    local user_msg = sent and sent.user_msg
+    local on_returned = sent and sent.on_returned
+    local chat_history = self.chat_history
+    local err = state.error
+
+    -- A turn that ends with another prompt still to run still owes the
+    -- reader its own boundary: the usage footer, the separator and the
+    -- per-turn writer flags, which corrupt the next turn if they carry into
+    -- it. What it does not owe is the signals that say the session went idle,
+    -- since the next turn is about to run.
+    local busy = state.more or #self._untaken > 0
+
+    self:_set_generating(busy)
+
+    --- Set when this failure is being resent as a fresh turn. Everything
+    --- that would tell the user the turn ended is suppressed, so a
+    --- recovered failure leaves no trace but its calls left open, which end
+    --- `failed`: no error block, no bell or idle state, no
+    --- on_response_complete, and no queue drain.
+    local retrying = err ~= nil
+        and Recovery.should_retry_transient(self, err, busy)
+
+    if not err then
+        -- A turn that started before another session's hit says nothing
+        -- about the limit.
+        if not self.agent.usage_limit:is_held() then
+            self.agent.usage_limit:clear_attempts()
+        end
+        self._transient_attempt = 0
+        self._reauth_live_retry = false
+        Recovery.surface_unexpected_response(self, state)
+        if on_returned and state.stop_reason == "refusal" then
+            on_returned("refusal")
+        end
+    elseif not retrying then
+        local error_type, reset_epoch =
+            self.message_writer:write_error_message(err)
+        -- Account for the retries the user never saw — otherwise this error
+        -- follows a multi-turn stall with nothing to explain it. Covers a
+        -- chain ending in a different error class too, so no branch below
+        -- can leave a stale budget behind.
+        if self._transient_attempt > 0 then
+            self.message_writer:write_error_action(
+                string.format(
+                    "Auto-retry gave up (%d attempts).",
+                    self._transient_attempt
+                )
+            )
+            self._transient_attempt = 0
+        end
+        if err.code == ACPClient.ERROR_CODES.AUTH_REQUIRED then
+            Recovery.offer_login(self)
+        elseif error_type == "usage_limit" then
+            -- claude-agent-acp reuses a stalled query after this error,
+            -- so the next prompt can end with no content. It keeps one
+            -- query per ACP session, so a new ACP session gets a fresh
+            -- one. See `.claude/skills/issues/references/chunk-flush.md`.
+            -- Hold before the renewal, not after: the renewal's
+            -- new_session drains when it completes, which would otherwise
+            -- dispatch into a still-limited provider.
+            local limit = self.agent.usage_limit
+            if reset_epoch then
+                limit:hold(reset_epoch)
+            end
+            -- The turn's own records (its UserPromptSubmit hook) belong
+            -- under its prompt, so the cut below takes them with it.
+            self:_drain_side_records()
+            -- The bridge forwards the limit's notice as an ordinary agent
+            -- message (claude-agent-acp's legacy transcript behaviour, for
+            -- clients that do not advertise session failures), so "no
+            -- reply" means nothing but that notice. Truncated before the
+            -- renewal, so the prompt reaches no history prefix.
+            if
+                on_returned
+                and user_msg
+                and replied_only_with(
+                    chat_history.messages,
+                    user_msg,
+                    err.message or ""
+                )
+                and chat_history:truncate_from(user_msg)
+            then
+                self:_history_changed(chat_history)
+                on_returned("usage_limit", limit:holds_drain())
+            end
+            Recovery.renew_session(self)
+            if reset_epoch then
+                Recovery.offer_auto_continue(self, limit)
+            end
+        end
+        -- No other error clears the limit's attempts: a client restart
+        -- after a re-login fails sibling sessions' turns with transport
+        -- errors, which say nothing about the limit.
+    end
+
+    -- Above the history save below, so the corrected statuses are the ones
+    -- persisted. A turn without a stop reason ends as a normal Stop.
+    local stop_reason = err and "error" or state.stop_reason or "end_turn"
+    if stop_reason ~= "end_turn" then
+        self:_end_open_tool_calls(
+            CanonicalToolCall.stop_reason_word(stop_reason)
+        )
+    end
+
+    self:_finalize_turn(state.usage)
+    -- The provider can rename the session while it runs.
+    self:_refresh_name()
+
+    if not retrying then
+        if not busy then
+            self:_notify_attention(true)
+        end
+
+        -- Fires once per user turn, not once per provider turn: the
+        -- retried attempts are not outcomes the user asked about.
+        P.invoke_hook("on_response_complete", {
+            session_id = self.session_id,
+            success = err == nil,
+            error = err,
+        })
+        self:_emit("turn_end", {
+            user_msg = user_msg,
+            stop_reason = not err and stop_reason or nil,
+        })
+    end
+
+    -- Persist on failure too: the user prompt is already in `chat_history`,
+    -- so a turn that dies before the session's first success would
+    -- otherwise leave the conversation with no on-disk copy at all. Not
+    -- while retrying — the resent turn writes the same history at its own
+    -- completion, and each save is a synchronous disk write.
+    if not retrying then
+        self:_persist_history(chat_history)
+    end
+
+    if retrying then
+        -- The retry turn reaches its own Stop where the drain runs.
+        -- Draining here too would fire a second concurrent send_prompt,
+        -- so deferred prompts wait up to MAX_TRANSIENT_RETRIES turns
+        -- (one dispatch per Stop).
+        Recovery.retry_after_transient_error(self)
+    elseif stop_reason == "end_turn" and not busy then
+        -- Only a normal Stop. `cancelled` is <C-c>, where the user is
+        -- asking a question rather than queueing the next task; `refusal`,
+        -- `max_tokens` and `max_turn_requests` all left the work unfinished,
+        -- and launching a follow-up onto a truncated state is wrong.
+        -- Deferred prompts stay visible in the input buffer meanwhile.
+        self:_drain_queue()
+    end
 end
 
 --- Make the just-created ACP session `session_id` this session's: take its
@@ -3832,7 +3915,7 @@ function SessionManager:new_session(opts)
     -- new_session) superseded this create while the RPC was in flight.
     self:_advance_session_epoch()
     local epoch = self._session_epoch
-    self.step_line:show("starting session")
+    self.tail_lines:show_step("starting session")
 
     if not (history or opts.keep_cwd) then
         self._cwd = vim.fn.getcwd()
@@ -3853,7 +3936,7 @@ function SessionManager:new_session(opts)
 
         -- A superseded create leaves the step of what superseded it.
         if epoch == self._session_epoch then
-            self.step_line:clear()
+            self.tail_lines:clear_step()
         end
 
         if err or not response then
@@ -4031,7 +4114,7 @@ function SessionManager:_do_load_acp_session(chat_id, cwd, model)
     end
     self:_reset_conversation()
 
-    self.step_line:show("loading session")
+    self.tail_lines:show_step("loading session")
 
     self.session_id = session_id
     if not from_file then
@@ -4111,7 +4194,7 @@ function SessionManager:_do_load_acp_session(chat_id, cwd, model)
                 self:_dispatch_replay_tail(hold)
             end
             self:_set_load_state(nil)
-            self.step_line:clear()
+            self.tail_lines:clear_step()
 
             if not from_file then
                 -- After the replay, whose spawns made the transcripts they
@@ -4469,7 +4552,7 @@ function SessionManager:_render_history()
             return self._subagents:peer_detail(id)
         end
     )
-    self.step_line:reposition()
+    self.tail_lines:reposition()
 end
 
 --- The messages of the history the chat shows: those from
@@ -4588,7 +4671,7 @@ function SessionManager:_do_start_fork(fork)
 
     self:_install_history(history)
     self:_advance_session_epoch()
-    self.step_line:show("forking")
+    self.tail_lines:show_step("forking")
     local epoch = self._session_epoch
     self.agent:fork_session(
         fork.source_id,
@@ -4602,7 +4685,7 @@ function SessionManager:_do_start_fork(fork)
                 end
                 return
             end
-            self.step_line:clear()
+            self.tail_lines:clear_step()
             if err or not result then
                 local message = "session/fork failed: "
                     .. (err and err.message or "no result")

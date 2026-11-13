@@ -857,6 +857,39 @@ describe("BufHelpers", function()
         end)
     end)
 
+    describe("scroll_down", function()
+        it("shows the virtual lines below the last line", function()
+            local bufnr = vim.api.nvim_create_buf(false, true)
+            local lines = {}
+            for i = 1, 50 do
+                lines[i] = "line " .. i
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            local winid = vim.api.nvim_open_win(bufnr, true, {
+                relative = "editor",
+                width = 40,
+                height = 20,
+                row = 0,
+                col = 0,
+            })
+            MiniTest.finally(function()
+                vim.api.nvim_win_close(winid, true)
+                vim.api.nvim_buf_delete(bufnr, { force = true })
+            end)
+            vim.wo[winid].scrolloff = 0
+            local ns = vim.api.nvim_create_namespace("buf_helpers_test")
+            vim.api.nvim_buf_set_extmark(bufnr, ns, 49, 0, {
+                virt_lines = { { { "a" } }, { { "b" } }, { { "c" } } },
+            })
+
+            BufHelpers.scroll_down(winid, 0)
+
+            vim.cmd("redraw")
+            -- Lines 34 to 50 and the 3 virtual lines fill the 20 rows.
+            assert.equal(34, vim.fn.line("w0", winid))
+        end)
+    end)
+
     describe("set_fold", function()
         --- Outer fold over lines 2-8, inner fold over lines 4-8.
         local OUTER, INNER = 2, 4

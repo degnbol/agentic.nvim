@@ -251,7 +251,7 @@ end
     end)
 
     it("forks while a turn runs", function()
-        child.lua([[_G.s._prompt_pending = 1]])
+        child.lua([[_G.s._foreground = "running"]])
         fork_natively()
 
         assert_forked()
@@ -260,6 +260,8 @@ end
     it("keeps a running turn's output below its forked prompt", function()
         child.lua([[
 _G.s:_handle_input_submit("third question")
+_G.s:_on_prompt_taken()
+_G.s:_on_turn_state({ state = "running" })
 _G.update = _G.s:_build_handlers().on_session_update
 _G.update({
     sessionUpdate = "agent_message_chunk",

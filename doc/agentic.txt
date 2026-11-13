@@ -1149,6 +1149,10 @@ or ended early by the agent, leaves the rest tagged; a refused turn leaves
 them as draft. Editing a region (any change to it, or entering insert mode
 with the cursor inside it) drops it back to ordinary draft.
 
+A prompt sent while the agent works shows dimmed below the chat until the
+agent takes it in. One the agent drops before taking it in, as `<C-c>` does,
+goes back to the top of the input.
+
 When the agent refuses a prompt, the prompt goes back to the top of the input
 it was sent from, and its context goes back in the context panels. The refused
 message stays in the agent's conversation.

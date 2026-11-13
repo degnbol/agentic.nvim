@@ -131,7 +131,7 @@ describe("agentic.session_recovery", function()
                 _session_epoch = 0,
                 _reauth_live_retry = false,
                 is_generating = false,
-                _prompt_pending = 0,
+                _foreground = "idle",
                 _replaying = SessionManager._replaying,
                 _turn_open = SessionManager._turn_open,
                 agent = {
@@ -899,11 +899,11 @@ describe("agentic.session_recovery", function()
             end)
         end)
 
-        describe("return_limited_prompt", function()
+        describe("return_as_draft", function()
             it("drafts the text on top, keeping the queue tagged", function()
                 local session, sink = make_session({ "queued" }, { { 0, 0 } })
 
-                Recovery.return_limited_prompt(session, "limited", {
+                Recovery.return_as_draft(session, "limited", {
                     selections = {},
                     files = { "/a.lua" },
                     diagnostics = {},

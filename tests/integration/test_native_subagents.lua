@@ -1087,10 +1087,9 @@ _G.s._subagents:_replay_transcript("c1")
 
     it("a turn's end closes nothing", function()
         child.lua([[
-_G.s.agent.send_prompt = function(_, _, _, cb) _G.prompt_cb = cb end
 _G.spawn("c1")
-_G.s:_dispatch_turn({})
-_G.prompt_cb({ stopReason = "end_turn" }, nil)
+_G.s:_on_turn_state({ state = "running" })
+_G.s:_on_turn_state({ state = "idle", stop_reason = "end_turn" })
 ]])
 
         assert.is_true(child.lua_get([[_G.s._subagents._agents.c1.open]]))
@@ -1100,13 +1099,12 @@ _G.prompt_cb({ stopReason = "end_turn" }, nil)
         "cancelling the main turn leaves a running child to its own end",
         function()
             child.lua([[
-_G.s.agent.send_prompt = function(_, _, _, cb) _G.prompt_cb = cb end
 _G.s.agent.stop_generation = function() end
 _G.spawn("c1")
 _G.call("c1", "t1")
-_G.s:_dispatch_turn({})
+_G.s:_on_turn_state({ state = "running" })
 _G.s:stop_generation()
-_G.prompt_cb({ stopReason = "cancelled" }, nil)
+_G.s:_on_turn_state({ state = "idle", stop_reason = "cancelled" })
 ]])
 
             assert.equal(
@@ -2279,7 +2277,8 @@ _G.s:_on_tool_call({
 
     it("a prompted turn's thinking does not drain", function()
         child.lua([[
-_G.s._prompt_pending = 1
+_G.s._foreground = "running"
+_G.s._taken = { { user_msg = {} } }
 _G.receive()
 _G.update("root", {
     sessionUpdate = "agent_thought_chunk",

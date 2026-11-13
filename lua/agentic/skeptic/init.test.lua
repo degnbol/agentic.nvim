@@ -349,6 +349,28 @@ describe("agentic.skeptic.Skeptic", function()
         assert.same({ "back on" }, extracts[2].turn.prompts)
     end)
 
+    it("checks work no prompt started like a user's turn", function()
+        local _, session = enabled_skeptic()
+        end_turn(session, add_prompt(session, "go"))
+        extracts[1].on_done({}, nil)
+        add_reply(session, "the background job finished")
+        session.chat_history:add_message({
+            type = "tool_call",
+            tool_call_id = "e1",
+            kind = "edit",
+            status = "completed",
+            argument = "/src/a.lua",
+            diff = { old = { "x = 1" }, new = { "x = 2" } },
+        })
+
+        end_turn(session, nil)
+
+        assert.equal(2, #extracts)
+        assert.same({}, extracts[2].turn.prompts)
+        assert.equal("the background job finished", extracts[2].turn.text)
+        assert.equal(1, #extracts[2].turn.diffs)
+    end)
+
     it("defers a stopped or failed turn to the next normal one", function()
         local _, session = enabled_skeptic()
         local first = add_prompt(session, "first")

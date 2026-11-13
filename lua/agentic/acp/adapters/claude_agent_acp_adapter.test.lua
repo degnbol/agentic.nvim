@@ -17,6 +17,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
     local function make_adapter(session_roots)
         return setmetatable({
             _session_roots = session_roots or {},
+            _unanswered = {},
             _children = {},
             _terminal_output = {},
             _transcript_readers = {},
@@ -535,6 +536,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             local updates = {}
             local adapter = setmetatable({
                 _session_roots = {},
+                _unanswered = {},
                 _children = {},
                 _terminal_output = {},
                 __with_subscriber = function(_self, _session_id, fn)
@@ -731,6 +733,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             local calls = {}
             local adapter = setmetatable({
                 _session_roots = {},
+                _unanswered = {},
                 _children = {},
                 __with_subscriber = function(_self, _session_id, fn)
                     fn({
@@ -1940,6 +1943,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             local updates = {}
             local adapter = setmetatable({
                 _session_roots = {},
+                _unanswered = {},
                 _children = {},
                 __with_subscriber = function(_self, _session_id, fn)
                     fn({
@@ -2217,6 +2221,7 @@ describe("agentic.acp.adapters.ClaudeAgentACPAdapter", function()
             end
             local adapter = setmetatable({
                 _session_roots = {},
+                _unanswered = {},
                 _children = {},
                 _terminal_output = {},
                 _tool_call_kinds = ToolCallKinds:new(),

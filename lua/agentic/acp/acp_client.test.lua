@@ -471,6 +471,7 @@ describe("agentic.acp.ACPClient", function()
                 _loading_sessions = {},
                 _children = {},
                 _session_roots = {},
+                _unanswered = {},
                 _tool_call_kinds = ToolCallKinds:new(),
                 provider_config = { name = "test-provider" },
             }, { __index = ACPClient })
@@ -712,6 +713,163 @@ describe("agentic.acp.ACPClient", function()
         )
     end)
 
+    describe("send_prompt on ACP v1", function()
+        --- @type tests.helpers.Deferred
+        local deferred
+        --- @type table[] Decoded JSON of each message sent
+        local sent
+
+        before_each(function()
+            deferred = Deferred.capture()
+            sent = {}
+        end)
+
+        after_each(function()
+            deferred.revert()
+        end)
+
+        --- A ready v1 client with `handlers` subscribed to session "s".
+        --- @param handlers agentic.acp.ClientHandlers
+        --- @return agentic.acp.ACPClient client
+        local function make_client(handlers)
+            --- @type agentic.acp.ACPClient
+            local client = setmetatable({
+                callbacks = {},
+                subscribers = { s = handlers },
+                id_counter = 0,
+                protocol_version = 1,
+                state = "ready",
+                transport = {
+                    send = function(_self, data)
+                        table.insert(sent, vim.json.decode(data))
+                        return true
+                    end,
+                },
+                _loading_sessions = {},
+                _children = {},
+                _session_roots = {},
+                _unanswered = {},
+                _tool_call_kinds = ToolCallKinds:new(),
+                provider_config = { name = "test-provider" },
+            }, { __index = ACPClient })
+            return client
+        end
+
+        --- Answer the `n`th request sent.
+        --- @param client agentic.acp.ACPClient
+        --- @param n integer
+        --- @param result table|nil
+        --- @param err table|nil
+        local function answer(client, n, result, err)
+            client:_handle_message({
+                jsonrpc = "2.0",
+                id = sent[n].id,
+                result = result,
+                error = err,
+            })
+            deferred.drain()
+        end
+
+        it("takes the prompt in at send and starts a turn", function()
+            local handlers, calls = RecordingHandlers.new()
+            local client = make_client(handlers)
+
+            client:send_prompt("s", {}, function() end)
+
+            assert.same({
+                { "on_prompt_taken" },
+                { "on_turn_state", { state = "running" } },
+            }, calls)
+        end)
+
+        it("ends the turn idle with the answer's stop reason", function()
+            local handlers, calls = RecordingHandlers.new()
+            local client = make_client(handlers)
+            local answers = {}
+            client:send_prompt("s", {}, function(result)
+                table.insert(answers, result)
+            end)
+
+            local usage = { inputTokens = 3 }
+            answer(client, 1, { stopReason = "max_tokens", usage = usage })
+
+            assert.same({
+                "on_turn_state",
+                {
+                    state = "idle",
+                    stop_reason = "max_tokens",
+                    usage = usage,
+                    more = false,
+                },
+            }, calls[3])
+            assert.equal(3, #calls)
+            assert.same(
+                { { stopReason = "max_tokens", usage = usage } },
+                answers
+            )
+        end)
+
+        it("ends the turn idle with an error answer", function()
+            local handlers, calls = RecordingHandlers.new()
+            local client = make_client(handlers)
+            client:send_prompt("s", {}, function() end)
+
+            answer(client, 1, nil, { code = -32603, message = "boom" })
+
+            local state = calls[3][2]
+            assert.equal("idle", state.state)
+            assert.equal("error", state.stop_reason)
+            assert.equal("boom", state.error.message)
+        end)
+
+        it(
+            "starts the next turn while a second prompt is unanswered",
+            function()
+                local handlers, calls = RecordingHandlers.new()
+                local client = make_client(handlers)
+                client:send_prompt("s", {}, function() end)
+                client:send_prompt("s", {}, function() end)
+
+                answer(client, 1, { stopReason = "end_turn" })
+
+                assert.same(
+                    {
+                        "on_prompt_taken",
+                        "on_turn_state",
+                        "on_prompt_taken",
+                        "on_turn_state",
+                        "on_turn_state",
+                    },
+                    vim.tbl_map(function(call)
+                        return call[1]
+                    end, calls)
+                )
+                assert.is_true(calls[4][2].more)
+                assert.same({ state = "running" }, calls[5][2])
+
+                answer(client, 2, { stopReason = "end_turn" })
+
+                assert.equal(6, #calls)
+                assert.is_false(calls[6][2].more)
+            end
+        )
+
+        it("calls back a subscriber without turn handlers", function()
+            local client = make_client({
+                on_session_update = function() end,
+                on_request_permission = function() end,
+                on_tool_call = function() end,
+                on_tool_call_update = function() end,
+            })
+            local done = spy.new(function() end)
+
+            client:send_prompt("s", {}, done --[[@as function]])
+            answer(client, 1, { stopReason = "end_turn" })
+
+            assert.equal(1, done.call_count)
+        end)
+    end)
+
     describe("_apply_initialize_result", function()
         local client
         before_each(function()
@@ -920,6 +1078,7 @@ describe("agentic.acp.ACPClient", function()
                 _on_ready = on_ready,
                 _ready_waiters = {},
                 _session_roots = {},
+                _unanswered = {},
                 _children = {},
                 _tool_call_kinds = ToolCallKinds:new(),
                 transport = {
@@ -1245,6 +1404,7 @@ describe("agentic.acp.ACPClient", function()
                 agent_capabilities = capabilities,
                 subscribers = { s1 = {} },
                 _session_roots = {},
+                _unanswered = {},
                 _children = {},
                 _tool_call_kinds = ToolCallKinds:new(),
                 _v2_states = {},
@@ -1332,6 +1492,7 @@ describe("agentic.acp.ACPClient", function()
                 provider_config = {},
                 subscribers = {},
                 _session_roots = {},
+                _unanswered = {},
                 _children = {},
                 _tool_call_kinds = ToolCallKinds:new(),
             }, { __index = ACPClient }) --[[@as agentic.acp.ACPClient]]
@@ -1638,6 +1799,7 @@ describe("agentic.acp.ACPClient", function()
                 _children = {},
                 _loading_sessions = {},
                 _session_roots = {},
+                _unanswered = {},
                 provider_config = {},
                 agent_capabilities = { loadSession = true },
                 _send_request = function(_this, method, p)
@@ -1700,6 +1862,7 @@ describe("agentic.acp.ACPClient", function()
                 _children = {},
                 _loading_sessions = {},
                 _session_roots = {},
+                _unanswered = {},
                 _tool_call_kinds = { forget_session = function() end },
                 provider_config = {},
                 agent_capabilities = { loadSession = true },
@@ -1739,6 +1902,7 @@ describe("agentic.acp.ACPClient", function()
                     _children = {},
                     _loading_sessions = {},
                     _session_roots = {},
+                    _unanswered = {},
                     _tool_call_kinds = ToolCallKinds:new(),
                     provider_config = {},
                 }, overrides),
@@ -1788,6 +1952,7 @@ describe("agentic.acp.ACPClient", function()
         it("drops them with the subscriber", function()
             local client = make_client({
                 _session_roots = { ["s-1"] = { "/tmp/project" } },
+                _unanswered = {},
                 subscribers = { ["s-1"] = {} },
             })
 
@@ -1855,6 +2020,7 @@ describe("agentic.acp.ACPClient", function()
                     _children = {},
                     _loading_sessions = {},
                     _session_roots = {},
+                    _unanswered = {},
                     _tool_call_kinds = ToolCallKinds:new(),
                 }, overrides or {}),
                 { __index = ACPClient }
@@ -2003,6 +2169,7 @@ describe("agentic.acp.ACPClient", function()
             local client = make_client({
                 subscribers = { root = {} },
                 _session_roots = { root = { "/tmp/project" } },
+                _unanswered = {},
             })
 
             spawn(client, "root", "child")
@@ -2152,6 +2319,7 @@ describe("agentic.acp.ACPClient", function()
                 _loading_sessions = {},
                 _children = {},
                 _session_roots = {},
+                _unanswered = {},
                 _tool_call_kinds = ToolCallKinds:new(),
                 _v2_states = {},
             }, { __index = Child }) --[[@as agentic.acp.ACPClient]]
@@ -2248,13 +2416,75 @@ describe("agentic.acp.ACPClient", function()
             deferred.drain()
 
             assert.same(
-                { "on_tool_call", "on_session_update" },
+                { "on_tool_call", "on_turn_state" },
                 vim.tbl_map(function(call)
                     return call[1]
                 end, calls)
             )
             assert.equal("t1", calls[1][2].tool_call_id)
-            assert.equal("state_update", calls[2][2].sessionUpdate)
+        end)
+
+        it("reports a state_update as the turn state", function()
+            local client = make_client()
+            local handlers, calls = RecordingHandlers.new()
+            client:_subscribe("s", handlers)
+            local err = { code = -32000, message = "auth" }
+
+            notify(client, "s", {
+                sessionUpdate = "state_update",
+                state = "idle",
+                stopReason = "error",
+                usage = { inputTokens = 1 },
+                error = err,
+            })
+            deferred.drain()
+
+            assert.same({
+                {
+                    "on_turn_state",
+                    {
+                        state = "idle",
+                        stop_reason = "error",
+                        usage = { inputTokens = 1 },
+                        error = err,
+                    },
+                },
+            }, calls)
+        end)
+
+        it("reports a user_message as a prompt taken in", function()
+            local client = make_client()
+            local handlers, calls = RecordingHandlers.new()
+            client:_subscribe("s", handlers)
+
+            notify(client, "s", {
+                sessionUpdate = "user_message",
+                messageId = "m1",
+                content = { { type = "text", text = "hi" } },
+            })
+            deferred.drain()
+
+            assert.same({ { "on_prompt_taken" } }, calls)
+        end)
+
+        it("gives send_prompt's callback the answer alone", function()
+            local client = make_client()
+            local handlers, calls = RecordingHandlers.new()
+            client:_subscribe("s", handlers)
+            local answers = {}
+
+            client:send_prompt("s", {}, function(result, err)
+                table.insert(answers, { result, err })
+            end)
+            client:_handle_message({
+                jsonrpc = "2.0",
+                id = sent[1].id,
+                result = { messageId = "m1" },
+            })
+            deferred.drain()
+
+            assert.same({ { { messageId = "m1" } } }, answers)
+            assert.same({}, calls)
         end)
 
         it("drops a child's state_update", function()
