@@ -1058,7 +1058,8 @@ subagent's or the skeptic's ACP session:
     Skeptic transcript        `agentic://<cid>/skeptic/<skeptic key>`
 
 |:edit|, |:split|, |:tabedit|, |gf|, |CTRL-W_f| and |CTRL-W_gf| on a name
-show that buffer, made again if it was wiped. On the name of a chat no
+show that buffer, made again if it was wiped, except a skeptic transcript.
+On the name of a chat no
 session holds, they resume the saved chat (|agentic-commands-resume|) in the
 window they open.
 
