@@ -8,30 +8,19 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 ## Inline bugs
 
 - File activity panel keeps a deleted file until toggled off and on
-  (`FileActivity:reconcile` runs once per toggle).
+  (`FileActivity:reconcile` runs once per toggle). Also appears to remove commited entries in repo, but not if path is outside repo.
 - Visual-mode `<Plug>(agentic-send)` adds the selection to context instead
   of sending it (`plugin/agentic.lua:52`); `:h agentic-plug-mappings` is right.
-- Cursor flickers while a command runs, e.g. a `git push` with heavy hooks.
 - The cancel sweep keys on `stopReason == "cancelled"`: an errored turn, a
   provider that never answers (needs a sweep in `SessionManager:_refresh`),
   or a call cut off by a cancel keeps a status line that never reaches a
   final status.
-- A search command with nested quotes displays wrong:
-  `rg -n ""todowrite"|@alias" …`.
 - Markdown in a prompt leaks into the chat (`##` makes a heading); provider
   colours sometimes break the same way.
-- Treesitter highlighting from a previous block sometimes bleeds into the
-  permission prompt.
-- A Fetch tool call shows a wrong title; the format varies.
-- Large tool outputs (long file reads) lag the chat write.
 - Edit diff highlighting reconstructs and parses the file once per hunk per
   side (`highlight_map_in_context` from `hunk_rows`, `tool_call_layout.lua`).
-- The terminal bell rings at every turn end while the chat is unfocused,
-  not only when input is needed.
 - A mouse click from insert mode in the input into the chat leaves insert
   mode on in the chat. Leave insert mode whenever the chat gets focus.
-- Resume right after compacting shows only the compaction summary, not the
-  history before it.
 - A `/word` line inside a prompt's code fence dispatches and highlights as a
   command; a CRLF line classifies differently in the two (`\s` vs `%s`).
 - opencode: a write of a new file shows only `### Edit` and the path.
@@ -175,16 +164,3 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 - [IDEA-tui-parity.md](notes/IDEA-tui-parity.md): slash command parity with the Claude Code TUI
 
 <!-- END plan-index -->
-
-## Housekeeping
-
-- **README demos**: images or gifs showing the differences from the TUI.
-- **Claude tool-name vocabulary in two places**: `ClaudeUtils` (`tool_name`,
-  `MODE_SWITCH_TOOLS`) and `NAME_TO_KIND` in `permission_hook.lua`. Give it
-  one home, or record that the hook's table is scoped to its three tools.
-- **Manual code review**: this repo is heavily vibe-coded.
-- **Claude-specific code behind the adapter**: move each behind a neutral
-  `ACPClient` default that `ClaudeAgentACPAdapter` overrides:
-  `ACPClient:claude_config_dir()` (called for every provider);
-  `_session_roots` and `SkillPath` in `acp_client.lua`; `AGENTIC_SOCK` in
-  `acp_transport.lua` (only the Claude hooks read it).
