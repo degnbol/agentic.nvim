@@ -19,7 +19,7 @@ local function entry(child_id, state, subagent)
         child_id = child_id,
         state = state,
         subagent = subagent or info,
-        name = "agentic://c1/" .. child_id,
+        name = "agentic://c1/subagent/" .. child_id,
     }
     return e
 end
@@ -29,8 +29,8 @@ describe("agentic.ui.AgentsPanel", function()
         it("aligns state, mode, type, name and label", function()
             assert.same(
                 {
-                    "working    Blocking?   Explore        agentic://c1/a  Map UI",
-                    "completed  Background  code-reviewer  agentic://c1/b  Review",
+                    "working    Blocking?   Explore        agentic://c1/subagent/a  Map UI",
+                    "completed  Background  code-reviewer  agentic://c1/subagent/b  Review",
                 },
                 AgentsPanel.lines({
                     entry("a", "working", {
@@ -54,8 +54,8 @@ describe("agentic.ui.AgentsPanel", function()
             e.subagent = nil
             assert.same(
                 {
-                    "ended                       agentic://c1/a  Agent",
-                    "working  Blocking  Explore  agentic://c1/b  map UI",
+                    "ended                       agentic://c1/subagent/a  Agent",
+                    "working  Blocking  Explore  agentic://c1/subagent/b  map UI",
                 },
                 AgentsPanel.lines({
                     e,
@@ -72,8 +72,8 @@ describe("agentic.ui.AgentsPanel", function()
         it("drops the type column while no entry has a type", function()
             assert.same(
                 {
-                    "working    Blocking  agentic://c1/a  map UI",
-                    "completed  Blocking  agentic://c1/b  map UI",
+                    "working    Blocking  agentic://c1/subagent/a  map UI",
+                    "completed  Blocking  agentic://c1/subagent/b  map UI",
                 },
                 AgentsPanel.lines({
                     entry("a", "working"),

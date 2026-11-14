@@ -1,7 +1,6 @@
 local AcpKind = require("agentic.utils.acp_kind")
 local AgentInstance = require("agentic.acp.agent_instance")
 local BufHelpers = require("agentic.utils.buf_helpers")
-local BufferNames = require("agentic.utils.buffer_names")
 local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local ChatHistory = require("agentic.ui.chat_history")
 local Config = require("agentic.config")
@@ -47,7 +46,8 @@ end
 --- @class agentic.BackgroundSession.Opts
 --- @field provider string Only "opencode-acp"
 --- @field model? string Model value id, e.g. "litellm/glm-5.3"
---- @field label string Transcript name suffix, e.g. "skeptic glm-5.3"
+--- @field label string Transcript heading and notification label, e.g. "skeptic glm-5.3"
+--- @field kind agentic.BufferNames.Kind The kind segment of its transcript's name
 --- @field cwd string Working directory of the session
 --- @field widget agentic.ui.ChatWidget The widget the transcript opens on
 --- @field get_config_dir fun(): string Claude's config directory, whose settings.json deny and ask rules apply
@@ -216,10 +216,7 @@ end
 
 function BackgroundSession:_open_transcript()
     local transcript = SubagentTranscript:new(
-        BufferNames.format({
-            key = BufferNames.short_key(self._session_id --[[@as string]]),
-            part = "background",
-        }),
+        self._opts.widget:buffer_name(self._session_id, nil, self._opts.kind),
         subagent_info(self._opts.label),
         self._opts.widget,
         {

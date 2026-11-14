@@ -44,7 +44,7 @@ _G.s:_on_session_update({
     state = { state = "running" },
 }, "sid-first")
 _G.transcript = _G.s._subagents:buf_of("c1")
-_G.c1 = "agentic://" .. _G.cid .. "/"
+_G.c1 = "agentic://" .. _G.cid .. "/subagent/"
     .. require("agentic.utils.buffer_names").short_key("c1")
 vim.cmd("tabnew")
 ]])

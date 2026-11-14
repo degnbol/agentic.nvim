@@ -7,10 +7,15 @@ describe("agentic.utils.BufferNames", function()
         local cases = {
             { key = "8e1f-uuid" },
             { key = "3" },
-            { key = "8e1f-uuid", sub_id = "toolu_01ab" },
+            { key = "8e1f-uuid", kind = "subagent", sub_id = "toolu_01ab" },
             { key = "8e1f-uuid", part = "files" },
-            { key = "ses_abc", sub_id = "ses_def", part = "input" },
-            { key = "8e1f-uuid", part = "background" },
+            {
+                key = "ses_abc",
+                kind = "subagent",
+                sub_id = "ses_def",
+                part = "input",
+            },
+            { key = "8e1f-uuid", kind = "skeptic", sub_id = "ses_def" },
         }
         for _, parts in ipairs(cases) do
             local name = BufferNames.format(parts)
@@ -32,10 +37,10 @@ describe("agentic.utils.BufferNames", function()
         end
     end)
 
-    it("reads any other second segment as a subagent id", function()
-        assert.same(
-            { key = "k", sub_id = "agent" },
-            BufferNames.parse("agentic://k/agent")
+    it("puts the kind before the short key", function()
+        assert.equal(
+            "agentic://k/skeptic/s",
+            BufferNames.format({ key = "k", kind = "skeptic", sub_id = "s" })
         )
     end)
 
@@ -53,10 +58,15 @@ describe("agentic.utils.BufferNames", function()
             "agentic:///files",
             "agentic://k/",
             "agentic://k//input",
-            "agentic://k/s/files",
+            "agentic://k/s",
+            "agentic://k/agent",
+            "agentic://k/s/input",
+            "agentic://k/subagent",
+            "agentic://k/subagent/s/files",
+            "agentic://k/subagent/s/input/x",
+            "agentic://k/skeptic/s/input",
+            "agentic://k/other/s",
             "agentic://k/files/input",
-            "agentic://k/s/input/x",
-            "agentic://k/background/input",
             "other://k",
             "/tmp/agentic://k",
         }) do

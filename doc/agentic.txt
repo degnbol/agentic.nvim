@@ -1047,15 +1047,15 @@ chat.
                                                        *agentic-buffer-names*
 Buffers are named after the chat id, `<cid>`, the name of the chat's
 session file, kept across a provider switch and a restart.
-`<agent key>` and `<background key>` are 8 hex digits standing for the
-subagent's or the background session's ACP session:
+`<agent key>` and `<skeptic key>` are 8 hex digits standing for the
+subagent's or the skeptic's ACP session:
 
-    Buffer                         Name ~
-    Chat                           `agentic://<cid>`
-    Panel                          `agentic://<cid>/<panel>`
-    Subagent transcript            `agentic://<cid>/<agent key>`
-    Subagent message input         `agentic://<cid>/<agent key>/input`
-    Background session             `agentic://<background key>/background`
+    Buffer                    Name ~
+    Chat                      `agentic://<cid>`
+    Panel                     `agentic://<cid>/<panel>`
+    Subagent transcript       `agentic://<cid>/subagent/<agent key>`
+    Subagent message input    `agentic://<cid>/subagent/<agent key>/input`
+    Skeptic transcript        `agentic://<cid>/skeptic/<skeptic key>`
 
 |:edit|, |:split|, |:tabedit|, |gf|, |CTRL-W_f| and |CTRL-W_gf| on a name
 show that buffer, made again if it was wiped. On the name of a chat no

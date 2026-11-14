@@ -1,4 +1,4 @@
---- Names of session buffers: `agentic://<key>[/<sub_id>][/<part>]`.
+--- Names of session buffers: `agentic://<key>[/<kind>/<sub_id>][/<part>]`.
 --- @class agentic.BufferNames
 local BufferNames = {}
 
@@ -17,10 +17,17 @@ BufferNames.PANELS = {
     "input",
 }
 
+--- What session a transcript below a chat belongs to.
+--- @alias agentic.BufferNames.Kind "subagent"|"skeptic"
+
+--- @type agentic.BufferNames.Kind[]
+local KINDS = { "subagent", "skeptic" }
+
 --- @class agentic.BufferNames.Parts
---- @field key string The chat id (`ChatHistory.chat_id`), or for `background` the session's short key
---- @field sub_id? string The short key of a subagent's session id
---- @field part? string A `PANELS` value; `input` after a `sub_id`; or `background`
+--- @field key string The chat id (`ChatHistory.chat_id`)
+--- @field kind? agentic.BufferNames.Kind Required with `sub_id`
+--- @field sub_id? string The `short_key` of a `kind` session's id
+--- @field part? string A `PANELS` value, only `input` with a `subagent` `sub_id`
 
 --- A short key that stands for `id`: the first 8 hex digits of its SHA-256.
 --- @param id string
@@ -35,21 +42,12 @@ end
 function BufferNames.format(parts)
     local name = SCHEME .. parts.key
     if parts.sub_id then
-        name = name .. "/" .. parts.sub_id
+        name = name .. "/" .. parts.kind .. "/" .. parts.sub_id
     end
     if parts.part then
         name = name .. "/" .. parts.part
     end
     return name
-end
-
---- Whether a second segment is a part rather than a subagent's key. No
---- short key (8 hex digits) is a part.
---- @param segment string
---- @return boolean
-local function is_part(segment)
-    return segment == "background"
-        or vim.list_contains(BufferNames.PANELS, segment)
 end
 
 --- Parts of a name `format` makes.
@@ -63,16 +61,16 @@ function BufferNames.parse(name)
     if vim.list_contains(segments, "") then
         return nil
     end
-    local key, second, third = unpack(segments)
+    local key, second, third, fourth = unpack(segments)
     if #segments == 1 then
         return { key = key }
-    elseif #segments == 2 then
-        if is_part(second) then
-            return { key = key, part = second }
-        end
-        return { key = key, sub_id = second }
-    elseif #segments == 3 and third == "input" and not is_part(second) then
-        return { key = key, sub_id = second, part = third }
+    elseif #segments == 2 and vim.list_contains(BufferNames.PANELS, second) then
+        return { key = key, part = second }
+    elseif #segments == 3 and vim.list_contains(KINDS, second) then
+        local kind = second --[[@as agentic.BufferNames.Kind]]
+        return { key = key, kind = kind, sub_id = third }
+    elseif #segments == 4 and second == "subagent" and fourth == "input" then
+        return { key = key, kind = second, sub_id = third, part = fourth }
     end
     return nil
 end

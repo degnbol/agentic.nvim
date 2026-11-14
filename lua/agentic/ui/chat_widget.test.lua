@@ -1155,7 +1155,11 @@ describe("agentic.ui.ChatWidget", function()
         it("names a subagent's buffers by its short key", function()
             local sub = BufferNames.short_key("toolu_01abc")
             assert.equal(
-                "agentic://c" .. last_owner_id .. "/" .. sub .. "/input",
+                "agentic://c"
+                    .. last_owner_id
+                    .. "/subagent/"
+                    .. sub
+                    .. "/input",
                 widget:buffer_name("toolu_01abc", "input")
             )
         end)

@@ -123,6 +123,7 @@ describe("agentic.BackgroundSession", function()
         local opts = vim.tbl_extend("force", {
             provider = "opencode-acp",
             label = "skeptic",
+            kind = "skeptic",
             cwd = vim.fn.getcwd(),
             widget = widget,
             get_config_dir = function()
@@ -207,6 +208,18 @@ describe("agentic.BackgroundSession", function()
         instance_stub:invokes(function() end)
         assert.is_nil(new_session())
         assert.equal(0, #timers)
+    end)
+
+    it("names its transcript under the chat by its kind", function()
+        local session = new_session() --[[@as agentic.BackgroundSession]]
+        create()
+        assert.equal(
+            "agentic://c"
+                .. owner_id
+                .. "/skeptic/"
+                .. require("agentic.utils.buffer_names").short_key("bg-1"),
+            vim.api.nvim_buf_get_name(session.bufnr)
+        )
     end)
 
     it("is no registry session and saves no history", function()

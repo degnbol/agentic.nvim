@@ -851,12 +851,14 @@ function ChatWidget:_create_new_buf(panel, listed)
 end
 
 --- The name of one of the session's buffers.
---- @param sub_id string|nil A subagent's session id, for its transcript or its message input
+--- @param sub_id string|nil The session id of a `kind` session, for its transcript or a subagent's message input
 --- @param part string|nil See `agentic.BufferNames.Parts`
+--- @param kind agentic.BufferNames.Kind|nil Of the `sub_id` session, default `subagent`
 --- @return string
-function ChatWidget:buffer_name(sub_id, part)
+function ChatWidget:buffer_name(sub_id, part, kind)
     return BufferNames.format({
         key = self._name_key,
+        kind = sub_id and (kind or "subagent"),
         sub_id = sub_id and BufferNames.short_key(sub_id),
         part = part,
     })

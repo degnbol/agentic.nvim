@@ -130,6 +130,7 @@ function Skeptic:_start(spec)
         provider = spec.provider,
         model = spec.model,
         label = label,
+        kind = "skeptic",
         cwd = session:cwd(),
         widget = session.widget,
         get_config_dir = function()
