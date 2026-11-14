@@ -460,32 +460,6 @@ function ChatWidget:_track_home(chat)
             end)
         end,
     })
-
-    vim.api.nvim_create_autocmd("QuitPre", {
-        buffer = chat,
-        callback = function()
-            local home = self:home_win()
-            if vim.api.nvim_get_current_win() ~= home then
-                return
-            end
-            local open_panels = self:_open_panels()
-            self:close_panels()
-            -- The home is still open when vim refused the quit (E37, E162).
-            vim.schedule(function()
-                if self:home_win() ~= home then
-                    return
-                end
-                for _, panel in ipairs(open_panels) do
-                    WidgetLayout.open_panel(
-                        self.win_nrs,
-                        self.buf_nrs,
-                        home,
-                        panel
-                    )
-                end
-            end)
-        end,
-    })
 end
 
 function ChatWidget:_initialize()
