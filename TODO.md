@@ -105,6 +105,7 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 
 - P1 [TRACK-token-usage.md](notes/TRACK-token-usage.md): Reduce token usage — reviewed
 - P2 [FEAT-auto-mode-integration.md](notes/FEAT-auto-mode-integration.md): deterministic permission ladder as a PreToolUse hook, classifier as fallback
+- P2 [FEAT-claude-hooks-opencode.md](notes/FEAT-claude-hooks-opencode.md): run Claude command hooks for opencode sessions — reviewed spec
 - P2 [FEAT-skeptic-adversarial-gate.md](notes/FEAT-skeptic-adversarial-gate.md): skeptics attack each other's refutations instead of voting — reviewed spec
 - P2 [FEAT-stale-read-warning.md](notes/FEAT-stale-read-warning.md): stale-read warning on Edit/Write
 - P3 [FEAT-context-usage.md](notes/FEAT-context-usage.md): tell the agent its context usage past a threshold — reviewed spec
@@ -151,6 +152,7 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 - [IDEA-background-processes-window.md](notes/IDEA-background-processes-window.md): background processes window
 - [IDEA-budget-sessions-left.md](notes/IDEA-budget-sessions-left.md): estimate how many sessions the budget has left
 - [IDEA-cross-provider-editing-guidance.md](notes/IDEA-cross-provider-editing-guidance.md): editing guidance for every provider
+- [IDEA-demo.md](notes/IDEA-demo.md): README demos
 - [IDEA-login-service-check.md](notes/IDEA-login-service-check.md): check the provider service before offering a login
 - [IDEA-lsp-rename-tooling.md](notes/IDEA-lsp-rename-tooling.md): LSP rename and lookup tools for the agent
 - [IDEA-permission-arity.md](notes/IDEA-permission-arity.md): permission rules with arity
