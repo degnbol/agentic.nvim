@@ -132,7 +132,8 @@ Priority: P1 large measured cost; P2 moderate; P3 small or speculative.
    descriptions over ~400 B (provider-system, issues, subagents, debug,
    acp, install).
 
-6. P2 **Model and effort routing.** Plan: (to write)
+6. P2 **Model and effort routing.** Plan: review trigger in
+   `FEAT-cross-lab-review.md`; Claude side (to write)
    - Claude side: `model:` and `effort:` frontmatter for mechanical agents
      in `agents/*.md` (learning-reviewer, docstring-reviewer, researcher);
      keep reviewers that judge correctness on the parent model unless

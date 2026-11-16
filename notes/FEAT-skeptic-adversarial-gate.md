@@ -1,7 +1,7 @@
 # Plan: skeptics attack each other's refutations instead of voting
-Status: reviewed spec
+Status: spec
 Priority: P2
-Depends: AUDIT-reviewer-models.md — implement only if an adversarial pair passes its pass mark
+Depends:
 
 ## Relevant files
 - `lua/agentic/skeptic/init.lua` (`_check`, `_verify`, `deliver_text`,
@@ -24,7 +24,11 @@ does not. For the skeptic, the items are the extracted claims and a finding
 is a refutation with evidence.
 
 The cross-check logic knows nothing about claims, so it lives outside
-`skeptic/` for the review trigger to reuse.
+`skeptic/` for the review trigger (`FEAT-cross-lab-review.md`) to reuse.
+There each reviewer writes its own findings, and an attack's other answers
+are shown as counterpoints. So `assign` takes who may attack what, not the
+skeptic's verdicts, and the attack result is each objection's answers, not
+a kept set.
 
 Rules:
 - A refutation needs evidence. A `refuted` verdict with empty evidence is
@@ -41,31 +45,52 @@ Rules:
   attacked. This follows from the rules, with no special case.
 
 ## Changes
-New `lua/agentic/cross_check.lua`:
+`lua/agentic/skeptic/verdicts.lua` and its test move to
+`lua/agentic/cross_check/verdicts.lua`; the types become
+`agentic.CrossCheck.Verdict` and `agentic.CrossCheck.VerdictWord`.
+
+New `lua/agentic/cross_check/init.lua`:
 - `--- @class agentic.CrossCheck.Objection`
   `{ item: integer, checker: integer, evidence: string }`.
 - `CrossCheck.objections(n_items, per_checker): agentic.CrossCheck.Objection[]`:
   each `refuted` verdict with non-empty evidence for items `1..n_items`, in
   item then checker order. `per_checker[i]` is checker `i`'s verdicts by
   item number, or false. Numbers outside `1..n_items` are ignored.
-- `CrossCheck.assign(n_items, per_checker, objections): table<integer, agentic.CrossCheck.Objection[]>`:
-  per checker with verdicts, the objections it attacks (rules above). Only
-  checkers with at least one objection are keys.
-- `CrossCheck.kept(assigned, attack_verdicts): table<agentic.CrossCheck.Objection, true>`:
+- `CrossCheck.assign(objections, stances): table<integer, agentic.CrossCheck.Objection[]>`:
+  `stances[c]` is false for a checker that does not attack, else the set
+  of items it objected to itself (`table<integer, true>`). Checker `c`
+  attacks objection `o` when `stances[c]`, `o.checker ~= c`, and not
+  `stances[c][o.item]`. Only checkers with at least one objection are
+  keys. The skeptic's stances: false for a checker without verdicts, else
+  the items it marked `refuted`, with or without evidence.
+- `CrossCheck.answers(assigned, attack_verdicts): table<agentic.CrossCheck.Objection, table<integer, agentic.CrossCheck.Verdict>>`:
   `attack_verdicts[c]` is checker `c`'s verdicts by the objection's number
-  in `assigned[c]`, or false. The set of objections no attack refuted with
-  evidence. Numbers outside a checker's list are ignored. Keyed by object
-  identity, so the numbering stays inside this function.
+  in `assigned[c]` (from 1, in order), or false. Each assigned objection's
+  answers, keyed by the attacking checker. Unassigned objections are
+  absent; callers read them as `{}`. Numbers outside a checker's list are
+  ignored. Keyed by object identity, so the numbering stays inside this
+  function.
+- `CrossCheck.refuted(answers): boolean`: whether one of `answers` (one
+  objection's value from `answers`, or nil) is `refuted` with non-empty
+  evidence. The one place of the evidence rule for dropping.
+
+`lua/agentic/background_session.lua`:
+- `BackgroundSession.prompt_all(sessions, texts, on_done)`: sends
+  `texts[i]` to `sessions[i]` for `i = 1, #sessions`, in parallel, skipping
+  nil texts. `on_done` gets `results[i] = { text, err }` (the `prompt`
+  callback's arguments), or false for a skipped session, once all
+  answered. The pending count is the number of non-nil texts, set before
+  the loop, since a closed session answers synchronously. With none,
+  `on_done` runs at once.
 
 `lua/agentic/skeptic/init.lua`:
 - `agentic.skeptic.Finding` moves here from `reporting_criteria.lua`,
   unchanged (`{ claim: string, evidence: string[] }`), with the evidence of
   the kept refutations only.
-- New `Skeptic:_ask(agents, texts, on_done)`, extracted from `_verify`: sends
-  `texts[i]` to `agents[i]` in parallel, skipping nil texts, with the
-  generation check and the failure notifies of today. `n_pending` is set
-  before the loop, since a closed session answers synchronously.
-  `on_done(per_agent)` gets each agent's parsed verdicts or false.
+- New `Skeptic:_ask(agents, texts, on_done)`, extracted from `_verify`:
+  `BackgroundSession.prompt_all` over the agents' sessions, with the
+  generation check and the failure notifies of today. `on_done(per_agent)`
+  gets each agent's parsed verdicts or false.
 - `_verify` builds the verify text for each agent and calls `_ask` with a
   copy of `self._agents`, taken before the prompts go out. `on_done` gets
   that copy, so later calls address the same agents after
@@ -74,7 +99,8 @@ New `lua/agentic/cross_check.lua`:
 - `_check`: after `_verify` and the `_checked` bookkeeping (unchanged),
   `CrossCheck.objections` and `CrossCheck.assign`. With no assignment,
   deliver at once. Else `_ask` the copied agents with the `attack` texts,
-  `CrossCheck.kept`, then deliver the claims with a kept objection.
+  `CrossCheck.answers`, then deliver the claims with an objection for which
+  `CrossCheck.refuted` is false.
   `deliver_text` is unchanged.
 
 `lua/agentic/skeptic/prompts.lua`:
@@ -102,7 +128,9 @@ reads "Refusal prompts per skeptic prompt".
   prompt".
 
 Tests:
-- `cross_check.test.lua`: `refuted` without evidence is no objection;
+- `background_session.test.lua`: `prompt_all` answers once all sessions
+  answered, skips nil texts, and answers when a session is closed.
+- `cross_check/init.test.lua`: `refuted` without evidence is no objection;
   numbers out of range ignored, in verify and attack verdicts; an item every
   checker refuted is not assigned; a checker that refuted an item without
   evidence does not attack it; a checker without verdicts does not attack;

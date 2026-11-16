@@ -40,6 +40,7 @@ an `IDEA-` note in `notes/`.
 - **Error display**: `error_display = "chat" | "notify" | "both"`, using
   `vim.notify`, `vim.diagnostic` or a float besides the inline
   `AgenticErrorHeading`/`AgenticErrorBody`.
+- Replace or supplement the "working"/"completed"/ etc. for the agents panel with a glyph, which we already have a system for for tool calls.
 
 ## Input
 
