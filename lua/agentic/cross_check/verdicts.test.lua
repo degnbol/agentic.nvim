@@ -1,9 +1,9 @@
 local assert = require("tests.helpers.assert")
 
-local Verdicts = require("agentic.skeptic.verdicts")
+local Verdicts = require("agentic.cross_check.verdicts")
 
-describe("agentic.skeptic.Verdicts", function()
-    it("reads the verdicts keyed by claim number", function()
+describe("agentic.CrossCheck.Verdicts", function()
+    it("reads the verdicts keyed by item number", function()
         local text = table.concat({
             "Checked both.",
             "```json",

@@ -491,6 +491,39 @@ function BackgroundSession:prompt(text, on_done)
     self:_run_next()
 end
 
+--- `prompt` each session with its text, all at once. `on_done` gets each
+--- session's answer once all answered.
+--- @param sessions agentic.BackgroundSession[]
+--- @param texts table<integer, string> By session index; a session without a text is skipped
+--- @param on_done fun(results: ({ text: string|nil, err: string|nil }|false)[]) The `prompt` answer per session, false for a skipped one
+function BackgroundSession.prompt_all(sessions, texts, on_done)
+    --- @type ({ text: string|nil, err: string|nil }|false)[]
+    local results = {}
+    -- Counted before any prompt: a closed session answers at once.
+    local n_pending = 0
+    for i = 1, #sessions do
+        results[i] = false
+        if texts[i] then
+            n_pending = n_pending + 1
+        end
+    end
+    if n_pending == 0 then
+        on_done(results)
+        return
+    end
+    for i, session in ipairs(sessions) do
+        if texts[i] then
+            session:prompt(texts[i], function(text, err)
+                results[i] = { text = text, err = err }
+                n_pending = n_pending - 1
+                if n_pending == 0 then
+                    on_done(results)
+                end
+            end)
+        end
+    end
+end
+
 function BackgroundSession:_run_next()
     if not self._ready or self._job or #self._jobs == 0 then
         return

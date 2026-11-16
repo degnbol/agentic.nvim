@@ -127,20 +127,35 @@ describe("agentic.skeptic.Skeptic", function()
         background_stub = spy.stub(BackgroundSession, "new")
         background_stub:invokes(function(_self, opts)
             local agent = { opts = opts, prompts = {}, destroyed = false }
+            --- Each prompt is answered once; a closed session answers
+            --- "closed" at once.
             function agent:prompt(text, on_done)
-                table.insert(self.prompts, { text = text, on_done = on_done })
+                local p = { text = text, answered = false }
+                function p.on_done(...)
+                    if not p.answered then
+                        p.answered = true
+                        on_done(...)
+                    end
+                end
+                table.insert(self.prompts, p)
+                if self.destroyed then
+                    p.on_done(nil, "closed")
+                end
             end
-            function agent:destroy()
+            function agent:close()
                 self.destroyed = true
                 for _, p in ipairs(self.prompts) do
                     p.on_done(nil, "closed")
                 end
+            end
+            function agent:destroy()
+                self:close()
                 opts.on_destroy(nil, true)
             end
             --- End the session by itself with `err`, as one that was
             --- `ready` or not.
             function agent:fail(err, ready)
-                self.destroyed = true
+                self:close()
                 opts.on_destroy(err, ready)
             end
             table.insert(agents, agent)
@@ -177,12 +192,19 @@ describe("agentic.skeptic.Skeptic", function()
         })
     end
 
+    --- Answer `agent`'s last prompt with `text`, or fail it with `err`.
+    --- @param agent table
+    --- @param text string|nil
+    --- @param err string|nil
+    local function answer_one(agent, text, err)
+        agent.prompts[#agent.prompts].on_done(text, err)
+    end
+
     --- Answer every skeptic's last prompt with `replies[i]`.
     --- @param replies string[]
     local function answer(replies)
         for i, agent in ipairs(agents) do
-            local p = agent.prompts[#agent.prompts]
-            p.on_done(replies[i], nil)
+            answer_one(agent, replies[i])
         end
     end
 
@@ -240,11 +262,14 @@ describe("agentic.skeptic.Skeptic", function()
             )
         )
         answer({
-            reply(1, "refuted") .. "\n",
+            '```json\n[{"claim": 1, "verdict": "refuted", "evidence": "e1"},'
+                .. ' {"claim": 2, "verdict": "supported"}]\n```',
             '```json\n[{"claim": 1, "verdict": "refuted", "evidence": "f1"},'
-                .. ' {"claim": 2, "verdict": "refuted", "evidence": "f2"}]\n```',
+                .. ' {"claim": 2, "verdict": "supported"}]\n```',
         })
 
+        assert.equal(1, #agents[1].prompts)
+        assert.equal(1, #agents[2].prompts)
         assert.equal(1, #session.sent)
         assert.equal("skeptic", session.sent[1].author)
         local text = session.sent[1].text
@@ -253,14 +278,137 @@ describe("agentic.skeptic.Skeptic", function()
         assert.is_nil(text:find("y is 1", 1, true))
     end)
 
-    it("sends nothing when no claim meets the reporting criteria", function()
+    it("does not forward a refutation without evidence", function()
         local _, session = enabled_skeptic()
         end_turn(session, add_prompt(session, "go"))
         extracts[1].on_done({ "a" }, nil)
 
-        answer({ reply(1, "refuted"), reply(1, "supported") })
+        local bare = '```json\n[{"claim": 1, "verdict": "refuted"}]\n```'
+        answer({ bare, bare })
 
         assert.equal(0, #session.sent)
+    end)
+
+    describe("an attack", function()
+        --- A check of claim `a` that the first skeptic refuted and the
+        --- second, which supported it, now attacks.
+        --- @return agentic.skeptic.Skeptic skeptic
+        --- @return table session
+        local function attacking()
+            local skeptic, session = enabled_skeptic()
+            end_turn(session, add_prompt(session, "go"))
+            extracts[1].on_done({ "a" }, nil)
+            answer({ reply(1, "refuted"), reply(1, "supported") })
+            return skeptic, session
+        end
+
+        it("goes to the other skeptic only", function()
+            attacking()
+
+            assert.equal(1, #agents[1].prompts)
+            assert.truthy(
+                agents[2].prompts[2].text:find(
+                    'Objection 1: "a" is wrong, because e1',
+                    1,
+                    true
+                )
+            )
+        end)
+
+        it("refuting with evidence drops the claim", function()
+            local _, session = attacking()
+
+            answer_one(agents[2], reply(1, "refuted"))
+
+            assert.equal(0, #session.sent)
+        end)
+
+        it("unsure delivers the claim as without an attack", function()
+            local _, session = attacking()
+
+            answer_one(agents[2], reply(1, "unsure"))
+
+            assert.equal(1, #session.sent)
+            assert.truthy(session.sent[1].text:find("1. a\n   - e1", 1, true))
+        end)
+
+        it("that fails drops nothing, with a notify", function()
+            local _, session = attacking()
+
+            answer_one(agents[2], nil, "timeout")
+
+            assert.equal(1, #session.sent)
+            assert.equal(1, notify_stub.call_count)
+        end)
+
+        it("is dropped with its delivery on disable", function()
+            local skeptic, session = attacking()
+
+            skeptic:disable()
+
+            assert.equal(0, #session.sent)
+            assert.equal(0, notify_stub.call_count)
+        end)
+
+        it("is dropped with its delivery on a session change", function()
+            local _, session = attacking()
+
+            session:emit("session_changed", { continued = false })
+
+            assert.equal(0, #session.sent)
+            assert.equal(0, notify_stub.call_count)
+        end)
+
+        it("is not sent by a skeptic that refuted without evidence", function()
+            local _, session = enabled_skeptic()
+            end_turn(session, add_prompt(session, "go"))
+            extracts[1].on_done({ "a" }, nil)
+
+            answer({
+                reply(1, "refuted"),
+                '```json\n[{"claim": 1, "verdict": "refuted"}]\n```',
+            })
+
+            assert.equal(1, #agents[2].prompts)
+            assert.equal(1, #session.sent)
+        end)
+
+        it("drops only the evidence of the objection it refutes", function()
+            local original = Config.skeptic.skeptics
+            Config.skeptic.skeptics = vim.list_extend(
+                vim.list_slice(original),
+                { { provider = "opencode-acp", model = "litellm/third" } }
+            )
+            MiniTest.finally(function()
+                Config.skeptic.skeptics = original
+            end)
+            local _, session = enabled_skeptic()
+            end_turn(session, add_prompt(session, "go"))
+            extracts[1].on_done({ "a" }, nil)
+            answer({
+                reply(1, "refuted"),
+                '```json\n[{"claim": 1, "verdict": "refuted", "evidence": "f1"}]\n```',
+                reply(1, "supported"),
+            })
+
+            answer_one(agents[3], reply(1, "refuted"))
+
+            assert.equal(1, #session.sent)
+            local text = session.sent[1].text
+            assert.truthy(text:find("1. a\n   - f1", 1, true))
+            assert.is_nil(text:find("e1", 1, true))
+        end)
+
+        it("delays the check of a turn that ends meanwhile", function()
+            local _, session = attacking()
+            end_turn(session, add_prompt(session, "two"))
+            assert.equal(1, #extracts)
+
+            answer_one(agents[2], reply(1, "unsure"))
+
+            assert.equal(1, #session.sent)
+            assert.equal(2, #extracts)
+        end)
     end)
 
     it("stops at an extraction with no claims", function()
@@ -517,6 +665,21 @@ describe("agentic.skeptic.Skeptic", function()
                 end, skeptic._agents)
             )
             assert.is_true(skeptic._enabled)
+        end)
+
+        it("is still the one a running check attacks with", function()
+            local _, session = enabled_skeptic()
+            end_turn(session, add_prompt(session, "go"))
+            extracts[1].on_done({ "a" }, nil)
+            answer_one(agents[2], reply(1, "supported"))
+            agents[2]:fail("disconnected", true)
+            deferred.drain()
+
+            answer_one(agents[1], reply(1, "refuted"))
+
+            assert.equal(2, #agents[2].prompts)
+            assert.equal(0, #agents[3].prompts)
+            assert.equal(1, #session.sent)
         end)
 
         it("is not started again after off", function()

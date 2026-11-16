@@ -154,8 +154,8 @@ Priority: P1 large measured cost; P2 moderate; P3 small or speculative.
      (falsifiable; an attack with evidence drops it) or a suggestion (an
      opinion; an attack only adds a counterpoint, never drops it). The
      skeptic is unsolicited and raises only defects with evidence; a review
-     is requested and raises both kinds. Skeptic side:
-     `FEAT-skeptic-adversarial-gate.md`. The plan decides:
+     is requested and raises both kinds. Skeptic side: done, on
+     `lua/agentic/cross_check/`. The plan decides:
      - Trigger: how the main agent asks for it (a tool the plugin exposes,
        a slash command, or a request file the plugin watches).
      - Channel: in-process (as skeptic) or markdown files in a cache dir

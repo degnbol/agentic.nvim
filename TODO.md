@@ -49,10 +49,6 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 1. P2 [FIX-opencode-child-title-prefix.md](notes/FIX-opencode-child-title-prefix.md): opencode child-call titles without the subagent prefix — reviewed spec
 2. P2 [FEAT-opencode-subagent-transcripts.md](notes/FEAT-opencode-subagent-transcripts.md): opencode subagents in their own transcripts — reviewed spec (after 1)
 
-**the main agent asks two models from different labs for a review**
-1. P2 [FEAT-skeptic-adversarial-gate.md](notes/FEAT-skeptic-adversarial-gate.md): skeptics attack each other's refutations instead of voting — spec
-2. P2 [FEAT-cross-lab-review.md](notes/FEAT-cross-lab-review.md): the main agent asks two models from different labs for a review — reviewed spec (after 1)
-
 **one approve walk; the tally is that walk with no effects pinned**
 1. P3 [REFACTOR-leaf-classification.md](notes/REFACTOR-leaf-classification.md): one structured classification and one leaf front per command leaf — spec
 2. P3 [REFACTOR-redirect-effect.md](notes/REFACTOR-redirect-effect.md): one classifier for what a file redirect does — spec
@@ -110,6 +106,7 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 - P1 [TRACK-token-usage.md](notes/TRACK-token-usage.md): Reduce token usage — reviewed
 - P2 [FEAT-auto-mode-integration.md](notes/FEAT-auto-mode-integration.md): deterministic permission ladder as a PreToolUse hook, classifier as fallback
 - P2 [FEAT-claude-hooks-opencode.md](notes/FEAT-claude-hooks-opencode.md): run Claude command hooks for opencode sessions — reviewed spec
+- P2 [FEAT-cross-lab-review.md](notes/FEAT-cross-lab-review.md): the main agent asks two models from different labs for a review — reviewed spec
 - P2 [FEAT-stale-read-warning.md](notes/FEAT-stale-read-warning.md): stale-read warning on Edit/Write
 - P3 [FEAT-context-usage.md](notes/FEAT-context-usage.md): tell the agent its context usage past a threshold — reviewed spec
 - P3 [FEAT-diff-line-numbers.md](notes/FEAT-diff-line-numbers.md): line numbers in Edit tool diff previews

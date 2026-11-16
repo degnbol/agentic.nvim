@@ -5,18 +5,84 @@
 local BackgroundSession = require("agentic.background_session")
 local Claims = require("agentic.skeptic.claims")
 local Config = require("agentic.config")
+local CrossCheck = require("agentic.cross_check")
 local Logger = require("agentic.utils.logger")
 local Prompts = require("agentic.skeptic.prompts")
-local ReportingCriteria = require("agentic.skeptic.reporting_criteria")
 local SessionManager = require("agentic.session_manager")
 local SessionRegistry = require("agentic.session_registry")
 local TextModel = require("agentic.utils.text_model")
 local TextWrap = require("agentic.utils.text_wrap")
 local Turn = require("agentic.skeptic.turn")
-local Verdicts = require("agentic.skeptic.verdicts")
+local Verdicts = require("agentic.cross_check.verdicts")
 
 --- The author of the skeptic's prompts, a key of `Glyphs.AUTHOR`.
 local AUTHOR = "skeptic"
+
+--- A claim, with the evidence of each refutation of it that stood.
+--- @class agentic.skeptic.Finding
+--- @field claim string
+--- @field evidence string[]
+
+--- Each skeptic's claims it marked `refuted`, with or without evidence.
+--- False for one that gave no verdicts.
+--- @param per_agent (table<integer, agentic.CrossCheck.Verdict>|false)[]
+--- @return (table<integer, true>|false)[]
+local function stances(per_agent)
+    local refuted = {}
+    for i, verdicts in ipairs(per_agent) do
+        refuted[i] = false
+        if verdicts then
+            refuted[i] = {}
+            for claim, verdict in pairs(verdicts) do
+                if verdict.verdict == "refuted" then
+                    refuted[i][claim] = true
+                end
+            end
+        end
+    end
+    return refuted
+end
+
+--- The `attack` prompt of `objections`, numbered from 1.
+--- @param claims string[]
+--- @param objections agentic.CrossCheck.Objection[]
+--- @return string
+local function attack_text(claims, objections)
+    local items = {}
+    for i, objection in ipairs(objections) do
+        items[i] = ('Objection %d: "%s" is wrong, because %s'):format(
+            i,
+            claims[objection.item],
+            objection.evidence
+        )
+    end
+    return Prompts.text("attack"):format(table.concat(items, "\n\n"))
+end
+
+--- The claims with an objection no attack refuted, in claim order, each with
+--- the evidence of those objections.
+--- @param claims string[]
+--- @param objections agentic.CrossCheck.Objection[] In claim order
+--- @param answers table<agentic.CrossCheck.Objection, table<integer, agentic.CrossCheck.Verdict>> Each objection's attack verdicts, by attacking skeptic
+--- @return agentic.skeptic.Finding[]
+local function findings_of(claims, objections, answers)
+    --- @type agentic.skeptic.Finding[]
+    local findings = {}
+    --- @type table<integer, agentic.skeptic.Finding>
+    local by_claim = {}
+    for _, objection in ipairs(objections) do
+        if not CrossCheck.refuted(answers[objection]) then
+            local finding = by_claim[objection.item]
+            if not finding then
+                finding = { claim = claims[objection.item], evidence = {} }
+                by_claim[objection.item] = finding
+                table.insert(findings, finding)
+            end
+            table.insert(finding.evidence, objection.evidence)
+        end
+    end
+    return findings
+end
 
 --- The `deliver` prompt of `findings`: each claim numbered, with the
 --- skeptics' evidence under it.
@@ -313,24 +379,33 @@ function Skeptic:_check(turn)
             self:_finish()
             return
         end
-        self:_verify(turn, claims, function(per_skeptic)
+        self:_verify(turn, claims, function(agents, per_agent)
             for i, claim in ipairs(claims) do
-                for _, verdicts in ipairs(per_skeptic) do
+                for _, verdicts in ipairs(per_agent) do
                     if verdicts and verdicts[i] then
                         table.insert(self._checked, claim)
                         break
                     end
                 end
             end
-            local findings = ReportingCriteria.findings(
-                claims,
-                per_skeptic,
-                Config.skeptic.reporting_criteria
-            )
-            if #findings > 0 then
-                self:_deliver(deliver_text(findings))
+            local objections = CrossCheck.objections(#claims, per_agent)
+            local assigned = CrossCheck.assign(objections, stances(per_agent))
+            --- @type table<integer, string>
+            local texts = {}
+            for i, assigned_objections in pairs(assigned) do
+                texts[i] = attack_text(claims, assigned_objections)
             end
-            self:_finish()
+            self:_ask(agents, texts, function(attack_verdicts)
+                local findings = findings_of(
+                    claims,
+                    objections,
+                    CrossCheck.answers(assigned, attack_verdicts)
+                )
+                if #findings > 0 then
+                    self:_deliver(deliver_text(findings))
+                end
+                self:_finish()
+            end)
         end)
     end)
 end
@@ -345,47 +420,70 @@ function Skeptic:_finish()
     end
 end
 
---- Ask every skeptic agent for verdicts on `claims`. `on_done` gets each
---- agent's verdicts, false for one that failed or gave none, once all
---- answered, unless the check was dropped meanwhile.
+--- Ask every skeptic agent for verdicts on `claims`. `on_done` gets the
+--- agents asked and each agent's verdicts once all answered, unless the
+--- check was dropped meanwhile. A later change to `self._agents` does not
+--- change the agents asked.
 --- @param turn agentic.skeptic.Turn
 --- @param claims string[]
---- @param on_done fun(per_skeptic: (table<integer, agentic.skeptic.Verdict>|false)[])
+--- @param on_done fun(agents: agentic.skeptic.Agent[], per_agent: (table<integer, agentic.CrossCheck.Verdict>|false)[]) False for an agent that failed or gave no verdicts
 function Skeptic:_verify(turn, claims, on_done)
     local text = Prompts.text("verify"):format(Prompts.join({
         Prompts.section("User prompts", turn.prompts),
         Prompts.section("Claims", Prompts.numbered(claims)),
         Prompts.section("Diffs", turn.diffs),
     }))
-    local agents = self._agents
-    local generation = self._generation
-    --- @type (table<integer, agentic.skeptic.Verdict>|false)[]
-    local per_skeptic = {}
-    local n_pending = #agents
-    for i, agent in ipairs(agents) do
-        agent.session:prompt(text, function(reply, err)
-            if generation ~= self._generation then
-                return
-            end
-            local verdicts = reply and Verdicts.parse(reply)
-            if not reply then
-                Logger.notify(
-                    ("Skeptic %q failed: %s"):format(agent.label, tostring(err)),
-                    vim.log.levels.WARN
-                )
-            elseif not verdicts then
-                Logger.notify(
-                    ("Skeptic %q gave no verdicts"):format(agent.label),
-                    vim.log.levels.WARN
-                )
-            end
-            per_skeptic[i] = verdicts or false
-            n_pending = n_pending - 1
-            if n_pending == 0 then
-                on_done(per_skeptic)
-            end
-        end)
+    local agents = vim.list_slice(self._agents)
+    local texts = {}
+    for i = 1, #agents do
+        texts[i] = text
     end
+    self:_ask(agents, texts, function(per_agent)
+        on_done(agents, per_agent)
+    end)
+end
+
+--- Prompt `agents[i]` with `texts[i]`, skipping an agent without a text.
+--- `on_done` gets each agent's verdicts once all answered, unless the check
+--- was dropped meanwhile. The user gets a warning for an agent that failed
+--- or gave no verdicts.
+--- @param agents agentic.skeptic.Agent[]
+--- @param texts table<integer, string>
+--- @param on_done fun(per_agent: (table<integer, agentic.CrossCheck.Verdict>|false)[]) False for an agent skipped, failed or without verdicts
+function Skeptic:_ask(agents, texts, on_done)
+    local generation = self._generation
+    local sessions = vim.tbl_map(function(agent)
+        return agent.session
+    end, agents)
+    BackgroundSession.prompt_all(sessions, texts, function(results)
+        if generation ~= self._generation then
+            return
+        end
+        --- @type (table<integer, agentic.CrossCheck.Verdict>|false)[]
+        local per_agent = {}
+        for i, result in ipairs(results) do
+            local label = agents[i].label
+            local verdicts = result
+                and result.text
+                and Verdicts.parse(result.text)
+            if result and not result.text then
+                Logger.notify(
+                    ("Skeptic %q failed: %s"):format(
+                        label,
+                        tostring(result.err)
+                    ),
+                    vim.log.levels.WARN
+                )
+            elseif result and not verdicts then
+                Logger.notify(
+                    ("Skeptic %q gave no verdicts"):format(label),
+                    vim.log.levels.WARN
+                )
+            end
+            per_agent[i] = verdicts or false
+        end
+        on_done(per_agent)
+    end)
 end
 
 --- Send `text` to the main session as the skeptic, or keep it for the next

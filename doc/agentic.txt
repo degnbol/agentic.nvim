@@ -1314,10 +1314,11 @@ a call that stops a background job, it jumps to that job's block.
 9.9 SKEPTIC                                                  *agentic-skeptic*
 
 After each turn that ends normally, skeptic agents on other models check the
-claims the main agent made in it, read-only. Claims the skeptics refute, as
-`reporting_criteria` sets, go to the main agent as one prompt marked with the
-skeptic's sign. A skeptic's prompt is not checked again. A stopped or failed
-turn is checked with the next turn that ends normally.
+claims the main agent made in it, read-only. Claims a skeptic refutes with
+evidence go to the main agent as one prompt marked with the skeptic's sign,
+unless another skeptic shows with evidence that the refutation is wrong. A
+skeptic's prompt is not checked again. A stopped or failed turn is checked
+with the next turn that ends normally.
 
 Each skeptic has a transcript, opened like a subagent's (|agentic-subagents|).
 A skeptic agent whose provider disconnects is started again; one that fails
@@ -1334,9 +1335,6 @@ Requires:
 `skeptic` table:
     `enabled`             boolean (default: false)
         On in every new session.
-    `reporting_criteria`  "agree" | "either" (default: "agree")
-        "agree" forwards a claim every skeptic refuted, "either" one any
-        skeptic refuted with evidence.
     `extractor`           table
         `model` is the `text_model` model that extracts the claims.
         `reasoning_effort` (default: "none") is sent as the request's
@@ -1346,10 +1344,10 @@ Requires:
     `turn_timeout_ms`     integer (default: 300000)
         Per skeptic turn, and for a skeptic to start.
     `max_refusals`        integer (default: 3)
-        Refusal prompts per check before a skeptic gives up.
+        Refusal prompts per skeptic prompt before a skeptic gives up.
     `prompts`             table (default: `{}`)
         Texts that replace the defaults in `lua/agentic/skeptic/prompts.lua`,
-        keyed `extract`, `verify`, `deliver` or `refusal`.
+        keyed `extract`, `verify`, `attack`, `deliver` or `refusal`.
 
 ==============================================================================
 10. HIGHLIGHT GROUPS                                      *agentic-highlights*

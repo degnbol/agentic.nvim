@@ -613,6 +613,63 @@ describe("agentic.BackgroundSession", function()
         end)
     end)
 
+    describe("prompt_all", function()
+        --- A stand-in session that records its prompts.
+        --- @return table session
+        local function fake()
+            local session = { prompts = {} }
+            function session:prompt(text, on_done)
+                table.insert(self.prompts, { text = text, on_done = on_done })
+            end
+            return session
+        end
+
+        it("answers once every prompted session answered", function()
+            local a, b, c = fake(), fake(), fake()
+            local results
+
+            BackgroundSession.prompt_all(
+                { a, b, c },
+                { "x", nil, "z" },
+                function(r)
+                    results = r
+                end
+            )
+            a.prompts[1].on_done("ax", nil)
+            assert.is_nil(results)
+            c.prompts[1].on_done(nil, "timeout")
+
+            assert.equal("x", a.prompts[1].text)
+            assert.equal(0, #b.prompts)
+            assert.same(
+                { { text = "ax" }, false, { err = "timeout" } },
+                results
+            )
+        end)
+
+        it("answers at once without texts", function()
+            local results
+
+            BackgroundSession.prompt_all({ fake() }, {}, function(r)
+                results = r
+            end)
+
+            assert.same({ false }, results)
+        end)
+
+        it("answers when a session is closed", function()
+            local closed = new_session() --[[@as agentic.BackgroundSession]]
+            closed:destroy()
+            local results
+
+            BackgroundSession.prompt_all({ closed }, { "x" }, function(r)
+                results = r
+            end)
+
+            assert.same({ { err = "closed" } }, results)
+        end)
+    end)
+
     describe("transcript", function()
         --- @type agentic.BackgroundSession
         local session
