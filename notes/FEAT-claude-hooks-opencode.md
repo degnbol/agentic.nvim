@@ -30,7 +30,7 @@ hooks for opencode sessions, and the TS copy can go.
 ### What the user's hooks use
 - Outputs: exit 2 with stderr; `permissionDecision: "deny"`; `additionalContext`.
   A deny from `lib/core.zsh` (`_emit_context`) carries a fixed
-  `permissionDecisionReason` ("Blocked by a hook; reasons in the hook context.")
+  `permissionDecisionReason` ("Blocked by hook.")
   and puts the reasons in `additionalContext` beside it. No hook uses `allow`,
   `ask`, `updatedInput` or `continue: false`.
 - Handler fields: `if` as `Skill(<name>)` and `Write(<path>)`; `once: true`
