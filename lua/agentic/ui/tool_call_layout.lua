@@ -140,7 +140,8 @@ local CODE_KINDS = {
 --- lives in the sign column, so the heading text is only the informative
 --- content (filename / description / command) that treesitter-context pins as a
 --- breadcrumb. A `CODE_KINDS` name is wrapped whole in a code span. A prose
---- name has each word guarded that holds a markdown-special character.
+--- name has each word guarded that holds a markdown-special character. A
+--- newline in `name` shows as a literal `\n`, so the heading stays one row.
 ---
 --- An empty `name` yields a bare `###` — used before the argument has streamed
 --- in, for execute calls with no model description, and for search calls with
@@ -163,6 +164,7 @@ local function collapsed_header(kind, name, wrap_width, truncate)
     if name == "" then
         return "###"
     end
+    name = name:gsub("\n", "\\n")
     local width = truncate and (wrap_width > 0 and wrap_width or 80) - #"### "
         or math.huge
     return "### "
@@ -440,7 +442,7 @@ end
 
 --- @type agentic.ui.ToolCallLayout.Builder
 local function default_head(call)
-    local name = call.argument:gsub("\n", "\\n")
+    local name = call.argument
     if name ~= "" and call.head_line then
         name = name .. ":" .. call.head_line
     end
@@ -541,8 +543,7 @@ local HEADS = {
     -- Fetch argument is "URL prompt" — show only the URL. The prompt is
     -- repeated in the body (model instructions to itself).
     fetch = function(call)
-        local name = call.argument:match("^(%S+)")
-            or call.argument:gsub("\n", "\\n")
+        local name = call.argument:match("^(%S+)") or call.argument
         return {
             {
                 rows = {

@@ -802,6 +802,12 @@ describe("agentic.ui.ToolCallLayout", function()
             assert.equal("rg -n foo lua/", lines[3])
         end)
 
+        it("escapes a newline in a multi-line pattern", function()
+            local lines = search_lines("foo\n|bar", 80)
+
+            assert.equal("### `foo\\n|bar`", lines[1])
+        end)
+
         it("leaves a search block without a pattern bare", function()
             local lines = search_lines(nil, 80)
 
