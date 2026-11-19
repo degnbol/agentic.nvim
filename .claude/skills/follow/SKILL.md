@@ -35,7 +35,9 @@ The user's motion changes the mode, never the window's position:
 (`_views[win]`), for keys and mouse alike: rows of text from the topline to
 the end, and the cursor line. Up takes control; the cursor moving onto the
 last line (or a closed fold ending there), or the view down with the last
-line in view, hands it back. Besides, `go_to_bottom` (`<localLeader>G`),
+line in view, hands it back. `_own_change` moves the cursor of a window in
+user control off the last line where it can without scrolling, so a later
+move onto it (`G`, mapped or not) is a motion. Besides, `go_to_bottom` (`<localLeader>G`),
 `resume_follow` (submit) and `follow_in` (a permission open key) hand windows
 back, and a pin
 that held the view short of the last line (`_pin_held`) puts its window in

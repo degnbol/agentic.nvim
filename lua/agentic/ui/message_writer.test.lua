@@ -2803,7 +2803,7 @@ describe("agentic.ui.MessageWriter", function()
         )
 
         it(
-            "a view move up with the cursor kept on the last line puts the window in user control",
+            "a view move up with the cursor kept on the last line puts the window in user control, and G follows again",
             function()
                 start_at({ topline = 32, lnum = 50 })
 
@@ -2811,6 +2811,45 @@ describe("agentic.ui.MessageWriter", function()
                 writer:on_view_change(winid, false)
 
                 assert.is_true(writer._user_controlled[winid])
+                assert.equal(49, vim.api.nvim_win_get_cursor(winid)[1])
+
+                vim.api.nvim_win_call(winid, function()
+                    vim.cmd("normal! G")
+                end)
+                writer:on_view_change(winid, false)
+
+                assert.is_nil(writer._user_controlled[winid])
+            end
+        )
+
+        it(
+            "a write that makes the cursor line the last moves it off in user control",
+            function()
+                writer._user_controlled[winid] = true
+                start_at({ topline = 31, lnum = 49 })
+
+                writer:_own_change(function()
+                    vim.api.nvim_buf_set_lines(bufnr, 49, 50, false, {})
+                end)
+
+                assert.equal(48, vim.api.nvim_win_get_cursor(winid)[1])
+            end
+        )
+
+        it(
+            "a view move up on a closed fold that ends on the last line moves the cursor above it",
+            function()
+                vim.api.nvim_win_call(winid, function()
+                    vim.wo.foldmethod = "manual"
+                    vim.cmd("45,50fold")
+                end)
+                start_at({ topline = 27, lnum = 45 })
+
+                move({ topline = 26, lnum = 45 })
+                writer:on_view_change(winid, false)
+
+                assert.is_true(writer._user_controlled[winid])
+                assert.equal(44, vim.api.nvim_win_get_cursor(winid)[1])
             end
         )
 

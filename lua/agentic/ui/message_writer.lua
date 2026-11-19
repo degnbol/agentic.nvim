@@ -664,7 +664,45 @@ function MessageWriter:on_view_change(winid, resized)
     elseif up then
         self._user_controlled[winid] = true
         self._newly_shown[winid] = nil
+        self:_own_change(function() end)
     end
+end
+
+--- Move the cursor of `winid` off the last line (or a closed fold that ends
+--- there) to `BufHelpers.drawn_line_above`, so that a later move onto the
+--- last line (`G`, mapped or not) is a motion. Not where the move would
+--- scroll the view ('scrolloff'), nor in a window with a Visual selection.
+--- @param winid integer A window showing the buffer
+function MessageWriter:_cursor_off_last_line(winid)
+    if
+        winid == vim.api.nvim_get_current_win()
+        and vim.api.nvim_get_mode().mode:find("^[vV\22]")
+    then
+        return
+    end
+    vim.api.nvim_win_call(winid, function()
+        local last = vim.api.nvim_buf_line_count(self.bufnr)
+        local lnum = vim.api.nvim_win_get_cursor(winid)[1]
+        if math.max(lnum, vim.fn.foldclosedend(lnum)) ~= last then
+            return
+        end
+        local above = BufHelpers.drawn_line_above(winid, lnum)
+        local topline = vim.fn.line("w0")
+        if not above or above < topline then
+            return
+        end
+        local rows_above = vim.api.nvim_win_text_height(winid, {
+            start_row = topline - 1,
+            end_row = above - 1,
+        }).all - vim.api.nvim_win_text_height(winid, {
+            start_row = above - 1,
+            end_row = above - 1,
+        }).all
+        if topline > 1 and rows_above < vim.wo[winid].scrolloff then
+            return
+        end
+        vim.api.nvim_win_set_cursor(winid, { above, 0 })
+    end)
 end
 
 --- Put `winid` in following, with its cursor on the last line and that line
@@ -681,14 +719,18 @@ function MessageWriter:go_to_bottom(winid)
     end)
 end
 
---- Run `fn` and record the view it leaves in each window showing the buffer,
---- so the view events it causes read as no motion.
+--- Run `fn`, move the cursor of each window in user control off the last line
+--- (`_cursor_off_last_line`), and record the view this leaves in each window
+--- showing the buffer, so the view events it causes read as no motion.
 --- @generic T
 --- @param fn fun(): T|nil
 --- @return T|nil result What `fn` returned
 function MessageWriter:_own_change(fn)
     local result = fn()
     for _, winid in ipairs(vim.fn.win_findbuf(self.bufnr)) do
+        if self._user_controlled[winid] then
+            self:_cursor_off_last_line(winid)
+        end
         self._views[winid] = view_of(winid)
     end
     return result

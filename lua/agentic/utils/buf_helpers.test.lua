@@ -1022,6 +1022,71 @@ describe("BufHelpers", function()
         end)
     end)
 
+    describe("drawn_line_above", function()
+        --- @type integer
+        local bufnr
+        --- @type integer
+        local winid
+
+        before_each(function()
+            bufnr = vim.api.nvim_create_buf(false, true)
+            local lines = {}
+            for i = 1, 20 do
+                lines[i] = "line " .. i
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            winid = vim.api.nvim_open_win(bufnr, true, {
+                relative = "editor",
+                width = 40,
+                height = 10,
+                row = 0,
+                col = 0,
+            })
+            vim.wo[winid].conceallevel = 2
+            vim.wo[winid].foldmethod = "manual"
+        end)
+
+        after_each(function()
+            vim.api.nvim_win_close(winid, true)
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        it("is the line above", function()
+            assert.equal(19, BufHelpers.drawn_line_above(winid, 20))
+        end)
+
+        it("passes over zero-height lines", function()
+            local ns = vim.api.nvim_create_namespace("buf_helpers_test")
+            for _, row in ipairs({ 17, 18 }) do
+                vim.api.nvim_buf_set_extmark(bufnr, ns, row, 0, {
+                    conceal_lines = "",
+                })
+            end
+
+            assert.equal(17, BufHelpers.drawn_line_above(winid, 20))
+        end)
+
+        it("is the start of a closed fold above", function()
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd("15,19fold")
+            end)
+
+            assert.equal(15, BufHelpers.drawn_line_above(winid, 20))
+        end)
+
+        it("starts above the closed fold `lnum` is in", function()
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd("15,20fold")
+            end)
+
+            assert.equal(14, BufHelpers.drawn_line_above(winid, 20))
+        end)
+
+        it("is nil above the first line", function()
+            assert.is_nil(BufHelpers.drawn_line_above(winid, 1))
+        end)
+    end)
+
     describe("scroll_lines", function()
         --- @type integer
         local bufnr

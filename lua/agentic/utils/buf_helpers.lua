@@ -771,6 +771,27 @@ function BufHelpers.fitting_cursor_line(winid, topline)
     end)
 end
 
+--- The nearest line above `lnum` (above its closed fold, if in one) that
+--- `winid` draws, at the start of its closed fold if in one.
+--- @param winid integer
+--- @param lnum integer 1-indexed
+--- @return integer|nil lnum 1-indexed; nil when every line above is zero-height
+function BufHelpers.drawn_line_above(winid, lnum)
+    return vim.api.nvim_win_call(winid, function()
+        local start = vim.fn.foldclosed(lnum)
+        local above = (start > 0 and start or lnum) - 1
+        while above >= 1 do
+            local fold_start = vim.fn.foldclosed(above)
+            above = fold_start > 0 and fold_start or above
+            if screen_rows(winid, above, above, 1) > 0 then
+                return above
+            end
+            above = above - 1
+        end
+        return nil
+    end)
+end
+
 --- Scroll `winid` by `count` lines (screen rows with 'smoothscroll') as
 --- `<C-e>` (positive) or `<C-y>`
 --- (negative) do. Before and after the scroll, the cursor moves to
