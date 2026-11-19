@@ -134,14 +134,14 @@ the fence is set per kind:
 | Execute body | `console`, or `console-fold` past one row | A body that arrives as one fenced block is unwrapped by `CanonicalToolCall.normalise` |
 | Execute body with `output_file` | unfenced path row, then `console` over the tail | No fold in the block, command fence included: a tail re-render would reopen a fold the user closed (`command_fold_state`) |
 | Search body | `console`, or `console-fold` past one row | `console` prevents markdown parsing of `--`, `*` |
-| Prose body (`prose_section`) | `markdown-fold` (multi-line) or `markdown` | Dimmed (sidecar) via `set_dim_range` (`AgenticDimmedBlock`) |
+| Prose body (`prose_section`) | `markdown-fold` past one drawn row, or `markdown` | Dimmed (sidecar) via `set_dim_range` (`AgenticDimmedBlock`) |
 | Generic and todowrite body | `json`, `markdown` (flat JSON table) or `console`, `-fold` past `other_max_lines` | todowrite folds closed past one row; not dimmed |
 | Diff content (edit/write/create) | `text`, `text-fold` past one row; `text-foldnext` when failed with a reason | Fold `open`, or `closed` when the edit failed or a created file exceeds `create_max_lines`. Highlighting via `block_col_hl` extmarks, language inferred from the path (contents only as a fallback for extensionless files). Never prose-wrapped (rendered faithfully to file, including markdown) |
 | Failure reason | `console`, or `console-fold` past one row (closed) | Dimmed. Replaces the kind-specific body when `status == "failed"` — **except edits**, which keep the diff and append the reason beneath it, and execute, which shows it as output |
-| Rejected call (`CanonicalToolCall.rejection_line` set) | command or diff fence `<lang>-foldfence` (closed); then `console`, or `console-fold` with agent text (closed) | Replaces every kind's body. The reason section is titled: its first row is the rejection line, the rest the text the agent was sent |
+| Rejected call (`CanonicalToolCall.rejection_line` set) | command or diff fence `<lang>-foldnext` (closed); then `console`, or `console-fold` with agent text (closed) | Replaces every kind's body. The reason section is titled: its first row is the rejection line, the rest the text the agent was sent |
 
 `injections.scm` strips a trailing
-`-fold`, `-foldnext` or `-foldfence` before resolving the injected parser (so sidecar markdown still
+`-fold` or `-foldnext` before resolving the injected parser (so sidecar markdown still
 highlights). A `text` label names no parser, so it is never injected — an
 injected zsh diff can hang the editor (`ZshParseGuard`).
 
@@ -154,16 +154,14 @@ in the chat, `Treesitter.code_block_rows` for rows inside a block, or
 
 A fold marker on the fence language is the only fold trigger — and, because
 levels come from the root tree alone, the chat buffer's only fold source at
-all. Three variants:
+all. Two variants:
 
 - `<lang>-fold` (sidecar bodies past their threshold, thought runs via
   `_append_collapsed_region`, hook output and discovered skills via
   `_place_collapsed_region`, edit diffs) folds its content.
-- `<lang>-foldnext` (execute and search commands, failed edits) folds through
-  the `console`/`console-fold` fence after it; the output's own fold nests
-  inside.
-- `<lang>-foldfence` (a rejected call's command or diff) folds through its own
-  closing fence row, so a one-row body still forms a fold that closes.
+- `<lang>-foldnext` (execute and search commands, failed edits, a rejected
+  call's command or diff) folds through the `console`/`console-fold` fence
+  after it; the output's own fold nests inside.
 
 Mechanism is split across four files; read them in this order when changing
 fold behaviour:
@@ -174,7 +172,7 @@ fold behaviour:
    per edit. Its module docstring is the record of why core's
    `vim.treesitter.foldexpr()` cannot be used here.
 3. `lua/agentic/ui/tool_call_layout.lua` — `assemble`: a section with
-   `fold` set gets `-fold`, or the marker its `fold_through` names; each
+   `fold` set gets `-fold`, or `-foldnext` with `fold_next`; each
    `Layout.folds[i].anchor` is the first row inside that fold, and
    `Layout.titled` holds the opening fence row of each `titled` section.
 4. `lua/agentic/ui/message_writer.lua` — `_render_block_folds` places a tool
@@ -182,15 +180,15 @@ fold behaviour:
    deferred, why it goes through `BufHelpers.set_fold`, and how anchor
    extmarks survive edits and chat-window hides.
 
-`folds.lua` provides the `··· N lines ···` foldtext, led by the body's first
-row for a `-foldnext` or `-foldfence` fold and where the writer marks the
-fence row in `Folds.NS_TITLED` (a titled section, a titled collapsed region).
+`folds.lua` provides the `··· N lines ···` foldtext; `M.foldtext`'s docstring
+says which row leads it, and how a `Folds.NS_TITLED` mark selects that row.
 
 Adding a new foldable kind:
 
 1. Decide the threshold policy and set `fold` on the body section in its
    `BODIES` builder when the body exceeds it; `assemble` adds `-fold` and
-   the anchor.
+   the anchor. Count a markdown body's rows with `FenceRows.drawn_count`: a
+   fold never ends on a hidden fence row (why: `folds.lua` module docstring).
 2. No changes needed to `folds.scm`, `injections.scm` or `folds.lua` — they
    match the fold markers generically.
 

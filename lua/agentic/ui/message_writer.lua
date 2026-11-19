@@ -400,6 +400,7 @@ function MessageWriter:new(bufnr, run_clocks)
                         winid,
                         change.width ~= 0 or change.height ~= 0
                     )
+                    instance:cursor_onto_drawn_row(winid)
                 end
             end
         end,
@@ -668,16 +669,47 @@ function MessageWriter:on_view_change(winid, resized)
     end
 end
 
+--- Whether `winid` holds a Visual selection.
+--- @param winid integer
+--- @return boolean
+local function selecting(winid)
+    return winid == vim.api.nvim_get_current_win()
+        and vim.api.nvim_get_mode().mode:find("^[vV\22]") ~= nil
+end
+
+--- Move the cursor of `winid` from a zero-height row to the nearest line that
+--- is drawn and at least 'scrolloff' screen rows from each window edge. Does
+--- nothing in a window with a Visual selection. With the cursor on a
+--- zero-height row, the 'scrolloff' correction of vim undoes each `<C-y>`.
+--- Public so the autocmd closure can reach it without tripping LuaLS's
+--- invisible-field check.
+--- @param winid integer A window showing the buffer
+function MessageWriter:cursor_onto_drawn_row(winid)
+    local lnum = vim.api.nvim_win_get_cursor(winid)[1]
+    local rows = vim.api.nvim_win_text_height(winid, {
+        start_row = lnum - 1,
+        end_row = lnum - 1,
+    }).all
+    if rows > 0 or selecting(winid) then
+        return
+    end
+    self:_own_change(function()
+        -- Raw: `line("w0")` would correct the topline first.
+        local topline = vim.fn.getwininfo(winid)[1].topline
+        vim.api.nvim_win_set_cursor(
+            winid,
+            { BufHelpers.fitting_cursor_line(winid, topline), 0 }
+        )
+    end)
+end
+
 --- Move the cursor of `winid` off the last line (or a closed fold that ends
 --- there) to `BufHelpers.drawn_line_above`, so that a later move onto the
 --- last line (`G`, mapped or not) is a motion. Not where the move would
 --- scroll the view ('scrolloff'), nor in a window with a Visual selection.
 --- @param winid integer A window showing the buffer
 function MessageWriter:_cursor_off_last_line(winid)
-    if
-        winid == vim.api.nvim_get_current_win()
-        and vim.api.nvim_get_mode().mode:find("^[vV\22]")
-    then
+    if selecting(winid) then
         return
     end
     vim.api.nvim_win_call(winid, function()
@@ -1003,7 +1035,7 @@ end
 --- @return integer row `first_row` when nothing below it draws, and less than
 ---         that for a range past the end of the buffer — both leave the caller's
 ---         one-drawn-row check to reject the region
-local function last_drawn_row(bufnr, fence_rows, first_row, last_row)
+local function last_text_row(bufnr, fence_rows, first_row, last_row)
     local rows =
         vim.api.nvim_buf_get_lines(bufnr, first_row, last_row + 1, false)
     local concealed = ChatBuffer.conceallevel(bufnr) >= 2
@@ -1042,7 +1074,7 @@ end
 --- is, when the rows hold more than one paragraph.
 ---
 --- Only the interior counts. A run's leading and trailing breaks are stripped by
---- `first_prose_row` and `last_drawn_row` before this sees the range, and say
+--- `first_prose_row` and `last_text_row` before this sees the range, and say
 --- nothing about how much the run holds.
 --- @param bufnr integer
 --- @param from_row integer 0-indexed first row of the range
@@ -1078,7 +1110,7 @@ end
 --- @param last_row integer 0-indexed last row of the region, inclusive
 --- @return integer[] decoration_extmark_ids Empty for a region drawing one row
 local function render_region_rail(bufnr, fence_rows, identity_row, last_row)
-    local end_row = last_drawn_row(bufnr, fence_rows, identity_row, last_row)
+    local end_row = last_text_row(bufnr, fence_rows, identity_row, last_row)
     if end_row <= identity_row then
         return {}
     end
@@ -1122,7 +1154,7 @@ local function render_prose_region(bufnr, fence_rows, run_start)
         return nil
     end
 
-    local end_row = last_drawn_row(bufnr, fence_rows, first_row, buf_end)
+    local end_row = last_text_row(bufnr, fence_rows, first_row, buf_end)
     if not has_paragraph_break(bufnr, first_row, end_row) then
         return nil
     end
@@ -1152,7 +1184,7 @@ local function render_collapsed_region(
     last_row,
     sign
 )
-    local end_row = last_drawn_row(bufnr, fence_rows, first_row, last_row)
+    local end_row = last_text_row(bufnr, fence_rows, first_row, last_row)
     ExtmarkBlock.render_block(bufnr, Renderer.NS_DECORATIONS, {
         header_line = first_row,
         header_sign = sign,
@@ -1209,7 +1241,7 @@ function MessageWriter:_extend_prose_region(bufnr)
         return
     end
 
-    local end_row = last_drawn_row(
+    local end_row = last_text_row(
         bufnr,
         self._fence_rows,
         closer_row,
@@ -1314,9 +1346,10 @@ function MessageWriter:_decorate_collapsed_region(
         Renderer.set_dim_range(bufnr, body_start, body_end)
     end
     mark_table_row_ends(bufnr, body_start, opts.table_row_ends or {})
-    -- Same measure `collapsed_region_lines` folds on: a one-row body has no
-    -- fence, and so no fold to set.
-    if body_end > body_start then
+    -- `Folds.levels` forms no fold over fewer than two drawn rows.
+    local body =
+        vim.api.nvim_buf_get_lines(bufnr, body_start, body_end + 1, false)
+    if FenceRows.drawn_count(body) > 1 then
         local fence_row = body_start - 1
         if opts.titled then
             vim.api.nvim_buf_set_extmark(
@@ -1898,7 +1931,7 @@ end
 --- @class agentic.ui.MessageWriter.NoticeLayout
 --- @field lines string[] Heading and body, without a trailing blank
 --- @field fold_offset? integer 0-indexed offset of the fenced body's first row in `lines`; nil without a fenced body
---- @field fold_rows integer Rows of the fenced body
+--- @field fold_rows integer Rows of the fenced body through its last drawn row (`FenceRows.drawn_count`)
 --- @field table_row_ends integer[] Rows of the fenced body that end a wrapped table row (`_wrap_prose`)
 
 --- The rows of a notice.
@@ -1928,7 +1961,7 @@ function MessageWriter:_notice_layout(notice)
     local layout = {
         lines = lines,
         fold_offset = fold_offset,
-        fold_rows = #fold_body,
+        fold_rows = FenceRows.drawn_count(fold_body),
         table_row_ends = table_row_ends,
     }
     return layout
@@ -1969,7 +2002,7 @@ function MessageWriter:_decorate_notice(heading_row, notice, layout)
             layout.table_row_ends
         )
     end
-    -- Vim cannot close a one-line fold.
+    -- `Folds.levels` forms no fold over fewer than two drawn rows.
     if fold_offset and layout.fold_rows > 1 then
         self:_queue_fold(heading_row + fold_offset, false)
     end

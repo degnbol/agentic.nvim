@@ -2983,6 +2983,66 @@ describe("agentic.ui.MessageWriter", function()
         )
 
         it(
+            "a scroll that leaves the cursor on a zero-height row moves it to a drawn row",
+            function()
+                setup_buffer(120, 120)
+                local ns = vim.api.nvim_create_namespace("message_writer_test")
+                for lnum = 3, 115, 7 do
+                    vim.api.nvim_buf_set_extmark(bufnr, ns, lnum - 1, 0, {
+                        conceal_lines = "",
+                    })
+                end
+                vim.api.nvim_win_set_height(winid, 22)
+                vim.wo[winid].scrolloff = 4
+                vim.wo[winid].wrap = false
+                vim.wo[winid].conceallevel = 2
+                vim.wo[winid].concealcursor = "n"
+                -- Unfocused, as a chat beside the input window.
+                vim.cmd("wincmd p")
+
+                --- Native `<C-y>` in the chat window.
+                --- @return integer topline after it
+                local function scroll_up()
+                    vim.api.nvim_win_call(winid, function()
+                        vim.cmd("normal! \25")
+                    end)
+                    vim.cmd("redraw")
+                    return vim.fn.line("w0", winid)
+                end
+                --- @return boolean
+                local function cursor_hidden()
+                    local lnum = vim.api.nvim_win_get_cursor(winid)[1]
+                    return vim.api.nvim_win_text_height(winid, {
+                        start_row = lnum - 1,
+                        end_row = lnum - 1,
+                    }).all == 0
+                end
+
+                vim.cmd("redraw")
+                local stalled = vim.fn.line("w0", winid)
+                for _ = 1, 30 do
+                    local before = stalled
+                    stalled = scroll_up()
+                    if stalled >= before then
+                        break
+                    end
+                end
+                assert.is_true(cursor_hidden())
+
+                -- What the WinScrolled hook runs after each scroll.
+                local topline = stalled
+                for _ = 1, 5 do
+                    writer:on_view_change(winid, false)
+                    writer:cursor_onto_drawn_row(winid)
+                    assert.is_false(cursor_hidden())
+                    local before = topline
+                    topline = scroll_up()
+                    assert.is_true(topline < before)
+                end
+            end
+        )
+
+        it(
             "go_to_bottom puts the window in following on the last line",
             function()
                 writer._user_controlled[winid] = true
@@ -6902,12 +6962,12 @@ describe("agentic.ui.MessageWriter", function()
             end)
 
             it(
-                "re-lays out with the diff closed and a reason section",
+                "re-lays out the diff and a reason section in one closed fold",
                 function()
                     local fence = diff_fence_line()
                     local lines =
                         vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-                    assert.is_not_nil(lines[fence]:match("^`+text%-foldfence$"))
+                    assert.is_not_nil(lines[fence]:match("^`+text%-foldnext$"))
                     local reason_fence = closing_fence_after(fence) + 1
                     assert.is_not_nil(lines[reason_fence]:match("^`+console$"))
                     assert.equal(
@@ -6918,7 +6978,7 @@ describe("agentic.ui.MessageWriter", function()
 
                     deferred.drain()
                     assert.equal(fence + 1, vim.fn.foldclosed(fence + 1))
-                    assert.equal(-1, vim.fn.foldclosed(reason_fence + 1))
+                    assert.equal(fence + 1, vim.fn.foldclosed(reason_fence + 1))
                 end
             )
 

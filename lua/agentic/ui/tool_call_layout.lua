@@ -2,6 +2,7 @@ local AcpKind = require("agentic.utils.acp_kind")
 local Ansi = require("agentic.utils.ansi")
 local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local Config = require("agentic.config")
+local FenceRows = require("agentic.ui.fence_rows")
 local FileSystem = require("agentic.utils.file_system")
 local GrepHighlights = require("agentic.utils.grep_highlights")
 local GrepOutput = require("agentic.utils.grep_output")
@@ -35,8 +36,8 @@ local M = {}
 --- @field rows string[]
 --- @field lang? string Fence language; nil leaves the rows unfenced, "" fences with an empty language
 --- @field fold? agentic.ui.FoldState Fold state; adds `-fold` to the info string
---- @field fold_through? "next"|"fence" With `fold`, where the fold ends instead of at the last row: `next` gives the marker `-foldnext`, through the next section's `console` or `console-fold` fence; `fence` gives `-foldfence`, through the section's own closing fence row, so a one-row section folds too. Without `fold` it adds no marker
---- @field titled? boolean The fold text of the section leads with its first row
+--- @field fold_next? boolean With `fold`, the marker is `-foldnext`: the fold runs through the next section's `console` or `console-fold` fence. Without `fold` it adds no marker
+--- @field titled? boolean The fold text of the section, or of a fold holding its opening fence row, leads with its first row
 --- @field dim? boolean Dim the rows with AgenticDimmedBlock. A layout keeps one dimmed range, the last dimmed section's
 --- @field highlights? agentic.ui.ToolCallLayout.HighlightRange[] `line_index` 0-based within `rows`
 --- @field ansi? agentic.utils.Ansi.Span[][] Spans per row of `rows`
@@ -261,23 +262,6 @@ local function search_title_flags(argument)
     return flags
 end
 
---- Fold marker of each `Section.fold_through`.
---- @type table<string, string>
-local FOLD_THROUGH_MARKERS = { next = "-foldnext", fence = "-foldfence" }
-
---- Fence info-string `word` without its fold marker suffix (`-fold`,
---- `-foldnext` or `-foldfence`).
---- @param word string
---- @return string
-function M.base_lang(word)
-    for _, marker in pairs(FOLD_THROUGH_MARKERS) do
-        if vim.endswith(word, marker) then
-            return word:sub(1, -#marker - 1)
-        end
-    end
-    return (word:gsub("%-fold$", ""))
-end
-
 --- Place sections in order, fence each one that has a `lang` with
 --- `TextWrap.safe_fence(section.rows)`, shift every index by the section's
 --- first content row (after the opening fence; also the fold anchor), and
@@ -301,7 +285,7 @@ local function assemble(sections)
             -- A command fence keeps its bare language until output exists:
             -- `permission_highlight.lua`'s `OPEN_FENCE` matches only that.
             local marker = section.fold
-                    and (FOLD_THROUGH_MARKERS[section.fold_through] or "-fold")
+                    and (section.fold_next and "-foldnext" or "-fold")
                 or ""
             if section.titled then
                 table.insert(layout.titled, #lines)
@@ -434,8 +418,9 @@ local function prose_section(rows, wrap_width, measure)
         lang = "markdown",
         dim = true,
         highlights = highlights,
-        -- A one-row body gets no fold (`Folds.levels`), so closing it raises E490.
-        fold = #wrapped > 1 and "closed" or nil,
+        -- `Folds.levels` forms no fold over fewer than two drawn rows, and
+        -- closing a missing fold raises E490.
+        fold = FenceRows.drawn_count(wrapped) > 1 and "closed" or nil,
     }
     return section
 end
@@ -455,8 +440,7 @@ end
 
 --- Start state of the fold over a call's command and its output (the
 --- failure reason or body): closed for a rejected call, whose command never
---- ran and folds alone; nil without output rows, so a command alone is
---- never hidden; closed when the call did not fail and is safe; else open.
+--- ran; nil without output rows, so a command alone is never hidden; closed when the call did not fail and is safe; else open.
 --- Nil for a call with an output file: its tail is re-rendered as the file
 --- grows, and a re-render would reopen a fold the user closed.
 --- @param call agentic.ui.ToolCallLayout.Call
@@ -513,7 +497,7 @@ local HEADS = {
                     call,
                     PermissionRules.is_read_only(call.argument)
                 ),
-                fold_through = call.rejection_line and "fence" or "next",
+                fold_next = true,
             },
         }
     end,
@@ -535,7 +519,7 @@ local HEADS = {
                 lang = shell_fence_lang(call.argument, "bash"),
                 -- A search is read-only by kind.
                 fold = command_fold_state(call, true),
-                fold_through = call.rejection_line and "fence" or "next",
+                fold_next = true,
             },
         }
     end,
@@ -947,7 +931,7 @@ local function diff_body(call)
         -- diff has no fence content for the fold to anchor on (E490).
         if #section.rows > 0 then
             section.fold = "closed"
-            section.fold_through = "next"
+            section.fold_next = true
         end
         table.insert(sections, reason_section(call.failure))
     elseif #section.rows > 1 then
@@ -964,10 +948,10 @@ local function nonempty(rows)
     return rows and #rows > 0 and rows or nil
 end
 
---- The body of a call rejected before it ran: its diff, if any, folded
---- closed alone, then a titled reason section that leads with the rejection
---- line and holds the text the agent was sent (`failure_reason`, else
---- `body`).
+--- The body of a call rejected before it ran: its diff, if any, then a
+--- titled reason section that leads with the rejection line and holds the
+--- text the agent was sent (`failure_reason`, else `body`). A diff and the
+--- reason section are one closed fold.
 --- @type agentic.ui.ToolCallLayout.Builder
 local function rejected_body(call)
     --- @type agentic.ui.ToolCallLayout.Section[]
@@ -977,7 +961,7 @@ local function rejected_body(call)
         -- No rows, no fence content for the fold to anchor on (E490).
         if #section.rows > 0 then
             section.fold = "closed"
-            section.fold_through = "fence"
+            section.fold_next = true
         end
         table.insert(sections, section)
     end

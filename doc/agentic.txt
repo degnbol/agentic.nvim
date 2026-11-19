@@ -253,9 +253,9 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     when the call did not fail and is a search or a command that structured
     `read_only` rules alone approve (|agentic-permissions-shell|).
 
-    The thresholds do not apply to a rejected call: its command or diff is
-    folded closed, and the text the agent was sent is folded closed under
-    the reason it was rejected.
+    The thresholds do not apply to a rejected call: its command or diff and
+    the reason it was rejected are one closed fold. The text the agent was
+    sent is folded closed under the reason.
 
     `search_max_lines`         integer (default: 8)
         Lines before a search block's output fold closes.

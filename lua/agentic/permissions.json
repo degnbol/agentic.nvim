@@ -315,8 +315,7 @@
   "launchctl": { "read_only": [{ "positionals": ["list"] }] },
 
   "sed": {
-    "read_only": [{}],
-    "ask":       [{ "options": ["i", "in-place"] }]
+    "read_only": [{ "unless": [{ "options": ["i", "in-place"] }] }]
   },
 
   "awk": {

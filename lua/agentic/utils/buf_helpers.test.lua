@@ -949,30 +949,6 @@ describe("BufHelpers", function()
             assert.equal(19, fit(10, 5))
         end)
 
-        it(
-            "counts no row for a closed fold ending in a zero-height line",
-            function()
-                open(20)
-                local ns = vim.api.nvim_create_namespace("buf_helpers_test")
-                vim.api.nvim_buf_set_extmark(bufnr, ns, 28, 0, {
-                    conceal_lines = "",
-                })
-                vim.api.nvim_win_call(winid, function()
-                    vim.cmd("27,29fold")
-                end)
-
-                -- Vim's 'scrolloff' check counts 26, 30 and 31 below 25, not
-                -- the fold, and would scroll.
-                local lnum = fit(10, 40)
-                assert.equal(24, lnum)
-                vim.api.nvim_win_call(winid, function()
-                    vim.fn.winrestview({ topline = 10, lnum = lnum, col = 0 })
-                end)
-                vim.cmd("redraw")
-                assert.equal(10, vim.fn.line("w0", winid))
-            end
-        )
-
         it("keeps a cursor inside a closed fold in the band", function()
             open(20)
             vim.api.nvim_win_call(winid, function()
@@ -1085,86 +1061,6 @@ describe("BufHelpers", function()
         it("is nil above the first line", function()
             assert.is_nil(BufHelpers.drawn_line_above(winid, 1))
         end)
-    end)
-
-    describe("scroll_lines", function()
-        --- @type integer
-        local bufnr
-        --- @type integer
-        local winid
-
-        --- @param lnum integer
-        --- @return boolean
-        local function zero_height(lnum)
-            return vim.api.nvim_win_text_height(winid, {
-                start_row = lnum - 1,
-                end_row = lnum - 1,
-            }).all == 0
-        end
-
-        --- @return integer topline
-        local function topline()
-            return vim.api.nvim_win_call(winid, vim.fn.winsaveview).topline
-        end
-
-        -- Fence rows and closed folds from a layout where the redraw after
-        -- a plain `<C-y>` undoes it, from topline 17 with the cursor on 49.
-        before_each(function()
-            bufnr = vim.api.nvim_create_buf(false, true)
-            local lines = {}
-            for i = 1, 80 do
-                lines[i] = "line " .. i
-            end
-            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-            winid = vim.api.nvim_open_win(bufnr, true, {
-                relative = "editor",
-                width = 40,
-                height = 22,
-                row = 0,
-                col = 0,
-            })
-            vim.wo[winid].scrolloff = 4
-            vim.wo[winid].wrap = false
-            vim.wo[winid].conceallevel = 2
-            vim.wo[winid].concealcursor = "n"
-            vim.wo[winid].foldmethod = "manual"
-            local ns = vim.api.nvim_create_namespace("buf_helpers_test")
-            for _, lnum in ipairs({ 15, 20, 30, 33, 36, 40, 41, 45, 46 }) do
-                vim.api.nvim_buf_set_extmark(bufnr, ns, lnum - 1, 0, {
-                    conceal_lines = "",
-                })
-            end
-            vim.api.nvim_win_call(winid, function()
-                vim.cmd("12,15fold")
-                vim.cmd("24,27fold")
-                vim.cmd("33,38fold")
-                vim.fn.winrestview({ topline = 17, lnum = 49, col = 0 })
-            end)
-            vim.cmd("redraw")
-        end)
-
-        after_each(function()
-            vim.api.nvim_win_close(winid, true)
-            vim.api.nvim_buf_delete(bufnr, { force = true })
-        end)
-
-        for _, case in ipairs({ { "up", -1 }, { "down", 1 } }) do
-            local direction, count = case[1], case[2]
-            it("moves the view " .. direction .. " at each step", function()
-                assert.equal(17, topline())
-                for _ = 1, 10 do
-                    local before = topline()
-
-                    BufHelpers.scroll_lines(winid, count)
-                    vim.cmd("redraw")
-
-                    assert.is_true((topline() - before) * count > 0)
-                    assert.is_false(
-                        zero_height(vim.api.nvim_win_get_cursor(winid)[1])
-                    )
-                end
-            end)
-        end
     end)
 
     describe("scroll_down", function()

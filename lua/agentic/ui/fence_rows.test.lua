@@ -147,6 +147,23 @@ describe("agentic.ui.FenceRows", function()
         )
     end)
 
+    describe("drawn_count", function()
+        it("leaves out trailing fence rows", function()
+            assert.equal(
+                3,
+                FenceRows.drawn_count({ "prose", "```lua", "x", "```" })
+            )
+        end)
+
+        it("counts no rows for a body of fence rows", function()
+            assert.equal(0, FenceRows.drawn_count({ "```lua", "```" }))
+        end)
+
+        it("counts fence rows above a drawn row", function()
+            assert.equal(3, FenceRows.drawn_count({ "```", "```", "prose" }))
+        end)
+    end)
+
     describe("marked", function()
         it("answers for rows set without a sync", function()
             local fence_rows = FenceRows:new(bufnr)

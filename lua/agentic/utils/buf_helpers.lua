@@ -607,34 +607,6 @@ local function text_room(winid, padding)
     return math.max(1, vim.api.nvim_win_get_height(winid) - padding)
 end
 
---- Whether line `lnum` has a `conceal_lines` extmark that `winid` hides
---- ('conceallevel' 2 or more). Unlike `nvim_win_text_height`, this also
---- answers for a line inside a closed fold. Ignores 'concealcursor' and
---- `conceal_lines` from treesitter queries.
---- @param winid integer
---- @param lnum integer 1-indexed
---- @return boolean
-local function conceals_line(winid, lnum)
-    if vim.api.nvim_get_option_value("conceallevel", { win = winid }) < 2 then
-        return false
-    end
-    local marks = vim.api.nvim_buf_get_extmarks(
-        vim.api.nvim_win_get_buf(winid),
-        -1,
-        { lnum - 1, 0 },
-        { lnum - 1, -1 },
-        { details = true, overlap = true }
-    )
-    for _, mark in ipairs(marks) do
-        -- Missing from `vim.api.keyset.extmark_details` in nvim 0.12.
-        local details = mark[4] --[[@as table]]
-        if details.conceal_lines then
-            return true
-        end
-    end
-    return false
-end
-
 --- The line for the cursor of `winid` if `topline` is at the top of the view.
 --- This is the cursor line if it is drawn and at least 'scrolloff' screen
 --- rows from each edge, else the nearest line that is.
@@ -647,10 +619,6 @@ end
 --- the last line that obeys the bottom edge, as `cursor_correct` in vim's
 --- `move.c` does. The result is never `topline` while the window skips part
 --- of it ('smoothscroll' skipcol).
----
---- Below the cursor, a closed fold whose last line `conceals_line` is no
---- row, as vim's 'scrolloff' check (`botline_forw`) counts it, though the
---- window draws it.
 --- @param winid integer
 --- @param topline integer 1-indexed
 --- @return integer lnum 1-indexed
@@ -669,10 +637,9 @@ function BufHelpers.fitting_cursor_line(winid, topline)
 
         -- One unit per line or closed fold from `topline` to the bottom edge.
         -- `above`: screen rows above the unit. `rows`: its screen rows.
-        -- `counted`: its rows as vim's 'scrolloff' check counts them.
-        -- `below`: the sum of `counted` for the units below it that fit fully
-        -- in the window.
-        --- @type { lnum: integer, above: integer, rows: integer, counted: integer, below: integer }[]
+        -- `below`: the sum of `rows` for the units below it that fit fully in
+        -- the window.
+        --- @type { lnum: integer, above: integer, rows: integer, below: integer }[]
         local units = {}
         local lnum, above = topline, 0
         while lnum <= last_line and above < height do
@@ -689,11 +656,6 @@ function BufHelpers.fitting_cursor_line(winid, topline)
                 lnum = lnum,
                 above = above,
                 rows = rows,
-                -- `botline_forw` in vim's `move.c` counts a closed fold as no
-                -- row when its last line is concealed, though it draws one.
-                counted = (fold_end > 0 and conceals_line(winid, fold_end))
-                        and 0
-                    or rows,
                 below = 0,
             }
             above = above + rows
@@ -703,7 +665,7 @@ function BufHelpers.fitting_cursor_line(winid, topline)
         for i = #units, 1, -1 do
             units[i].below = below
             if units[i].above + units[i].rows <= height then
-                below = below + units[i].counted
+                below = below + units[i].rows
             end
         end
         local drawn = vim.tbl_filter(function(unit)
@@ -789,37 +751,6 @@ function BufHelpers.drawn_line_above(winid, lnum)
             above = above - 1
         end
         return nil
-    end)
-end
-
---- Scroll `winid` by `count` lines (screen rows with 'smoothscroll') as
---- `<C-e>` (positive) or `<C-y>`
---- (negative) do. Before and after the scroll, the cursor moves to
---- `fitting_cursor_line`, so that the 'scrolloff' correction of vim does not
---- undo the scroll.
---- @param winid integer
---- @param count integer
-function BufHelpers.scroll_lines(winid, count)
-    if count == 0 then
-        return
-    end
-    vim.api.nvim_win_call(winid, function()
-        local function place()
-            local lnum = BufHelpers.fitting_cursor_line(
-                winid,
-                vim.fn.winsaveview().topline
-            )
-            if lnum ~= vim.api.nvim_win_get_cursor(winid)[1] then
-                vim.api.nvim_win_set_cursor(winid, { lnum, 0 })
-            end
-        end
-        place()
-        local key = count > 0 and "<C-e>" or "<C-y>"
-        vim.cmd.normal({
-            math.abs(count) .. vim.keycode(key),
-            bang = true,
-        })
-        place()
     end)
 end
 
