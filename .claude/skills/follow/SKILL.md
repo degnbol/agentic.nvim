@@ -33,9 +33,9 @@ Each window showing the chat is in one of two modes:
 The user's motion changes the mode, never the window's position:
 `on_view_change` reads it as the difference from the last view seen
 (`_views[win]`), for keys and mouse alike: rows of text from the topline to
-the end, and the cursor line. Up takes control; the cursor on the last line
-(or a closed fold ending there), or the view down with the last line in
-view, hands it back. Besides, `go_to_bottom` (`<localLeader>G`),
+the end, and the cursor line. Up takes control; the cursor moving onto the
+last line (or a closed fold ending there), or the view down with the last
+line in view, hands it back. Besides, `go_to_bottom` (`<localLeader>G`),
 `resume_follow` (submit) and `follow_in` (a permission open key) hand windows
 back, and a pin
 that held the view short of the last line (`_pin_held`) puts its window in

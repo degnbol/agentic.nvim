@@ -2802,6 +2802,18 @@ describe("agentic.ui.MessageWriter", function()
             end
         )
 
+        it(
+            "a view move up with the cursor kept on the last line puts the window in user control",
+            function()
+                start_at({ topline = 32, lnum = 50 })
+
+                move({ topline = 31, lnum = 50 })
+                writer:on_view_change(winid, false)
+
+                assert.is_true(writer._user_controlled[winid])
+            end
+        )
+
         it("a view move down onto the last line follows again", function()
             writer._user_controlled[winid] = true
             start_at({ topline = 1, lnum = 1 })

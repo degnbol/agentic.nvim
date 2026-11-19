@@ -629,7 +629,8 @@ end
 --- the difference from the last view seen there, and sets its mode by the
 --- direction:
 ---
---- - Cursor on the last line, or on a closed fold that ends there → following.
+--- - Cursor moved onto the last line, or onto a closed fold that ends there
+---   → following.
 --- - Up: more rows of text from the topline to the end, or as many with the
 ---   cursor moved up → user control.
 --- - View down, with the last line now in view → following.
@@ -658,7 +659,7 @@ function MessageWriter:on_view_change(winid, resized)
     local down_to_end = not up
         and view.topline > before.topline
         and view.shows_end
-    if view.on_last_line or down_to_end then
+    if (view.on_last_line and view.lnum ~= before.lnum) or down_to_end then
         self._user_controlled[winid] = nil
     elseif up then
         self._user_controlled[winid] = true
