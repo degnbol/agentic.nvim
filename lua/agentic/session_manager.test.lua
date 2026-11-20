@@ -4155,7 +4155,6 @@ describe("agentic.SessionManager", function()
                         return 80
                     end,
                     set_idle = noop,
-                    set_waiting = noop,
                     set_running = noop,
                     set_chat_title = noop,
                     rename_buffers = noop,
@@ -4363,7 +4362,6 @@ describe("agentic.SessionManager", function()
                         return 80
                     end,
                     set_idle = noop,
-                    set_waiting = noop,
                     set_running = noop,
                     set_chat_title = noop,
                     rename_buffers = noop,
@@ -5985,11 +5983,6 @@ describe("agentic.SessionManager", function()
                     add_request = function()
                         return prompted
                     end,
-                    permission_float = {
-                        is_visible_in_current_tab = function()
-                            return true
-                        end,
-                    },
                 },
                 _notify_attention = SessionManager._notify_attention,
                 _on_request_permission = SessionManager._on_request_permission,

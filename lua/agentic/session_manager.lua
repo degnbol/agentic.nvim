@@ -43,7 +43,6 @@ local States = require("agentic.states")
 local Subagents = require("agentic.subagents")
 local ToolTimings = require("agentic.tool_timings")
 local WidgetLayout = require("agentic.ui.widget_layout")
-local WindowDecoration = require("agentic.ui.window_decoration")
 
 --- @class agentic._SessionManagerPrivate
 local P = {}
@@ -179,36 +178,18 @@ function SessionManager:_notify_attention(mark_idle)
     end
 end
 
---- Signal a permission request waiting with its float hidden, not visible in
---- the current tabpage: bell, the waiting state in the header of
---- `badge_bufnr`, and a notification naming the session and `anchor_bufnr`,
---- the buffer the request belongs to. The state stays until the request ends.
---- @param badge_bufnr integer
---- @param anchor_bufnr integer
-function SessionManager:_on_permission_hidden(badge_bufnr, anchor_bufnr)
-    SessionManager._ring_bell()
-    self.widget:set_waiting(true, badge_bufnr)
-    local title = self.chat_history.title
-    local label = self:_subagent_label(anchor_bufnr)
-    local where = label and "subagent " .. label
-        or string.format("its %s buffer", vim.b[anchor_bufnr].agentic_window)
-    Logger.notify(
-        string.format(
-            "%s is waiting for a permission in %s",
-            title ~= "" and title or "An Agentic session",
-            where
-        ),
-        vim.log.levels.INFO,
-        { title = "Agentic" }
-    )
-end
-
---- The label of the subagent whose transcript is `bufnr`.
+--- The session title and the label of the subagent whose transcript is
+--- `bufnr`, joined by " · ", or the one of them that is set.
 --- @param bufnr integer
---- @return string|nil label Nil for a buffer that is no transcript
-function SessionManager:_subagent_label(bufnr)
+--- @return string|nil title Nil when neither is set
+function SessionManager:_buf_title(bufnr)
+    local title = self.chat_history.title ~= "" and self.chat_history.title
     local child_id = self._subagents:child_of_buf(bufnr)
-    return child_id and self._subagents:agent_label(child_id)
+    local label = child_id and self._subagents:agent_label(child_id)
+    if title and label then
+        return title .. " · " .. label
+    end
+    return title or label or nil
 end
 
 --- Generate the welcome header for a new session
@@ -472,23 +453,11 @@ function SessionManager:new(provider)
             return self:_turn_open()
         end
     )
-    self.permission_manager.on_hidden = function(badge_bufnr, anchor_bufnr)
-        self:_on_permission_hidden(badge_bufnr, anchor_bufnr)
-    end
-    self.permission_manager.on_hidden_resolved = function(bufnr)
-        -- A marked transcript the user wiped took its header with it.
-        if
-            vim.api.nvim_buf_is_valid(bufnr)
-            and WindowDecoration.get_header(bufnr).waiting
-        then
-            self.widget:set_waiting(false, bufnr)
-        end
-    end
     self.permission_manager.open_anchor = function(bufnr, how)
         return WidgetLayout.open_buf(bufnr, how, self.widget:target_win())
     end
     self.permission_manager.title_for = function(anchor)
-        return self:_subagent_label(anchor)
+        return self:_buf_title(anchor)
     end
     self.permission_manager.proxy_tool_call = function(anchor)
         return self._subagents:child_of_buf(anchor)
@@ -2251,12 +2220,7 @@ function SessionManager:_on_request_permission(request, callback)
         -- Notifications and hooks are non-essential UI; a throw here must not
         -- escape (add_request has already run, so the callback is safe).
         local ok, err = pcall(function()
-            -- A hidden float is signalled by `_on_permission_hidden`.
-            if
-                self.permission_manager.permission_float:is_visible_in_current_tab()
-            then
-                self:_notify_attention(false)
-            end
+            self:_notify_attention(false)
 
             P.invoke_hook("on_permission_request", {
                 session_id = self.session_id,

@@ -3,6 +3,11 @@ local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local Logger = require("agentic.utils.logger")
 
+--- The window of the current tabpage a float shows on: `"anchor"` one showing
+--- its anchor buffer, `"chat"` one showing the chat, `"tab"` the first
+--- non-floating window. `"chat"` and `"tab"` are the fallback hosts.
+--- @alias agentic.ui.PermissionFloat.Host "anchor"|"chat"|"tab"
+
 --- @class agentic.ui.PermissionFloat
 --- @field message_writer agentic.ui.MessageWriter
 --- @field _buf_nrs agentic.ui.ChatWidget.BufNrs
@@ -10,8 +15,8 @@ local Logger = require("agentic.utils.logger")
 --- @field _bufnr? integer
 --- @field _anchor_bufnr? integer Buffer the float anchors to while open
 --- @field _anchor_winid? integer Window the float is placed against while shown
---- @field _on_fallback boolean Whether no window showed the anchor buffer at the last `place`
---- @field _title? string Border title while the float shows on the chat in place of the anchor buffer
+--- @field _host? agentic.ui.PermissionFloat.Host Host of the last shown window, stale after it closes
+--- @field _title? string Title while the float is on a fallback host
 --- @field _lines string[] The prompt body, without the hint
 --- @field _autocmd_ids integer[]
 --- @field _anchor "NE"|"NW"|"SE"|"SW" Cached anchor used for the open window
@@ -32,7 +37,6 @@ function PermissionFloat:new(message_writer, buf_nrs)
         _winid = nil,
         _bufnr = nil,
         _autocmd_ids = {},
-        _on_fallback = false,
         _lines = {},
         _anchor = "NE",
         _width = 0,
@@ -83,19 +87,17 @@ function PermissionFloat._anchor_position(
     return row, col
 end
 
---- Find a window showing `bufnr`: on the current tab page, else any. Nil
---- when no window shows it.
+--- A window of the current tabpage showing `bufnr`, nil when none does.
 --- @param bufnr integer
 --- @return integer|nil
-function PermissionFloat:_find_anchor_winid(bufnr)
-    local winids = vim.fn.win_findbuf(bufnr)
+local function find_win_in_tab(bufnr)
     local tab = vim.api.nvim_get_current_tabpage()
-    for _, winid in ipairs(winids) do
+    for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
         if vim.api.nvim_win_get_tabpage(winid) == tab then
             return winid
         end
     end
-    return winids[1]
+    return nil
 end
 
 --- Build the lines and option_mapping for the prompt body.
@@ -346,43 +348,55 @@ end
 
 --- Anchor the open float to `bufnr` and `place` it again.
 --- @param bufnr integer
---- @param title string|nil Border title while the float shows on the chat in place of `bufnr`; nil for none
+--- @param title string|nil Title while the float is on a fallback host, nil for none
 function PermissionFloat:set_anchor(bufnr, title)
     self._anchor_bufnr = bufnr
     self._title = title
-    -- The title may change with the window and fallback state unchanged.
+    -- The title may change with the window and host unchanged.
     self:_close_window()
     self:place()
 end
 
---- Show the open float on a window showing its anchor buffer (see
---- `_find_anchor_winid`). While no window shows that buffer, show it on the
---- chat's window instead, with a hint listing the open keys: on a border
---- with top and bottom edges, the anchor's title as title and the hint as
---- footer, else the hint as the last body line. Hidden while no window shows either. Never focusable. A no-op
---- when no float is open or it is already where it belongs.
+--- The first of `"anchor"`, `"chat"` and `"tab"` with a window to host the
+--- float now, and that window.
+--- @return agentic.ui.PermissionFloat.Host host
+--- @return integer winid
+function PermissionFloat:_find_host()
+    local winid = find_win_in_tab(self._anchor_bufnr)
+    if winid then
+        return "anchor", winid
+    end
+    winid = find_win_in_tab(self.message_writer.bufnr)
+    if winid then
+        return "chat", winid
+    end
+    -- A tabpage always has a non-floating window (E444).
+    return "tab",
+        vim.iter(vim.api.nvim_tabpage_list_wins(0)):find(function(w)
+            return vim.api.nvim_win_get_config(w).relative == ""
+        end)
+end
+
+--- Show the open float on its host's window in the current tabpage. On a
+--- fallback host it carries the title and a hint listing the open keys: on a border with
+--- top and bottom edges as title and footer, else as the first and the last
+--- body line. A no-op when no float is open or it is already where it
+--- belongs.
 function PermissionFloat:place()
     if not self._bufnr or not vim.api.nvim_buf_is_valid(self._bufnr) then
         return
     end
-    local anchor_winid = self:_find_anchor_winid(self._anchor_bufnr)
-    local on_fallback = anchor_winid == nil
-    anchor_winid = anchor_winid
-        or self:_find_anchor_winid(self.message_writer.bufnr)
-    -- `:edit` of the anchor in the chat's window ends the fallback but keeps
+    local host, anchor_winid = self:_find_host()
+    -- `:edit` of the anchor in the chat's window changes the host but keeps
     -- the window.
     if
         self:is_shown()
         and self._anchor_winid == anchor_winid
-        and self._on_fallback == on_fallback
+        and self._host == host
     then
         return
     end
-    self._on_fallback = on_fallback
     self:_close_window()
-    if not anchor_winid then
-        return
-    end
 
     local cfg = Config.permission_float
     self:_render(self._bufnr, self._lines)
@@ -391,7 +405,6 @@ function PermissionFloat:place()
     local win_config = vim.tbl_extend("force", self:_placement(anchor_winid), {
         border = cfg.border,
         style = "minimal",
-        focusable = false,
         noautocmd = true,
     })
     local ok, winid_or_err =
@@ -406,13 +419,14 @@ function PermissionFloat:place()
 
     self._winid = winid_or_err --[[@as integer]]
     self._anchor_winid = anchor_winid
+    self._host = host
     vim.wo[self._winid].winblend = cfg.winblend
     self:_register_resize_watcher(anchor_winid)
 
-    local hint = on_fallback and open_keys_hint(cfg.width) or nil
-    if not hint then
+    if host == "anchor" then
         return
     end
+    local hint = open_keys_hint(cfg.width)
     -- The border as opened, `'winborder'` applied when `cfg.border` is unset.
     if has_title_edges(vim.api.nvim_win_get_config(self._winid).border) then
         vim.api.nvim_win_set_config(
@@ -420,33 +434,31 @@ function PermissionFloat:place()
             { title = self._title, footer = hint }
         )
     else
-        self:_render(
-            self._bufnr,
-            vim.list_extend(vim.list_slice(self._lines), { hint })
-        )
-        self._height = #self._lines + 1
+        local lines = { self._title }
+        vim.list_extend(lines, self._lines)
+        table.insert(lines, hint)
+        self:_render(self._bufnr, lines)
+        self._height = #lines
         vim.api.nvim_win_set_config(self._winid, self:_placement(anchor_winid))
     end
 end
 
---- Whether no window showed the anchor buffer at the last `place`.
---- @return boolean
-function PermissionFloat:is_on_fallback()
-    return self._on_fallback
+--- Where the float shows, nil while it is not shown.
+--- @return agentic.ui.PermissionFloat.Host|nil
+function PermissionFloat:get_host()
+    return self:is_shown() and self._host or nil
+end
+
+--- The float's buffer, nil while no float is open.
+--- @return integer|nil
+function PermissionFloat:get_bufnr()
+    return self._bufnr
 end
 
 --- Whether the float's window is open, in any tab page.
 --- @return boolean
 function PermissionFloat:is_shown()
     return self._winid ~= nil and vim.api.nvim_win_is_valid(self._winid)
-end
-
---- Whether the float is open in the current tabpage.
---- @return boolean
-function PermissionFloat:is_visible_in_current_tab()
-    return self:is_shown()
-        and vim.api.nvim_win_get_tabpage(self._winid --[[@as integer]])
-            == vim.api.nvim_get_current_tabpage()
 end
 
 --- Close the float's window and its watchers, keeping the buffer.
@@ -468,7 +480,6 @@ end
 function PermissionFloat:close()
     self:_close_window()
     self._anchor_bufnr = nil
-    self._on_fallback = false
 
     local bufnr = self._bufnr
     self._bufnr = nil

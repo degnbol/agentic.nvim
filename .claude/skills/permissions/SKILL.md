@@ -53,8 +53,8 @@ Provider sends "session/request_permission"
         -> approved/rejected: callback fires immediately, skip UI
         -> otherwise: fall through to interactive prompt
      -> Queue request (sequential — one prompt at a time)
-     -> PermissionFloat.open renders prompt anchored to the chat window
-     -> Bind buffer-local option keys on all widget buffers
+     -> PermissionFloat.open shows the prompt (§ Permission float)
+     -> Bind buffer-local option keys (§ Permission float)
   -> User presses permission key (PermissionManager:_complete_request)
      -> Cache an allow/reject-always decision
      -> Close float
@@ -220,6 +220,8 @@ over a provider's own `rejection`.
 
 `PermissionFloat` — one instance per session, paired with its
 `PermissionManager`, in a separate buffer so chat updates never displace the
-prompt. Never focusable: the keys live on the session's buffers and the
-anchor's `companion_bufs`. `PermissionManager:refresh_float` re-places it on
+prompt. Always in the current tabpage, on the first of three hosts that has
+a window there: the tool call's buffer (the anchor), the chat, the tabpage's
+first window. Focusable, so the keys live on the float's buffer too, besides
+the session's buffers, the anchor and its `companion_bufs`. `PermissionManager:refresh_float` re-places it on
 layout events.

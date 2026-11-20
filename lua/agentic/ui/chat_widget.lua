@@ -19,7 +19,6 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field context? string Dynamic info (managed internally)
 --- @field session_name? string Custom session name (set by /rename or first message)
 --- @field running? boolean The agent works
---- @field waiting? boolean A permission prompt waits unseen
 --- @field idle? boolean A turn ended unseen
 
 --- @alias agentic.ui.ChatWidget.BufNrs table<agentic.ui.ChatWidget.PanelNames, integer>
@@ -901,19 +900,12 @@ end
 
 --- Set a state fact of a buffer's header.
 --- @param bufnr integer|nil Nil is a no-op
---- @param fact "running"|"waiting"|"idle"
+--- @param fact "running"|"idle"
 --- @param value boolean
 local function set_header_fact(bufnr, fact, value)
     if bufnr then
         WindowDecoration.set_header_fact(bufnr, fact, value)
     end
-end
-
---- Mark a buffer's header as waiting on a hidden permission prompt, or clear it.
---- @param waiting boolean
---- @param bufnr integer|nil The buffer to mark; nil = the chat
-function ChatWidget:set_waiting(waiting, bufnr)
-    set_header_fact(bufnr or self.buf_nrs.agent, "waiting", waiting)
 end
 
 --- Mark the chat's header as having ended a turn unseen, or clear it.

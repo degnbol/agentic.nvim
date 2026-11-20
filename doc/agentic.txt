@@ -320,7 +320,8 @@ All options with defaults are in `lua/agentic/config_default.lua`.
                                             *agentic-config-permission_float*
 `permission_float` table
     Floating window that renders permission prompts, anchored to a corner
-    of the window showing the tool call.
+    of a window in the current tabpage: the tool call's, else the chat's,
+    else the first.
 
     `anchor`       `"NE"` | `"NW"` | `"SE"` | `"SW"` (default: `"SE"`)
     `width`        integer (default: 30)
@@ -697,8 +698,9 @@ opens one below the current window.
 ------------------------------------------------------------------------------
 6.4 PERMISSION KEYMAPS                            *agentic-keymaps-permission*
 
-Mapped in every widget buffer of a session while its permission float is
-shown in the current tabpage. Set with `keymaps.permission`, keyed by
+Mapped in every widget buffer of a session and in the float, which
+|CTRL-W_w| and the mouse enter, while its permission float is shown. Set
+with `keymaps.permission`, keyed by
 option kind. A permission key shadows a key with the same lhs while the
 prompt is active. What each option does is in |agentic-permissions-prompt|.
 
@@ -713,20 +715,22 @@ prompt is active. What each option does is in |agentic-permissions-prompt|.
 An option whose kind has no key, or whose kind's key an earlier option
 took, gets `<localLeader>` and its position, for example `<localLeader>3`.
 
-While a subagent's prompt shows on the chat (|agentic-permissions-prompt|),
-the `keymaps.permission_open` keys open its transcript. The prompt stays
-pending and moves to the transcript's window. `false` disables a key.
+While a prompt shows away from its tool call (|agentic-permissions-prompt|),
+the `keymaps.permission_open` keys open the tool call's buffer. The prompt
+stays pending and moves to that buffer's window. `false` disables a key.
 
-    Key              Field    Opens the transcript in ~
+    Key              Field    Opens the buffer in ~
     `<localLeader>e`   `edit`     The current window (*)
     `<localLeader>s`   `split`    A split
     `<localLeader>v`   `vsplit`   A vertical split
     `<localLeader>t`   `tab`      A new last tabpage
 
 (*) From an input or a widget panel other than the chat: the chat's window.
+From the float: the previous window.
 
 The float's footer lists the enabled keys, with a shared prefix written once:
-`\{e,s,v,t}`. Without a border, the list is the float's last line.
+`\{e,s,v,t}`. Without a border, the list is the float's last line and the
+title its first.
 
 ------------------------------------------------------------------------------
 6.5 PLUG MAPPINGS                                      *agentic-plug-mappings*
@@ -816,11 +820,11 @@ notices as well as prompts (|agentic-keymaps-agent|).
 8.1 THE PERMISSION PROMPT                         *agentic-permissions-prompt*
 
 A tool call the agent is not cleared to make raises a prompt in a float
-(|agentic-config-permission_float|) on the window showing that tool call's
-buffer: the chat, or the subagent's transcript. While no window shows the
-transcript, the float shows on the chat, titled with the transcript's name,
-and the open keys (|agentic-keymaps-permission|) open the transcript. A float
-outside the current tabpage counts as hidden (|agentic-attention|). The
+(|agentic-config-permission_float|) in the current tabpage, on the window
+showing that tool call's buffer: the chat, or the subagent's transcript.
+While no window there shows it, the float shows on the chat's window, else
+on the first window, titled with the session and subagent, and the open keys
+(|agentic-keymaps-permission|) open the tool call's buffer. The
 options come from the provider; the plugin inserts "Reject all" ahead of the
 provider's
 "Reject always", or appends it when there is none. When the agent leaves
@@ -1127,12 +1131,6 @@ next submit. While a later turn runs, the header shows 󰔟 in its place.
 When a permission float is shown, the bell rings if the chat window is not
 the current window.
 
-When the float is not in the current tabpage, once per prompt, the bell
-rings, the header of the tool call's buffer (the chat, or a transcript; the
-chat while no window shows the transcript) shows `?` after its title, and a
-notification names the session and the tool call's buffer. `?` stays until
-the prompt is answered.
-
 Auto-approved requests do none of this.
 
 ------------------------------------------------------------------------------
@@ -1265,8 +1263,8 @@ of the spawn confirms it; the type shows once that record is read.
 A provider crash and a session switch end every running subagent. A cancel
 ends the subagents that the provider then reports ended.
 
-A permission prompt from a subagent whose transcript has no window shows on
-the chat (|agentic-permissions-prompt|).
+A permission prompt from a subagent whose transcript has no window in the
+current tabpage shows on the chat (|agentic-permissions-prompt|).
 
 A `to_input` key in a background subagent's transcript opens its message
 input. `:w` there sends the text to the subagent through the main agent, as
@@ -1453,8 +1451,8 @@ User AgenticHeadersChanged
     contains `buf`. Read the state, `header`, with
     `require("agentic.ui.window_decoration").get_header(buf)`, which falls
     back to the panel's default: a table with a `title` string, optional
-    `icon` and `context` strings, and optional `running`, `waiting` and
-    `idle` booleans.
+    `icon` and `context` strings, and optional `running` and `idle`
+    booleans.
     `require("agentic.ui.window_decoration").header_chunks(header)` gives
     it as a list of `{ text, hl_group }` chunks, `hl_group` nil or a group
     from |agentic-highlights|. The texts concatenate to the header text

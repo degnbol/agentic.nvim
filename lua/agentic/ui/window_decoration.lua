@@ -24,16 +24,14 @@ local WINDOW_HEADERS = {
     agents = { icon = Glyphs.COMMAND.agents, title = "Agents" },
 }
 
---- @alias agentic.ui.HeaderState "permission"|"running"|"idle"
+--- @alias agentic.ui.HeaderState "running"|"idle"
 
---- The state a header shows after its title: a waiting permission prompt,
---- else a running turn, else an unseen turn end. Nil without one.
+--- The state a header shows after its title: a running turn, else an unseen
+--- turn end. Nil without one.
 --- @param parts agentic.ui.ChatWidget.HeaderParts
 --- @return agentic.ui.HeaderState|nil state
 function WindowDecoration.header_state(parts)
-    if parts.waiting then
-        return "permission"
-    elseif parts.running then
+    if parts.running then
         return "running"
     elseif parts.idle then
         return "idle"
@@ -43,7 +41,6 @@ end
 
 --- @type table<agentic.ui.HeaderState, string|nil>
 local STATE_HL = {
-    permission = Theme.HL_GROUPS.HEADER_ATTENTION,
     idle = Theme.HL_GROUPS.HEADER_ATTENTION,
 }
 
@@ -110,7 +107,7 @@ end
 --- Set one state fact of an Agentic buffer's header, as `set_header` does.
 --- A no-op when the fact already holds.
 --- @param bufnr integer
---- @param fact "running"|"waiting"|"idle"
+--- @param fact "running"|"idle"
 --- @param value boolean
 function WindowDecoration.set_header_fact(bufnr, fact, value)
     local header = WindowDecoration.get_header(bufnr)

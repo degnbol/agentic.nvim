@@ -442,10 +442,10 @@ local ConfigDefault = {
     },
 
     --- Floating window that renders permission prompts. Anchored to a corner
-    --- of the chat window so it stays in view regardless of where the
-    --- streaming content currently is.
+    --- of a window in the current tabpage (the tool call's, else the chat's,
+    --- else the first) so it stays in view.
     --- @class agentic.UserConfig.PermissionFloat
-    --- @field anchor "NE"|"NW"|"SE"|"SW" Chat-window corner to anchor to
+    --- @field anchor "NE"|"NW"|"SE"|"SW" Window corner to anchor to
     --- @field width integer Content width in columns (border drawn around)
     --- @field row_offset integer Inset from the anchored corner (positive = down for N*, up for S*)
     --- @field col_offset integer Inset from the anchored corner (positive = right for *W, left for *E)

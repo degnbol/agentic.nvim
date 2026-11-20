@@ -182,9 +182,8 @@ end)
         assert.is_true(botline(foreign) < last)
     end)
 
-    it(
-        "a permission for a hidden chat shows no float until the chat is shown",
-        function()
+    describe("a permission for a chat no window shows", function()
+        before_each(function()
             -- A message keeps the session alive once its chat is hidden.
             child.lua([[
 _G.s.chat_history:add_message({ type = "user", text = "x", timestamp = 0, provider_name = "p" })
@@ -194,49 +193,79 @@ require("agentic.session_manager")._ring_bell = function() _G.bells = _G.bells +
 ]])
             child.cmd("tabnew")
             child.lua([[
+_G.below = vim.api.nvim_get_current_win()
 _G.answer = nil
 _G.s:_on_request_permission({
     sessionId = "s",
     toolCall = { toolCallId = "tc-1", kind = "edit" },
     options = { { optionId = "allow-once", name = "Allow", kind = "allow_once" } },
 }, function(option_id) _G.answer = option_id end)
+_G.float = _G.s.permission_manager.permission_float
 ]])
             child.flush()
+        end)
 
-            local function waiting()
-                return child.lua_get(
-                    [[require("agentic.ui.window_decoration").get_header(_G.chat).waiting]]
+        it(
+            "shows in the current tab, and its keys work from the float",
+            function()
+                assert.equal("tab", child.lua_get("_G.float:get_host()"))
+                assert.equal(1, child.lua_get("_G.bells"))
+                assert.same(
+                    {},
+                    child.lua_get([[vim.fn.maparg("\\y", "n", false, true)]])
+                )
+                child.lua([[
+_G.reached_below = false
+vim.keymap.set("n", "\\y", function() _G.reached_below = true end, { buf = 0 })
+]])
+
+                child.type_keys("<C-w>w")
+                assert.equal(
+                    child.lua_get("_G.float:get_bufnr()"),
+                    child.api.nvim_get_current_buf()
+                )
+                child.type_keys("\\y")
+                child.flush()
+
+                assert.equal("allow-once", child.lua_get("_G.answer"))
+                assert.is_false(child.lua_get("_G.reached_below"))
+                assert.equal(
+                    child.lua_get("_G.below"),
+                    child.api.nvim_get_current_win()
                 )
             end
-            assert.is_false(
-                child.lua_get(
-                    "_G.s.permission_manager.permission_float:is_shown()"
-                )
-            )
-            assert.equal(1, child.lua_get("_G.bells"))
-            assert.is_true(waiting())
-            assert.same(
-                {},
-                child.lua_get([[vim.fn.maparg("\\y", "n", false, true)]])
-            )
+        )
 
-            child.cmd("buffer " .. child.lua_get("_G.chat"))
+        it("an open key in the float opens in the previous window", function()
+            child.type_keys("<C-w>w")
+            child.type_keys("\\e")
+            child.flush()
+
+            assert.equal(
+                child.lua_get("_G.below"),
+                child.api.nvim_get_current_win()
+            )
+            assert.equal(
+                child.lua_get("_G.chat"),
+                child.api.nvim_get_current_buf()
+            )
+            assert.equal("anchor", child.lua_get("_G.float:get_host()"))
+        end)
+
+        it("follows into another tab without the chat", function()
+            child.cmd("tabnew")
             child.flush()
             vim.uv.sleep(50)
             child.flush()
 
-            assert.is_true(
-                child.lua_get(
-                    "_G.s.permission_manager.permission_float:is_shown()"
-                )
+            assert.equal("tab", child.lua_get("_G.float:get_host()"))
+            assert.equal(
+                child.api.nvim_get_current_tabpage(),
+                child.lua_get("vim.api.nvim_win_get_tabpage(_G.float._winid)")
             )
-            assert.is_true(waiting())
-            child.type_keys("\\y")
-            child.flush()
-            assert.equal("allow-once", child.lua_get("_G.answer"))
-            assert.equal(vim.NIL, waiting())
-        end
-    )
+            assert.equal(1, child.lua_get("_G.bells"))
+        end)
+    end)
 
     it(
         "a detached permission moves to the home window when show_in shows the chat",

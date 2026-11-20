@@ -122,7 +122,7 @@ State facts go through `set_header_fact()`, a no-op when the fact holds.
 the buffer.
 
 `vim.b[buf].agentic_header` (`ChatWidget.HeaderParts`) is the single source
-of truth. Its `running`/`waiting`/`idle` facts are independent;
+of truth. Its `running`/`idle` facts are independent;
 `WindowDecoration.header_state` picks the one shown. `vim.b[buf].agentic_window` names
 the buffer's panel. `WindowDecoration.header_chunks` is the one layout of the
 parts: the default winbar concatenates it, and outside readers use it rather than
