@@ -2445,6 +2445,9 @@ describe("PermissionRules", function()
             "tar -tf x.tar -F s.sh",
             -- `--` is the archive name; the option after it still runs
             "tar -tf -- --use-compress-program=./prog.sh",
+            -- bsdtar (macOS `tar`) takes any long option as `-W name=value`
+            "tar -tf x.tar -W use-compress-program=./prog.sh",
+            "bsdtar -tf x.tar -W use-compress-program=./prog.sh",
         }) do
             it("does not auto-approve: " .. cmd, function()
                 assert.is_false(
@@ -2487,6 +2490,7 @@ describe("PermissionRules", function()
             "zsh -n s.sh",
             "luajit -bl f.lua",
             "tar -tvf x.tar",
+            "bsdtar -tvf x.tar",
         }) do
             it("auto-approves: " .. cmd, function()
                 assert.is_true(

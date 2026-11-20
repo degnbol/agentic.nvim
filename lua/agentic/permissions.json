@@ -69,7 +69,29 @@
                     "to-command", "checkpoint-action",
                     "rmt-command", "rsh-command",
                     "index-file", "volno-file",
-                    "F", "info-script", "new-volume-script"] }
+                    "F", "info-script", "new-volume-script",
+                    "W"] }
+    ],
+    "arity": { "*": { "booleans": ["-v"] } }
+  },
+  "bsdtar": {
+    "read_only": [
+      { "options":     ["t", "list", "d", "diff", "compare"] },
+      { "positionals": ["t*"] }
+    ],
+    "ask": [
+      { "options": ["c", "create",
+                    "x", "extract", "get",
+                    "r", "append",
+                    "u", "update",
+                    "A", "catenate", "concatenate",
+                    "delete",
+                    "I", "use-compress-program",
+                    "to-command", "checkpoint-action",
+                    "rmt-command", "rsh-command",
+                    "index-file", "volno-file",
+                    "F", "info-script", "new-volume-script",
+                    "W"] }
     ],
     "arity": { "*": { "booleans": ["-v"] } }
   },
