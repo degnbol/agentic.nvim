@@ -1630,6 +1630,95 @@ describe("PermissionStructured", function()
         end)
     end)
 
+    describe("write_values", function()
+        --- @type agentic.StructuredEntries
+        local entries = {
+            foo = {
+                writes = {
+                    {
+                        options = { "o", "output" },
+                        not_files = { "/dev/null", "-" },
+                        opaque = { "*#*" },
+                    },
+                    {
+                        options = { "w" },
+                        not_files = { "*" },
+                        opaque = { "@*" },
+                    },
+                },
+            },
+            bar = { read_only = { {} } },
+        }
+
+        --- @param cmd string
+        --- @param args string[]
+        --- @param dynamic boolean[]|nil
+        --- @return { value: string, word: integer }[]|nil
+        local function writes(cmd, args, dynamic)
+            return PermissionStructured.write_values(
+                entries,
+                { cmd_name = cmd, args = args, args_dynamic = dynamic }
+            )
+        end
+
+        local cases = {
+            { { "-o", "F" }, { { value = "F", word = 2 } } },
+            { { "-oF" }, { { value = "F", word = 1 } } },
+            {
+                { "-o=F" },
+                { { value = "=F", word = 1 }, { value = "F", word = 1 } },
+            },
+            { { "-sSo", "F" }, { { value = "F", word = 2 } } },
+            { { "--output=F" }, { { value = "F", word = 1 } } },
+            { { "--output", "F" }, { { value = "F", word = 2 } } },
+            { { "--out", "F" }, { { value = "F", word = 2 } } },
+            {
+                { "-o", "A", "x", "-o", "B" },
+                { { value = "A", word = 2 }, { value = "B", word = 5 } },
+            },
+            { { "-k", "-o", "F" }, { { value = "F", word = 3 } } },
+            { { "x", "-o" }, {} },
+            { { "--", "-o", "F" }, {} },
+            { { "-o", "/dev/null", "-w", "%{http_code}" }, {} },
+        }
+        for _, case in ipairs(cases) do
+            it("foo " .. table.concat(case[1], " "), function()
+                assert.same(case[2], writes("foo", case[1]))
+            end)
+        end
+
+        it("is nil for an opaque value", function()
+            assert.is_nil(writes("foo", { "-o", "f_#1" }))
+        end)
+
+        it("checks opaque before not_files", function()
+            assert.is_nil(writes("foo", { "-w", "@fmt" }))
+        end)
+
+        it("is nil for a dynamic word anywhere", function()
+            assert.is_nil(
+                writes("foo", { "-o", "F", "x" }, { false, false, true })
+            )
+        end)
+
+        it("is empty for a command with no writes", function()
+            assert.same({}, writes("bar", { "-o", "F" }, { false, true }))
+            assert.same({}, writes("baz", { "-o", "F" }))
+        end)
+
+        it("ends a cluster at a hinted taker", function()
+            entries.qux = {
+                writes = { { options = { "o" } }, { options = { "D" } } },
+                arity = { ["*"] = { takers = { "-D", "-K" } } },
+            }
+            assert.same(
+                { { value = "o", word = 1 } },
+                writes("qux", { "-Do", "F" })
+            )
+            assert.same({}, writes("qux", { "-Ko", "F" }))
+        end)
+    end)
+
     describe("get_entries", function()
         --- @type agentic.UserConfig.Permissions
         local saved_permissions
@@ -1778,6 +1867,44 @@ describe("PermissionStructured", function()
             }, foo and foo.arity)
             assert.is_nil(wildcard and wildcard.arity)
             assert.equal(5, notify.call_count)
+        end)
+
+        it("keeps valid writes gates and drops other shapes", function()
+            local notify = spy.stub(Logger, "notify")
+            MiniTest.finally(function()
+                notify:revert()
+            end)
+            --- @type table
+            local user = {
+                foo = {
+                    writes = {
+                        { options = { "-o", "--output" }, not_files = { "-" } },
+                        { options = {} },
+                        { options = { "x" }, opaque = "@*" },
+                        { options = { "x" }, extra = true },
+                        "x",
+                    },
+                },
+                ["*"] = { writes = { { options = { "o" } } } },
+            }
+            Config.permissions.structured = user
+            local entries = PermissionStructured.get_entries()
+            assert.same(
+                { { options = { "o", "output" }, not_files = { "-" } } },
+                entries.foo.writes
+            )
+            assert.is_nil(entries["*"].writes)
+            assert.equal(4, notify.call_count)
+        end)
+
+        it("replaces the bundled writes with the user's", function()
+            Config.permissions.use_plugin_defaults = true
+            Config.permissions.structured =
+                { sort = { writes = { { options = { "x" } } } } }
+            assert.same(
+                { { options = { "x" } } },
+                PermissionStructured.get_entries().sort.writes
+            )
         end)
 
         describe("gate conditions", function()

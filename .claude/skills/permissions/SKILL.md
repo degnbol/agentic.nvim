@@ -89,14 +89,17 @@ matcher** (`lua/agentic/utils/permission_structured.lua`) consumes the bundled
 `lua/agentic/permissions.json` plus any `Config.permissions.structured`
 additions: cmd-keyed gate arrays (`read_only`, `safe_write`, `ask`, `deny`)
 matched on flag identifiers and positionals, plus `unless` (negation) and
-`option_values` (value globs) on non-deny gates. It exists because globs are
+`option_values` (value globs) on non-deny gates, and a `writes` list of
+options whose values are files written (write effects, § 4). It exists because globs are
 unsound against option clustering and GNU abbreviation (`sort -uo out`,
 `sort --out=x`).
 
 **Classify by un-redirected effect.** A command that only prints to stdout is
 `read_only` (writing via pipe/redirect is caught structurally by the walker);
 one that mutates disk or executes arbitrary code as its normal action is
-`safe_write`, with write-causing options/subcommands carved out as `ask`/`deny`.
+`safe_write`, with write-causing options/subcommands carved out as `ask`/`deny`,
+or listed in `writes` when the value is the path written. An option in none
+of these auto-approves with its command, and its path never meets the grants.
 
 **Guarantees the walker enforces** (mechanics in
 [references/parsing.md](references/parsing.md)):
@@ -170,7 +173,8 @@ or glob compiled by `GrantSafety.compile_scope`; the keywords `.` and `root`
 resolve against the session's ACP cwd in `GrantCommand.resolve_input`.
 
 Two mutation producers feed one policy: ACP file tool calls (`_check_grant`)
-and Bash effects — redirect writes and plain `rm` operands that
+and Bash effects — redirect writes, values of the options a `writes` gate
+lists (`PermissionStructured.write_values`) and plain `rm` operands that
 `PermissionRules.evaluate` pins to literal paths (`_bash_effects_clear`).
 Bash effects clear only for absolute paths (`_bash_effects_clear`).
 
@@ -181,7 +185,7 @@ Bash effects clear only for absolute paths (`_bash_effects_clear`).
 2. **Hidden exclusion.** A `.`-segment below a scope root is out unless the
    pattern names it (`GrantSafety.scope_contains`).
 3. **Recoverability** — `GrantSafety.safe_for_kind`. A Bash delete of
-   scratch clears only for a path redirected to earlier in the same command
+   scratch clears only for a path written earlier in the same command
    (`tmp_cleanup`). When git fails on an existing file (`git_unknown`), every
    kind refuses and it is never scratch.
 4. **Verified Claude-owned range.** `SessionManager:_try_record_edit_range`

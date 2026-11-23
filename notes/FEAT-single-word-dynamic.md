@@ -21,8 +21,8 @@ Depends:
 - `lua/agentic/utils/shell_parse.test.lua`,
   `lua/agentic/utils/permission_structured.test.lua`,
   `lua/agentic/utils/permission_rules.test.lua`
-- `notes/FEAT-option-write-grant.md` — its `write_values` must not read a
-  dynamic value word as a path (stated there)
+- `lua/agentic/utils/permission_structured.lua` — `write_values` must not
+  read a dynamic value word as a path
 - `notes/FEAT-any-positionals-gate.md` — its `every_parse_has_positional`
   stops at `ctx.n_static`, which keeps its meaning here
 - Skills: `permissions` (`references/parsing.md` § Token expansion),
@@ -145,7 +145,7 @@ command substitutions.
 
 ## Expected outcome
 - `gh api -X GET "/repos/$r"` and `curl -sS "https://h/$p"` approve.
-- With `FEAT-option-write-grant.md` landed, `curl -sSL --max-time 15 -o
+- `curl -sSL --max-time 15 -o
   /tmp/s.out -w '[%{http_code}]' "https://sabiork.h-its.org/$p"` and the
   URL-first order (`curl -sS "https://h/$p" -o /tmp/s.out`) approve through
   the `/tmp` grant.

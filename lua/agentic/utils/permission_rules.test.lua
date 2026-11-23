@@ -2629,9 +2629,14 @@ describe("PermissionRules", function()
                 ["remote-name-all"] = true,
                 ["remote-header-name"] = true,
                 ["create-dirs"] = true,
+                ["no-clobber"] = true,
             }
-            local writes = PermissionStructured.get_entries().curl.read_only[1]
-            local options = vim.iter(writes.unless)
+            local curl = PermissionStructured.get_entries().curl
+            local gates = vim.list_extend(
+                vim.list_slice(curl.read_only[1].unless),
+                curl.writes or {}
+            )
+            local options = vim.iter(gates)
                 :map(function(gate)
                     return gate.options
                 end)
@@ -2649,6 +2654,82 @@ describe("PermissionRules", function()
                     )
                 end
             end
+        end)
+
+        describe("option value writes", function()
+            --- `evaluate` of `command` under the bundled rules.
+            --- @param command string
+            --- @return boolean ok
+            --- @return agentic.utils.PermissionRules.Effect[] effects
+            local function evaluate(command)
+                return PermissionRules.evaluate(
+                    command,
+                    PermissionRules.rules(config_dir)
+                )
+            end
+
+            --- @param path string
+            --- @return agentic.utils.PermissionRules.Effect[]
+            local function write(path)
+                return { { kind = "write", path = path } }
+            end
+
+            for _, case in ipairs({
+                {
+                    "curl -sS -o /tmp/s.out -w '[%{http_code}]' https://x",
+                    write("/tmp/s.out"),
+                },
+                { "curl -o /dev/null https://x", {} },
+                { "curl -D - https://x", {} },
+                { "curl -o '~/x' https://x", write("./~/x") },
+                { "curl -o~/x https://x", write("./~/x") },
+                { "wget -O /tmp/x https://x", write("/tmp/x") },
+                { "wget -q -nv -O /tmp/x https://x", write("/tmp/x") },
+                { "sort -r -o /tmp/x f", write("/tmp/x") },
+                { "git log --output /tmp/x", write("/tmp/x") },
+                { "git -C /r show --output=/tmp/x", write("/tmp/x") },
+                { "git log --outp=/tmp/x", write("/tmp/x") },
+            }) do
+                it("pins the write of " .. case[1], function()
+                    local ok, effects = evaluate(case[1])
+                    assert.is_true(ok)
+                    assert.same(case[2], effects)
+                end)
+            end
+
+            for _, cmd in ipairs({
+                "curl --no-clobber -o /tmp/x https://x",
+                'curl -o /tmp/x "https://x/$p"',
+                "wget https://x",
+                "wget -O x -r https://x",
+                "wget -b -O x https://x",
+            }) do
+                it("does not approve " .. cmd, function()
+                    assert.is_false((evaluate(cmd)))
+                end)
+            end
+
+            for _, cmd in ipairs({
+                "curl -w '%output{f}x' https://x",
+                "curl -o 'f_#1' https://x",
+            }) do
+                it("tallies an opaque write: " .. cmd, function()
+                    assert.is_false((evaluate(cmd)))
+                    local ranges, leaves = PermissionRules.tally_unapproved(
+                        cmd,
+                        PermissionRules.rules(config_dir)
+                    )
+                    assert.same({ { 0, 0, 0, #cmd, "opaque-write" } }, ranges)
+                    assert.same({}, leaves)
+                end)
+            end
+
+            it("takes a glob allow over the write", function()
+                stub_settings({ allow = { "Bash(sort *)" } })
+                local ok, effects = evaluate("sort -o /tmp/x f")
+                assert.is_true(ok)
+                assert.same({}, effects)
+            end)
         end)
 
         it("auto-approves gh api with no method flag (GET default)", function()
@@ -3234,17 +3315,14 @@ describe("PermissionRules", function()
                 end
             )
 
-            it(
-                "auto-approves git log $ref (token after pinned positional)",
-                function()
-                    assert.is_true(
-                        PermissionRules.should_auto_approve(
-                            "git log $ref",
-                            PermissionRules.rules(config_dir)
-                        )
+            it("prompts on git log $ref (--output writes reachable)", function()
+                assert.is_false(
+                    PermissionRules.should_auto_approve(
+                        "git log $ref",
+                        PermissionRules.rules(config_dir)
                     )
-                end
-            )
+                )
+            end)
 
             it("auto-approves ls $f (no gate to evade)", function()
                 assert.is_true(
@@ -3413,10 +3491,10 @@ describe("PermissionRules", function()
 
         -- git's leading `-c x.y=z` is a code channel (`core.pager=!cmd`), so it
         -- is gated even with a static value. The gate is direction-aware: it
-        -- matches only in the leading option region, so the dominant `git log
-        -- $ref` (dynamic ref after the pinned subcommand, which can never inject
-        -- a leading flag) stays AUTO, and a post-subcommand `-c` (the harmless
-        -- combined-diff flag) is not flagged.
+        -- matches only in the leading option region, so `git log $ref` (a
+        -- dynamic ref after the pinned subcommand, which can never inject a
+        -- leading flag) passes the gates, and a post-subcommand `-c` (the
+        -- harmless combined-diff flag) is not flagged.
         describe("git -c leading-option gate", function()
             it(
                 "prompts on git -c core.pager=x log (static code channel)",
@@ -3431,12 +3509,18 @@ describe("PermissionRules", function()
             )
 
             it(
-                "auto-approves git log $ref (trailing token can't inject -c)",
+                "allows git log $ref (trailing token can't inject -c)",
                 function()
-                    assert.is_true(
-                        PermissionRules.should_auto_approve(
-                            "git log $ref",
-                            PermissionRules.rules(config_dir)
+                    assert.equal(
+                        "allow",
+                        PermissionStructured.decide_leaf(
+                            PermissionStructured.get_entries(),
+                            {
+                                cmd_name = "git",
+                                args = { "log", "$ref" },
+                                args_dynamic = { false, true },
+                            },
+                            "safe_write"
                         )
                     )
                 end
@@ -4408,10 +4492,10 @@ describe("PermissionRules", function()
                 )
             end)
 
-            it("no-allow: a curl that writes a file", function()
+            it("none: a curl that writes a named file", function()
                 Config.permissions.use_plugin_defaults = true
                 local cmd = "curl -sS -o /tmp/s.out -w '%{http_code}' https://x"
-                assert.same({ { cmd, "no-allow" } }, reasons(cmd, nil))
+                assert.same({}, reasons(cmd, nil))
             end)
 
             it("gives one range per unapproved part", function()
@@ -5489,6 +5573,21 @@ describe("PermissionRules", function()
                 path
             )
             assert.is_true(tallies(cmd, "zsh " .. path))
+        end)
+
+        it("judges a script an option value wrote as unknown", function()
+            Config.permissions.use_plugin_defaults = true
+            local path = script("ls\n")
+            local cmd = ("curl -o %s https://x; zsh %s"):format(path, path)
+            assert.is_true(tallies(cmd, "zsh " .. path))
+            assert.is_false(
+                (
+                    PermissionRules.evaluate(
+                        cmd,
+                        PermissionRules.rules(config_dir)
+                    )
+                )
+            )
         end)
 
         it("highlights a script an expanding heredoc wrote", function()

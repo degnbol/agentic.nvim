@@ -875,7 +875,8 @@ with no word was decided by the provider.
 8.3 GRANTS                                         *agentic-permissions-grant*
 
 `/grant` adds a path to the session's grants. Under a granted path, file
-tool calls (edit, write, create, delete, move), shell redirects (`>`, `>>`)
+tool calls (edit, write, create, delete, move), shell redirects (`>`, `>>`),
+the files a `writes` option names (`curl -o`, |agentic-permissions-shell|)
 and `rm` auto-approve when the change is recoverable. Grants last until the
 session ends.
 
@@ -903,10 +904,11 @@ A change is recoverable when:
 A delete needs a tracked file with no uncommitted change.
 
 An untracked file under `/tmp` or `$TMPDIR` can always be written, created
-or edited. An `rm` of one needs the file redirected to earlier in the same
+or edited. An `rm` of one needs the file written earlier in the same
 command, and `permissions.tmp_cleanup` on.
 
-A redirect or `rm` target must be an absolute path with no `..` segment.
+A redirect, `writes` option or `rm` target must be an absolute path with no
+`..` segment.
 
 `permissions.default_grant` is granted at session start. An entry naming an
 unset variable is skipped.
@@ -972,6 +974,12 @@ A token is a letter (`-x`, also inside a cluster) or a long name
 the first positional, a literal first positional (`config`) is after it,
 and `"*"` is every scope. A missing hint only adds prompts; a wrong hint
 can auto-approve a write.
+A command's optional `writes` field lists gates `{ options = {...},
+not_files = {...}, opaque = {...} }`. The value of a listed option is a
+file the command writes, checked as a redirect target is
+(|agentic-permissions-grant|). A value that matches a `not_files` glob
+(`-`, `/dev/null`) names no file. A value that matches an `opaque` glob
+(`#1`) withholds approval.
 
 A command's optional `runs` field lists config files that make it load code.
 While an item matches, after an earlier part of the command may have changed
@@ -996,7 +1004,7 @@ An item with neither `keys` nor `except_keys` matches when the file exists. A
 file that does not parse as `format`, or is larger than 64 KB, matches.
 
 `permissions.structured` is deep-merged over the bundled defaults: a kind-array
-replaces the bundled array of that kind, kinds you omit stay bundled, `arity`
+or `writes` replaces the bundled one, fields you omit stay bundled, `arity`
 merges per scope and field, `runs` adds to the bundled items, and `vim.NIL`
 disables the bundled entry. >lua
     require("agentic").setup({

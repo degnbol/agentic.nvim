@@ -1924,6 +1924,50 @@ describe("agentic.ui.PermissionManager", function()
                 end
             )
 
+            it(
+                "a granted option value write is decided by its command and the grant",
+                function()
+                    grant(tmp)
+                    local verdict = pm:decide("execute", {
+                        toolCallId = "tc-grant-option",
+                        kind = "execute",
+                        rawInput = {
+                            command = "curl -o " .. tmp .. "/x https://x",
+                        } --[[@as agentic.acp.RawInput]],
+                    }, nil)
+                    assert.same({
+                        allow = true,
+                        causes = {
+                            { code = "read-only" },
+                            { code = "grant", subject = tmp .. "/x" },
+                        },
+                    }, verdict)
+                end
+            )
+
+            it(
+                "an option value write to a dirty file does not clear",
+                function()
+                    grant(repo)
+                    local verdict = pm:decide("execute", {
+                        toolCallId = "tc-grant-option-dirty",
+                        kind = "execute",
+                        rawInput = {
+                            command = "curl -o " .. dirty_md .. " https://x",
+                        } --[[@as agentic.acp.RawInput]],
+                    }, nil)
+                    assert.same({
+                        causes = {
+                            {
+                                code = "grant",
+                                subject = dirty_md,
+                                detail = "file has unstaged changes",
+                            },
+                        },
+                    }, verdict)
+                end
+            )
+
             it("a delete clears nothing when git diff fails", function()
                 diff_hunks_stub:returns(nil)
                 grant(repo)

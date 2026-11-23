@@ -111,7 +111,6 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 - P3 [FEAT-context-usage.md](notes/FEAT-context-usage.md): tell the agent its context usage past a threshold — reviewed spec
 - P3 [FEAT-diff-line-numbers.md](notes/FEAT-diff-line-numbers.md): line numbers in Edit tool diff previews
 - P3 [FEAT-gutter-identity.md](notes/FEAT-gutter-identity.md): gutter identity glyphs — reviewed (open questions)
-- P3 [FEAT-option-write-grant.md](notes/FEAT-option-write-grant.md): option values as grant-scoped write effects — spec
 - P3 [FEAT-permission-always-allow-wording.md](notes/FEAT-permission-always-allow-wording.md): per-kind wording for the "Allow always" permission option
 - P3 [FEAT-permission-resolve-known-vars.md](notes/FEAT-permission-resolve-known-vars.md): resolve known-literal vars before the safety check
 - P3 [FEAT-single-word-dynamic.md](notes/FEAT-single-word-dynamic.md): a quoted dynamic word that cannot be an option — reviewed spec
