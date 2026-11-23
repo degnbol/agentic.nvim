@@ -850,8 +850,7 @@
   "col":   { "read_only": [{}] },
 
   "curl": {
-    "read_only": [{}],
-    "ask": [{ "options": ["O",
+    "read_only": [{ "unless": [{ "options": ["O",
                           "remote-name", "remote-name-all",
                           "remote-header-name", "J",
                           "output-dir", "create-dirs",
@@ -880,7 +879,7 @@
             { "options": ["o", "output", "D", "dump-header"],
               "unless": [{ "option_values": {
                 "options": ["o", "output", "D", "dump-header"],
-                "values":  ["/dev/null", "-"] } }] }],
+                "values":  ["/dev/null", "-"] } }] }] }],
     "arity": {
       "*": {
         "takers": ["-o", "--output", "-D", "--dump-header", "-w", "--write-out",

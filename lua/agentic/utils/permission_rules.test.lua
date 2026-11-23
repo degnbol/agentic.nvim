@@ -2623,16 +2623,15 @@ describe("PermissionRules", function()
             end)
         end
 
-        it("lists the expand- twin of every valued curl ask option", function()
+        it("lists the expand- twin of each valued curl write option", function()
             local booleans = {
                 ["remote-name"] = true,
                 ["remote-name-all"] = true,
                 ["remote-header-name"] = true,
                 ["create-dirs"] = true,
             }
-            local options = vim.iter(
-                PermissionStructured.get_entries().curl.ask
-            )
+            local writes = PermissionStructured.get_entries().curl.read_only[1]
+            local options = vim.iter(writes.unless)
                 :map(function(gate)
                     return gate.options
                 end)
@@ -4407,6 +4406,12 @@ describe("PermissionRules", function()
                     { { "git $sub", "dynamic" } },
                     reasons("git $sub", nil)
                 )
+            end)
+
+            it("no-allow: a curl that writes a file", function()
+                Config.permissions.use_plugin_defaults = true
+                local cmd = "curl -sS -o /tmp/s.out -w '%{http_code}' https://x"
+                assert.same({ { cmd, "no-allow" } }, reasons(cmd, nil))
             end)
 
             it("gives one range per unapproved part", function()
