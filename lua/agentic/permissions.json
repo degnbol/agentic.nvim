@@ -17,7 +17,8 @@
   "bat":       { "read_only": [{}] },
   "mdfind":    { "read_only": [{}] },
   "locate":    { "read_only": [{}] },
-  "fc-list":   { "read_only": [{}] },
+  "fc-list":   { "safe_write": [{}] },
+  "fc-match":  { "safe_write": [{}] },
 
   "which":     { "read_only": [{}] },
   "whereis":   { "read_only": [{}] },
