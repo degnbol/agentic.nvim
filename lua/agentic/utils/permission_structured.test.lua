@@ -11,6 +11,7 @@
 
 local assert = require("tests.helpers.assert")
 local Config = require("agentic.config")
+local FileSystem = require("agentic.utils.file_system")
 local Logger = require("agentic.utils.logger")
 local MiniTest = require("mini.test")
 local PermissionRules = require("agentic.utils.permission_rules")
@@ -1552,6 +1553,7 @@ describe("PermissionStructured", function()
 
         it("approves when the nested condition holds", function()
             assert.equal("allow", decide({ "-m", "GET", "x" }))
+            assert.equal("allow", decide({ "-mGET", "x" }))
         end)
 
         it("asks when the nested unless holds", function()
@@ -1560,6 +1562,8 @@ describe("PermissionStructured", function()
 
         it("asks on another value", function()
             assert.equal("ask", decide({ "-m", "POST" }))
+            assert.equal("ask", decide({ "-m=GET" }))
+            assert.equal("ask", decide({ "-m", "GET", "-m", "POST" }))
         end)
 
         it("asks on a dynamic word", function()
@@ -1720,15 +1724,56 @@ describe("PermissionStructured", function()
     end)
 
     describe("get_entries", function()
+        local read_json = FileSystem.read_json
         --- @type agentic.UserConfig.Permissions
         local saved_permissions
+        --- @type TestStub
+        local bundled_read
+
+        --- Synthetic content of the bundled file.
+        local BUNDLED = {
+            git = {
+                arity = {
+                    [""] = { booleans = { "--no-pager" } },
+                    config = { booleans = { "--global" } },
+                },
+            },
+            cargo = { runs = { { path = ".cargo/config.toml" } } },
+            sort = { writes = { { options = { "o" } } } },
+        }
+
+        --- Serve `BUNDLED` as the bundled file, other paths from disk.
+        --- @param path string
+        --- @return table|nil data
+        --- @return string|nil err
+        local function serve_bundled(path)
+            if vim.endswith(path, "/agentic/permissions.json") then
+                return vim.deepcopy(BUNDLED), nil
+            end
+            return read_json(path)
+        end
+
+        --- Drop the cached bundled layer: get_entries reloads it when
+        --- `use_plugin_defaults` changes.
+        local function reload_bundled()
+            local used = Config.permissions.use_plugin_defaults
+            Config.permissions.use_plugin_defaults = not used
+            PermissionStructured.get_entries()
+            Config.permissions.use_plugin_defaults = used
+        end
 
         before_each(function()
             saved_permissions = vim.deepcopy(Config.permissions)
+            bundled_read = spy.stub(FileSystem, "read_json")
+            bundled_read:invokes(serve_bundled)
+            Config.permissions.use_plugin_defaults = true
+            reload_bundled()
         end)
 
         after_each(function()
+            bundled_read:revert()
             Config.permissions = saved_permissions
+            reload_bundled()
         end)
 
         --- Whether `command` auto-approves with the user structured entries
@@ -1747,7 +1792,10 @@ describe("PermissionStructured", function()
         it("follows use_plugin_defaults with no cache reset", function()
             Config.permissions.structured = {}
             Config.permissions.use_plugin_defaults = true
-            assert.is_not_nil(next(PermissionStructured.get_entries()))
+            assert.same(
+                { "cargo", "git", "sort" },
+                vim.fn.sort(vim.tbl_keys(PermissionStructured.get_entries()))
+            )
             Config.permissions.use_plugin_defaults = false
             assert.same({}, PermissionStructured.get_entries())
         end)
@@ -1765,24 +1813,19 @@ describe("PermissionStructured", function()
         end)
 
         it("retries a failed read of the bundled file", function()
-            local FileSystem = require("agentic.utils.file_system")
             local notify = spy.stub(Logger, "notify")
-            local read_json = spy.stub(FileSystem, "read_json")
             MiniTest.finally(function()
-                read_json:revert()
                 notify:revert()
             end)
-            read_json:invokes(function()
+            bundled_read:invokes(function()
                 return nil, "unreadable"
             end)
             Config.permissions.structured = {}
-            Config.permissions.use_plugin_defaults = false
-            PermissionStructured.get_entries()
-            Config.permissions.use_plugin_defaults = true
+            reload_bundled()
             assert.same({}, PermissionStructured.get_entries())
 
-            read_json:revert()
-            assert.is_not_nil(next(PermissionStructured.get_entries()))
+            bundled_read:invokes(serve_bundled)
+            assert.is_not_nil(PermissionStructured.get_entries().git)
         end)
 
         it("strips leading dashes from option strings", function()
@@ -1805,9 +1848,10 @@ describe("PermissionStructured", function()
             Config.permissions.use_plugin_defaults = true
             local item = { path = "x.toml", format = "toml", keys = { "a" } }
             Config.permissions.structured = { cargo = { runs = { item } } }
-            local runs = PermissionStructured.get_entries().cargo.runs or {}
-            assert.is_true(#runs > 1)
-            assert.same(item, runs[#runs])
+            assert.same(
+                { { path = ".cargo/config.toml" }, item },
+                PermissionStructured.get_entries().cargo.runs
+            )
             Config.permissions.structured = { foo = { runs = { item } } }
             assert.same({ item }, PermissionStructured.get_entries().foo.runs)
         end)
