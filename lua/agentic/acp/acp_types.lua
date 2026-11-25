@@ -221,7 +221,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field method string
 --- @field result? table
 --- @field params? { sessionId: string, update: agentic.acp.SessionUpdateMessage }
---- @field error? agentic.acp.ACPError
+--- @field error? agentic.AgentClient.Error
 
 --- @class agentic.acp.ToolCallMessage
 --- @field sessionUpdate "tool_call"
@@ -327,15 +327,6 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @class agentic.acp.StateUpdate : agentic.acp.SubagentWorkState
 --- @field sessionUpdate "state_update"
 
---- The state of a session's foreground work, as `ACPClient` reports it to a
---- subscriber.
---- @class agentic.acp.TurnState
---- @field state "running"|"requires_action"|"idle"
---- @field stop_reason? agentic.acp.StopReason|"error" With `idle` at a turn's end; nil on a resume snapshot
---- @field usage? table
---- @field error? agentic.acp.ACPError With `idle` when the work failed
---- @field more? boolean ACP v1 only: with `idle`, other prompts are still unanswered
-
 --- A prompt the agent took in (ACP v2), or with empty `content` a replayed
 --- message cleared.
 --- @class agentic.acp.UserMessage
@@ -377,8 +368,3 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @class agentic.acp.RequestPermissionOutcome
 --- @field outcome "cancelled" | "selected"
 --- @field optionId? string
-
---- @class agentic.acp.ACPError
---- @field code number
---- @field message string
---- @field data? any

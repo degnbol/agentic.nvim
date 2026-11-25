@@ -4,7 +4,7 @@
 -- When the user switches the provider, the SessionManager should handle the transition smoothly,
 -- ensuring that the new session is properly set up and all the previous messages are sent to the new agent provider without duplicating them in the chat widget
 
-local ACPClient = require("agentic.acp.acp_client")
+local AgentClient = require("agentic.agent_client")
 local ACPPayloads = require("agentic.acp.acp_payloads")
 local AcpKind = require("agentic.utils.acp_kind")
 local AgentConfigOptions = require("agentic.acp.agent_config_options")
@@ -109,7 +109,7 @@ end
 --- @field _is_first_message boolean Whether this is the first message in the session, used to add system info only once
 --- @field is_generating boolean The running state the chat header shows
 --- @field widget agentic.ui.ChatWidget
---- @field agent agentic.acp.ACPClient
+--- @field agent agentic.AgentClient
 --- @field main_view agentic.ui.AgentView The chat's. Its response boundary is never reset: every session starts with the writer's prose run closed and history ending on a user message, where a stale verdict writes no break
 --- @field message_writer agentic.ui.MessageWriter `main_view.writer`
 --- @field permission_manager agentic.ui.PermissionManager
@@ -1580,9 +1580,9 @@ end
 
 --- Build the ACP client handlers table. Conversation updates of a session/load
 --- replay are held or dropped instead of handled.
---- @return agentic.acp.ClientHandlers
+--- @return agentic.AgentClient.ClientHandlers
 function SessionManager:_build_handlers()
-    --- @type agentic.acp.ClientHandlers
+    --- @type agentic.AgentClient.ClientHandlers
     return {
         on_session_update = function(update, source_session_id)
             if
@@ -3611,7 +3611,7 @@ function SessionManager:_dispatch_turn(prompt, sent)
         if self.destroyed or not err or not self:_drop_untaken(sent) then
             return
         end
-        if err.code ~= ACPClient.ERROR_CODES.REQUEST_CANCELLED then
+        if err.code ~= AgentClient.ERROR_CODES.REQUEST_CANCELLED then
             self.message_writer:write_error_message(err)
             if not self:_turn_open() then
                 self.message_writer:finalize_turn()
@@ -3683,7 +3683,7 @@ end
 
 --- Apply a change of the agent's foreground work. An `idle` ends the turn
 --- running, if one runs; an `idle` while idle is a snapshot and ends nothing.
---- @param state agentic.acp.TurnState
+--- @param state agentic.AgentClient.TurnState
 function SessionManager:_on_turn_state(state)
     local was = self._foreground
     self._foreground = state.state
@@ -3703,7 +3703,7 @@ end
 --- the refusal is reported), or when the usage limit turns it away before any
 --- reply (`"usage_limit"`). A turned-away prompt and the limit's notice are
 --- removed from the chat history.
---- @param state agentic.acp.TurnState
+--- @param state agentic.AgentClient.TurnState
 function SessionManager:_end_turn(state)
     local sent = table.remove(self._taken, 1)
     local user_msg = sent and sent.user_msg
@@ -3756,7 +3756,7 @@ function SessionManager:_end_turn(state)
             )
             self._transient_attempt = 0
         end
-        if err.code == ACPClient.ERROR_CODES.AUTH_REQUIRED then
+        if err.code == AgentClient.ERROR_CODES.AUTH_REQUIRED then
             Recovery.offer_login(self)
         elseif error_type == "usage_limit" then
             -- claude-agent-acp reuses a stalled query after this error,
@@ -4669,7 +4669,7 @@ end
 --- Start the session of a fork. A fork holding no prompt is a new session
 --- without links. Otherwise the fork's history gets its link to the source,
 --- and the provider cuts its own copy of the conversation where it can
---- (`ACPClient:can_fork`); else, or when the cut fails, the history is sent
+--- (`AgentClient:can_fork`); else, or when the cut fails, the history is sent
 --- as text with the first prompt.
 --- @param fork agentic.SessionManager.ForkStart
 function SessionManager:_do_start_fork(fork)
@@ -4722,7 +4722,10 @@ function SessionManager:_do_start_fork(fork)
                     .. " — sending the history with the first prompt"
                 -- A response the provider has not recorded: one stopped
                 -- early, or one still streaming.
-                if err and err.code == ACPClient.ERROR_CODES.INVALID_PARAMS then
+                if
+                    err
+                    and err.code == AgentClient.ERROR_CODES.INVALID_PARAMS
+                then
                     Logger.debug(message)
                 else
                     Logger.notify(message, vim.log.levels.WARN)

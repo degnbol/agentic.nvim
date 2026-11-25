@@ -80,7 +80,7 @@ end
 ---    {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",
 ---    \"message\":\"Invalid authentication credentials\"}}"
 --- Output: {"401 Invalid authentication credentials"}
---- @param err agentic.acp.ACPError
+--- @param err agentic.AgentClient.Error
 --- @return string[] lines
 --- @return string|nil error_type Error class (from errorKind if present, else text)
 --- @return number|nil reset_epoch Epoch seconds when usage resets (for usage_limit errors)

@@ -7,6 +7,7 @@
 --- | "cursor-acp"
 --- | "auggie-acp"
 --- | "mistral-vibe-acp"
+--- | "pi"
 
 --- @alias agentic.UserConfig.HeaderRenderFn fun(parts: agentic.ui.ChatWidget.HeaderParts): string|nil
 
@@ -144,6 +145,13 @@ local ConfigDefault = {
             name = "OpenCode ACP",
             command = "opencode",
             args = { "acp" },
+            env = {},
+        },
+
+        pi = {
+            name = "pi",
+            command = "pi",
+            args = {},
             env = {},
         },
 
@@ -596,8 +604,8 @@ local ConfigDefault = {
     },
 
     --- @class agentic.UserConfig.SkepticModel
-    --- @field provider string Only "opencode-acp"
-    --- @field model string Model value id, e.g. "litellm/glm-5.3"
+    --- @field provider string Only "pi"
+    --- @field model string Model value id, `<provider>/<id>`, e.g. "litellm/glm-5.3"
 
     --- Background checks of the main agent's claims after each turn. Needs
     --- `text_model.url`. `:h agentic-skeptic`
@@ -615,8 +623,8 @@ local ConfigDefault = {
             reasoning_effort = "none",
         },
         skeptics = {
-            { provider = "opencode-acp", model = "litellm/glm-5.3" },
-            { provider = "opencode-acp", model = "litellm/kimi-k3" },
+            { provider = "pi", model = "litellm/glm-5.3" },
+            { provider = "pi", model = "litellm/kimi-k3" },
         },
         turn_timeout_ms = 300000,
         max_refusals = 3,

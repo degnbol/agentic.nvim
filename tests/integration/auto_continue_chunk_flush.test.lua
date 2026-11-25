@@ -68,7 +68,7 @@ end
 --- Synthetic usage-limit ACPError matching what claude-agent-acp sends:
 --- an internal error (-32603) carrying the API error body as its message.
 --- Only the `message` field is inspected by write_error_message.
---- @return agentic.acp.ACPError
+--- @return agentic.AgentClient.Error
 local function usage_limit_err()
     return {
         code = -32603,

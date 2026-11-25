@@ -492,6 +492,7 @@ end
 --- Known field usage by provider:
 ---   - claude-agent-acp, auggie-acp: `file_path` (snake_case)
 ---   - opencode-acp: `path` (`filePath` in sessions migrated from 1.x)
+---   - pi: `path` (absolute)
 ---   - gemini-acp, codex-acp, mistral-vibe-acp: path arrives via
 ---     `update.locations[]` or `update.content[]`, not `rawInput` — these
 ---     providers will return nil here and rely on the adapter to surface

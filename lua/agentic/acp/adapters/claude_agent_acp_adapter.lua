@@ -187,8 +187,8 @@ end
 --- this before sending the request: a reader keeps only records from its
 --- construction on.
 --- @generic R : { sessionId?: string }
---- @param callback fun(result: R|nil, err: agentic.acp.ACPError|nil)
---- @return fun(result: R|nil, err: agentic.acp.ACPError|nil)
+--- @param callback fun(result: R|nil, err: agentic.AgentClient.Error|nil)
+--- @return fun(result: R|nil, err: agentic.AgentClient.Error|nil)
 function ClaudeAgentACPAdapter:_with_transcript_reader(callback)
     local reader = ClaudeTranscriptReader:new()
     return function(result, err)
@@ -202,8 +202,8 @@ end
 
 --- Creates a session and opens a transcript reader for it.
 --- @param cwd string
---- @param handlers agentic.acp.ClientHandlers
---- @param callback fun(result: agentic.acp.SessionCreationResponse|nil, err: agentic.acp.ACPError|nil)
+--- @param handlers agentic.AgentClient.ClientHandlers
+--- @param callback fun(result: agentic.acp.SessionCreationResponse|nil, err: agentic.AgentClient.Error|nil)
 function ClaudeAgentACPAdapter:create_session(cwd, handlers, callback)
     -- The CLI writes SessionStart's records before the bridge answers
     -- `session/new`.
@@ -231,8 +231,8 @@ end
 --- @param session_id string
 --- @param cwd string
 --- @param response_id string
---- @param handlers agentic.acp.ClientHandlers
---- @param callback fun(result: agentic.acp.ForkSessionResponse|nil, err: agentic.acp.ACPError|nil)
+--- @param handlers agentic.AgentClient.ClientHandlers
+--- @param callback fun(result: agentic.acp.ForkSessionResponse|nil, err: agentic.AgentClient.Error|nil)
 function ClaudeAgentACPAdapter:fork_session(
     session_id,
     cwd,
@@ -260,8 +260,8 @@ end
 --- @param session_id string
 --- @param cwd string
 --- @param mcp_servers table[]|nil
---- @param handlers agentic.acp.ClientHandlers
---- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil)
+--- @param handlers agentic.AgentClient.ClientHandlers
+--- @param callback fun(result: table|nil, err: agentic.AgentClient.Error|nil)
 function ClaudeAgentACPAdapter:load_session(
     session_id,
     cwd,

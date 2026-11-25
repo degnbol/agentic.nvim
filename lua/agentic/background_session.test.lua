@@ -13,7 +13,7 @@ describe("agentic.BackgroundSession", function()
 
     --- A client that records each request and answers only when told.
     --- @class tests.FakeClient
-    --- @field handlers? agentic.acp.ClientHandlers
+    --- @field handlers? agentic.AgentClient.ClientHandlers
     --- @field on_created? fun(result: table|nil, err: table|nil)
     --- @field prompts { text: string, callback: fun(result: table|nil, err: table|nil) }[]
     --- @field config_sets { id: string, value: string }[]
@@ -45,7 +45,7 @@ describe("agentic.BackgroundSession", function()
         timers = {}
         sessions = {}
         client = {
-            provider_config = { name = "OpenCode" },
+            provider_config = { name = "pi" },
             prompts = {},
             config_sets = {},
             model_sets = {},
@@ -121,7 +121,7 @@ describe("agentic.BackgroundSession", function()
     local function new_session(overrides)
         --- @type agentic.BackgroundSession.Opts
         local opts = vim.tbl_extend("force", {
-            provider = "opencode-acp",
+            provider = "pi",
             label = "skeptic",
             kind = "skeptic",
             cwd = vim.fn.getcwd(),
@@ -147,13 +147,25 @@ describe("agentic.BackgroundSession", function()
         client.on_created({ sessionId = "bg-1", configOptions = config_options })
     end
 
-    --- Answer the latest prompt.
+    --- Take the current prompt in, then end its turn.
+    --- @param stop_reason string
+    local function end_turn(stop_reason)
+        client.handlers.on_prompt_taken()
+        client.handlers.on_turn_state({
+            state = "idle",
+            stop_reason = stop_reason,
+        })
+    end
+
+    --- End the latest prompt's turn `end_turn`, or fail the prompt before the
+    --- agent took it in.
     --- @param err table|nil
     local function answer(err)
-        client.prompts[#client.prompts].callback(
-            err == nil and { stopReason = "end_turn" } or nil,
-            err
-        )
+        if err then
+            client.prompts[#client.prompts].callback(nil, err)
+        else
+            end_turn("end_turn")
+        end
     end
 
     --- @param text string
@@ -267,6 +279,20 @@ describe("agentic.BackgroundSession", function()
         assert.same({ "bg-1" }, client.closes)
     end)
 
+    it("ends no turn at an idle before its prompt is taken in", function()
+        local session = new_session() --[[@as agentic.BackgroundSession]]
+        create()
+        local results, on_done = collector()
+        session:prompt("hi", on_done)
+        client.handlers.on_turn_state({
+            state = "idle",
+            stop_reason = "end_turn",
+        })
+        assert.same({}, results)
+        answer(nil)
+        assert.equal(1, #results)
+    end)
+
     describe("permissions", function()
         --- @type agentic.BackgroundSession
         local session
@@ -345,7 +371,7 @@ describe("agentic.BackgroundSession", function()
                     shell_request("t1", "git add x"),
                     function() end
                 )
-                client.prompts[1].callback({ stopReason = "cancelled" }, nil)
+                end_turn("cancelled")
                 assert.equal(2, #client.prompts)
                 assert.equal(
                     "Refused:\ngit add x: no allow rule matches it",
@@ -360,14 +386,14 @@ describe("agentic.BackgroundSession", function()
                     shell_request("t" .. i, "rm y"),
                     function() end
                 )
-                client.prompts[i].callback({ stopReason = "cancelled" }, nil)
+                end_turn("cancelled")
             end
             assert.equal(2, #client.prompts)
             assert.same({ { err = "refused" } }, results)
         end)
 
         it("fails on a provider cancel without a reject", function()
-            client.prompts[1].callback({ stopReason = "cancelled" }, nil)
+            end_turn("cancelled")
             assert.equal(1, #client.prompts)
             assert.same({ { err = "interrupted" } }, results)
         end)
@@ -383,10 +409,7 @@ describe("agentic.BackgroundSession", function()
                     session:stop()
                     assert.same({ "bg-1" }, client.stops)
                     assert.same({ { err = "interrupted" } }, results)
-                    client.prompts[1].callback(
-                        { stopReason = stop_reason },
-                        nil
-                    )
+                    end_turn(stop_reason)
                     assert.equal(1, #client.prompts)
                     assert.equal(1, #results)
                 end
@@ -475,7 +498,6 @@ describe("agentic.BackgroundSession", function()
                 create()
                 local results, on_done = collector()
                 session:prompt("slow", on_done)
-                local late = client.prompts[1]
                 timers[#timers].fn()
                 assert.same({ "bg-1" }, client.stops)
                 assert.same({ { err = "timeout" } }, results)
@@ -488,7 +510,7 @@ describe("agentic.BackgroundSession", function()
                     function() end
                 )
                 assert.equal(1, #client.prompts)
-                late.callback({ stopReason = "cancelled" }, nil)
+                end_turn("cancelled")
                 assert.equal(2, #client.prompts)
                 assert.equal(1, #results)
                 message("ok")

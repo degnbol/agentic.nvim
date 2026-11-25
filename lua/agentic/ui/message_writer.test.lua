@@ -4929,7 +4929,7 @@ describe("agentic.ui.MessageWriter", function()
         it(
             "writes heading and body to buffer and returns error_type",
             function()
-                --- @type agentic.acp.ACPError
+                --- @type agentic.AgentClient.Error
                 local err = {
                     code = -32000,
                     message = "Authentication required",
@@ -4947,7 +4947,7 @@ describe("agentic.ui.MessageWriter", function()
         )
 
         it("returns parsed error_type from embedded JSON", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "Internal error: API Error: 401\n"
@@ -4963,7 +4963,7 @@ describe("agentic.ui.MessageWriter", function()
         it("applies error heading extmark on Error text", function()
             local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32000,
                 message = "Authentication required",
@@ -4990,7 +4990,7 @@ describe("agentic.ui.MessageWriter", function()
         it("applies error body extmarks on non-empty lines", function()
             local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "Internal error: API Error: 401\n"
@@ -5025,7 +5025,7 @@ describe("agentic.ui.MessageWriter", function()
                 { "previous message", "" }
             )
 
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "Internal error: API Error: 529\n"
@@ -5055,7 +5055,7 @@ describe("agentic.ui.MessageWriter", function()
         it("wraps the body at wrap_width", function()
             Config.windows.wrap_width = 58
 
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "You've hit your individual spend limit · run"

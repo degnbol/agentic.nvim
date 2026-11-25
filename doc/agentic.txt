@@ -66,8 +66,8 @@ This is a fork of carlos-algms/agentic.nvim.
 2. REQUIREMENTS                                         *agentic-requirements*
 
 - Neovim >= 0.12.0
-- An ACP provider binary on PATH. `provider` takes the config key; the
-  binary is what must be installed:
+- An ACP provider binary, or pi, on PATH. `provider` takes the config key;
+  the binary is what must be installed:
 
   Config key          Binary            Provider ~
   claude-agent-acp    claude-agent-acp  Claude (default)
@@ -77,6 +77,7 @@ This is a fork of carlos-algms/agentic.nvim.
   cursor-acp          cursor-agent-acp  Cursor Agent
   auggie-acp          auggie            Auggie (--acp)
   mistral-vibe-acp    vibe-acp          Mistral Vibe
+  pi                  pi                pi
 
 Install claude-agent-acp:
 >
@@ -781,8 +782,8 @@ A command line dispatches as its own prompt; see |agentic-queue|.
 ------------------------------------------------------------------------------
 7.2 FORWARDED COMMANDS                            *agentic-commands-forwarded*
 
-Slash commands the provider advertises over ACP are passed through and
-appear in completion.
+Slash commands the provider advertises are passed through and appear in
+completion. pi skills run as `/skill:<name>`.
 
 ------------------------------------------------------------------------------
 7.3 COMMAND NOTICES                                          *agentic-notices*
@@ -1333,7 +1334,7 @@ turns off.
 
 Requires:
 - `text_model.url`, for the model that extracts the claims.
-- The `opencode-acp` provider.
+- The `pi` provider.
 
     `/skeptic`           Report whether the skeptic is on.
     `/skeptic on|off`    Turn it on or off for the session.
@@ -1346,7 +1347,7 @@ Requires:
         `reasoning_effort` (default: "none") is sent as the request's
         `reasoning_effort`; `false` leaves the field out of the request.
     `skeptics`            table[]
-        One `{ provider = "opencode-acp", model = "..." }` per skeptic.
+        One `{ provider = "pi", model = "<provider>/<id>" }` per skeptic.
     `turn_timeout_ms`     integer (default: 300000)
         Per skeptic turn, and for a skeptic to start.
     `max_refusals`        integer (default: 3)

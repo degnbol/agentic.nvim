@@ -1,7 +1,7 @@
 local M = {}
 
 --- ACP client handlers that record each call in order.
---- @return agentic.acp.ClientHandlers handlers
+--- @return agentic.AgentClient.ClientHandlers handlers
 --- @return table[] calls `{ method, payload, source }` per call
 function M.new()
     local calls = {}

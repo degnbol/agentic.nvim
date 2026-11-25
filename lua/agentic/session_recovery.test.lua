@@ -83,7 +83,7 @@ describe("agentic.session_recovery", function()
         --- @type TestStub
         local restart_stub
         --- What `authenticate` answers; overridden per case.
-        --- @type agentic.acp.ACPError|nil
+        --- @type agentic.AgentClient.Error|nil
         local auth_err
         --- The process `vim.system` returns, recording `kill`.
         local process
@@ -368,7 +368,7 @@ describe("agentic.session_recovery", function()
                 "ignores the answer to a stopped authenticate request",
                 function()
                     local session, sink = make_session({ AGENT })
-                    --- @type fun(err: agentic.acp.ACPError|nil)
+                    --- @type fun(err: agentic.AgentClient.Error|nil)
                     local answer_stopped
                     session.agent.authenticate = function(_self, _id, cb)
                         answer_stopped = cb

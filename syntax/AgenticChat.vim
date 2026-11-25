@@ -7,7 +7,7 @@ if exists('b:current_syntax') | finish | endif
 " /command is intercepted by the CLI before the LLM sees it (built-in, skill,
 " or unknown). Mid-line /word has no special meaning — it's plain prose. The
 " highlight signals "intercepted and acted upon" vs unmarked text.
-syn match AgenticSlashCommandPrefix "^/\ze[[:alnum:]_-]\+\%(\s\|$\)" nextgroup=AgenticSlashCommand
-syn match AgenticSlashCommand "[[:alnum:]_-]\+" contained
+syn match AgenticSlashCommandPrefix "^/\ze[[:alnum:]_:-]\+\%(\s\|$\)" nextgroup=AgenticSlashCommand
+syn match AgenticSlashCommand "[[:alnum:]_:-]\+" contained
 
 let b:current_syntax = 'AgenticChat'

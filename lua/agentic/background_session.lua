@@ -10,9 +10,10 @@ local PermissionManager = require("agentic.ui.permission_manager")
 local SessionResume = require("agentic.session_resume")
 local SubagentTranscript = require("agentic.ui.subagent_transcript")
 
---- The only provider whose escalations the tripwire can tell apart: claude's
---- SDK auto-allows read-only Bash without asking.
-local PROVIDER = "opencode-acp"
+--- The only provider whose escalations the tripwire can tell apart, because
+--- pi's `agentic.ts` extension asks about every call. Claude's SDK, by
+--- contrast, auto-allows read-only Bash without asking.
+local PROVIDER = "pi"
 
 --- Kinds whose run without a permission request trips the session.
 --- @type table<string, true>
@@ -44,7 +45,7 @@ local function subagent_info(label)
 end
 
 --- @class agentic.BackgroundSession.Opts
---- @field provider string Only "opencode-acp"
+--- @field provider string Only "pi"
 --- @field model? string Model value id, e.g. "litellm/glm-5.3"
 --- @field label string Transcript heading and notification label, e.g. "skeptic glm-5.3"
 --- @field kind agentic.BufferNames.Kind The kind segment of its transcript's name
@@ -72,6 +73,7 @@ end
 --- @field text string[] The agent's message chunks
 --- @field timer? uv.uv_timer_t
 --- @field abandoned boolean Cancelled by us; its output no longer counts
+--- @field taken? boolean The provider has taken the turn's prompt in
 
 --- An agent session the plugin drives unattended, with a transcript the user
 --- can open like a subagent's. It never prompts: a call its policy does not
@@ -79,7 +81,7 @@ end
 --- @class agentic.BackgroundSession
 --- @field bufnr integer|nil Transcript buffer, nil until the session exists
 --- @field _opts agentic.BackgroundSession.Opts
---- @field _client? agentic.acp.ACPClient
+--- @field _client? agentic.AgentClient
 --- @field _session_id? string
 --- @field _ready boolean Created, with its model set
 --- @field _destroyed boolean
@@ -148,7 +150,7 @@ function BackgroundSession:new(opts)
 end
 
 --- @param result agentic.acp.SessionCreationResponse|nil
---- @param err agentic.acp.ACPError|nil
+--- @param err agentic.AgentClient.Error|nil
 function BackgroundSession:_on_created(result, err)
     if self._destroyed then
         if result then
@@ -179,7 +181,7 @@ end
 --- Set `opts.model` through the config option of category `model`, else the legacy
 --- `session/set_model`. Without a model, `on_set` runs at once.
 --- @param config_options agentic.acp.ConfigOption[]|nil
---- @param on_set fun(err: agentic.acp.ACPError|nil)
+--- @param on_set fun(err: agentic.AgentClient.Error|nil)
 function BackgroundSession:_set_model(config_options, on_set)
     local model = self._opts.model
     if not model then
@@ -286,12 +288,12 @@ end
 
 --- The client handlers. Updates before the transcript opens or after a
 --- destroy are dropped, and a permission request then is cancelled.
---- @return agentic.acp.ClientHandlers
+--- @return agentic.AgentClient.ClientHandlers
 function BackgroundSession:_handlers()
     local function live()
         return self._transcript ~= nil and not self._destroyed
     end
-    --- @type agentic.acp.ClientHandlers
+    --- @type agentic.AgentClient.ClientHandlers
     return {
         on_session_update = function(update)
             if live() then
@@ -316,6 +318,22 @@ function BackgroundSession:_handlers()
                 self:_on_request_permission(request, callback)
             else
                 callback(nil)
+            end
+        end,
+        on_prompt_taken = function()
+            if live() and self._turn then
+                self._turn.taken = true
+            end
+        end,
+        on_turn_state = function(state)
+            -- An idle before the prompt was taken in ends earlier work.
+            if
+                live()
+                and state.state == "idle"
+                and self._turn
+                and self._turn.taken
+            then
+                self:_end_turn({ stopReason = state.stop_reason }, state.error)
             end
         end,
         on_disconnect = function()
@@ -458,7 +476,7 @@ function BackgroundSession:_check_tripwire(tool_call_id)
         return
     end
     local raw_input = kind == "execute" and { command = tracker.argument }
-        or { filePath = tracker.argument }
+        or { path = tracker.argument }
     local verdict = self._permissions:decide(kind, {
         toolCallId = tool_call_id,
         kind = kind,
@@ -468,7 +486,7 @@ function BackgroundSession:_check_tripwire(tool_call_id)
         return
     end
     Logger.notify(
-        ("Background session %q stopped: opencode ran a %s call without asking; a managed opencode setting may allow it."):format(
+        ("Background session %q stopped: pi ran a %s call without asking; another pi extension may allow it."):format(
             self._opts.label,
             kind
         ),
@@ -556,9 +574,9 @@ function BackgroundSession:_send(text)
     self._client:send_prompt(
         self._session_id --[[@as string]],
         { { type = "text", text = text } },
-        function(result, err)
-            if self._turn == turn then
-                self:_end_turn(result, err)
+        function(_answer, err)
+            if err and self._turn == turn then
+                self:_end_turn(nil, err)
             end
         end
     )
@@ -597,9 +615,9 @@ end
 --- its answer already. An error or a stop reason fails the job, except:
 --- - `end_turn` without refusals gives the job the turn's text.
 --- - `end_turn` or `cancelled` with refusals sends the refusal prompt, up to
----   `max_refusals`. opencode ends a turn `cancelled` after a reject.
+---   `max_refusals`.
 --- @param result { stopReason?: string }|nil
---- @param err agentic.acp.ACPError|nil
+--- @param err agentic.AgentClient.Error|nil
 function BackgroundSession:_end_turn(result, err)
     local turn = self._turn --[[@as agentic.BackgroundSession.Turn]]
     local job = self._job --[[@as agentic.BackgroundSession.Job]]

@@ -24,7 +24,7 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 
 --- What a session gives its subagents.
 --- @class agentic.Subagents.Host
---- @field agent fun(): agentic.acp.ACPClient The session's current client
+--- @field agent fun(): agentic.AgentClient The session's current client
 --- @field history fun(): agentic.ui.ChatHistory The session's current history
 --- @field session_id fun(): string|nil
 --- @field config_options fun(): agentic.acp.AgentConfigOptions The main agent's current config options

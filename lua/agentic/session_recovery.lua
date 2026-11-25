@@ -17,7 +17,7 @@
 -- this module is a tightly-coupled helper that legitimately reaches in.
 --- @diagnostic disable: invisible
 
-local ACPClient = require("agentic.acp.acp_client")
+local AgentClient = require("agentic.agent_client")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local Config = require("agentic.config")
 local Duration = require("agentic.utils.duration")
@@ -33,7 +33,7 @@ local M = {}
 --- @return agentic.acp.AuthMethod[] runnable
 local function runnable_auth_methods(methods)
     return vim.tbl_filter(function(method)
-        return ACPClient.auth_method_kind(method) ~= nil
+        return AgentClient.auth_method_kind(method) ~= nil
     end, methods)
 end
 
@@ -43,7 +43,7 @@ end
 --- `cancelled` are the normal terminal/user-acknowledged reasons and are
 --- skipped.
 --- @param sm agentic.SessionManager
---- @param state agentic.acp.TurnState The `idle` that ended the turn
+--- @param state agentic.AgentClient.TurnState The `idle` that ended the turn
 function M.surface_unexpected_response(sm, state)
     local stop_reason = state.stop_reason
     if
@@ -69,7 +69,7 @@ function M.surface_unexpected_response(sm, state)
         end
     end
 
-    --- @type agentic.acp.ACPError
+    --- @type agentic.AgentClient.Error
     local synthetic_error = {
         code = 0,
         message = table.concat(lines, "\n"),
@@ -343,10 +343,14 @@ function M.run_login(sm, method, on_done)
 
     Logger.notify(string.format("Logging in with %s…", method.name))
 
-    if ACPClient.auth_method_kind(method) == "terminal" then
+    if AgentClient.auth_method_kind(method) == "terminal" then
         -- No pty: a method that needs one to interact (claude-agent-acp's
         -- `claude-login`, offered over SSH) fails, and its error is reported.
         local invocation = agent:terminal_auth_invocation(method)
+        if not invocation then
+            finish(false, "the provider has no terminal login")
+            return
+        end
         local started, result = pcall(
             vim.system,
             invocation.cmd,
@@ -611,7 +615,7 @@ local MAX_TRANSIENT_RETRIES = 3
 --- unrecoverable subsets burn the budget in fast failures and then surface as
 --- a normal error block. Bridges that attach no `data` never retry.
 --- @param sm agentic.SessionManager
---- @param err agentic.acp.ACPError
+--- @param err agentic.AgentClient.Error
 --- @param prompts_waiting boolean Another prompt is still to run after the failed turn
 --- @return boolean should_retry
 function M.should_retry_transient(sm, err, prompts_waiting)

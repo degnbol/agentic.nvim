@@ -204,14 +204,13 @@ end
 --- @field stopped_by? string Tool call id of the call that stopped this call's background job
 --- @field provider_note? agentic.ui.MessageWriter.ProviderNote
 --- @field duration_ms? integer How long the call ran, from its allow answer when the client gave one
-
 --- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
 --- @field kind agentic.acp.ToolKind
 --- @field argument string
 --- @field extmark_id? integer Range extmark spanning the block
 --- @field decoration_extmark_ids? integer[] IDs of decoration extmarks from ExtmarkBlock
 --- @field cached_diff_blocks? agentic.ui.ToolCallDiff.DiffBlock[] Captured at render time so navigation (diff_jump) survives a later file refresh that breaks OLD-based matching
---- @field task_id? string Task id the call is tagged with (`ACPClient:subagent_task_id`); nil for main-agent calls
+--- @field task_id? string Task id the call is tagged with (`AgentClient:subagent_task_id`); nil for main-agent calls
 --- @field placed? agentic.ui.MessageWriter.Placed What was placed beneath the block after it was written
 --- @field folds? agentic.ui.MessageWriter.BlockFold[] The block's folds, outermost first.
 --- @field output_tail? string[] Last rows of `output_file`, as last read
@@ -2297,7 +2296,7 @@ end
 ---
 --- Opens a response group directly under the region, outside its rail, and
 --- closes any earlier error's group.
---- @param err agentic.acp.ACPError
+--- @param err agentic.AgentClient.Error
 --- @return string|nil error_type Error class for caller to dispatch on (errorKind-first)
 --- @return number|nil reset_epoch Epoch seconds when usage resets (for usage_limit errors)
 function MessageWriter:write_error_message(err)

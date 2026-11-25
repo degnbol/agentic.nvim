@@ -6964,7 +6964,7 @@ describe("agentic.SessionManager", function()
                         sides = {}
                         return drained
                     end,
-                } --[[@as agentic.acp.ACPClient]]
+                } --[[@as agentic.AgentClient]]
             end
 
             --- Drain `update` as a side record.
@@ -7072,7 +7072,7 @@ describe("agentic.SessionManager", function()
                 session.destroyed = false
                 session.agent = {
                     stop_generation = spy.new(noop),
-                } --[[@as agentic.acp.ACPClient]]
+                } --[[@as agentic.AgentClient]]
                 session._set_generating = noop
                 session.stop_generation = SessionManager.stop_generation
                 session._end_open_tool_calls =
