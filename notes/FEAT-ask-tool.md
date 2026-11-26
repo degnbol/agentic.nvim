@@ -166,3 +166,49 @@ A sketch. The open questions below decide the details.
     panel?
 18. The reminder for a question in prose fires once per session. After
     compaction the model may have lost it; send it again with change 7?
+19. We can also enforce this better by broading the concept from an `ask` tool, 
+    to a more general "handing back to user" system, which is simply a 
+    structured version of the Stop message. So, we completely block a regular stop 
+    message (maybe specifically saying to agent your stop message must be "IDLE", 
+    since an agent can't say literally nothing), and then it has to end its turn 
+    with a tool call to a structured tool, with fixed fields, e.g.
+    - `state`/`status` of
+      - `aligning` (communication with the user)
+      - `exploring` (learning, gathering info, nothing has been "done", no implementation or real changes)
+      - `doing` (implementing, or running things, producing data, etc.)
+      - `retro`/`reviewing` (corrections)
+      - `finished`/`done`/`completed` (no more actions from agent or user needed for this session)
+    If state/status is not finished, that means something is needed from the user, and that something can probably only be a question. Thus, all but one state must come with at least 1 Q:
+    `Q`:
+    - `permission` Agent wants to do a thing, the question is not about whether it should be done, it is about safety/risk/etc.
+      - `allow`
+      - `deny`
+      - freetext follow up
+    - `agreement` Agent wants to do a thing, the question is about if the user agrees that it should be done.
+      - `agreed`
+      - `disagree`
+    - `scope` Agent wants to do a thing. The questions is not about whether it 
+      should be done, it's only about who does it. This could become redundant if 
+      we tie in context usage to the agent so it gets a signal when it is close 
+      to 200k, and if we tie in an agent being able to fork itself, compact 
+      itself, spawn subagents more autonomously.
+    - `choice` Multiple choice question with convenient way to press "selection option 1/A", but still with a way to give free text response if the question isn't valid (there's 3 options given, but there are more options to consider). This is basically the `AskUserQuestion` plugins.
+    - `user` A question with an answer that ONLY exists inside the user's head. Unknowable without asking.
+    The structuring can help by having strict character limits. The agent might still be able to provide plenty of context in the general chat log.
+    This is just a quick draft and vague idea of the structure. The structure 
+      is yet to be determined through thorough research about similar 
+      established patterns, and looking at previous session transcripts for the kinds of questions asked and how they may be improved.
+      The goal is simple:
+      - reduce user fatigue, by providing exactly the context needed to settle a question, or clear ways to use hover help and goto-def etc. to explore the relevant context, in structured consistent formats.
+      - convenience: strong integration with key-maps, etc. to make it fast to communicate, and clear to the agent what is being communicated.
+      - teach. Systematically separate info to user that is valuable learnings and background, from info directed to help with resolving questions and moving forward.
+      - organise to not miss the overview: keep a listing of the questions, so unanswered ones don't get lost in the noise, and so the agent can drop questions clearly when they are answered. With more autonomous forking, etc. it can also become easier to spread out if a session leads down multiple separate paths of work (a bit like the claude `btw` feature).
+      The example structure is flawed: there shouldn't be 
+      much room for an agent to choose between states freely, like how it will 
+      currently use "scope Q" vs "permission Q" vs "choice Q" without a clear 
+      principle behind the Q kind.
+    Or we don't force the agent to stay quiet with the "IDLE" sentinel, since 
+      agent performance might benefit from thinking out load freely, but then 
+      we just block it from finishing without an occompanying "hand back to 
+      user" tool call, and the agent will know anything not in that will only 
+      maybe be read as a general log.

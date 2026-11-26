@@ -2085,6 +2085,16 @@ end
 
 --- @class agentic.utils.ShellParse.Shell
 --- @field cwd? string|false current directory: nil = the caller's cwd, false = unknown
+--- @field child? true may not run in the top-level shell, so a `cd` in it may not change the top-level shell's cwd
+--- @field detached? true `cwd` may differ from the top-level shell's cwd at this point
+
+--- A new child shell of `shell`. It starts in `shell`'s cwd, and a `cd` in it
+--- leaves `shell` unchanged.
+--- @param shell agentic.utils.ShellParse.Shell
+--- @return agentic.utils.ShellParse.Shell
+local function child_of(shell)
+    return { cwd = shell.cwd, child = true, detached = shell.detached }
+end
 
 --- What a statement's redirects give one node of it.
 --- @class agentic.utils.ShellParse.NodeIO
@@ -2607,7 +2617,7 @@ local function collect_command(node, src, out, depth, shell, io_of, enclosing)
             cmd_name,
             out,
             depth,
-            SAME_SHELL_PREFIXES[cmd_name] and shell or { cwd = shell.cwd },
+            SAME_SHELL_PREFIXES[cmd_name] and shell or child_of(shell),
             not SHELL_C_COMMANDS[cmd_name] and cmd_name ~= "xargs" and io.stdin
                 or nil,
             inherited
@@ -2639,6 +2649,7 @@ local function collect_command(node, src, out, depth, shell, io_of, enclosing)
         redirects = #redirects > 0 and redirects or nil,
         assignments = next(assignments) and assignments or nil,
         cwd = shell.cwd,
+        cwd_detached = shell.detached,
         via = {},
         opaque = names_unseen_command(cmd_name, args) or nil,
     }
@@ -2647,6 +2658,11 @@ local function collect_command(node, src, out, depth, shell, io_of, enclosing)
     end
     table.insert(out, rec)
 
+    local action_shell = child_of(shell)
+    if actions and actions.foreign_cwd then
+        action_shell.cwd = false
+        action_shell.detached = true
+    end
     if
         actions
         and not collect_unwrapped(
@@ -2654,7 +2670,7 @@ local function collect_command(node, src, out, depth, shell, io_of, enclosing)
             cmd_name,
             out,
             depth,
-            { cwd = not actions.foreign_cwd and shell.cwd },
+            action_shell,
             nil,
             inherited
         )
@@ -2687,6 +2703,9 @@ local function collect_command(node, src, out, depth, shell, io_of, enclosing)
         end
     elseif cmd_name == "popd" then
         shell.cwd = false
+    end
+    if CD_COMMANDS[cmd_name] or cmd_name == "popd" then
+        shell.detached = shell.detached or shell.child
     end
     return true
 end
@@ -2739,7 +2758,7 @@ local function collect_pipeline(
     local upstream
     for i, element in ipairs(elements) do
         local first = #out + 1
-        local element_shell = i < #elements and { cwd = shell.cwd } or shell
+        local element_shell = i < #elements and child_of(shell) or shell
         if
             not collect_each(
                 element,
@@ -2846,7 +2865,7 @@ function collect(node, src, out, depth, shell, io_of, enclosing)
         return collect_command(node, src, out, depth, shell, io_of, enclosing)
     end
     if CHILD_SHELL_TYPES[t] then
-        shell = { cwd = shell.cwd }
+        shell = child_of(shell)
     end
     local io = io_of[node:id()]
     if io then
@@ -2897,8 +2916,7 @@ function collect(node, src, out, depth, shell, io_of, enclosing)
         children = { redirect_operands(node, src).dests[1] }
     end
     for _, child in ipairs(children) do
-        local child_shell = M.is_background(child) and { cwd = shell.cwd }
-            or shell
+        local child_shell = M.is_background(child) and child_of(shell) or shell
         if
             not collect(child, src, out, depth, child_shell, io_of, enclosing)
         then
@@ -3348,6 +3366,7 @@ end
 --- @field redirects? agentic.utils.ShellParse.Redirect[] every file redirect and herestring the shell applies to this command, in the order it applies them: those of the compound statements and launchers enclosing it, outermost first, then its own. A list or pipeline's redirect applies to its last command. Heredocs are in `stdin`. nil when none.
 --- @field assignments? table<string, agentic.utils.ShellParse.Assignment> the prefix assignments in effect for this command (`IFS=$'\t' read` → `IFS`), its launchers' prefix assignments and `env` operands included. nil when none.
 --- @field cwd? string|false the directory this command starts in, after earlier `cd`s in the same shell (targets as `ShellParse.cd_target` knows them). Relative to the caller's cwd when relative. nil = no `cd` yet, false = unknown. A `cd` in a branch or loop counts as if it always ran.
+--- @field cwd_detached? true `cwd` may differ from the top-level shell's cwd at this point of the command: a `cd`, `pushd` or `popd` ran in a shell the command runs in that may not be the top-level one (a subshell, substitution, function body, background job, pipeline element but the last, or a launcher's process), or the command is a `find -exec`-style action run in the match's directory
 --- @field opaque? true the command runs code from its arguments that extraction could not unwrap (`eval "$x"`, `sudo -i …`, `zsh -c "$x"`), so `argv` holds commands no record shows
 --- @field via string[] the launchers, `-c` shells and static `eval`s this command was unwrapped from, outermost first (`timeout 5 uv run x` → `{ "timeout", "uv" }`)
 --- @field pipe_from? integer[] indices, in the same record list, of the records of the pipeline element before this command's, whose output its stdin reads. Every record inside a pipeline element, its substitutions included, gets them. nil outside a pipeline and in its first element.
