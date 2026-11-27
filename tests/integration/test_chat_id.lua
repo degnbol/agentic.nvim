@@ -92,25 +92,6 @@ vim.cmd("tabnew")
         end
     )
 
-    it("keeps the chat across a provider switch", function()
-        child.lua([[
-local AgentInstance = require("agentic.acp.agent_instance")
-_G.other = AgentInstance.get_instance("codex-acp")
-_G.other.state = "ready"
-_G.other.create_session = function(_, _, _, cb)
-    cb({ sessionId = "sid-next" })
-end
-AgentInstance.get_instance = function(_, on_ready)
-    on_ready(_G.other)
-    return _G.other
-end
-_G.s:switch_provider("codex-acp")
-]])
-        child.flush()
-
-        assert_same_chat()
-    end)
-
     it("keeps the chat across a renewal", function()
         child.lua([[
 require("agentic.session_recovery").renew_session(_G.s)

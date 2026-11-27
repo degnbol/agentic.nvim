@@ -1,8 +1,6 @@
 -- The session manager class glues together the Chat widget, the agent instance, and the message writer.
 -- It is responsible for managing the session state, routing messages between components, and handling user interactions.
 -- When the user creates a new session, the SessionManager should be responsible for cleaning the existing session (if any) and initializing a new one.
--- When the user switches the provider, the SessionManager should handle the transition smoothly,
--- ensuring that the new session is properly set up and all the previous messages are sent to the new agent provider without duplicating them in the chat widget
 
 local AgentClient = require("agentic.agent_client")
 local ACPPayloads = require("agentic.acp.acp_payloads")
@@ -327,8 +325,7 @@ end
 --- Last `SessionManager.id` handed out.
 local last_id = 0
 
---- @param provider agentic.UserConfig.ProviderName
-function SessionManager:new(provider)
+function SessionManager:new()
     Bootstrap.ensure()
 
     local AgentInstance = require("agentic.acp.agent_instance")
@@ -366,7 +363,7 @@ function SessionManager:new(provider)
         },
     }, self)
 
-    local agent = AgentInstance.get_instance(provider, function(_client)
+    local agent = AgentInstance.get_instance(function(_client)
         vim.schedule(function()
             if self.destroyed then
                 return
@@ -471,20 +468,15 @@ function SessionManager:new(provider)
         self:_on_permission_decided(tool_call_id, causes)
     end
 
-    self.config_options = AgentConfigOptions:new(
-        function(mode_id, is_legacy, opts)
-            self:_handle_mode_change(mode_id, is_legacy, opts)
-        end,
-        function(model_id, is_legacy, opts)
-            self:_handle_model_change(model_id, is_legacy, opts)
-        end,
-        function(value, opts)
-            self:_handle_thought_level_change(value, opts)
-        end,
-        function()
-            return self.agent ~= nil and self.agent.state == "ready"
-        end
-    )
+    self.config_options = AgentConfigOptions:new(function(mode_id, opts)
+        self:_handle_mode_change(mode_id, opts)
+    end, function(model_id, opts)
+        self:_handle_model_change(model_id, opts)
+    end, function(value, opts)
+        self:_handle_thought_level_change(value, opts)
+    end, function()
+        return self.agent ~= nil and self.agent.state == "ready"
+    end)
 
     --- @param panel agentic.ui.ChatWidget.StackPanel
     --- @return fun(): integer|nil
@@ -886,17 +878,6 @@ end
 --- @param bufnr integer
 function SessionManager:_bind_owner_keymaps(bufnr)
     local keymaps = Config.keymaps.widget
-    BufHelpers.multi_keymap_set(keymaps.switch_provider, bufnr, function()
-        SessionRegistry.select_provider(
-            self.agent.provider_name,
-            function(provider_name)
-                if provider_name then
-                    self:switch_provider(provider_name)
-                end
-            end
-        )
-    end, { desc = "Agentic: Switch provider" })
-
     BufHelpers.multi_keymap_set(keymaps.stop_generation, bufnr, function()
         self:stop_generation()
     end, { desc = "Agentic: Stop generation" })
@@ -1275,12 +1256,6 @@ function SessionManager:_on_session_update(update, source_session_id)
         end
     elseif update.sessionUpdate == "available_commands_update" then
         self:_set_available_commands(update.availableCommands)
-    elseif update.sessionUpdate == "current_mode_update" then
-        -- only for legacy modes, not for config_options
-        self.config_options.legacy_agent_modes:handle_agent_update_mode(
-            update.currentModeId
-        )
-        self:render_info()
     elseif update.sessionUpdate == "config_option_update" then
         if source_session_id and source_session_id ~= self.session_id then
             self._subagents:set_config_options(
@@ -2525,16 +2500,12 @@ end
 
 --- Send the newly selected mode to the agent and handle the response
 --- @param mode_id string
---- @param is_legacy boolean|nil
 --- @param opts agentic.acp.AgentConfigOptions.ChangeOpts|nil `as_notice` is
 ---   set by the mode picker. Without it the change is silent, since the
 ---   configured `default_mode` at session start arrives through this same
 ---   callback and is not a user switch.
-function SessionManager:_handle_mode_change(mode_id, is_legacy, opts)
-    self:_set_session_option("mode", mode_id, is_legacy, function()
-        if is_legacy then
-            self.config_options.legacy_agent_modes.current_mode_id = mode_id
-        end
+function SessionManager:_handle_mode_change(mode_id, opts)
+    self:_set_session_option("mode", mode_id, function()
         if opts and opts.as_notice then
             self:_notice_mode_switched(mode_id)
         end
@@ -2543,17 +2514,13 @@ end
 
 --- Send the newly selected model to the agent
 --- @param model_id string
---- @param is_legacy boolean|nil
 --- @param opts agentic.acp.AgentConfigOptions.ChangeOpts|nil `as_notice` renders the announce as
 ---   a command notice instead of prose. Set by the model picker; the render
 ---   style cannot be inferred from the call site, since the queued-initial-model
 ---   flush (resume, `/new`, `/clear`) arrives through this same callback and is
 ---   not a user switch.
-function SessionManager:_handle_model_change(model_id, is_legacy, opts)
-    self:_set_session_option("model", model_id, is_legacy, function()
-        if is_legacy then
-            self.config_options.legacy_agent_models.current_model_id = model_id
-        end
+function SessionManager:_handle_model_change(model_id, opts)
+    self:_set_session_option("model", model_id, function()
         if opts and opts.as_notice then
             self:_notice_model_switched(model_id)
         else
@@ -2566,7 +2533,7 @@ end
 --- @param value string
 --- @param opts agentic.acp.AgentConfigOptions.ChangeOpts|nil
 function SessionManager:_handle_thought_level_change(value, opts)
-    self:_set_session_option("thought_level", value, false, function()
+    self:_set_session_option("thought_level", value, function()
         if opts and opts.as_notice then
             self:_notice_thought_level_switched(value)
         end
@@ -2578,14 +2545,8 @@ end
 --- `on_set`. On failure, notify. A no-op without a session.
 --- @param category "mode"|"model"|"thought_level"
 --- @param value_id string
---- @param is_legacy boolean|nil Send `session/set_mode` or `session/set_model` instead of `session/set_config_option`
 --- @param on_set fun()
-function SessionManager:_set_session_option(
-    category,
-    value_id,
-    is_legacy,
-    on_set
-)
+function SessionManager:_set_session_option(category, value_id, on_set)
     if not self.session_id then
         return
     end
@@ -2620,24 +2581,13 @@ function SessionManager:_set_session_option(
         self:render_info()
     end
 
-    if not is_legacy then
-        -- A picker stays open across option updates, which can drop the option.
-        local option = self.config_options[category]
-        if not option then
-            notify_failure("option no longer offered")
-            return
-        end
-        self.agent:set_config_option(
-            self.session_id,
-            option.id,
-            value_id,
-            callback
-        )
-    elseif category == "mode" then
-        self.agent:set_mode(self.session_id, value_id, callback)
-    else
-        self.agent:set_model(self.session_id, value_id, callback)
+    -- A picker stays open across option updates, which can drop the option.
+    local option = self.config_options[category]
+    if not option then
+        notify_failure("option no longer offered")
+        return
     end
+    self.agent:set_config_option(self.session_id, option.id, value_id, callback)
 end
 
 function SessionManager:_update_chat_header()
@@ -2723,7 +2673,6 @@ end
 --- @param mode_id string
 function SessionManager:_notice_mode_switched(mode_id)
     local mode = self.config_options:get_mode(mode_id)
-        or self.config_options.legacy_agent_modes:get_mode(mode_id)
 
     --- @type string[]|nil
     local body
@@ -3762,7 +3711,7 @@ function SessionManager:_end_turn(state)
             -- claude-agent-acp reuses a stalled query after this error,
             -- so the next prompt can end with no content. It keeps one
             -- query per ACP session, so a new ACP session gets a fresh
-            -- one. See `.claude/skills/issues/references/chunk-flush.md`.
+            -- one. See `.agents/skills/issues/references/chunk-flush.md`.
             -- Hold before the renewal, not after: the renewal's
             -- new_session drains when it completes, which would otherwise
             -- dispatch into a still-limited provider.
@@ -3891,8 +3840,8 @@ end
 --- is not the current mode.
 --- @param mode_id string|nil
 function SessionManager:_set_initial_mode(mode_id)
-    self.config_options:set_initial_mode(mode_id, function(mode, is_legacy)
-        self:_handle_mode_change(mode, is_legacy)
+    self.config_options:set_initial_mode(mode_id, function(mode)
+        self:_handle_mode_change(mode)
     end)
 end
 
@@ -3903,7 +3852,7 @@ end
 --- The agent's session is empty, so that is the only way they reach the
 --- agent, and the history's response ids, which name responses of another
 --- session, are cleared.
---- @param opts {history?: agentic.ui.ChatHistory, keep_cwd?: boolean, quiet_welcome?: boolean, on_created?: fun(), mode?: string}|nil `keep_cwd` keeps the session's working directory instead of taking the editor cwd. `history` implies it. `mode` replaces the provider's `default_mode`
+--- @param opts {history?: agentic.ui.ChatHistory, keep_cwd?: boolean, quiet_welcome?: boolean, on_created?: fun(), mode?: string}|nil `keep_cwd` keeps the session's working directory instead of taking the editor cwd. `history` implies it. `mode` is the mode to switch the new session to
 function SessionManager:new_session(opts)
     opts = opts or {}
     local history = opts.history
@@ -3993,9 +3942,7 @@ function SessionManager:new_session(opts)
             self.config_options:set_pending_initial_model(preserved_model)
         end
 
-        self:_set_initial_mode(
-            opts.mode or self.agent.provider_config.default_mode
-        )
+        self:_set_initial_mode(opts.mode)
 
         self._is_first_message = true
 
@@ -4375,67 +4322,6 @@ function SessionManager:_cancel_session()
     self:_reset_conversation()
 end
 
---- Switch to a different ACP provider while preserving chat UI and history.
---- The new provider's client carries its own usage limit.
---- @param provider_name agentic.UserConfig.ProviderName
-function SessionManager:switch_provider(provider_name)
-    if self.is_generating then
-        Logger.notify(
-            "Cannot switch provider while generating. Stop generation first.",
-            vim.log.levels.WARN
-        )
-        return
-    end
-
-    local AgentInstance = require("agentic.acp.agent_instance")
-
-    self._transient_attempt = 0
-
-    -- Save references before get_instance (on_ready fires synchronously for
-    -- a ready agent)
-    local saved_history = self.chat_history
-    local old_agent = self.agent
-    local old_session_id = self.session_id
-
-    -- Get new agent instance BEFORE tearing down the current session
-    local new_agent = AgentInstance.get_instance(provider_name, function(client)
-        vim.schedule(function()
-            self.agent = client
-
-            self:new_session({
-                history = saved_history,
-                on_created = function()
-                    -- Nothing else names the new provider: the welcome
-                    -- header takes it and discards it.
-                    self.message_writer:write_notice({
-                        glyph = Glyphs.PROVIDER,
-                        title = self.agent.provider_config.name,
-                    })
-                    self:announce_model_loaded(
-                        self.config_options:current_model_id()
-                    )
-                end,
-            })
-        end)
-    end)
-
-    if not new_agent then
-        return
-    end
-
-    -- Soft cancel: tear down old ACP session now that we have a new agent
-    if old_session_id then
-        old_agent:cancel_session(old_session_id)
-    end
-    self.session_id = nil
-    self.permission_manager:cancel_requests()
-    self.todo_list:clear()
-
-    -- If the agent was ready, on_ready fired synchronously above.
-    -- If not, it will fire when the process is ready.
-    self.agent = new_agent
-end
-
 function SessionManager:add_selection_or_file_to_session()
     local added_selection = self:add_selection_to_session()
 
@@ -4481,24 +4367,11 @@ function SessionManager:add_buffer_diagnostics_to_context(bufnr)
     return self.diagnostics_list:add_many(diagnostics)
 end
 
---- Store the mode and model options of a session/new or session/load result,
---- in either the configOptions or the legacy form.
+--- Store the mode and model options of a session/new or session/load result.
 --- @param response table The RPC result
 function SessionManager:_apply_session_options(response)
     if response.configOptions then
-        Logger.debug("Provider announce configOptions")
         self.config_options:set_options(response.configOptions)
-        return
-    end
-
-    if response.modes then
-        Logger.debug("Provider announce legacy mode")
-        self.config_options:set_legacy_modes(response.modes)
-    end
-
-    if response.models then
-        Logger.debug("Provider announce legacy models")
-        self.config_options:set_legacy_models(response.models)
     end
 end
 
@@ -4642,7 +4515,7 @@ function SessionManager:fork_at_cursor(mods)
         prefix:set_title(history.title .. " (fork)")
     end
 
-    local new = SessionRegistry.create(self.agent.provider_name)
+    local new = SessionRegistry.create()
     if not new then
         return
     end

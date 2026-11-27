@@ -291,16 +291,6 @@ describe("native subagent sessions", function()
         end
     )
 
-    it("an announce without state opens no agent and no input", function()
-        child.lua([[
-_G.s.agent.provider_config.subagents.force_background = true
-_G.announce("c1", "find it", "root", false)
-]])
-
-        assert.is_false(child.lua_get([[_G.s._subagents._agents.c1.open]]))
-        assert.is_true(child.lua_get([[_G.s._subagents._inputs.c1 == nil]]))
-    end)
-
     it(
         "a null state and a message without content change nothing else",
         function()
@@ -332,42 +322,6 @@ _G.state("c1", { state = "_paused" })
             child.lua_get([[_G.ttext("c1")]]):find("_paused", 1, true)
         )
     end)
-
-    it(
-        "a message from a child is no delegation and no launch prompt",
-        function()
-            child.lua([[
--- An ancestor announced without state or prompt, as for a child from a session file.
-_G.announce("c1", "alpha", "root", false)
-_G.announce("c2", "beta", "c1")
-_G.update("c1", {
-    sessionUpdate = "session_message", messageId = "toolu_c2:reply",
-    senderSessionId = "c2", recipientSessionId = "c1",
-    content = { { type = "text", text = "Found it." } },
-})
-]])
-
-            assert.is_true(child.lua_get([[_G.block("c1").body == nil]]))
-            assert.is_true(
-                child.lua_get(
-                    [[_G.s._subagents._agent_by_task["toolu_c2:reply"] == nil]]
-                )
-            )
-            assert.truthy(
-                child.lua_get([[_G.ttext("c1")]]):find(
-                    "\nFound it.\n" .. child.lua_get([[_G.detail("c2")]]),
-                    1,
-                    true
-                )
-            )
-            assert.equal(
-                child.lua_get("_G.G.MESSAGE.result"),
-                child.lua_get(
-                    [[_G.row_sign_of(_G.transcript("c1").bufnr, "Found it.")]]
-                )
-            )
-        end
-    )
 
     it("a later announce gives a known agent its parent", function()
         child.lua([[
@@ -531,66 +485,6 @@ _G.message("toolu_more", "root", "c1", "And docs.")
             child.lua_get([[_G.sign_of("c1", "And docs.")]])
         )
     end)
-
-    it(
-        "a launch reply, seen by the parent only, settles the launch as one folded row",
-        function()
-            child.lua([[
-_G.spawn("c1")
-_G.update("root", {
-    sessionUpdate = "session_message", messageId = "toolu_c1:reply",
-    senderSessionId = "c1", recipientSessionId = "root",
-    content = { { type = "text", text = "All found." } },
-})
-]])
-            child.flush()
-
-            local chat = child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]])
-            assert.truthy(
-                chat:find(
-                    "\nAll found.\n" .. child.lua_get([[_G.detail("c1")]]),
-                    1,
-                    true
-                )
-            )
-            assert.is_nil(chat:find("## All found.", 1, true))
-            assert.equal(
-                child.lua_get("_G.G.MESSAGE.result"),
-                child.lua_get(
-                    [[_G.row_sign_of(_G.s.widget.buf_nrs.agent, "All found.")]]
-                )
-            )
-            child.lua([[
-vim.api.nvim_set_current_win(_G.s.widget:home_win())
-for i, line in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
-    if line == "All found." then _G.reply_line = i end
-end
-]])
-            assert.equal(
-                child.lua_get("_G.reply_line"),
-                child.lua_get("vim.fn.foldclosed(_G.reply_line + 1)")
-            )
-            assert.equal("completed", child.lua_get([[_G.block("c1").status]]))
-            assert.is_nil(
-                child.lua_get([[_G.ttext("c1")]]):find("All found.", 1, true)
-            )
-            assert.same(
-                {
-                    type = "session_message",
-                    message_id = "toolu_c1:reply",
-                    kind = "result",
-                    view = "received",
-                    sender_session_id = "c1",
-                    recipient_session_id = "root",
-                    text = "All found.",
-                    launch_reply = true,
-                },
-                child.lua_get(
-                    [[_G.s.chat_history.messages[#_G.s.chat_history.messages] ]]
-                )
-            )
-        end
-    )
 
     it("CTRL-] jumps between a message's two rows, CTRL-T back", function()
         child.lua([[
@@ -914,47 +808,6 @@ _G.chunk("c1", "two", "toolu_c1")
         )
     end)
 
-    it(
-        "a root-session update tagged with a known task id lands in its agent",
-        function()
-            child.lua([[
-_G.write_meta("c1", "background", "toolu_1")
-_G.spawn("c1")
-_G.chunk("root", "tagged finding", "toolu_1")
-]])
-
-            assert.truthy(
-                child
-                    .lua_get([[_G.ttext("c1")]])
-                    :find("tagged finding", 1, true)
-            )
-        end
-    )
-
-    it("a meta file found late updates the block", function()
-        child.lua([[_G.spawn("c1")]])
-        assert.is_true(
-            child.lua_get([[_G.block("c1").subagent.agent_type == nil]])
-        )
-
-        child.lua([[
-_G.write_meta("c1", "background", "toolu_c1")
-_G.call("c1", "t1")
-]])
-
-        assert.same({
-            label = "find it",
-            agent_type = "Explore",
-            mode = "background",
-            confirmed = true,
-        }, child.lua_get([[_G.block("c1").subagent]]))
-        assert.truthy(
-            child
-                .lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]])
-                :find("Background Explore · find it", 1, true)
-        )
-    end)
-
     for _, case in ipairs({
         {
             state = { state = "idle", stopReason = "end_turn" },
@@ -1253,25 +1106,6 @@ _G.child_chunk("c1", "agent_message_chunk", "late", "r4")
         assert.is_false(child.lua_get([[_G.prose_cursor_at_end("c1")]]))
     end)
 
-    it("main and child chunks land in their own buffers", function()
-        child.lua([[
-_G.write_meta("c1", "background", "toolu_1")
-_G.spawn("c1")
-_G.chunk("root", "main text")
-_G.chunk("root", "tagged text", "toolu_1")
-_G.chunk("c1", "child text")
-]])
-
-        local chat = child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]])
-        local transcript = child.lua_get([[_G.ttext("c1")]])
-        assert.truthy(chat:find("main text", 1, true))
-        assert.is_nil(chat:find("tagged text", 1, true))
-        assert.is_nil(chat:find("child text", 1, true))
-        assert.truthy(transcript:find("tagged text", 1, true))
-        assert.truthy(transcript:find("child text", 1, true))
-        assert.is_nil(transcript:find("main text", 1, true))
-    end)
-
     it(
         "an unknown child's config options stay out of the main agent's",
         function()
@@ -1561,29 +1395,6 @@ _G.state("c1", { state = "idle" }, "sid-x")
         child.flush()
     end
 
-    it(
-        "a state sent right behind the load response comes after the load",
-        function()
-            load(
-                nil,
-                [[
-local client = _G.s.agent
-client.callbacks[99] = _G.load_cb
-client:_handle_message({ jsonrpc = "2.0", id = 99, result = {} })
-client:_handle_message({ jsonrpc = "2.0", method = "session/update", params = {
-    sessionId = "sid-x",
-    update = {
-        sessionUpdate = "subagent_update", sessionId = "c1",
-        state = { state = "running" },
-    },
-} })
-]]
-            )
-
-            assert.is_true(child.lua_get("_G.s._subagents._agents.c1.open"))
-        end
-    )
-
     it("nothing is modified or written while the load runs", function()
         load([[
 _G.mid_modified = vim.bo[_G.s.widget.buf_nrs.agent].modified
@@ -1600,51 +1411,6 @@ _G.mid_file = table.concat(vim.fn.readfile(
         )
         assert.is_false(child.lua_get("_G.s.chat_history.dirty"))
     end)
-
-    it(
-        "after a load the chat links the prompt, and gf loads the file's rows",
-        function()
-            load()
-
-            -- The file's rows once; the reply the file lacks is the tail.
-            local chat = child.lua_get([[_G.text(_G.s.widget.buf_nrs.agent)]])
-            local detail = child.lua_get([[_G.detail("c1")]])
-            assert.equal(1, count(chat, "## Find it.\n" .. detail))
-            assert.equal(1, count(chat, "\nreplayed reply\n" .. detail))
-            assert.equal("completed", child.lua_get([[_G.block("c1").status]]))
-            assert.same(
-                { "user", "tool_call", "session_message", "session_message" },
-                child.lua_get([[vim.tbl_map(function(m)
-    return m.type
-end, _G.s.chat_history.messages)]])
-            )
-            child.lua([[
-vim.api.nvim_set_current_win(_G.s.widget:home_win())
-local name = _G.block("c1").argument
--- The block's own row: the reply's folded row names the transcript too.
-for i, line in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
-    if line == name then
-        vim.api.nvim_win_set_cursor(0, { i, 3 })
-        break
-    end
-end
-]])
-            child.type_keys("gf")
-            child.flush()
-
-            assert.equal(
-                child.lua_get([[_G.transcript("c1").bufnr]]),
-                child.api.nvim_get_current_buf()
-            )
-            local text = child.lua_get([[_G.text(0)]])
-            assert.truthy(text:find("saved finding", 1, true))
-            assert.equal(1, count(text, "## Find it."))
-            assert.equal(1, count(text, "## completed"))
-            assert.is_nil(text:find("## ended", 1, true))
-            assert.is_nil(text:find("replayed", 1, true))
-            assert.is_nil(text:find("legacy finding", 1, true))
-        end
-    )
 
     it(
         "a load whose replay sends the incoming view first writes one link",
@@ -1972,30 +1738,6 @@ _G.s:_on_request_permission({ sessionId = "c1", toolCall = { toolCallId = "t9" }
         assert.equal(1, child.lua_get("#vim.api.nvim_list_tabpages()"))
     end)
 
-    it(
-        "output from before the task id is known replays with the rest",
-        function()
-            child.lua([[
-_G.announce("c1")
-_G.chunk("c1", "early", nil)
-_G.write_meta("c1", "background", "toolu_1")
-_G.call("c1", "t1")
-_G.chunk("c1", " late", nil)
-_G.s._subagents:_replay_transcript("c1")
-]])
-
-            assert.same(
-                { "toolu_1", "toolu_1", "toolu_1" },
-                child.lua_get([[vim.tbl_map(function(m)
-    return m.agent_key
-end, _G.s.chat_history.subagent_messages)]])
-            )
-            local text = child.lua_get([[_G.ttext("c1")]])
-            assert.truthy(text:find("early", 1, true))
-            assert.truthy(text:find("late", 1, true))
-        end
-    )
-
     it("a stray buffer under a wiped transcript's name gives way", function()
         child.lua([[
 _G.spawn("c1")
@@ -2192,21 +1934,6 @@ _G.s:_drain_side_records()
                 1,
                 true
             )
-        )
-    end)
-
-    it("a resumed subagent's message names its latest generation", function()
-        child.lua([[
-_G.spawn("a1")
-_G.spawn("a1:generation:2")
-_G.spawn("a1:generation:10")
-_G.receive({ sender_id = "a1" })
-_G.s:_drain_side_records()
-]])
-
-        assert.equal(
-            "a1:generation:10",
-            child.lua_get("_G.last().sender_session_id")
         )
     end)
 

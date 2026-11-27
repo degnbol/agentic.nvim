@@ -160,11 +160,9 @@ local function show_chat(session, opts)
 end
 
 --- Show the chat of the open session whose chat id or ACP session id is
---- `ref.chat_id`. Else create a session on
---- `ref.provider`, apply `sessions.cd_on_load`, load the saved chat into
---- it (ACP `session/load`) and show its chat. A nil `cwd`, `provider` or
---- `model` takes the value of the saved file, when there is one. A provider
---- that is not configured warns and uses the default provider.
+--- `ref.chat_id`. Else create a session, apply `sessions.cd_on_load`, load
+--- the saved chat into it and show its chat. A nil `cwd` or `model` takes
+--- the value of the saved file, when there is one.
 --- @param ref agentic.ui.ChatHistory.SessionRef
 --- @param opts agentic.SessionResume.ResumeOpts|nil
 --- @return agentic.SessionManager|nil session The session shown, open or created; nil when none could be created
@@ -177,19 +175,16 @@ function SessionResume.resume(ref, opts)
         return open_session
     end
 
-    local cwd, provider, model = ref.cwd, ref.provider, ref.model
-    if not (cwd and provider and model) then
+    local cwd, model = ref.cwd, ref.model
+    if not (cwd and model) then
         local saved = ChatHistory.read_saved(ref.chat_id)
         if saved then
             cwd = cwd or saved.cwd
-            provider = provider or saved.provider
             model = model or saved.model
         end
     end
 
-    local configured = provider and Config.acp_providers[provider] and provider
-        or nil
-    local session = SessionRegistry.create(configured)
+    local session = SessionRegistry.create()
     if not session then
         return nil
     end
@@ -198,16 +193,6 @@ function SessionResume.resume(ref, opts)
         if st and st.type == "directory" then
             vim.api.nvim_set_current_dir(cwd)
         end
-    end
-    if provider and not configured then
-        Logger.notify(
-            "Saved provider '"
-                .. provider
-                .. "' is not configured — resuming with provider '"
-                .. session.agent.provider_name
-                .. "'.",
-            vim.log.levels.WARN
-        )
     end
     session:load_acp_session(ref.chat_id, cwd, model)
     show_chat(session, opts)

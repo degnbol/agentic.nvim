@@ -1,6 +1,6 @@
 # agentic.nvim
 
-Neovim plugin providing AI chat interface via ACP (Agent Client Protocol).
+Neovim plugin providing AI chat interface to pi (its RPC mode).
 Fork of [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim).
 
 - LuaJIT 2.1 (Lua 5.1)
@@ -10,14 +10,10 @@ Fork of [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim
 
 ## You are running through this plugin
 
-When working in this repo, you are hosted by agentic.nvim itself via ACP
-(Agent Client Protocol). The session's provider (`agent.provider_name`) is
-not necessarily Claude. Anything that depends on the host (slash command
-interception, permission flow, `environment_info`, what's forwarded in
-`available_commands_update`) follows the ACP path, not the TUI path.
-Provider-specific behaviour (e.g. which tools the SDK auto-approves vs
-escalates) is adapter-dependent — see the `provider-system` project
-skill.
+When working in this repo, you are hosted by agentic.nvim itself, on pi.
+Anything that depends on the host (slash command interception, permission
+flow, which commands are advertised) follows the plugin's pi path, not a
+TUI path.
 
 ## Debugging
 
@@ -44,7 +40,7 @@ Log paths: `.local/agentic_{format,luals,selene,…}_output.log`
 
 - `lua/agentic/config_default.lua` — all user-configurable options
 - `lua/agentic/theme.lua` — highlight groups, `glyphs.lua` — glyph vocabulary (canonical; not in the help)
-- `lua/agentic/acp/adapters/` — provider-specific adapters
+- `lua/agentic/pi/` — the pi client
 
 ## Session cache location
 

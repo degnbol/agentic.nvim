@@ -47,7 +47,7 @@ local LOAD_TIMEOUT_MS = 10000
 --- @field _stopping table<string, agentic.pi.PiProcess> Processes of given-up sessions until they exit, by session id
 local PiClient = AgentClient.extend()
 
---- @param config agentic.acp.ACPProviderConfig
+--- @param config agentic.UserConfig.Pi
 --- @param on_ready fun(client: agentic.AgentClient)
 --- @return agentic.pi.PiClient
 function PiClient:new(config, on_ready)

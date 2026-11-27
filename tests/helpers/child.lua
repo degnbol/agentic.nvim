@@ -3,7 +3,7 @@
 local MiniTest = require("mini.test")
 
 --- @class tests.helpers.Child : MiniTest.child
---- @field launch fun() Restart child, put the plugin on the runtimepath with the ACP transport and health mocked, and source its `plugin/` file as startup does
+--- @field launch fun() Restart child, put the plugin on the runtimepath with the transport and the client mocked (`tests.mocks.agent_client_mock`) and the pi command set to `true`, and source its `plugin/` file as startup does
 --- @field setup fun() `launch`, then run agentic.setup()
 --- @field flush fun() Flush pending scheduled callbacks in child neovim and wait a bit to ensure they are processed
 --- @field new_session fun() Start another session with nothing added to its context, show its chat, then `flush`
@@ -24,11 +24,13 @@ function M.new()
         child.lua([[
             local ACPTransportMock = require("tests.mocks.acp_transport_mock")
             package.loaded["agentic.acp.acp_transport"] = ACPTransportMock
+            package.loaded["agentic.pi.pi_client"] =
+                require("tests.mocks.agent_client_mock")
         ]])
 
+        -- The plugin checks that the pi command is executable.
         child.lua([[
-            local ACPHealthMock = require("tests.mocks.acp_health_mock")
-            package.loaded["agentic.acp.acp_health"] = ACPHealthMock
+            require("agentic.config").pi.command = "true"
         ]])
 
         -- `-u NONE` skips loading plugins.

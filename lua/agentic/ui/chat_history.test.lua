@@ -1476,7 +1476,7 @@ describe("ChatHistory", function()
             local original = ChatHistory:new()
             original.chat_id = "roundtrip-test"
             original.session_id = "roundtrip-acp"
-            original.provider = "claude-agent-acp"
+            original.provider = "pi"
             original.provider_version = "0.66.0"
             original:add_message({
                 type = "user",
@@ -1501,7 +1501,7 @@ describe("ChatHistory", function()
             assert.equal(original.session_id, parsed.session_id)
             assert.equal("Test message", parsed.title)
             assert.is_not_nil(parsed.timestamp)
-            assert.equal("claude-agent-acp", parsed.provider)
+            assert.equal("pi", parsed.provider)
             assert.equal("0.66.0", parsed.provider_version)
 
             local loaded, load_err = read(original.chat_id)
@@ -1860,7 +1860,7 @@ describe("ChatHistory", function()
                 })
                 source.subagents = { child = { task_id = "task" } }
                 source.title = "Title"
-                source.provider = "claude-agent-acp"
+                source.provider = "pi"
                 source.model = "m"
                 source.provider_version = "1.0"
                 source.chat_id = "chat-src"
@@ -1878,7 +1878,7 @@ describe("ChatHistory", function()
                 assert.is_not_nil(copy.chat_id)
                 assert.are_not.equal("chat-src", copy.chat_id)
                 assert.is_nil(copy.session_id)
-                assert.equal("claude-agent-acp", copy.provider)
+                assert.equal("pi", copy.provider)
                 assert.equal("m", copy.model)
                 assert.equal("1.0", copy.provider_version)
                 assert.is_true(copy.dirty)

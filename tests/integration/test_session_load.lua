@@ -81,13 +81,9 @@ _G.load_cb({}, nil)
     it("sends a load deferred until the agent is ready", function()
         child.lua([[
 local agent = _G.s.agent
-agent._send_request = function(_, method, params, cb)
-    if method == "initialize" then
-        cb({ protocolVersion = 1, agentCapabilities = { loadSession = true } }, nil)
-    end
+agent._send_request = function(_, method, params)
     if method == "session/load" then _G.load_params = params end
 end
-agent.transport = { start = function() agent.state = "connected" end }
 local saved = require("agentic.ui.chat_history"):new()
 saved.chat_id = "chat-1"
 saved.session_id = "acp-2"
@@ -99,8 +95,7 @@ require("agentic").load_acp_session("chat-1")
 _G.l = require("agentic.session_registry").session_for_key("chat-1")
 _G.deferred = _G.l._pending_load ~= nil
 _G.sent_early = _G.load_params ~= nil
-agent.state = "disconnected"
-agent:_connect()
+agent:_ready()
 ]])
         child.flush()
 

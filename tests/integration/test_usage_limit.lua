@@ -81,7 +81,7 @@ _G.limit:_lift()
             table.sort(sent, function(a, b)
                 return a.session < b.session
             end)
-            local PROVIDER = "claude-agent-acp"
+            local PROVIDER = "pi"
             assert.same({
                 { session = "one", provider = PROVIDER, text = "first queued" },
                 {
@@ -92,32 +92,4 @@ _G.limit:_lift()
             }, sent)
         end
     )
-
-    it("sends a queued continue to the provider switched to", function()
-        child.lua([[
-local AgentInstance = require("agentic.acp.agent_instance")
-_G.other = AgentInstance.get_instance("codex-acp")
-_G.other.state = "ready"
-_G.other.create_session = function(_, _, _, cb)
-    cb({ sessionId = "three" })
-end
-AgentInstance.get_instance = function(_, on_ready)
-    on_ready(_G.other)
-    return _G.other
-end
-
-_G.limit:hold(os.time() + 3600)
-_G.s1:_queue_input("held on claude")
-_G.s2:_queue_input("continue")
-_G.s2:switch_provider("codex-acp")
-]])
-        child.flush()
-
-        assert.same({
-            { session = "three", provider = "codex-acp", text = "continue" },
-        }, child.lua_get("_G.sent"))
-        assert.is_true(child.lua_get("_G.limit:is_held()"))
-        assert.is_false(child.lua_get("_G.other.usage_limit:holds_drain()"))
-        child.lua("_G.limit:stop()")
-    end)
 end)

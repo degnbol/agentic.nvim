@@ -6,24 +6,24 @@ local Logger = require("agentic.utils.logger")
 --- @class agentic.acp.AgentConfigOptions.ChangeOpts
 --- @field as_notice? boolean The user picked this value, so announce it as a command notice
 
+--- @alias agentic.acp.AgentConfigOptions.OnChange fun(value: string, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
+
 --- @class agentic.acp.AgentConfigOptions
 --- @field mode? agentic.acp.ConfigOption
 --- @field model? agentic.acp.ConfigOption
 --- @field thought_level? agentic.acp.ConfigOption
---- @field legacy_agent_modes agentic.acp.AgentModes
---- @field legacy_agent_models agentic.acp.AgentModels
 --- @field _pending_model_select boolean
 --- @field _pending_initial_model? string model id to apply once options arrive
---- @field _set_mode_callback fun(mode_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
---- @field _set_model_callback fun(model_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
---- @field _set_thought_level_callback fun(value: string, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
+--- @field _set_mode_callback agentic.acp.AgentConfigOptions.OnChange
+--- @field _set_model_callback agentic.acp.AgentConfigOptions.OnChange
+--- @field _set_thought_level_callback agentic.acp.AgentConfigOptions.OnChange
 --- @field _is_agent_ready? fun(): boolean Returns true if an agent is attached and ready
 local AgentConfigOptions = {}
 AgentConfigOptions.__index = AgentConfigOptions
 
---- @param set_mode_callback fun(mode_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
---- @param set_model_callback fun(model_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
---- @param set_thought_level_callback fun(value: string, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil)
+--- @param set_mode_callback agentic.acp.AgentConfigOptions.OnChange
+--- @param set_model_callback agentic.acp.AgentConfigOptions.OnChange
+--- @param set_thought_level_callback agentic.acp.AgentConfigOptions.OnChange
 --- @param is_agent_ready fun(): boolean Returns true if an agent is attached and ready
 --- @return agentic.acp.AgentConfigOptions
 function AgentConfigOptions:new(
@@ -32,15 +32,10 @@ function AgentConfigOptions:new(
     set_thought_level_callback,
     is_agent_ready
 )
-    local AgentModes = require("agentic.acp.agent_modes")
-    local AgentModels = require("agentic.acp.agent_models")
-
     self = setmetatable({
         mode = nil,
         model = nil,
         thought_level = nil,
-        legacy_agent_modes = AgentModes:new(),
-        legacy_agent_models = AgentModels:new(),
         _pending_model_select = false,
         _pending_initial_model = nil,
         _set_mode_callback = set_mode_callback,
@@ -89,8 +84,6 @@ function AgentConfigOptions:clear()
     self.thought_level = nil
     self._pending_model_select = false
     self._pending_initial_model = nil
-    self.legacy_agent_modes:clear()
-    self.legacy_agent_models:clear()
 end
 
 --- @param configOptions agentic.acp.ConfigOption[]|nil
@@ -126,52 +119,27 @@ function AgentConfigOptions:set_options(configOptions)
     end
 end
 
---- Modes from providers that don't support the new Config Options
---- @param modes_info agentic.acp.ModesInfo
-function AgentConfigOptions:set_legacy_modes(modes_info)
-    self.legacy_agent_modes:set_modes(modes_info)
-end
-
---- Models from providers that don't support the new Config Options
---- @param models_info agentic.acp.ModelsInfo
-function AgentConfigOptions:set_legacy_models(models_info)
-    self.legacy_agent_models:set_models(models_info)
-
-    if self._pending_model_select then
-        self:_flush_pending_model_select()
-    end
-
-    if self._pending_initial_model then
-        self:_flush_pending_initial_model()
-    end
-end
-
---- The model the session runs: the `model` config option's value, else
---- the legacy model id.
+--- The model the session runs: the `model` config option's value.
 --- @return string|nil model_id
 function AgentConfigOptions:current_model_id()
     return self.model and self.model.currentValue
-        or self.legacy_agent_models.current_model_id
 end
 
---- The mode the session runs: the `mode` config option's value, else
---- the legacy mode id.
+--- The mode the session runs: the `mode` config option's value.
 --- @return string|nil mode_id
 function AgentConfigOptions:current_mode_id()
     return self.mode and self.mode.currentValue
-        or self.legacy_agent_modes.current_mode_id
 end
 
---- Whether the provider offers a model, as a config option or a legacy model.
+--- Whether the provider offers a model.
 --- @param model_id string
 --- @return boolean
 function AgentConfigOptions:has_model(model_id)
     return self:get_model(model_id) ~= nil
-        or self.legacy_agent_models:get_model(model_id) ~= nil
 end
 
---- Queue a model id to apply once configOptions (or legacy models) become
---- available, or apply it now if it already is.
+--- Queue a model id to apply once configOptions become available, or apply
+--- it now if it already is.
 --- @param model_id string
 function AgentConfigOptions:set_pending_initial_model(model_id)
     self._pending_initial_model = model_id
@@ -196,13 +164,12 @@ function AgentConfigOptions:_flush_pending_initial_model()
         return
     end
 
-    local is_legacy = self:get_model(model_id) == nil
     self._pending_initial_model = nil
-    self._set_model_callback(model_id, is_legacy)
+    self._set_model_callback(model_id)
 end
 
 --- @param target_mode string|nil
---- @param handle_mode_change fun(mode: string, is_legacy: boolean|nil): any
+--- @param handle_mode_change fun(mode: string): any
 function AgentConfigOptions:set_initial_mode(target_mode, handle_mode_change)
     if not target_mode or target_mode == "" then
         Logger.debug("not setting initial mode", target_mode)
@@ -213,11 +180,7 @@ function AgentConfigOptions:set_initial_mode(target_mode, handle_mode_change)
 
     if self:get_mode(target_mode) ~= nil then
         if target_mode ~= current then
-            handle_mode_change(target_mode, false)
-        end
-    elseif self.legacy_agent_modes:get_mode(target_mode) ~= nil then
-        if target_mode ~= current then
-            handle_mode_change(target_mode, true)
+            handle_mode_change(target_mode)
         end
     else
         Logger.notify(
@@ -260,18 +223,7 @@ end
 --- @return string|nil mode_name
 function AgentConfigOptions:get_mode_name(mode_value)
     local mode = self:get_mode(mode_value)
-
-    if mode then
-        return mode.name
-    end
-
-    local legacy_mode = self.legacy_agent_modes:get_mode(mode_value)
-
-    if legacy_mode then
-        return legacy_mode.name
-    end
-
-    return nil
+    return mode and mode.name
 end
 
 --- @param model_value string
@@ -284,27 +236,7 @@ end
 --- @return string|nil model_name
 function AgentConfigOptions:get_model_name(model_value)
     local model = self:get_model(model_value)
-
-    if model then
-        return model.name
-    end
-
-    local legacy_model = self.legacy_agent_models:get_model(model_value)
-
-    if legacy_model then
-        return legacy_model.name
-    end
-
-    return nil
-end
-
---- The entry of a model id, as a config option or a legacy model.
---- @param options agentic.acp.AgentConfigOptions
---- @param model_id string
---- @return agentic.acp.ConfigOption.Option|agentic.acp.Model|nil
-local function model_entry(options, model_id)
-    return options:get_model(model_id)
-        or options.legacy_agent_models:get_model(model_id)
+    return model and model.name
 end
 
 --- How a model id reads to a human: its display name and description. Falls
@@ -316,9 +248,9 @@ end
 --- @return string name
 --- @return string|nil description
 function AgentConfigOptions:model_display(model_id, fallback)
-    local model = model_entry(self, model_id)
+    local model = self:get_model(model_id)
     if fallback and not (model and model.description) then
-        model = model_entry(fallback, model_id) or model
+        model = fallback:get_model(model_id) or model
     end
     local name = model and model.name or model_id
     local description = model and model.description
@@ -360,27 +292,18 @@ end
 --- Pick a mode interactively. Like `show_model_selector`, every selection is
 --- a user switch and is flagged as such; `set_initial_mode` calls the same
 --- callback without the flag.
---- @param handle_mode_change fun(mode: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil): any
+--- @param handle_mode_change agentic.acp.AgentConfigOptions.OnChange
 --- @return boolean shown
 function AgentConfigOptions:show_mode_selector(handle_mode_change)
-    local on_pick = function(mode, is_legacy)
-        handle_mode_change(mode, is_legacy, { as_notice = true })
-    end
-
-    local shown =
-        self:_show_selector(self.mode, "Select agent mode config:", on_pick)
-
-    if shown then
-        return true
-    end
-
-    local legacy_shown = self.legacy_agent_modes:show_mode_selector(
+    local shown = self:_show_selector(
+        self.mode,
+        "Select agent mode config:",
         function(mode)
-            on_pick(mode, true)
+            handle_mode_change(mode, { as_notice = true })
         end
     )
 
-    if not legacy_shown then
+    if not shown then
         Logger.notify(
             "This provider does not support mode switching",
             vim.log.levels.WARN,
@@ -388,13 +311,13 @@ function AgentConfigOptions:show_mode_selector(handle_mode_change)
         )
     end
 
-    return legacy_shown
+    return shown
 end
 
 --- Pick a model interactively. Every selection made here is a user switch, so
 --- the callback is told to render it as such — the queued-initial-model path
 --- calls the same callback without that flag.
---- @param handle_model_change fun(model_id: string, is_legacy: boolean, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil): any
+--- @param handle_model_change agentic.acp.AgentConfigOptions.OnChange
 --- @return boolean shown
 function AgentConfigOptions:show_model_selector(handle_model_change)
     if self._is_agent_ready and not self._is_agent_ready() then
@@ -407,24 +330,15 @@ function AgentConfigOptions:show_model_selector(handle_model_change)
         return false
     end
 
-    local on_pick = function(model_id, is_legacy)
-        handle_model_change(model_id, is_legacy, { as_notice = true })
-    end
-
-    local shown =
-        self:_show_selector(self.model, "Select model to change:", on_pick)
-
-    if shown then
-        return true
-    end
-
-    local legacy_shown = self.legacy_agent_models:show_model_selector(
+    local shown = self:_show_selector(
+        self.model,
+        "Select model to change:",
         function(model_id)
-            on_pick(model_id, true)
+            handle_model_change(model_id, { as_notice = true })
         end
     )
 
-    if legacy_shown then
+    if shown then
         return true
     end
 
@@ -440,7 +354,7 @@ end
 --- Pick a thought level interactively and pass it on flagged `as_notice`.
 --- Notifies instead while no agent is ready, or when the session has no
 --- thought level option.
---- @param handle_change fun(value: string, opts: agentic.acp.AgentConfigOptions.ChangeOpts|nil): any
+--- @param handle_change agentic.acp.AgentConfigOptions.OnChange
 --- @return boolean shown
 function AgentConfigOptions:show_thought_level_selector(handle_change)
     if self._is_agent_ready and not self._is_agent_ready() then
@@ -483,7 +397,7 @@ end
 
 --- @param target agentic.acp.ConfigOption|nil
 --- @param prompt string
---- @param handle_change fun(mode: string, is_legacy: boolean): any
+--- @param handle_change fun(value: string): any
 --- @return boolean shown
 function AgentConfigOptions:_show_selector(target, prompt, handle_change)
     if not target or not target.options or #target.options == 0 then
@@ -508,7 +422,7 @@ function AgentConfigOptions:_show_selector(target, prompt, handle_change)
         end,
     }, function(selected_mode)
         if selected_mode and selected_mode.value ~= target.currentValue then
-            handle_change(selected_mode.value, false)
+            handle_change(selected_mode.value)
         end
     end)
 

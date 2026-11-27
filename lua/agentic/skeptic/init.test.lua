@@ -377,7 +377,7 @@ describe("agentic.skeptic.Skeptic", function()
             local original = Config.skeptic.skeptics
             Config.skeptic.skeptics = vim.list_extend(
                 vim.list_slice(original),
-                { { provider = "opencode-acp", model = "litellm/third" } }
+                { { model = "litellm/third" } }
             )
             MiniTest.finally(function()
                 Config.skeptic.skeptics = original

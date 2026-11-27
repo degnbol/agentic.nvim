@@ -249,11 +249,7 @@ function M.login(sm, arg, on_done)
         return
     end
 
-    local method, problem = M.resolve_auth_method(
-        agent.auth_methods,
-        arg,
-        agent.provider_config.auth_method
-    )
+    local method, problem = M.resolve_auth_method(agent.auth_methods, arg)
     if problem then
         sm.message_writer:write_error_action(problem)
         on_done()

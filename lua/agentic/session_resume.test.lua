@@ -470,8 +470,7 @@ describe("SessionResume", function()
             assert.spy(open_session.widget.show).was.called(0)
         end)
 
-        it("creates a session on the provider and loads into it", function()
-            Config.acp_providers = { ["codex-acp"] = {} }
+        it("creates a session and loads into it", function()
             local session = create_mock_session()
             session_registry_stub:returns(session)
             local mods = { vertical = true }
@@ -479,12 +478,11 @@ describe("SessionResume", function()
             local shown = SessionResume.resume({
                 chat_id = "sid-x",
                 cwd = "/p",
-                provider = "codex-acp",
                 model = "m1",
             }, { mods = mods })
 
             assert.equal(session, shown)
-            assert.equal("codex-acp", session_registry_stub.calls[1][1])
+            assert.spy(session_registry_stub).was.called(1)
             assert.same(
                 { session, "sid-x", "/p", "m1", n = 4 },
                 session.load_acp_session.calls[1]
@@ -494,35 +492,10 @@ describe("SessionResume", function()
             assert.spy(read_saved_stub).was.called(0)
         end)
 
-        it(
-            "warns and takes the default rule for an unconfigured provider",
-            function()
-                Config.acp_providers = {}
-                session_registry_stub:returns(create_mock_session())
-
-                SessionResume.resume({
-                    chat_id = "sid-x",
-                    cwd = "/p",
-                    --- @diagnostic disable-next-line: assign-type-mismatch
-                    provider = "gone-acp",
-                    model = "m1",
-                })
-
-                assert.is_nil(session_registry_stub.calls[1][1])
-                assert.spy(logger_notify_stub).was.called(1)
-                assert.equal(
-                    vim.log.levels.WARN,
-                    logger_notify_stub.calls[1][2]
-                )
-            end
-        )
-
         it("fills nil fields from the saved file", function()
-            Config.acp_providers = { ["codex-acp"] = {} }
             read_saved_stub:returns({
                 session_id = "sid-x",
                 cwd = "/saved",
-                provider = "codex-acp",
                 model = "m-saved",
             })
             local session = create_mock_session()
@@ -530,7 +503,6 @@ describe("SessionResume", function()
 
             SessionResume.resume({ chat_id = "sid-x" })
 
-            assert.equal("codex-acp", session_registry_stub.calls[1][1])
             assert.same(
                 { session, "sid-x", "/saved", "m-saved", n = 4 },
                 session.load_acp_session.calls[1]

@@ -17,7 +17,6 @@ describe("agentic.BackgroundSession", function()
     --- @field on_created? fun(result: table|nil, err: table|nil)
     --- @field prompts { text: string, callback: fun(result: table|nil, err: table|nil) }[]
     --- @field config_sets { id: string, value: string }[]
-    --- @field model_sets string[]
     --- @field stops string[]
     --- @field closes string[]
     local client
@@ -48,7 +47,6 @@ describe("agentic.BackgroundSession", function()
             provider_config = { name = "pi" },
             prompts = {},
             config_sets = {},
-            model_sets = {},
             stops = {},
             closes = {},
         }
@@ -66,10 +64,6 @@ describe("agentic.BackgroundSession", function()
             table.insert(self.config_sets, { id = id, value = value })
             callback({}, nil)
         end
-        function client:set_model(_sid, model, callback)
-            table.insert(self.model_sets, model)
-            callback({}, nil)
-        end
         function client:stop_generation(sid)
             table.insert(self.stops, sid)
         end
@@ -79,7 +73,7 @@ describe("agentic.BackgroundSession", function()
         end
 
         instance_stub = spy.stub(AgentInstance, "get_instance")
-        instance_stub:invokes(function(_provider, on_ready)
+        instance_stub:invokes(function(on_ready)
             on_ready(client)
             return client
         end)
@@ -121,7 +115,6 @@ describe("agentic.BackgroundSession", function()
     local function new_session(overrides)
         --- @type agentic.BackgroundSession.Opts
         local opts = vim.tbl_extend("force", {
-            provider = "pi",
             label = "skeptic",
             kind = "skeptic",
             cwd = vim.fn.getcwd(),
@@ -205,15 +198,9 @@ describe("agentic.BackgroundSession", function()
             end
     end
 
-    it("refuses another provider", function()
-        assert.is_nil(new_session({ provider = "claude-agent-acp" }))
-        assert.equal(1, notify_stub.call_count)
-        assert.equal(0, instance_stub.call_count)
-    end)
-
     it("asks for the unattended client", function()
         new_session()
-        assert.is_true(instance_stub.calls[1][3])
+        assert.is_true(instance_stub.calls[1][2])
     end)
 
     it("is nil and starts no timer without a client", function()
@@ -258,22 +245,24 @@ describe("agentic.BackgroundSession", function()
         assert.equal(1, #client.prompts)
     end)
 
-    it("sets the model by session/set_model without the option", function()
+    it("fails queued prompts without a model option", function()
         local session = new_session({ model = "litellm/glm" }) --[[@as agentic.BackgroundSession]]
-        session:prompt("hi", function() end)
+        local results, on_done = collector()
+        session:prompt("hi", on_done)
         create({})
-        assert.same({ "litellm/glm" }, client.model_sets)
-        assert.equal(1, #client.prompts)
+        assert.same({ { err = "The session offers no model option" } }, results)
+        assert.equal(0, #client.prompts)
+        assert.same({ "bg-1" }, client.closes)
     end)
 
     it("fails queued prompts when the model set fails", function()
-        function client:set_model(_sid, _model, callback)
+        function client:set_config_option(_sid, _id, _value, callback)
             callback(nil, { message = "no such model" })
         end
         local session = new_session({ model = "x" }) --[[@as agentic.BackgroundSession]]
         local results, on_done = collector()
         session:prompt("hi", on_done)
-        create()
+        create({ { id = "model-opt", category = "model" } })
         assert.same({ { err = "no such model" } }, results)
         assert.equal(0, #client.prompts)
         assert.same({ "bg-1" }, client.closes)

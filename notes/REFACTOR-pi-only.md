@@ -4,27 +4,25 @@ Priority: P3
 Depends:
 
 ## Relevant files
-- `lua/agentic/acp/` — all of it (8,296 lines)
-- `lua/agentic/acp/adapters/claude_*.lua` — Claude-specific (3,302 lines)
+- `lua/agentic/acp/` — what remains after the ACP client and adapters went
 - `lua/agentic/agent_client.lua`, `lua/agentic/pi/`, `pi/agentic.ts`
 - `lua/agentic/session_manager.lua` — `_on_session_update`, the load replay (`_load_state`, `_replay_hold`, `_take_replay_update`, `_replay_entry`, `_dispatch_replay_tail`, `CONVERSATION_UPDATES`), `_new_session_after_failed_load`, `fork_at_cursor`
 - `lua/agentic/session_recovery.lua` — login and usage-limit flows
 - `lua/agentic/subagents.lua`, `ui/subagent_transcript.lua`, `ui/subagent_input.lua`
 - `lua/agentic/permission_hook.lua`, `hooks/permission_hook.sh`, `hooks/subagent_hook.lua`
 - `lua/agentic/utils/acp_kind.lua`, `lua/agentic/acp/canonical_tool_call.lua`
-- `lua/agentic/config_default.lua` — `acp_providers`, `provider`
 - Skills: `provider-system`, `session-lifecycle`, `subagents`, `permissions`
 - `pi-claude-bridge` (`https://github.com/elidickinson/pi-claude-bridge`): README § Session history, § Provider options, § Hooks written for Claude Code; `src/index.ts` (the provider query options), `src/cc-child.ts` (`CLAUDE_MD_EXCLUDES`, `CC_CHILD_ENV`), `src/rate-limit.ts`
-- pi 1.6.1 docs: `compaction.md`, `configuration.md` (context files, `SYSTEM.md`), `mcp.md`, `extensions.md` § `after_provider_response`, `rpc-extension-ui.md` § `setStatus`; source `src/core/system-prompt.ts` (`buildSystemPromptSections`)
+- pi 1.6.1 docs: `compaction.md`, `configuration.md` (context files, `SYSTEM.md`), `mcp.md`, `extensions.md` § `after_provider_response`, § Custom UI, `rpc-extension-ui.md`; source `src/core/system-prompt.ts` (`buildSystemPromptSections`)
 
 ## Background
-Two client stacks run side by side: ACP (Claude
-Code and the other ACP providers) and pi. Claude can run on pi through
-`pi-claude-bridge`: it uses the Agent SDK with Claude Code's own login and
-system prompt, keeps a Claude Code session file in step with pi's history,
-and pi runs the tools. Its README states that use bills to the plan, like
-Claude Code. With Claude on pi, every model goes through one client, and the
-ACP layer, the adapters and the session load replay have no user.
+pi is the only provider: the ACP client and its adapters are gone. Claude
+runs on pi through `pi-claude-bridge`: it uses the Agent SDK with Claude
+Code's own login and system prompt, keeps a Claude Code session file in step
+with pi's history, and pi runs the tools, billed to the plan (dotfiles
+`config/pi/install.sh`). What remains of the ACP layer (the session load
+replay, the login flow, the permission hook, the ACP-named shapes) has no
+user, or serves pi under ACP names.
 
 The bridge uses Claude Code as the model client only. It starts Claude Code
 with `tools: []`, `permissionMode: "bypassPermissions"`, user settings only,
@@ -32,19 +30,9 @@ and CLAUDE.md, AGENTS.md and `.claude/rules/**` excluded; pi supplies the
 tools, the context files and the skills. Each capability that Claude Code
 supplies today is therefore absent, or comes from somewhere else (step 8).
 
-Claude runs on pi through the bridge (dotfiles `config/pi/install.sh`),
-billed to the plan. Removal waits until it has been in daily use.
-
 ## Changes
 
 ### Remove
-1. `config_default.lua`: `provider = "pi"`; remove `acp_providers` for all
-   ACP providers. Their models are reached through pi's own providers.
-2. `lua/agentic/acp/`: the client, the v2 codec, all adapters,
-   `agent_config_options.lua`, `agent_modes.lua`, `agent_models.lua`,
-   `acp_health.lua`, `usage_limit.lua`, `response_boundary.lua`. The
-   transport moves to `lua/agentic/pi/`, as the UI's client of the harness
-   interface (step 9).
 3. `session_manager.lua`: the session load replay; a load is "render the chat
    JSON and start pi on the session file". The re-create from history stays
    only for a missing pi session file.
@@ -64,14 +52,16 @@ billed to the plan. Removal waits until it has been in daily use.
 ### Rename
 7. ACP-named shapes that stay as the plugin's own vocabulary get neutral
    names: `agentic.acp.*` types → `agentic.*`, `AcpKind` → `ToolKind`,
-   `canonical_tool_call.lua` out of `acp/`. `PiClient` calls one handler
+   the rest of `lua/agentic/acp/` out of `acp/` (the transport to
+   `lua/agentic/pi/`). `PiClient` calls one handler
    per event (`on_message_chunk`, `on_usage`, …) in place of
    `on_session_update` with a `sessionUpdate` string.
 
 ### Capabilities that came from Claude Code
 8. Each row gets one choice: a bridge option, a pi package, our own pi
    extension, or drop it. Each choice is harness work; how the UI shows
-   its result is designed in step 9.
+   its result is designed in step 9. A pi package whose UI is TUI only
+   (`custom()`, TUI components) shows nothing in the Neovim chat.
 
    | Capability | Under the bridge | Choices |
    |---|---|---|
@@ -111,7 +101,15 @@ billed to the plan. Removal waits until it has been in daily use.
      system prompt, the per-turn context from step 8, usage, plan limits.
    - **Interface**: pi's RPC mode (commands, events, extension UI
      requests), the data our extensions send over it (for example a
-     `notify` with a fixed prefix), and pi's session files.
+     `notify` with a fixed prefix), and pi's session files. Of pi's
+     extension UI (`extensions.md` § Custom UI), RPC mode carries the
+     dialogs and the fire-and-forget methods (`notify`, `setStatus`,
+     `setWidget` with string lines, `setTitle`, `set_editor_text`);
+     `custom()`, header, footer, editor components and custom message
+     rendering are TUI only (`rpc-extension-ui.md`). Our extensions state
+     their UI needs through what RPC mode carries and through message
+     `details`, so the pi TUI and the Neovim chat show the same data;
+     anything for the pi TUI alone is guarded with `ctx.mode === "tui"`.
    - **UI**: the Neovim chat, in Lua. It shows only what the interface
      gives, and holds no harness decision. Which data it shows, and how,
      is a separate design per datum.

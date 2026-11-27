@@ -6,7 +6,6 @@ local M = {}
 local vim_health = vim.health
 
 function M.check()
-    local ACPHealth = require("agentic.acp.acp_health")
     local Config = require("agentic.config")
 
     vim_health.start("agentic.nvim")
@@ -41,82 +40,15 @@ function M.check()
         )
     end
 
-    vim_health.start("ACP Provider Configuration")
-    local provider_name = Config.provider
-    local provider_config = Config.acp_providers[provider_name]
-    if not provider_config then
+    vim_health.start("pi")
+    local command = Config.pi.command
+    if vim.fn.executable(vim.fn.expand(command)) == 1 then
+        vim_health.ok(string.format("%s: installed", command))
+    else
         vim_health.error(
-            string.format(
-                "Provider '%s' not found in config.acp_providers",
-                provider_name
-            )
+            string.format("%s: not found in PATH or not executable", command),
+            { "Install pi: npm install -g @earendil-works/pi-coding-agent" }
         )
-    else
-        vim_health.ok(
-            string.format(
-                "Default provider: %s",
-                provider_config.name or provider_name
-            )
-        )
-        local command = provider_config.command
-        if ACPHealth.is_command_available(command) then
-            vim_health.ok(string.format("%s: installed", command))
-        else
-            vim_health.error(
-                string.format(
-                    "%s: not found in PATH or not executable",
-                    command
-                ),
-                {
-                    "See requirements: https://github.com/carlos-algms/agentic.nvim?tab=readme-ov-file#-requirements",
-                }
-            )
-        end
-    end
-
-    vim_health.start(
-        "Other ACP Providers (optional, if don't intend to use them)"
-    )
-    for name, config in pairs(Config.acp_providers) do
-        if config and name ~= provider_name then
-            local command = config.command
-            if ACPHealth.is_command_available(command) then
-                vim_health.ok(
-                    string.format("[%s] %s: installed", name, command)
-                )
-            else
-                vim_health.warn(
-                    string.format("[%s] %s: not found", name, command)
-                )
-            end
-        end
-    end
-
-    vim_health.start("Node.js and Package Managers")
-    vim_health.info(
-        "Most of the ACP providers require Node.js and a package manager to run, so you'll need at least one installed."
-    )
-
-    if ACPHealth.is_command_available("node") then
-        vim_health.ok("node: installed")
-    else
-        vim_health.error("node: not found")
-    end
-
-    local managers = { "pnpm", "bun", "yarn", "npm" }
-    for _, name in ipairs(managers) do
-        if ACPHealth.is_command_available(name) then
-            if name == "npm" then
-                vim_health.ok(
-                    string.format(
-                        "%s: installed (global path tied to node version, packages are lost when switching node versions)",
-                        name
-                    )
-                )
-            else
-                vim_health.ok(string.format("%s: installed", name))
-            end
-        end
     end
 
     vim_health.start("Optional Dependencies")

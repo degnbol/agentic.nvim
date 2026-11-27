@@ -83,7 +83,7 @@ _G.s.code_selection:add({
         assert.equal(chat_win, child.fn.win_getid(child.fn.winnr("k")))
     end)
 
-    it("binds <localLeader>p to switch provider and leaves i_CTRL-V", function()
+    it("leaves i_CTRL-V in the input", function()
         open()
 
         local input = child.lua_get("_G.s.widget.buf_nrs.input")
@@ -101,10 +101,6 @@ _G.s.code_selection:add({
                 )
             )
         end
-        assert.equal(
-            "Agentic: Switch provider",
-            map_desc("<localLeader>p", "n")
-        )
         assert.equal(vim.NIL, map_desc("<C-v>", "i"))
     end)
 

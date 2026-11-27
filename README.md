@@ -1,7 +1,6 @@
 # agentic.nvim
 
-An AI chat interface via [Agent Client Protocol (ACP)](https://agentclientprotocol.com) in neovim.
-Experimental support for other models through opencode.
+An AI chat interface in neovim for the [pi](https://pi.dev) coding agent.
 
 Fork of [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim).
 
@@ -27,11 +26,6 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
 - Completion of any terms mentioned in chat
 - Navigation keymap (default: `[[` and `]]`) for cursor jump between prompts.
 - `:AgenticResume [{query}]` — the session picker, or the saved session the query matches (`session_id` prefix, else exact title, case-insensitive). Several matches open the picker on them. Resuming shows the chat and sends `session/load` to the agent. With `sessions.cd_on_load` (default `true`), nvim's working directory is changed to the session's recorded cwd.
-- **Forwarded slash commands** (work via ACP, not intercepted locally):
-  - `/init` — generate a project `CLAUDE.md`
-  - `/review` — pull-request review
-  - `/security-review` — security review of pending changes
-  - `/compact`, `/extra-usage`, `/insights`, `/team-onboarding`, `/heapdump`
 
 ### Rendering
 
@@ -52,10 +46,8 @@ See `:help agentic-vs-tui` for a comparison to e.g. Claude TUI.
 
 ## Requirements
 
-- A recent Neovim and an ACP provider binary on PATH — [`claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp)
-  (Claude, default), opencode, gemini, codex and others. For the Neovim version,
-  the supported providers and the pinned install command, see
-  `:help agentic-requirements`.
+- A recent Neovim and [pi](https://pi.dev) on PATH. For the Neovim version and
+  the install command, see `:help agentic-requirements`.
 
 ### Treesitter parsers
 
@@ -72,35 +64,12 @@ Without it, register mappings yourself via `vim.treesitter.language.register`.
 
 If [`snacks.nvim`](https://github.com/folke/snacks.nvim)'s `image` module is installed and enabled, chat buffers attach to it automatically and LaTeX math (`$…$`, `$$…$$`) renders inline as images. Absent or disabled, it is a no-op. See snacks' `image` docs for its own requirements (graphics-capable terminal, ImageMagick, a LaTeX toolchain).
 
-### Subagent prose (claude-agent-acp)
-
-A subagent (Task) assistant message's text and thinking render in its transcript alongside its tool calls. The plugin advertises the `subagent-transcript` client capability, which `claude-agent-acp` (≥ 0.66.0) reads to forward subagent prose as `parentToolUseId`-tagged notifications. Older bridges omit the prose and show only tool calls.
-
-### OpenCode permission caveat
-
-OpenCode is trust-by-default: `edit`, `bash`, and most other tools auto-approve unless you opt in via its config. To route permission prompts through this plugin, set in `~/.config/opencode/opencode.json` (or `config.json`):
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "permissions": [
-    { "action": "edit", "resource": "*", "effect": "ask" },
-    { "action": "shell", "resource": "*", "effect": "ask" }
-  ]
-}
-```
-
-Key reference: [opencode permissions](https://opencode.ai/docs/permissions).
-
-If you want to guard against prompt injection through fetched web content (a returned page persuading the agent to execute follow-up actions), also add `{ "action": "webfetch", "resource": "*", "effect": "ask" }`.
-
 ## Setup
 
 The plugin works without a setup call. To change options, call `setup()` before the first session:
 
 ```lua
 require("agentic").setup({
-    provider = "claude-agent-acp",
     -- ... any overrides
 })
 ```
@@ -115,4 +84,4 @@ Full reference: `:help agentic.txt`
 
 [MIT](LICENSE.txt)
 
-Based on [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim). Built on the [Agent Client Protocol](https://agentclientprotocol.com).
+Based on [carlos-algms/agentic.nvim](https://github.com/carlos-algms/agentic.nvim).

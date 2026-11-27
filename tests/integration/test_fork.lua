@@ -12,8 +12,7 @@ vim.cmd("Agentic")
 local Registry = require("agentic.session_registry")
 _G.s = Registry.current()
 _G.agent = _G.s.agent
-_G.agent.agent_capabilities =
-    { loadSession = true, sessionCapabilities = { fork = {} } }
+_G.agent.agent_capabilities = { loadSession = true }
 _G.agent.state = "ready"
 _G.sent = {}
 _G.cbs = {}
@@ -93,11 +92,11 @@ end
         assert.is_true(child.lua_get("(" .. expr .. ") == nil"))
     end
 
-    --- Fork at the second answer and let the provider cut it.
-    local function fork_natively()
+    --- Fork at the second answer and answer its `session/new`.
+    local function fork_through_new()
         child.lua([[_G.fork_at("second answer")]])
         child.flush()
-        child.lua([[_G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)]])
+        child.lua([[_G.cbs["session/new"]({ sessionId = "sid-fork" }, nil)]])
         child.flush()
         child.lua([[_G.fork_cid = _G.fid()]])
     end
@@ -144,30 +143,7 @@ end
         )
     end
 
-    it("lets the provider cut the conversation before the turn", function()
-        fork_natively()
-
-        assert.equal("session/fork", child.lua_get("_G.sent[1].method"))
-        local fork = child.lua_get("_G.sent[1].params")
-        assert.equal("sid-src", fork.sessionId)
-        assert.same(
-            { version = 1, messageId = "r1" },
-            fork._meta.jetbrains.air.fork
-        )
-        assert.is_false(
-            child.lua_get([[vim.tbl_contains(_G.methods(), "session/new")]])
-        )
-        assert_forked()
-        -- The provider holds the conversation: nothing is sent as text.
-        absent("_G.f._history_to_send")
-        assert.equal(
-            "m-new",
-            child.lua_get("_G.f.config_options._pending_initial_model")
-        )
-    end)
-
-    it("sends the history as text without a native fork", function()
-        child.lua([[_G.agent.agent_capabilities = { loadSession = true }]])
+    it("sends the history as text", function()
         child.lua([[_G.fork_at("second answer")]])
         child.flush()
         child.lua([[_G.cbs["session/new"]({ sessionId = "sid-fork" }, nil)]])
@@ -179,62 +155,23 @@ end
         absent("_G.f.chat_history.messages[2].response_id")
     end)
 
-    it("falls back quietly when the response was never recorded", function()
-        child.lua([[_G.fork_at("second answer")]])
-        child.flush()
-        child.lua([[
-_G.cbs["session/fork"](nil, { code = -32602, message = "not found" })
-]])
-        child.flush()
-        child.lua([[_G.cbs["session/new"]({ sessionId = "sid-fork" }, nil)]])
-        child.flush()
-
-        assert.equal(0, child.lua_get("#_G.notes"))
-        assert_forked()
-    end)
-
-    it("warns on another fork error, then falls back", function()
-        child.lua([[_G.fork_at("second answer")]])
-        child.flush()
-        child.lua([[
-_G.cbs["session/fork"](nil, { code = -32603, message = "boom" })
-]])
-        child.flush()
-        child.lua([[_G.cbs["session/new"]({ sessionId = "sid-fork" }, nil)]])
-        child.flush()
-
-        assert.equal(1, child.lua_get("#_G.notes"))
-        assert.equal(
-            child.lua_get("vim.log.levels.WARN"),
-            child.lua_get("_G.notes[1].level")
-        )
-        assert_forked()
-    end)
-
     it("keeps the source's mode", function()
         child.lua([[
-_G.s.config_options.legacy_agent_modes.current_mode_id = "plan"
+_G.s.config_options.mode = {
+    id = "mode",
+    category = "mode",
+    currentValue = "plan",
+    options = { { value = "plan", name = "Plan" } },
+}
 _G.fork_at("second answer")
 _G.f.config_options.set_initial_mode = function(_, mode)
     _G.mode = mode
 end
 ]])
         child.flush()
-        child.lua([[_G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)]])
+        child.lua([[_G.cbs["session/new"]({ sessionId = "sid-fork" }, nil)]])
 
         assert.equal("plan", child.lua_get("_G.mode"))
-    end)
-
-    it("forks before the last prompt from the end of the chat", function()
-        child.lua([[_G.fork_at("second answer")]])
-        child.flush()
-
-        assert.equal(
-            "r1",
-            child.lua_get(
-                [[_G.sent[1].params._meta.jetbrains.air.fork.messageId]]
-            )
-        )
     end)
 
     it("starts a plain new session above the first prompt", function()
@@ -252,7 +189,7 @@ end
 
     it("forks while a turn runs", function()
         child.lua([[_G.s._foreground = "running"]])
-        fork_natively()
+        fork_through_new()
 
         assert_forked()
     end)
@@ -272,7 +209,7 @@ _G.update({
         child.lua([[_G.fork_at("early part")]])
         child.flush()
         child.lua([[
-_G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)
+_G.cbs["session/new"]({ sessionId = "sid-fork" }, nil)
 ]])
         child.flush()
         child.lua([[
@@ -323,7 +260,7 @@ _G.fork_at("second answer")
         child.flush()
         child.lua([[
 require("agentic.session_registry").destroy(_G.f)
-_G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)
+_G.cbs["session/new"]({ sessionId = "sid-fork" }, nil)
 ]])
         child.flush()
 
@@ -339,7 +276,7 @@ _G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)
         child.lua([[
 _G.s.session_id = "sid-other"
 _G.s.chat_history.chat_id = "sid-other"
-_G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)
+_G.cbs["session/new"]({ sessionId = "sid-fork" }, nil)
 ]])
         child.flush()
 
@@ -355,21 +292,21 @@ _G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)
         child.flush()
         child.lua([[
 _G.s.session_id = "sid-switched"
-_G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)
+_G.cbs["session/new"]({ sessionId = "sid-fork" }, nil)
 ]])
         child.flush()
 
         assert.equal(5, child.lua_get("#_G.s.chat_history.messages"))
     end)
 
-    it("drains a submit made while session/fork is in flight", function()
+    it("drains a submit made while session/new is in flight", function()
         child.lua([[_G.fork_at("second answer")]])
         child.flush()
         child.lua([[_G.f:_handle_input_submit("go on")]])
         assert.is_false(
             child.lua_get([[vim.tbl_contains(_G.methods(), "session/prompt")]])
         )
-        child.lua([[_G.cbs["session/fork"]({ sessionId = "sid-fork" }, nil)]])
+        child.lua([[_G.cbs["session/new"]({ sessionId = "sid-fork" }, nil)]])
         child.flush()
 
         assert.is_true(
@@ -399,7 +336,7 @@ vim.api.nvim_feedkeys(vim.keycode(...), "mx", false)
     end
 
     it("opens the other chat with gf on its name", function()
-        fork_natively()
+        fork_through_new()
         follow_link("gf")
 
         assert.is_true(
@@ -410,7 +347,7 @@ vim.api.nvim_feedkeys(vim.keycode(...), "mx", false)
     end)
 
     it("loads a closed chat with gf in the window gf chose", function()
-        fork_natively()
+        fork_through_new()
         child.lua([[require("agentic.session_registry").destroy(_G.f)]])
         child.flush()
         child.lua([[_G.tabs = #vim.api.nvim_list_tabpages()]])
@@ -440,7 +377,7 @@ _G.shown_win = vim.api.nvim_get_current_win()
     end)
 
     it("renders a reloaded fork from its link", function()
-        fork_natively()
+        fork_through_new()
         child.lua([[_G.f:_reload_chat()]])
 
         absent([[_G.row_of(_G.f, "## first question")]])
@@ -448,7 +385,7 @@ _G.shown_win = vim.api.nvim_get_current_win()
     end)
 
     it("renders a loaded fork from its link", function()
-        fork_natively()
+        fork_through_new()
         child.lua([[
 _G.l = require("agentic.session_registry").create()
 _G.l:load_acp_session(_G.fork_cid)

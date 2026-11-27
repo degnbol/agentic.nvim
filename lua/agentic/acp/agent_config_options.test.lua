@@ -190,21 +190,6 @@ describe("agentic.acp.AgentConfigOptions", function()
             assert.equal("Plan", config_options:get_mode_name("plan"))
         end)
 
-        it("returns name from legacy mode", function()
-            config_options.legacy_agent_modes:set_modes({
-                availableModes = {
-                    {
-                        id = "legacy-mode",
-                        name = "Legacy",
-                        description = "Legacy mode",
-                    },
-                },
-                currentModeId = "legacy-mode",
-            })
-
-            assert.equal("Legacy", config_options:get_mode_name("legacy-mode"))
-        end)
-
         it("returns nil when mode not found in either source", function()
             config_options:set_options({ mode_option })
 
@@ -213,45 +198,30 @@ describe("agentic.acp.AgentConfigOptions", function()
     end)
 
     describe("current_model_id", function()
-        it("returns the config value, else the legacy id, else nil", function()
+        it("returns the config value, else nil", function()
             assert.is_nil(config_options:current_model_id())
 
-            config_options.legacy_agent_models.current_model_id = "legacy"
-            assert.equal("legacy", config_options:current_model_id())
-
             config_options:set_options({ model_option })
-            config_options.legacy_agent_models.current_model_id = "legacy"
             assert.equal("claude-sonnet", config_options:current_model_id())
         end)
     end)
 
     describe("has_model", function()
-        it("finds a config option model and a legacy model", function()
+        it("finds a config option model", function()
             assert.is_false(config_options:has_model("claude-sonnet"))
 
             config_options:set_options({ model_option })
-            config_options.legacy_agent_models:set_models({
-                availableModels = {
-                    { modelId = "legacy", name = "Legacy", description = "" },
-                },
-                currentModelId = "legacy",
-            })
 
             assert.is_true(config_options:has_model("claude-sonnet"))
-            assert.is_true(config_options:has_model("legacy"))
             assert.is_false(config_options:has_model("nonexistent"))
         end)
     end)
 
     describe("current_mode_id", function()
-        it("returns the config value, else the legacy id, else nil", function()
+        it("returns the config value, else nil", function()
             assert.is_nil(config_options:current_mode_id())
 
-            config_options.legacy_agent_modes.current_mode_id = "legacy"
-            assert.equal("legacy", config_options:current_mode_id())
-
             config_options:set_options({ mode_option })
-            config_options.legacy_agent_modes.current_mode_id = "legacy"
             assert.equal("normal", config_options:current_mode_id())
         end)
     end)
@@ -501,47 +471,20 @@ describe("agentic.acp.AgentConfigOptions", function()
 
                 config_options:set_initial_mode(
                     "plan",
-                    handler --[[@as fun(mode: string, is_legacy: boolean|nil): any]]
+                    handler --[[@as fun(mode: string): any]]
                 )
 
                 assert.spy(handler).was.called(1)
-                local args = handler.calls[1]
-                assert.equal("plan", args[1])
-                assert.is_false(args[2])
+                assert.same({ "plan", n = 1 }, handler.calls[1])
             end
         )
-
-        it("calls handler with is_legacy=true for legacy modes", function()
-            config_options.legacy_agent_modes:set_modes({
-                availableModes = {
-                    {
-                        id = "legacy-plan",
-                        name = "Legacy Plan",
-                        description = "",
-                    },
-                },
-                currentModeId = "legacy-normal",
-            })
-
-            local handler = spy.new(function() end)
-
-            config_options:set_initial_mode(
-                "legacy-plan",
-                handler --[[@as fun(mode: string, is_legacy: boolean|nil): any]]
-            )
-
-            assert.spy(handler).was.called(1)
-            local args = handler.calls[1]
-            assert.equal("legacy-plan", args[1])
-            assert.is_true(args[2])
-        end)
 
         it("skips handler when target matches currentValue", function()
             local handler = spy.new(function() end)
 
             config_options:set_initial_mode(
                 "normal",
-                handler --[[@as fun(mode: string, is_legacy: boolean|nil): any]]
+                handler --[[@as fun(mode: string): any]]
             )
 
             assert.spy(handler).was.called(0)
@@ -553,7 +496,7 @@ describe("agentic.acp.AgentConfigOptions", function()
 
             config_options:set_initial_mode(
                 "nonexistent",
-                handler --[[@as fun(mode: string, is_legacy: boolean|nil): any]]
+                handler --[[@as fun(mode: string): any]]
             )
 
             assert.spy(handler).was.called(0)
@@ -568,44 +511,41 @@ describe("agentic.acp.AgentConfigOptions", function()
 
             config_options:set_initial_mode(
                 nil,
-                handler --[[@as fun(mode: string, is_legacy: boolean|nil): any]]
+                handler --[[@as fun(mode: string): any]]
             )
             config_options:set_initial_mode(
                 "",
-                handler --[[@as fun(mode: string, is_legacy: boolean|nil): any]]
+                handler --[[@as fun(mode: string): any]]
             )
 
             assert.spy(handler).was.called(0)
             assert.stub(notify_stub).was.called(0)
         end)
 
-        it(
-            "does not crash when no config options and no legacy modes exist",
-            function()
-                local fresh = AgentConfigOptions:new(
-                    function() end,
-                    function() end,
-                    function() end,
-                    function()
-                        return true
-                    end
-                )
-                local handler = spy.new(function() end)
+        it("does not crash when no mode option exists", function()
+            local fresh = AgentConfigOptions:new(
+                function() end,
+                function() end,
+                function() end,
+                function()
+                    return true
+                end
+            )
+            local handler = spy.new(function() end)
 
-                assert.has_no_errors(function()
-                    fresh:set_initial_mode(
-                        "nonexistent",
-                        handler --[[@as fun(mode: string, is_legacy: boolean|nil): any]]
-                    )
-                end)
-
-                assert.spy(handler).was.called(0)
-                assert.stub(notify_stub).was.called(1)
-                assert.is_true(
-                    string.find(notify_stub.calls[1][1], "unknown") ~= nil
+            assert.has_no_errors(function()
+                fresh:set_initial_mode(
+                    "nonexistent",
+                    handler --[[@as fun(mode: string): any]]
                 )
-            end
-        )
+            end)
+
+            assert.spy(handler).was.called(0)
+            assert.stub(notify_stub).was.called(1)
+            assert.is_true(
+                string.find(notify_stub.calls[1][1], "unknown") ~= nil
+            )
+        end)
     end)
 
     describe("show_mode_selector", function()
@@ -632,7 +572,7 @@ describe("agentic.acp.AgentConfigOptions", function()
         )
 
         it(
-            "calls handler with value and is_legacy=false on config-option selection",
+            "calls handler with the value, flagged as a notice, on selection",
             function()
                 local handler = spy.new(function() end)
                 select_stub:invokes(function(items, _opts, on_choice)
@@ -640,12 +580,12 @@ describe("agentic.acp.AgentConfigOptions", function()
                 end)
 
                 config_options:show_mode_selector(
-                    handler --[[@as fun(mode: string, is_legacy: boolean): any]]
+                    handler --[[@as agentic.acp.AgentConfigOptions.OnChange]]
                 )
 
                 assert
                     .spy(handler).was
-                    .called_with("plan", false, { as_notice = true })
+                    .called_with("plan", { as_notice = true })
             end
         )
 
@@ -656,62 +596,18 @@ describe("agentic.acp.AgentConfigOptions", function()
                 on_choice(items[1])
             end)
             config_options:show_mode_selector(
-                handler --[[@as fun(mode: string, is_config_option: boolean): any]]
+                handler --[[@as agentic.acp.AgentConfigOptions.OnChange]]
             )
 
             select_stub:invokes(function(_items, _opts, on_choice)
                 on_choice(nil)
             end)
             config_options:show_mode_selector(
-                handler --[[@as fun(mode: string, is_config_option: boolean): any]]
+                handler --[[@as agentic.acp.AgentConfigOptions.OnChange]]
             )
 
             assert.spy(handler).was.called(0)
         end)
-
-        it(
-            "falls back to legacy modes and wraps callback with is_legacy=true",
-            function()
-                local fresh = AgentConfigOptions:new(
-                    function() end,
-                    function() end,
-                    function() end,
-                    function()
-                        return true
-                    end
-                )
-                fresh.legacy_agent_modes:set_modes({
-                    availableModes = {
-                        {
-                            id = "legacy",
-                            name = "Legacy",
-                            description = "Legacy mode",
-                        },
-                        {
-                            id = "legacy-2",
-                            name = "Legacy 2",
-                            description = "Another",
-                        },
-                    },
-                    currentModeId = "legacy",
-                })
-
-                local handler = spy.new(function() end)
-                select_stub:invokes(function(items, _opts, on_choice)
-                    on_choice(items[2])
-                end)
-
-                local shown = fresh:show_mode_selector(
-                    handler --[[@as fun(mode: string, is_config_option: boolean): any]]
-                )
-
-                assert.is_true(shown)
-                assert.stub(select_stub).was.called(1)
-                assert
-                    .spy(handler).was
-                    .called_with("legacy-2", true, { as_notice = true })
-            end
-        )
 
         it("returns false and notifies when no modes exist at all", function()
             local Logger = require("agentic.utils.logger")
@@ -760,7 +656,7 @@ describe("agentic.acp.AgentConfigOptions", function()
         end)
 
         it(
-            "calls handler with selected model value and is_legacy=false",
+            "calls handler with the selected model, flagged as a notice",
             function()
                 local handler = spy.new(function() end)
                 --- Add a second model so selection differs from current
@@ -785,56 +681,12 @@ describe("agentic.acp.AgentConfigOptions", function()
                 end)
 
                 config_options:show_model_selector(
-                    handler --[[@as fun(model: string, is_legacy: boolean): any]]
+                    handler --[[@as agentic.acp.AgentConfigOptions.OnChange]]
                 )
 
                 assert
                     .spy(handler).was
-                    .called_with("claude-opus", false, { as_notice = true })
-            end
-        )
-
-        it(
-            "falls back to legacy models and wraps callback with is_legacy=true",
-            function()
-                local fresh = AgentConfigOptions:new(
-                    function() end,
-                    function() end,
-                    function() end,
-                    function()
-                        return true
-                    end
-                )
-                fresh.legacy_agent_models:set_models({
-                    availableModels = {
-                        {
-                            modelId = "default",
-                            name = "Default",
-                            description = "Default model",
-                        },
-                        {
-                            modelId = "opus",
-                            name = "Opus",
-                            description = "Most capable",
-                        },
-                    },
-                    currentModelId = "default",
-                })
-
-                local handler = spy.new(function() end)
-                select_stub:invokes(function(items, _opts, on_choice)
-                    on_choice(items[2])
-                end)
-
-                local shown = fresh:show_model_selector(
-                    handler --[[@as fun(model: string, is_legacy: boolean): any]]
-                )
-
-                assert.is_true(shown)
-                assert.stub(select_stub).was.called(1)
-                assert
-                    .spy(handler).was
-                    .called_with("opus", true, { as_notice = true })
+                    .called_with("claude-opus", { as_notice = true })
             end
         )
 
@@ -937,35 +789,6 @@ describe("agentic.acp.AgentConfigOptions", function()
             assert.stub(select_stub).was.called(1)
         end)
 
-        it(
-            "shows model selector when set_legacy_models delivers models",
-            function()
-                local fresh = AgentConfigOptions:new(
-                    function() end,
-                    function() end,
-                    function() end,
-                    function()
-                        return true
-                    end
-                )
-
-                fresh:show_model_selector(function() end)
-
-                fresh:set_legacy_models({
-                    availableModels = {
-                        {
-                            modelId = "opus",
-                            name = "Opus",
-                            description = "Most capable",
-                        },
-                    },
-                    currentModelId = "opus",
-                })
-
-                assert.stub(select_stub).was.called(1)
-            end
-        )
-
         it("clear() prevents pending select from firing", function()
             -- Trigger pending, then clear, then deliver models
             config_options:show_model_selector(function() end)
@@ -982,50 +805,12 @@ describe("agentic.acp.AgentConfigOptions", function()
         end)
     end)
 
-    describe("set_legacy_models", function()
-        it("stores legacy models info", function()
-            config_options:set_legacy_models({
-                availableModels = {
-                    {
-                        modelId = "opus",
-                        name = "Opus",
-                        description = "Most capable",
-                    },
-                },
-                currentModelId = "opus",
-            })
-
-            local model = config_options.legacy_agent_models:get_model("opus")
-            assert.is_not_nil(model)
-            assert.equal(
-                "opus",
-                config_options.legacy_agent_models.current_model_id
-            )
-        end)
-    end)
-
     describe("clear", function()
-        it("resets all fields, legacy modes, and legacy models", function()
+        it("resets all fields", function()
             config_options:set_options({
                 mode_option,
                 model_option,
                 thought_option,
-            })
-            config_options.legacy_agent_modes:set_modes({
-                availableModes = {
-                    { id = "legacy", name = "Legacy", description = "" },
-                },
-                currentModeId = "legacy",
-            })
-            config_options.legacy_agent_models:set_models({
-                availableModels = {
-                    {
-                        modelId = "opus",
-                        name = "Opus",
-                        description = "Most capable",
-                    },
-                },
-                currentModelId = "opus",
             })
 
             config_options:clear()
@@ -1033,10 +818,6 @@ describe("agentic.acp.AgentConfigOptions", function()
             assert.is_nil(config_options.mode)
             assert.is_nil(config_options.model)
             assert.is_nil(config_options.thought_level)
-            assert.is_nil(config_options.legacy_agent_modes:get_mode("legacy"))
-            assert.is_nil(config_options.legacy_agent_modes.current_mode_id)
-            assert.is_nil(config_options.legacy_agent_models:get_model("opus"))
-            assert.is_nil(config_options.legacy_agent_models.current_model_id)
         end)
     end)
 end)

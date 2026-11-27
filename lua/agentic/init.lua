@@ -127,7 +127,6 @@ function Agentic.add_buffer_diagnostics()
 end
 
 --- @class agentic.ui.NewSessionOpts : agentic.OpenOpts
---- @field provider? agentic.UserConfig.ProviderName
 
 --- Start another session and show its chat. The previous sessions stay
 --- alive.
@@ -135,7 +134,7 @@ end
 --- @return agentic.SessionManager|nil session Nil when none could be created
 function Agentic.new_session(opts)
     opts = opts or {}
-    local session = SessionRegistry.create(opts.provider)
+    local session = SessionRegistry.create()
     if session then
         if opts.auto_add_to_context ~= false then
             session:add_selection_or_file_to_session()

@@ -4,59 +4,42 @@ local MiniTest = require("mini.test")
 
 describe("agentic.acp.AgentInstance", function()
     local AgentInstance = require("agentic.acp.agent_instance")
-    local adapters = {
-        ["opencode-acp"] = require("agentic.acp.adapters.opencode_acp_adapter"),
-        ["gemini-acp"] = require("agentic.acp.adapters.gemini_acp_adapter"),
-    }
+    local PiClient = require("agentic.pi.pi_client")
 
-    --- Stub of each adapter's `new`, keyed by provider name
-    --- @type table<string, TestStub>
-    local new_stubs
+    --- Stub of `PiClient:new`
+    --- @type TestStub
+    local new_stub
 
     before_each(function()
-        new_stubs = {}
-        for name, adapter in pairs(adapters) do
-            new_stubs[name] = spy.stub(adapter, "new")
-            new_stubs[name]:invokes(function()
-                return {}
-            end)
-        end
+        new_stub = spy.stub(PiClient, "new")
+        new_stub:invokes(function()
+            return {}
+        end)
     end)
 
     after_each(function()
-        for _, stub in pairs(new_stubs) do
-            stub:revert()
-        end
+        new_stub:revert()
         AgentInstance._instances = {}
     end)
 
     describe("get_instance", function()
         it("sets the provider name on the client", function()
-            local client = AgentInstance.get_instance("opencode-acp")
+            local client = AgentInstance.get_instance()
 
-            assert.equal("opencode-acp", client.provider_name)
+            assert.equal("pi", client.provider_name)
         end)
 
         it("returns the same client for a second call", function()
-            local first = AgentInstance.get_instance("opencode-acp")
-            local second = AgentInstance.get_instance("opencode-acp")
+            local first = AgentInstance.get_instance()
+            local second = AgentInstance.get_instance()
 
             assert.equal(first, second)
-            assert.spy(new_stubs["opencode-acp"]).was.called(1)
-        end)
-
-        it("gives two provider names two clients", function()
-            local opencode = AgentInstance.get_instance("opencode-acp")
-            local gemini = AgentInstance.get_instance("gemini-acp")
-
-            assert.are_not.equal(opencode, gemini)
-            assert.equal("gemini-acp", gemini.provider_name)
+            assert.spy(new_stub).was.called(1)
         end)
 
         describe("unattended", function()
             local Config = require("agentic.config")
             local Logger = require("agentic.utils.logger")
-            local OpenCode = adapters["opencode-acp"]
 
             --- @type TestStub
             local env_stub
@@ -64,7 +47,7 @@ describe("agentic.acp.AgentInstance", function()
             local notify_stub
 
             before_each(function()
-                env_stub = spy.stub(OpenCode, "unattended_env")
+                env_stub = spy.stub(PiClient, "unattended_env")
                 env_stub:returns({ FOO = "1" })
                 notify_stub = spy.stub(Logger, "notify")
             end)
@@ -75,32 +58,26 @@ describe("agentic.acp.AgentInstance", function()
             end)
 
             it("gets its own client with the merged env", function()
-                local provider = Config.acp_providers["opencode-acp"]
-                local saved_env = provider.env
-                provider.env = { BAR = "2" }
+                local saved_env = Config.pi.env
+                Config.pi.env = { BAR = "2" }
                 MiniTest.finally(function()
-                    provider.env = saved_env
+                    Config.pi.env = saved_env
                 end)
-                local before = vim.deepcopy(provider)
-                local plain = AgentInstance.get_instance("opencode-acp")
-                local unattended =
-                    AgentInstance.get_instance("opencode-acp", nil, true)
+                local before = vim.deepcopy(Config.pi)
+                local plain = AgentInstance.get_instance()
+                local unattended = AgentInstance.get_instance(nil, true)
 
                 assert.is_false(rawequal(plain, unattended))
-                assert.equal("opencode-acp", unattended.provider_name)
-                assert.is_true(
-                    rawequal(plain, AgentInstance.get_instance("opencode-acp"))
-                )
-                local config = new_stubs["opencode-acp"].calls[2][2]
+                assert.equal("pi", unattended.provider_name)
+                assert.is_true(rawequal(plain, AgentInstance.get_instance()))
+                local config = new_stub.calls[2][2]
                 assert.same({ BAR = "2", FOO = "1" }, config.env)
-                assert.same(before, provider)
+                assert.same(before, Config.pi)
             end)
 
             it("asks for the env once", function()
-                local first =
-                    AgentInstance.get_instance("opencode-acp", nil, true)
-                local second =
-                    AgentInstance.get_instance("opencode-acp", nil, true)
+                local first = AgentInstance.get_instance(nil, true)
+                local second = AgentInstance.get_instance(nil, true)
 
                 assert.is_true(rawequal(first, second))
                 assert.spy(env_stub).was.called(1)
@@ -108,17 +85,16 @@ describe("agentic.acp.AgentInstance", function()
 
             it("notifies and returns nil when the env fails", function()
                 env_stub:invokes(function()
-                    return nil, "bad OPENCODE_CONFIG_CONTENT"
+                    return nil, "no extension"
                 end)
                 local on_ready = spy.new(function() end)
 
-                local client =
-                    AgentInstance.get_instance("opencode-acp", on_ready, true)
+                local client = AgentInstance.get_instance(on_ready, true)
 
                 assert.is_nil(client)
                 assert.spy(on_ready).was.called(0)
                 assert.spy(notify_stub).was.called(1)
-                assert.spy(new_stubs["opencode-acp"]).was.called(0)
+                assert.spy(new_stub).was.called(0)
             end)
         end)
 
@@ -133,10 +109,10 @@ describe("agentic.acp.AgentInstance", function()
                     restart = spy.new(function() end),
                     when_ready = spy.new(function() end),
                 }
-                new_stubs["opencode-acp"]:invokes(function()
+                new_stub:invokes(function()
                     return client
                 end)
-                AgentInstance.get_instance("opencode-acp")
+                AgentInstance.get_instance()
                 return client
             end
 
@@ -144,8 +120,7 @@ describe("agentic.acp.AgentInstance", function()
                 local client = cached_client({})
                 local on_ready = spy.new(function() end)
 
-                local returned =
-                    AgentInstance.get_instance("opencode-acp", on_ready)
+                local returned = AgentInstance.get_instance(on_ready)
 
                 assert.equal(client, returned)
                 assert.spy(client.restart).was.called(1)
@@ -157,7 +132,7 @@ describe("agentic.acp.AgentInstance", function()
             it("restarts one in error", function()
                 local client = cached_client({}, "error")
 
-                AgentInstance.get_instance("opencode-acp")
+                AgentInstance.get_instance()
 
                 assert.spy(client.restart).was.called(1)
             end)
@@ -175,7 +150,7 @@ describe("agentic.acp.AgentInstance", function()
                     local client = cached_client(case.subscribers, case.state)
                     local on_ready = spy.new(function() end)
 
-                    AgentInstance.get_instance("opencode-acp", on_ready)
+                    AgentInstance.get_instance(on_ready)
 
                     assert.spy(client.restart).was.called(0)
                     assert.spy(on_ready).was.called(0)
@@ -188,17 +163,20 @@ describe("agentic.acp.AgentInstance", function()
 
     describe("cleanup_all", function()
         it("stops each client's usage limit", function()
-            for _, stub in pairs(new_stubs) do
-                stub:invokes(function()
-                    return {
-                        usage_limit = { stop = spy.new(function() end) },
-                        stop = function() end,
-                    }
-                end)
-            end
+            new_stub:invokes(function()
+                return {
+                    usage_limit = { stop = spy.new(function() end) },
+                    stop = function() end,
+                }
+            end)
+            local env_stub = spy.stub(PiClient, "unattended_env")
+            env_stub:returns({})
+            MiniTest.finally(function()
+                env_stub:revert()
+            end)
             local clients = {
-                AgentInstance.get_instance("opencode-acp"),
-                AgentInstance.get_instance("gemini-acp"),
+                AgentInstance.get_instance(),
+                AgentInstance.get_instance(nil, true),
             }
 
             AgentInstance:cleanup_all()

@@ -1,6 +1,5 @@
 local Logger = require("agentic.utils.logger")
 local Config = require("agentic.config")
-local ACPHealth = require("agentic.acp.acp_health")
 local Listeners = require("agentic.utils.listeners")
 
 --- Extension registration, not per-session state.
@@ -46,23 +45,23 @@ function SessionRegistry.target_win()
     return vim.api.nvim_get_current_win()
 end
 
---- Create, register and activate a new session on `provider`. Nil when the
---- provider is not configured or creation fails.
---- @param provider agentic.UserConfig.ProviderName|nil Default: the provider of `current()`, else `Config.provider`
+--- Create, register and activate a new session. Nil with a notify when the
+--- pi command is not executable, else nil when creation fails.
 --- @return agentic.SessionManager|nil
-function SessionRegistry.create(provider)
-    if not provider then
-        local current = SessionRegistry.current()
-        provider = current and current.agent.provider_name or Config.provider
-    end
-
-    if not ACPHealth.check_configured_provider(provider) then
-        Logger.debug("Session creation aborted: provider not available")
+function SessionRegistry.create()
+    local command = Config.pi.command
+    if vim.fn.executable(vim.fn.expand(command)) ~= 1 then
+        Logger.notify(
+            ("pi command `%s` is not executable. Run :checkhealth agentic"):format(
+                command
+            ),
+            vim.log.levels.ERROR
+        )
         return nil
     end
 
     local SessionManager = require("agentic.session_manager")
-    local session = SessionManager:new(provider) --[[@as agentic.SessionManager|nil]]
+    local session = SessionManager:new() --[[@as agentic.SessionManager|nil]]
     if session then
         SessionRegistry.by_id[session.id] = session
         SessionRegistry.set_active(session)
@@ -135,66 +134,6 @@ function SessionRegistry.session_for_key(key)
         end
     end
     return nil
-end
-
---- @param current agentic.UserConfig.ProviderName Provider to mark "(current)"
---- @param on_selected fun(provider_name: agentic.UserConfig.ProviderName|nil) Callback that will be called with the selected provider name, if any
-function SessionRegistry.select_provider(current, on_selected)
-    local available_providers = ACPHealth.get_default_provider_names()
-
-    --- @class _ProviderStatus
-    --- @field name string
-    --- @field installed boolean
-
-    --- @type _ProviderStatus[]
-    local sorted_providers = {}
-
-    --- @type _ProviderStatus[]
-    local not_installed = {}
-
-    for _, provider_name in ipairs(available_providers) do
-        local provider_config = Config.acp_providers[provider_name]
-        if
-            provider_config
-            and ACPHealth.is_command_available(provider_config.command)
-        then
-            sorted_providers[#sorted_providers + 1] = {
-                name = provider_name,
-                installed = true,
-            }
-        else
-            not_installed[#not_installed + 1] = {
-                name = provider_name,
-                installed = false,
-            }
-        end
-    end
-
-    vim.list_extend(sorted_providers, not_installed)
-
-    vim.ui.select(sorted_providers, {
-        prompt = "Select ACP provider",
-        --- @param item _ProviderStatus
-        format_item = function(item)
-            local marks = {}
-            if item.name == current then
-                marks[#marks + 1] = "current"
-            end
-            if item.name == Config.provider then
-                marks[#marks + 1] = "default"
-            end
-
-            local label = item.name
-            if #marks > 0 then
-                label = label .. " (" .. table.concat(marks, ", ") .. ")"
-            end
-
-            return label
-                .. (item.installed and " ✓ available" or " ✗ not installed")
-        end,
-    }, function(selected_provider)
-        on_selected(selected_provider and selected_provider.name)
-    end)
 end
 
 return SessionRegistry

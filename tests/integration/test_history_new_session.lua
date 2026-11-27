@@ -135,19 +135,6 @@ _G.s:restart_session()
         )
     end)
 
-    it("a reconnect after /new mid-load starts a session", function()
-        child.lua([[
-_G.s:_do_load_acp_session("sid-none", "/tmp")
-_G.s:new_session({ quiet_welcome = true })
-_G.new_cb({ sessionId = "sid-new" }, nil)
-_G.sent = {}
-_G.s.agent._on_ready(_G.s.agent)
-]])
-        child.flush()
-
-        assert.same({ "session/new" }, child.lua_get("_G.sent"))
-    end)
-
     it("a failed load replaces its partial replay with the file", function()
         child.lua([[
 local saved = require("agentic.ui.chat_history"):new()

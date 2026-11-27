@@ -2,7 +2,7 @@
 --- Integration test: reproduce the chunk-flush symptom in the auto-continue
 --- after usage-limit reset path.
 ---
---- Symptom (see .claude/skills/issues/references/chunk-flush.md):
+--- Symptom (see .agents/skills/issues/references/chunk-flush.md):
 --- After auto-continue fires, permission prompts appear fine but
 --- agent_message_chunk prose and entire tool call frames are missing from
 --- the chat buffer. All missing content appears at once when the user

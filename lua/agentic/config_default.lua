@@ -1,13 +1,10 @@
---- List of supported ACP providers
---- @alias agentic.UserConfig.ProviderName
---- | "claude-agent-acp"
---- | "gemini-acp"
---- | "codex-acp"
---- | "opencode-acp"
---- | "cursor-acp"
---- | "auggie-acp"
---- | "mistral-vibe-acp"
---- | "pi"
+--- @alias agentic.UserConfig.ProviderName "pi"
+
+--- @class agentic.UserConfig.Pi
+--- @field name string Shown in the chat header and notices
+--- @field command string The pi executable
+--- @field args string[] Passed after the plugin's own arguments
+--- @field env table<string, string|nil> Added to the environment of each pi process
 
 --- @alias agentic.UserConfig.HeaderRenderFn fun(parts: agentic.ui.ChatWidget.HeaderParts): string|nil
 
@@ -79,104 +76,18 @@ local ConfigDefault = {
     --- `debug` — set this without `debug` to log without screen distraction.
     log = false,
 
-    --- @type agentic.UserConfig.ProviderName
-    provider = "claude-agent-acp",
-
     --- Auto-retry after transient server errors.
     --- When a turn dies mid-stream (connection closed, API unreachable,
     --- overloaded), resend "continue" immediately, up to 3 times. Nothing is
     --- shown in the chat until the budget runs out.
     auto_retry_on_transient_error = true,
 
-    --- @type table<agentic.UserConfig.ProviderName, agentic.acp.ACPProviderConfig|nil>
-    acp_providers = {
-        ["claude-agent-acp"] = {
-            name = "Claude Agent ACP",
-            command = "claude-agent-acp",
-            env = {},
-            auth_method = "claude-ai-login",
-
-            --- Offer the Claude Code todo/task tools (TaskCreate, TaskUpdate,
-            --- TaskList, TaskGet, TodoWrite) to the agent.
-            --- Turns the plan pane on and off: the bridge renders Task* calls
-            --- as ACP `plan` updates rather than tool calls, and nothing else
-            --- writes there.
-            todo_tools = true,
-
-            --- Claude Code `--allowedTools` permission rules. Naming Grep or Glob
-            --- gives the agent both tools. A matching tool call bypasses the
-            --- permission prompt, `auto_approve_kinds` and `/grant`; the
-            --- default scope matches no path, so it approves nothing.
-            allowed_tools = { "Grep(//dev/null/**)", "Glob(//dev/null/**)" },
-
-            --- @class agentic.UserConfig.Subagents
-            --- @field force_background boolean Run every Agent (Task) spawn in the background, whatever the model passes for `run_in_background`.
-            subagents = {
-                force_background = false,
-            },
-
-            --- Auto-continue after usage limit errors.
-            --- When the provider reports "out of extra usage · resets Xpm",
-            --- schedules a timer to send "continue" once the reset time
-            --- arrives.
-            auto_continue_on_usage_limit = true,
-        } --[[@as agentic.acp.ClaudeProviderConfig]],
-
-        ["gemini-acp"] = {
-            name = "Gemini ACP",
-            command = "gemini",
-            args = { "--experimental-acp" },
-            env = {},
-        },
-
-        ["codex-acp"] = {
-            name = "Codex ACP",
-            -- https://github.com/zed-industries/codex-acp/releases
-            -- xattr -dr com.apple.quarantine ~/.local/bin/codex-acp
-            command = "codex-acp",
-            args = {
-                -- "-c",
-                -- "features.web_search_request=true", -- disabled as it doesn't send proper tool call messages
-            },
-            env = {},
-        },
-
-        ["opencode-acp"] = {
-            name = "OpenCode ACP",
-            command = "opencode",
-            args = { "acp" },
-            env = {},
-        },
-
-        pi = {
-            name = "pi",
-            command = "pi",
-            args = {},
-            env = {},
-        },
-
-        ["cursor-acp"] = {
-            name = "Cursor Agent ACP",
-            command = "cursor-agent-acp",
-            args = {},
-            env = {},
-        },
-
-        ["auggie-acp"] = {
-            name = "Auggie ACP",
-            command = "auggie",
-            args = {
-                "--acp",
-            },
-            env = {},
-        },
-
-        ["mistral-vibe-acp"] = {
-            name = "Mistral Vibe ACP",
-            command = "vibe-acp",
-            args = {},
-            env = {},
-        },
+    --- @type agentic.UserConfig.Pi
+    pi = {
+        name = "pi",
+        command = "pi",
+        args = {},
+        env = {},
     },
 
     --- @class agentic.UserConfig.Windows.Agent
@@ -287,7 +198,6 @@ local ConfigDefault = {
             refresh = "",
             toggle_follow = "<localLeader>a",
             goto_bottom = "<localLeader>G",
-            switch_provider = "<localLeader>p",
             switch_model = "<localLeader>M",
             switch_thought_level = "<localLeader>E",
         },
@@ -604,7 +514,6 @@ local ConfigDefault = {
     },
 
     --- @class agentic.UserConfig.SkepticModel
-    --- @field provider string Only "pi"
     --- @field model string Model value id, `<provider>/<id>`, e.g. "litellm/glm-5.3"
 
     --- Background checks of the main agent's claims after each turn. Needs
@@ -623,8 +532,8 @@ local ConfigDefault = {
             reasoning_effort = "none",
         },
         skeptics = {
-            { provider = "pi", model = "litellm/glm-5.3" },
-            { provider = "pi", model = "litellm/kimi-k3" },
+            { model = "litellm/glm-5.3" },
+            { model = "litellm/kimi-k3" },
         },
         turn_timeout_ms = 300000,
         max_refusals = 3,

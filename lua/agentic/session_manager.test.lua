@@ -2,9 +2,8 @@
 local assert = require("tests.helpers.assert")
 local spy = require("tests.helpers.spy")
 
-local ACPClient = require("agentic.acp.acp_client")
+local AgentClientMock = require("tests.mocks.agent_client_mock")
 local AgentConfigOptions = require("agentic.acp.agent_config_options")
-local AgentModes = require("agentic.acp.agent_modes")
 local AgentView = require("agentic.ui.agent_view")
 local ChatHistory = require("agentic.ui.chat_history")
 local FileSystem = require("agentic.utils.file_system")
@@ -18,12 +17,6 @@ local MiniTest = require("mini.test")
 local SessionManager = require("agentic.session_manager")
 local Subagents = require("agentic.subagents")
 local UsageLimit = require("agentic.acp.usage_limit")
-
---- @param mode_id string
---- @return agentic.acp.CurrentModeUpdate
-local function mode_update(mode_id)
-    return { sessionUpdate = "current_mode_update", currentModeId = mode_id }
-end
 
 local last_id = 0
 
@@ -106,7 +99,7 @@ local function with_turn_state(session)
     return session
 end
 
---- Make a fake session's agent speak ACP v1 through `ACPClient.send_prompt`,
+--- Make a fake session's agent speak ACP v1 through `AgentClientMock.send_prompt`,
 --- which derives the turn states from each answer. The agent's own
 --- `send_prompt` becomes `prompt_answer`, which gives the answer. The session
 --- gets the turn methods of `SessionManager`, and its handlers subscribe to
@@ -122,7 +115,7 @@ local function speak_v1(session)
     agent._send_request = function(this, _method, params, cb)
         this.prompt_answer(this, params.sessionId, params.prompt, cb)
     end
-    setmetatable(agent, { __index = ACPClient })
+    setmetatable(agent, { __index = AgentClientMock })
     for _, name in ipairs({
         "_dispatch_turn",
         "_drop_untaken",
@@ -169,87 +162,6 @@ local function with_commands(session)
 end
 
 describe("agentic.SessionManager", function()
-    describe("_on_session_update: current_mode_update", function()
-        --- @type TestStub
-        local notify_stub
-        --- @type TestSpy
-        local render_header_spy
-        --- @type agentic.SessionManager
-        local session
-        --- @type integer
-        local test_bufnr
-
-        before_each(function()
-            notify_stub = spy.stub(Logger, "notify")
-            render_header_spy = spy.new(function() end)
-            test_bufnr = vim.api.nvim_create_buf(false, true)
-
-            local legacy_modes = AgentModes:new()
-            legacy_modes:set_modes({
-                availableModes = {
-                    { id = "plan", name = "Plan", description = "Planning" },
-                    { id = "code", name = "Code", description = "Coding" },
-                },
-                currentModeId = "plan",
-            })
-
-            local AgentModels = require("agentic.acp.agent_models")
-
-            session = {
-                id = fresh_id(),
-                config_options = {
-                    legacy_agent_modes = legacy_modes,
-                    legacy_agent_models = AgentModels:new(),
-                    current_mode_id = AgentConfigOptions.current_mode_id,
-                    get_mode_name = function(_self, mode_id)
-                        local mode = legacy_modes:get_mode(mode_id)
-                        return mode and mode.name or nil
-                    end,
-                    get_model_name = function()
-                        return nil
-                    end,
-                },
-                widget = {
-                    render_header = render_header_spy,
-                    buf_nrs = { agent = test_bufnr },
-                },
-                _on_session_update = SessionManager._on_session_update,
-                render_info = function() end,
-                _update_chat_header = SessionManager._update_chat_header,
-            } --[[@as agentic.SessionManager]]
-        end)
-
-        after_each(function()
-            notify_stub:revert()
-            vim.api.nvim_buf_delete(test_bufnr, { force = true })
-        end)
-
-        it("updates state without notifying or touching the header", function()
-            session:_on_session_update(mode_update("code"))
-
-            assert.equal(
-                "code",
-                session.config_options.legacy_agent_modes.current_mode_id
-            )
-
-            assert.spy(render_header_spy).was.called(0)
-            assert.spy(notify_stub).was.called(0)
-        end)
-
-        it("rejects invalid mode and keeps current state", function()
-            session:_on_session_update(mode_update("nonexistent"))
-
-            assert.equal(
-                "plan",
-                session.config_options.legacy_agent_modes.current_mode_id
-            )
-            assert.spy(render_header_spy).was.called(0)
-
-            assert.spy(notify_stub).was.called(1)
-            assert.equal(vim.log.levels.WARN, notify_stub.calls[1][2])
-        end)
-    end)
-
     describe("_on_session_update: config_option_update", function()
         --- @type TestSpy
         local render_header_spy
@@ -1232,28 +1144,6 @@ describe("agentic.SessionManager", function()
             assert.is_nil(session._load_state)
         end)
 
-        it("takes legacy models from the load result", function()
-            local session = make_load_session()
-            session.config_options = AgentConfigOptions:new(
-                function() end,
-                function() end,
-                function() end,
-                function()
-                    return true
-                end
-            )
-
-            session:_do_load_acp_session("test-session-id", "/tmp")
-            captured_load_cb({
-                models = {
-                    availableModels = { { modelId = "m", name = "M" } },
-                    currentModelId = "m",
-                },
-            }, nil)
-
-            assert.equal("m", session.config_options:current_model_id())
-        end)
-
         it("writes nothing after the session is destroyed", function()
             local session = make_load_session()
             local notice_spy = spy.new(function() end)
@@ -1359,8 +1249,8 @@ describe("agentic.SessionManager", function()
         it("falls back quietly when the agent cannot load", function()
             local session = make_load_session()
             session.agent.agent_capabilities = { loadSession = false }
-            session.agent.load_session = ACPClient.load_session
-            session.agent.ERROR_CODES = ACPClient.ERROR_CODES
+            session.agent.load_session = AgentClientMock.load_session
+            session.agent.ERROR_CODES = AgentClientMock.ERROR_CODES
             local send = spy.new(function() end)
             session.agent._send_request = send
             local read_stub = spy.stub(ChatHistory, "read_saved")
@@ -1815,9 +1705,6 @@ describe("agentic.SessionManager", function()
                     current_thought_level_label = function()
                         return current.thought_level
                     end,
-                    legacy_agent_models = {
-                        get_model = function() end,
-                    },
                     model_display = AgentConfigOptions.model_display,
                     model_title = AgentConfigOptions.model_title,
                 },
@@ -1947,8 +1834,8 @@ describe("agentic.SessionManager", function()
             local session
             local config_options = AgentConfigOptions:new(
                 noop,
-                function(model_id, is_legacy, opts)
-                    session:_handle_model_change(model_id, is_legacy, opts)
+                function(model_id, opts)
+                    session:_handle_model_change(model_id, opts)
                 end,
                 noop,
                 function()
@@ -2319,32 +2206,59 @@ describe("agentic.SessionManager", function()
             notify_stub:revert()
         end)
 
-        --- @param err table|nil Error the provider answers `session/set_mode` with
-        local function make_session(err)
-            local legacy_modes = AgentModes:new()
-            legacy_modes:set_modes({
-                availableModes = {
-                    { id = "plan", name = "Plan", description = "Planning" },
-                    { id = "auto", name = "Auto", description = "No prompts" },
+        --- The mode option with `current` as its value.
+        --- @param current string
+        --- @return agentic.acp.ConfigOption
+        local function mode_option(current)
+            --- @type agentic.acp.ConfigOption
+            local option = {
+                id = "mode",
+                name = "Mode",
+                category = "mode",
+                type = "select",
+                currentValue = current,
+                options = {
+                    { value = "plan", name = "Plan", description = "Planning" },
+                    {
+                        value = "auto",
+                        name = "Auto",
+                        description = "No prompts",
+                    },
                 },
-                currentModeId = "plan",
-            })
+            }
+            return option
+        end
+
+        --- @param err table|nil Error the provider answers the option change with
+        local function make_session(err)
+            local noop = function() end
+            local config_options = AgentConfigOptions:new(
+                noop,
+                noop,
+                noop,
+                function()
+                    return true
+                end
+            )
+            config_options:set_options({ mode_option("plan") })
             local notice_spy = spy.new(function() end)
             local session = {
                 session_id = "s",
                 agent = {
-                    set_mode = function(_, _session_id, _mode_id, callback)
-                        callback({}, err)
+                    set_config_option = function(_, _sid, _id, value, callback)
+                        if err then
+                            callback(nil, err)
+                        else
+                            callback({ configOptions = { mode_option(value) } })
+                        end
                     end,
                 },
-                config_options = {
-                    legacy_agent_modes = legacy_modes,
-                    get_mode = function() end,
-                },
+                config_options = config_options,
                 message_writer = { write_notice = notice_spy },
                 _update_chat_header = function() end,
                 _handle_mode_change = SessionManager._handle_mode_change,
                 _set_session_option = SessionManager._set_session_option,
+                _handle_new_config_options = SessionManager._handle_new_config_options,
                 render_info = function() end,
                 _notice_mode_switched = SessionManager._notice_mode_switched,
                 _foreground = "idle",
@@ -2359,7 +2273,7 @@ describe("agentic.SessionManager", function()
         it("renders a picked mode as a notice", function()
             local session, notice_spy = make_session(nil)
 
-            session:_handle_mode_change("auto", true, { as_notice = true })
+            session:_handle_mode_change("auto", { as_notice = true })
 
             assert.spy(notice_spy).was.called(1)
             local notice = notice_spy.calls[1][2]
@@ -2372,12 +2286,9 @@ describe("agentic.SessionManager", function()
         it("stays silent for a change the user did not pick", function()
             local session, notice_spy = make_session(nil)
 
-            session:_handle_mode_change("auto", true)
+            session:_handle_mode_change("auto")
 
-            assert.equal(
-                "auto",
-                session.config_options.legacy_agent_modes.current_mode_id
-            )
+            assert.equal("auto", session.config_options:current_mode_id())
             assert.spy(notice_spy).was.called(0)
             assert.spy(notify_stub).was.called(0)
         end)
@@ -2386,11 +2297,10 @@ describe("agentic.SessionManager", function()
             local session = make_session(nil)
             local mode_at_render
             session.render_info = function(this)
-                mode_at_render =
-                    this.config_options.legacy_agent_modes.current_mode_id
+                mode_at_render = this.config_options:current_mode_id()
             end
 
-            session:_handle_mode_change("auto", true)
+            session:_handle_mode_change("auto")
 
             assert.equal("auto", mode_at_render)
         end)
@@ -2401,12 +2311,9 @@ describe("agentic.SessionManager", function()
             session.render_info = render_spy --[[@as function]]
             session.destroyed = true
 
-            session:_handle_mode_change("auto", true, { as_notice = true })
+            session:_handle_mode_change("auto", { as_notice = true })
 
-            assert.equal(
-                "plan",
-                session.config_options.legacy_agent_modes.current_mode_id
-            )
+            assert.equal("plan", session.config_options:current_mode_id())
             assert.spy(notice_spy).was.called(0)
             assert.spy(render_spy).was.called(0)
         end)
@@ -2414,47 +2321,11 @@ describe("agentic.SessionManager", function()
         it("reports a failed change as an error, not a notice", function()
             local session, notice_spy = make_session({ message = "nope" })
 
-            session:_handle_mode_change("auto", true, { as_notice = true })
+            session:_handle_mode_change("auto", { as_notice = true })
 
             assert.spy(notice_spy).was.called(0)
             assert.spy(notify_stub).was.called(1)
             assert.equal(vim.log.levels.ERROR, notify_stub.calls[1][2])
-        end)
-
-        it("keeps a legacy mode id past the returned options", function()
-            local session = make_session(nil)
-            local legacy_modes = session.config_options.legacy_agent_modes
-            session.agent.set_mode = function(
-                _,
-                _session_id,
-                _mode_id,
-                callback
-            )
-                callback({ configOptions = {} }, nil)
-            end
-            -- As `set_options`, which clears the legacy state.
-            session._handle_new_config_options = function()
-                legacy_modes:clear()
-            end
-
-            session:_handle_mode_change("auto", true)
-
-            assert.equal("auto", legacy_modes.current_mode_id)
-        end)
-
-        it("leaves the legacy mode id on a config option change", function()
-            local session = make_session(nil)
-            session.config_options.mode = { id = "mode" }
-            session.agent.set_config_option = function(_, _sid, _id, _v, cb)
-                cb({}, nil)
-            end
-
-            session:_handle_mode_change("auto", false)
-
-            assert.equal(
-                "plan",
-                session.config_options.legacy_agent_modes.current_mode_id
-            )
         end)
     end)
 
@@ -2476,13 +2347,8 @@ describe("agentic.SessionManager", function()
         it("sends the option's id, not its category", function()
             local session, set_spy = make_session()
 
-            session:_set_session_option(
-                "thought_level",
-                "high",
-                false,
-                function() end
-            )
-            session:_set_session_option("mode", "plan", false, function() end)
+            session:_set_session_option("thought_level", "high", function() end)
+            session:_set_session_option("mode", "plan", function() end)
 
             assert.equal("effort", set_spy.calls[1][3])
             assert.equal("mode-id", set_spy.calls[2][3])
@@ -2496,12 +2362,7 @@ describe("agentic.SessionManager", function()
                 notify_stub:revert()
             end)
 
-            session:_set_session_option(
-                "thought_level",
-                "high",
-                false,
-                function() end
-            )
+            session:_set_session_option("thought_level", "high", function() end)
 
             assert.spy(set_spy).was.called(0)
             assert.equal(vim.log.levels.ERROR, notify_stub.calls[1][2])
@@ -2581,33 +2442,7 @@ describe("agentic.SessionManager", function()
         end)
     end)
 
-    describe("_handle_model_change", function()
-        it("records a legacy model change as the current model", function()
-            local AgentModels = require("agentic.acp.agent_models")
-            local legacy_models = AgentModels:new()
-            legacy_models.current_model_id = "old"
-            local session = {
-                session_id = "s",
-                agent = {
-                    set_model = function(_, _session_id, _model_id, callback)
-                        callback({}, nil)
-                    end,
-                },
-                config_options = {
-                    legacy_agent_models = legacy_models,
-                    current_model_id = AgentConfigOptions.current_model_id,
-                },
-                announce_model_loaded = function() end,
-                _handle_model_change = SessionManager._handle_model_change,
-                _set_session_option = SessionManager._set_session_option,
-                render_info = function() end,
-            } --[[@as agentic.SessionManager]]
-
-            session:_handle_model_change("new", true)
-
-            assert.equal("new", session.config_options:current_model_id())
-        end)
-    end)
+    describe("_handle_model_change", function() end)
 
     describe("_display_context_usage", function()
         --- @param usage table|nil
@@ -2728,305 +2563,6 @@ describe("agentic.SessionManager", function()
             session:render_info()
 
             assert.spy(resize_spy).was.called(0)
-        end)
-    end)
-
-    describe("switch_provider", function()
-        --- @type TestStub
-        local notify_stub
-        --- @type TestStub
-        local get_instance_stub
-        --- @type TestStub
-        local schedule_stub
-
-        before_each(function()
-            notify_stub = spy.stub(Logger, "notify")
-            schedule_stub = spy.stub(vim, "schedule")
-            schedule_stub:invokes(function(fn)
-                fn()
-            end)
-        end)
-
-        after_each(function()
-            schedule_stub:revert()
-            notify_stub:revert()
-            if get_instance_stub then
-                get_instance_stub:revert()
-                get_instance_stub = nil
-            end
-        end)
-
-        it("blocks when is_generating is true", function()
-            local session = {
-                is_generating = true,
-                switch_provider = SessionManager.switch_provider,
-            } --[[@as agentic.SessionManager]]
-
-            session:switch_provider("new-provider")
-
-            assert.spy(notify_stub).was.called(1)
-            local msg = notify_stub.calls[1][1]
-            assert.truthy(msg:match("[Gg]enerating"))
-        end)
-
-        it(
-            "soft cancels old session without clearing widget/history",
-            function()
-                local cancel_spy = spy.new(function() end)
-                local perm_cancel_spy = spy.new(function() end)
-                local todo_clear_spy = spy.new(function() end)
-                local widget_clear_spy = spy.new(function() end)
-                local file_list_clear_spy = spy.new(function() end)
-                local code_selection_clear_spy = spy.new(function() end)
-
-                local AgentInstance = require("agentic.acp.agent_instance")
-                local mock_new_agent = {
-                    provider_config = { name = "New Provider" },
-                    create_session = spy.new(function() end),
-                }
-                get_instance_stub = spy.stub(AgentInstance, "get_instance")
-                get_instance_stub:invokes(function(_provider, on_ready)
-                    on_ready(mock_new_agent)
-                    return mock_new_agent
-                end)
-
-                local new_session_spy = spy.new(function() end)
-
-                local original_messages = { { type = "user", text = "hello" } }
-                local mock_chat_history = {
-                    messages = original_messages,
-                    session_id = "old-session",
-                }
-                local default_provider = Config.provider
-
-                local session = {
-                    is_generating = false,
-                    session_id = "old-session",
-
-                    agent = {
-                        cancel_session = cancel_spy,
-                        provider_config = { name = "Old Provider" },
-                    },
-                    permission_manager = {
-                        cancel_requests = perm_cancel_spy,
-                    },
-                    todo_list = { clear = todo_clear_spy },
-                    widget = { clear = widget_clear_spy },
-                    file_list = { clear = file_list_clear_spy },
-                    code_selection = { clear = code_selection_clear_spy },
-                    chat_history = mock_chat_history,
-                    _is_first_message = false,
-                    _history_to_send = nil,
-                    new_session = new_session_spy,
-                    switch_provider = SessionManager.switch_provider,
-                } --[[@as agentic.SessionManager]]
-
-                session:switch_provider("new-provider")
-
-                assert.equal("new-provider", get_instance_stub.calls[1][1])
-                assert.equal(default_provider, Config.provider)
-                assert.spy(cancel_spy).was.called(1)
-                assert.is_nil(session.session_id)
-                assert.spy(perm_cancel_spy).was.called(1)
-                assert.spy(todo_clear_spy).was.called(1)
-
-                assert.spy(widget_clear_spy).was.called(0)
-                assert.spy(file_list_clear_spy).was.called(0)
-                assert.spy(code_selection_clear_spy).was.called(0)
-
-                assert.equal(mock_new_agent, session.agent)
-
-                assert.spy(new_session_spy).was.called(1)
-                local opts = new_session_spy.calls[1][2]
-                assert.equal(mock_chat_history, opts.history)
-                assert.equal("function", type(opts.on_created))
-            end
-        )
-
-        it("passes the history to new_session", function()
-            local AgentInstance = require("agentic.acp.agent_instance")
-            local mock_new_agent = {
-                provider_config = { name = "New Provider" },
-                create_session = spy.new(function() end),
-            }
-            get_instance_stub = spy.stub(AgentInstance, "get_instance")
-            get_instance_stub:invokes(function(_provider, on_ready)
-                on_ready(mock_new_agent)
-                return mock_new_agent
-            end)
-
-            local new_session_spy = spy.new(function() end)
-            local saved_history = {
-                messages = { { type = "user", text = "hello" } },
-                session_id = "old",
-            }
-            local write_notice = spy.new(function() end)
-
-            local session = {
-                is_generating = false,
-                session_id = "old-session",
-
-                agent = {
-                    cancel_session = spy.new(function() end),
-                    provider_config = { name = "Old" },
-                },
-                permission_manager = {
-                    cancel_requests = function() end,
-                },
-                todo_list = { clear = function() end },
-                message_writer = { write_notice = write_notice },
-                chat_history = saved_history,
-                config_options = { current_model_id = function() end },
-                announce_model_loaded = function() end,
-                new_session = new_session_spy,
-                switch_provider = SessionManager.switch_provider,
-            } --[[@as agentic.SessionManager]]
-
-            session:switch_provider("new-provider")
-
-            local opts = new_session_spy.calls[1][2]
-            assert.equal(saved_history, opts.history)
-            opts.on_created()
-            assert.equal("New Provider", write_notice.calls[1][2].title)
-        end)
-
-        -- A usage limit is the main reason to switch provider at all. The
-        -- outgoing provider's limit would defer every drain to the new one.
-        it("leaves the old provider's usage limit behind", function()
-            local AgentInstance = require("agentic.acp.agent_instance")
-            local old_limit = UsageLimit:new(function() end)
-            old_limit.resets_at = os.time() + 3600
-            get_instance_stub = spy.stub(AgentInstance, "get_instance")
-            get_instance_stub:invokes(function(_provider, on_ready)
-                local agent = {
-                    provider_config = { name = "New" },
-                    create_session = spy.new(function() end),
-                    usage_limit = UsageLimit:new(function() end),
-                }
-                on_ready(agent)
-                return agent
-            end)
-
-            local session = {
-                is_generating = false,
-                session_id = "old-session",
-                agent = {
-                    cancel_session = spy.new(function() end),
-                    provider_config = { name = "Old" },
-                    usage_limit = old_limit,
-                },
-                permission_manager = {
-                    cancel_requests = function() end,
-                },
-                todo_list = { clear = function() end },
-                message_writer = { write_notice = spy.new(function() end) },
-                chat_history = { messages = {}, session_id = "old" },
-                _is_first_message = false,
-                _history_to_send = nil,
-                new_session = spy.new(function() end),
-                switch_provider = SessionManager.switch_provider,
-            } --[[@as agentic.SessionManager]]
-
-            session:switch_provider("new-provider")
-
-            assert.is_false(session.agent.usage_limit:holds_drain())
-            assert.is_true(old_limit:is_held())
-        end)
-
-        it("no-ops soft cancel when session_id is nil", function()
-            local AgentInstance = require("agentic.acp.agent_instance")
-            local mock_agent = {
-                provider_config = { name = "Provider" },
-                cancel_session = spy.new(function() end),
-                create_session = spy.new(function() end),
-            }
-            get_instance_stub = spy.stub(AgentInstance, "get_instance")
-            get_instance_stub:invokes(function(_provider, on_ready)
-                on_ready(mock_agent)
-                return mock_agent
-            end)
-
-            local session = {
-                is_generating = false,
-                session_id = nil,
-
-                agent = mock_agent,
-                permission_manager = {
-                    cancel_requests = spy.new(function() end),
-                },
-                todo_list = { clear = spy.new(function() end) },
-                chat_history = { messages = {} },
-                _is_first_message = false,
-                _history_to_send = nil,
-                new_session = spy.new(function() end),
-                switch_provider = SessionManager.switch_provider,
-            } --[[@as agentic.SessionManager]]
-
-            session:switch_provider("some-provider")
-
-            assert.spy(mock_agent.cancel_session).was.called(0)
-            assert.spy(session.permission_manager.cancel_requests).was.called(1)
-            assert.spy(session.todo_list.clear).was.called(1)
-            assert.spy(session.new_session).was.called(1)
-        end)
-
-        it("names the new provider, then its model, from on_created", function()
-            local AgentInstance = require("agentic.acp.agent_instance")
-            local mock_new_agent = {
-                provider_config = { name = "New Provider" },
-                create_session = spy.new(function() end),
-            }
-            get_instance_stub = spy.stub(AgentInstance, "get_instance")
-            get_instance_stub:invokes(function(_provider, on_ready)
-                on_ready(mock_new_agent)
-                return mock_new_agent
-            end)
-
-            local captured_on_created
-            local order = {}
-            local notice_spy = spy.new(function()
-                table.insert(order, "notice")
-            end)
-            local session = {
-                is_generating = false,
-                session_id = "old-session",
-                agent = {
-                    cancel_session = spy.new(function() end),
-                    provider_config = { name = "Old" },
-                },
-                permission_manager = {
-                    cancel_requests = function() end,
-                },
-                todo_list = { clear = function() end },
-                message_writer = { write_notice = notice_spy },
-                widget = { buf_nrs = {} },
-                chat_history = { messages = {}, session_id = "old" },
-                config_options = {
-                    current_model_id = function()
-                        return "m"
-                    end,
-                },
-                announce_model_loaded = function(_, model_id)
-                    table.insert(order, "announce " .. model_id)
-                end,
-                new_session = spy.new(function(_self, opts)
-                    captured_on_created = opts.on_created
-                end),
-                _sync_modified = SessionManager._sync_modified,
-                _replaying = SessionManager._replaying,
-                _turn_open = SessionManager._turn_open,
-                _in_flight = SessionManager._in_flight,
-                _untaken_changed = SessionManager._untaken_changed,
-                _reset_turn_state = SessionManager._reset_turn_state,
-                switch_provider = SessionManager.switch_provider,
-            } --[[@as agentic.SessionManager]]
-            with_subagents(session)
-
-            session:switch_provider("new-provider")
-            captured_on_created()
-
-            assert.equal("New Provider", notice_spy.calls[1][2].title)
-            assert.same({ "notice", "announce m" }, order)
         end)
     end)
 
@@ -4249,7 +3785,7 @@ describe("agentic.SessionManager", function()
         --- reports the given class. `send_err` overrides the error object the
         --- provider answers with; `sink` collects the writes and prompts the
         --- turn tail produces. Its agent speaks ACP v1 through
-        --- `ACPClient.send_prompt`, which derives the turn states from the
+        --- `AgentClientMock.send_prompt`, which derives the turn states from the
         --- answer `agent.prompt_answer` gives.
         --- @param error_type string|nil
         --- @param send_err table|nil
@@ -5040,7 +4576,7 @@ describe("agentic.SessionManager", function()
 
         it("auth required offers login", function()
             local session = make_session(nil, {
-                code = ACPClient.ERROR_CODES.AUTH_REQUIRED,
+                code = AgentClientMock.ERROR_CODES.AUTH_REQUIRED,
                 message = "Authentication required",
             })
             session:_handle_input_submit("hello")
@@ -5053,7 +4589,7 @@ describe("agentic.SessionManager", function()
             "a transport error classed as authentication offers no login",
             function()
                 local session = make_session("authentication_error", {
-                    code = ACPClient.ERROR_CODES.TRANSPORT_ERROR,
+                    code = AgentClientMock.ERROR_CODES.TRANSPORT_ERROR,
                     message = "disconnected",
                 })
                 session:_handle_input_submit("hello")
@@ -5063,7 +4599,7 @@ describe("agentic.SessionManager", function()
 
         it("auth required with a usage-limit body offers login", function()
             local session = make_session("usage_limit", {
-                code = ACPClient.ERROR_CODES.AUTH_REQUIRED,
+                code = AgentClientMock.ERROR_CODES.AUTH_REQUIRED,
                 message = "Authentication required",
             })
             session:_handle_input_submit("hello")
@@ -5302,7 +4838,7 @@ describe("agentic.SessionManager", function()
 
             it("keeps attempts after another error", function()
                 local session = make_session(nil, {
-                    code = ACPClient.ERROR_CODES.TRANSPORT_ERROR,
+                    code = AgentClientMock.ERROR_CODES.TRANSPORT_ERROR,
                     message = "disconnected",
                 })
                 session.agent.usage_limit.attempt = 2
@@ -8368,7 +7904,7 @@ describe("agentic.SessionManager", function()
                 chat_history = { provider_version = recorded_version },
                 agent = {
                     agent_info = agent_info,
-                    provider_name = "opencode-acp",
+                    provider_name = "pi",
                 },
                 file_activity = { serialize = function() end },
                 config_options = { current_model_id = function() end },
@@ -8376,13 +7912,12 @@ describe("agentic.SessionManager", function()
             } --[[@as agentic.SessionManager]]
         end
 
-        it("records the session's provider, not the default", function()
+        it("records the session's provider", function()
             local session = make_session(nil)
-            assert.are_not.equal("opencode-acp", Config.provider)
 
             session:_sync_history_context(session.chat_history)
 
-            assert.equal("opencode-acp", session.chat_history.provider)
+            assert.equal("pi", session.chat_history.provider)
         end)
 
         it("records the version the agent reported", function()

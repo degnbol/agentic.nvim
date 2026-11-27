@@ -193,7 +193,6 @@ function Skeptic:_start(spec)
     --- @type agentic.skeptic.Agent
     local agent
     local background = BackgroundSession:new({
-        provider = spec.provider,
         model = spec.model,
         label = label,
         kind = "skeptic",

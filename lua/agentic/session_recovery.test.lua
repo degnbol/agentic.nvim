@@ -63,8 +63,27 @@ describe("agentic.session_recovery", function()
     end)
 
     describe("login", function()
-        local ACPClient = require("agentic.acp.acp_client")
         local Logger = require("agentic.utils.logger")
+
+        --- The command of a terminal method: the provider command and args,
+        --- then the method's args; the env with the method's on top.
+        --- @param self agentic.AgentClient
+        --- @param method agentic.acp.AuthMethod
+        --- @return agentic.acp.TerminalAuthInvocation
+        local function terminal_auth_invocation(self, method)
+            local config = self.provider_config
+            local cmd = { config.command }
+            vim.list_extend(cmd, config.args or {})
+            vim.list_extend(cmd, method.args or {})
+            return {
+                cmd = cmd,
+                env = vim.tbl_extend(
+                    "force",
+                    config.env or {},
+                    method.env or {}
+                ),
+            }
+        end
 
         local TERMINAL = {
             id = "term",
@@ -138,7 +157,7 @@ describe("agentic.session_recovery", function()
                     state = "ready",
                     auth_methods = methods,
                     provider_config = { name = "Test Agent", command = "agent" },
-                    terminal_auth_invocation = ACPClient.terminal_auth_invocation,
+                    terminal_auth_invocation = terminal_auth_invocation,
                     authenticate = spy.new(function(_self, _id, cb)
                         cb(auth_err)
                     end),

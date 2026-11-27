@@ -1,4 +1,5 @@
 local AcpKind = require("agentic.utils.acp_kind")
+local AgentClient = require("agentic.agent_client")
 local AgentInstance = require("agentic.acp.agent_instance")
 local BufHelpers = require("agentic.utils.buf_helpers")
 local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
@@ -10,12 +11,9 @@ local PermissionManager = require("agentic.ui.permission_manager")
 local SessionResume = require("agentic.session_resume")
 local SubagentTranscript = require("agentic.ui.subagent_transcript")
 
---- The only provider whose escalations the tripwire can tell apart, because
---- pi's `agentic.ts` extension asks about every call. Claude's SDK, by
---- contrast, auto-allows read-only Bash without asking.
-local PROVIDER = "pi"
-
---- Kinds whose run without a permission request trips the session.
+--- Kinds whose run without a permission request trips the session. pi's
+--- `agentic.ts` extension asks about every call, so such a run is an
+--- escalation.
 --- @type table<string, true>
 local GUARDED_KINDS = { edit = true, execute = true }
 
@@ -45,7 +43,6 @@ local function subagent_info(label)
 end
 
 --- @class agentic.BackgroundSession.Opts
---- @field provider string Only "pi"
 --- @field model? string Model value id, e.g. "litellm/glm-5.3"
 --- @field label string Transcript heading and notification label, e.g. "skeptic glm-5.3"
 --- @field kind agentic.BufferNames.Kind The kind segment of its transcript's name
@@ -98,18 +95,8 @@ BackgroundSession.__index = BackgroundSession
 
 --- Start a session. `prompt` calls wait until it is ready.
 --- @param opts agentic.BackgroundSession.Opts
---- @return agentic.BackgroundSession|nil session Nil with a notify for another provider, or when its process cannot be configured
+--- @return agentic.BackgroundSession|nil session Nil with a notify when its process cannot be configured
 function BackgroundSession:new(opts)
-    if opts.provider ~= PROVIDER then
-        Logger.notify(
-            "Background sessions support "
-                .. PROVIDER
-                .. " only, not "
-                .. opts.provider,
-            vim.log.levels.ERROR
-        )
-        return nil
-    end
     self = setmetatable({
         bufnr = nil,
         _opts = opts,
@@ -120,7 +107,7 @@ function BackgroundSession:new(opts)
         _history = ChatHistory:new(),
     }, self)
 
-    local instance = AgentInstance.get_instance(opts.provider, function(client)
+    local instance = AgentInstance.get_instance(function(client)
         vim.schedule(function()
             -- A reconnect runs this again.
             if self._destroyed or self._client then
@@ -178,8 +165,8 @@ function BackgroundSession:_on_created(result, err)
     end)
 end
 
---- Set `opts.model` through the config option of category `model`, else the legacy
---- `session/set_model`. Without a model, `on_set` runs at once.
+--- Set `opts.model` through the config option of category `model`. Without a
+--- model, `on_set` runs at once; without that option, it gets an error.
 --- @param config_options agentic.acp.ConfigOption[]|nil
 --- @param on_set fun(err: agentic.AgentClient.Error|nil)
 function BackgroundSession:_set_model(config_options, on_set)
@@ -202,7 +189,10 @@ function BackgroundSession:_set_model(config_options, on_set)
             return
         end
     end
-    self._client:set_model(self._session_id, model, callback)
+    on_set({
+        code = AgentClient.ERROR_CODES.METHOD_NOT_FOUND,
+        message = "The session offers no model option",
+    })
 end
 
 --- Fail every waiting `prompt` call with `err`, and destroy the session.

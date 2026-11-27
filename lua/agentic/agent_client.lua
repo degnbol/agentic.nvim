@@ -1,12 +1,10 @@
-local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
-
 --- The client of one provider: its processes, sessions and prompts. Methods
 --- without a default raise until a subclass overrides them.
 --- @class agentic.AgentClient
 --- @field state agentic.AgentClient.ClientConnectionState
 --- @field subscribers table<string, agentic.AgentClient.ClientHandlers> Handlers per root session id
 --- @field provider_name agentic.UserConfig.ProviderName Config key of the provider this client runs
---- @field provider_config agentic.acp.ACPProviderConfig
+--- @field provider_config agentic.UserConfig.Pi
 --- @field agent_info? agentic.acp.AgentInfo
 --- @field agent_capabilities? agentic.acp.AgentCapabilities
 --- @field auth_methods? agentic.acp.AuthMethod[]
@@ -56,7 +54,7 @@ local function not_implemented(name)
     error("AgentClient:" .. name .. " is not implemented by this client")
 end
 
---- @param _config agentic.acp.ACPProviderConfig
+--- @param _config agentic.UserConfig.Pi
 --- @param _on_ready fun(client: agentic.AgentClient)
 --- @return agentic.AgentClient
 function AgentClient:new(_config, _on_ready)
@@ -142,23 +140,6 @@ end
 --- @param _callback fun(result: table|nil, err: agentic.AgentClient.Error|nil) Gets the answer, or an error when the prompt is never taken in (`REQUEST_CANCELLED` when a stop ended it before)
 function AgentClient:send_prompt(_session_id, _prompt, _callback)
     not_implemented("send_prompt")
-end
-
---- Set the agent mode of a session. The default fails with
---- `METHOD_NOT_FOUND`.
---- @param _session_id string
---- @param _mode_id string
---- @param callback fun(result: table|nil, err: agentic.AgentClient.Error|nil)
-function AgentClient:set_mode(_session_id, _mode_id, callback)
-    not_supported(callback)
-end
-
---- Set the model of a session. The default fails with `METHOD_NOT_FOUND`.
---- @param _session_id string
---- @param _model_id string
---- @param callback fun(result: table|nil, err: agentic.AgentClient.Error|nil)
-function AgentClient:set_model(_session_id, _model_id, callback)
-    not_supported(callback)
 end
 
 --- Set a config option value of a session.
@@ -434,7 +415,10 @@ end
 --- the directory whose settings.json holds the permission rules.
 --- @return string
 function AgentClient:claude_config_dir()
-    return ClaudeUtils.config_dir(self.provider_config.env)
+    local env = self.provider_config.env
+    return (env and env.CLAUDE_CONFIG_DIR)
+        or vim.env.CLAUDE_CONFIG_DIR
+        or vim.fs.normalize("~/.claude")
 end
 
 --- The plan file a permission request asks approval for.

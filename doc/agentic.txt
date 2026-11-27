@@ -10,7 +10,7 @@ CONTENTS                                                    *agentic-contents*
     2. Requirements ................................... |agentic-requirements|
     3. Setup ................................................. |agentic-setup|
     4. Configuration ................................. |agentic-configuration|
-       4.1  Provider ............................... |agentic-config-provider|
+       4.1  pi ..................................... |agentic-config-pi|
        4.2  Windows ................................. |agentic-config-windows|
        4.3  Keymaps ................................. |agentic-config-keymaps|
        4.4  Tool call display .................. |agentic-config-tool-display|
@@ -56,9 +56,9 @@ CONTENTS                                                    *agentic-contents*
 ==============================================================================
 1. INTRODUCTION                                         *agentic-introduction*
 
-agentic.nvim is a Claude-focused AI chat interface for Neovim, communicating
-via the Agent Client Protocol (ACP). It provides a chat buffer with context
-panels, tool call rendering, permission management, and session persistence.
+agentic.nvim is an AI chat interface for Neovim to the pi coding agent, run
+in pi's RPC mode. It provides a chat buffer with context panels, tool call
+rendering, permission management, and session persistence.
 
 This is a fork of carlos-algms/agentic.nvim.
 
@@ -66,25 +66,10 @@ This is a fork of carlos-algms/agentic.nvim.
 2. REQUIREMENTS                                         *agentic-requirements*
 
 - Neovim >= 0.12.0
-- An ACP provider binary, or pi, on PATH. `provider` takes the config key;
-  the binary is what must be installed:
-
-  Config key          Binary            Provider ~
-  claude-agent-acp    claude-agent-acp  Claude (default)
-  gemini-acp          gemini            Gemini (--experimental-acp)
-  codex-acp           codex-acp         Codex
-  opencode-acp        opencode          OpenCode (acp subcommand)
-  cursor-acp          cursor-agent-acp  Cursor Agent
-  auggie-acp          auggie            Auggie (--acp)
-  mistral-vibe-acp    vibe-acp          Mistral Vibe
-  pi                  pi                pi
-
-Install claude-agent-acp:
+- pi (https://pi.dev) on PATH:
 >
-    pnpm add -g @agentclientprotocol/claude-agent-acp@0.97.0
+    npm install -g @earendil-works/pi-coding-agent
 <
-Or download a binary from the releases page. Developed against
-claude-agent-acp 0.97.0.
 
 TREESITTER PARSERS                              *agentic-requirements-parsers*
 
@@ -110,7 +95,6 @@ The plugin works without a setup call. To change options, call `setup()`
 before the first session:
 >lua
     require("agentic").setup({
-        provider = "claude-agent-acp",
         -- ... any overrides (see |agentic-configuration|)
     })
 <
@@ -121,61 +105,16 @@ All options with defaults are in `lua/agentic/config_default.lua`.
 4. CONFIGURATION                                       *agentic-configuration*
 
 ------------------------------------------------------------------------------
-4.1 PROVIDER                                         *agentic-config-provider*
+4.1 PI                                                     *agentic-config-pi*
 
-                                                *agentic-config-provider-name*
-`provider` string (default: `"claude-agent-acp"`)
-    Provider of a new session when no session is current. A session started
-    from another runs that session's provider. Must match a key in
-    `acp_providers`; the keys are listed in |agentic-requirements|.
-
-                                               *agentic-config-acp_providers*
-`acp_providers` table
-    Provider definitions. Each entry has:
-      `name`      Display name
-      `command`   Binary name or path
-      `args`      List of CLI arguments (optional)
-      `env`       Environment variables (optional)
-      `auth_method`
-                  Id of the preferred login method (optional). `/login`
-                  runs it without asking when the provider advertises it.
-                  An `agent`-type method also runs each time the provider
-                  starts. `claude-agent-acp` advertises `claude-ai-login`
-                  (the default, a Claude subscription) and `console-login`.
-
-    The `claude-agent-acp` entry also has the fields below.
-
-                                                  *agentic-config-todo_tools*
-`todo_tools` boolean (default: true)
-    Offer the agent the Claude Code todo/task tools (TaskCreate, TaskUpdate,
-    TaskList, TaskGet, TodoWrite). These tools fill the todos split.
-
-                                               *agentic-config-allowed_tools*
-`allowed_tools` list
-    (default: `{ "Grep(//dev/null/**)", "Glob(//dev/null/**)" }`)
-    Claude Code permission rules, passed as `--allowedTools`. Naming `Grep`
-    or `Glob`, with or without a scope, gives the agent both tools. Without
-    either, the agent has neither. Naming `TodoWrite` or a `Task*` tool gives
-    the agent the todo tools, whatever |agentic-config-todo_tools| is set to.
-
-    A tool call that a rule here matches bypasses the permission prompt,
-    |agentic-config-auto_approve_kinds| and |agentic-permissions-grant|. The
-    default scope matches no path, so the default rules approve nothing.
-
-                                                   *agentic-config-subagents*
-`subagents` table (default: `{ force_background = false }`)
-    `force_background` runs every subagent (Task) in the background, whatever
-    the model passes for `run_in_background`. Background subagents have no
-    Agent or LSP tool. An `Agent` PreToolUse hook of your own that rewrites
-    the tool input can undo this.
-
-                                *agentic-config-auto_continue_on_usage_limit*
-`auto_continue_on_usage_limit` boolean (default: true)
-    When a turn stops on a usage limit with a reset time and the input is
-    empty, queue `continue` in the input. Delete it to not continue. Queued
-    prompts send when the limit lifts whatever this is set to. The limit
-    holds every session on that provider, not sessions on other providers,
-    and `/new` does not clear it. See |agentic-queue|.
+`pi` table
+    How the plugin starts pi:
+      `name`      Display name (default: `"pi"`)
+      `command`   Binary name or path (default: `"pi"`)
+      `args`      List of CLI arguments, after the plugin's own
+                  (default: `{}`)
+      `env`       Environment variables added for each pi process
+                  (default: `{}`)
 
 ------------------------------------------------------------------------------
 4.2 WINDOWS                                           *agentic-config-windows*
@@ -519,15 +458,12 @@ when the chat's window is not in the current tabpage.
                                                        *agentic.new_session()*
 agentic.new_session({opts})
     Start another chat session and show it as |agentic.open()| does. The
-    previous sessions stay alive. Takes the `opts` of |agentic.open()| and
-    `provider`. `provider` runs the new session on that provider. Without
-    it, the new session runs the current session's provider.
+    previous sessions stay alive. Takes the `opts` of |agentic.open()|.
 
                                                   *agentic.load_acp_session()*
 agentic.load_acp_session({id}, {cwd}, {model}, {mods})
     Load the saved chat {id} into a new session and show its chat in the
-    target window, as |agentic.open()| does, on the session's saved
-    provider when there is one. {id} is a chat id (|agentic-buffer-names|),
+    target window, as |agentic.open()| does. {id} is a chat id (|agentic-buffer-names|),
     or the ACP session id of a session with no saved file, which loads into
     a new chat. Optional {cwd} for the working directory and {model} for
     the model id; a nil {cwd} or {model} takes the saved value. Optional
@@ -624,7 +560,6 @@ Applied to all buffers in the widget (chat, prompt, panels).
     `<localLeader>m`   `change_mode`           n/v     Switch agent mode
     `<C-c>`            `stop_generation`       n/i     Stop generation
     `<localLeader>R`   `resume_session`        n       Pick a saved session
-    `<localLeader>p`   `switch_provider`       n       Switch this session's provider
     `<localLeader>M`   `switch_model`          n       Switch model
     `<localLeader>E`   `switch_thought_level`  n       Switch thought level (effort)
     `<localLeader>!`   `restart_session`       n       Restart session
@@ -770,9 +705,8 @@ and appear in slash-command completion.
     `/grant [path]`    Grant a path for auto-approval. See
                        |agentic-permissions-grant|.
     `/login [method]`  Log in with one of the provider's login methods.
-                       Without an argument it runs `auth_method` (see
-                       |agentic-config-acp_providers|) or the only method,
-                       else asks. A login already running is stopped.
+                       Without an argument it runs the only method, else
+                       asks. A login already running is stopped.
                        Takes the place of a provider's own `/login`.
     `/skeptic [on|off]`
                        Background claim checks. See |agentic-skeptic|.
@@ -788,7 +722,7 @@ completion. pi skills run as `/skill:<name>`.
 ------------------------------------------------------------------------------
 7.3 COMMAND NOTICES                                          *agentic-notices*
 
-`/grant`, `/rename`, `/context`, a model or provider switch and a resumed
+`/grant`, `/rename`, `/context`, a model switch and a resumed
 session report back in the chat as a notice heading. `[[` and `]]` stop on
 notices as well as prompts (|agentic-keymaps-agent|).
 
@@ -1066,7 +1000,7 @@ chat.
 
                                                        *agentic-buffer-names*
 Buffers are named after the chat id, `<cid>`, the name of the chat's
-session file, kept across a provider switch and a restart.
+session file, kept across a restart.
 `<agent key>` and `<skeptic key>` are 8 hex digits standing for the
 subagent's or the skeptic's ACP session:
 
@@ -1217,7 +1151,7 @@ drops when the file exists again, unless it is tracked and differs from
 HEAD, or when the agent created the file before deleting it.
 `windows.activity.hide_reverted = false` keeps them all.
 
-The list survives a resume and a provider switch. `/new`
+The list survives a resume. `/new`
 and `/clear` start a new conversation, and empty it.
 
 ------------------------------------------------------------------------------
@@ -1229,7 +1163,7 @@ limits.
 ------------------------------------------------------------------------------
 9.7 SUBAGENTS                                              *agentic-subagents*
 
-With claude-agent-acp, each subagent has its own transcript: a listed buffer
+Each subagent has its own transcript: a listed buffer
 (|agentic-buffer-names|) holding its prose,
 thinking and tool calls under a `##` heading like its block's. A transcript
 shows its subagent as working while it works, and the model of a running
@@ -1334,7 +1268,6 @@ turns off.
 
 Requires:
 - `text_model.url`, for the model that extracts the claims.
-- The `pi` provider.
 
     `/skeptic`           Report whether the skeptic is on.
     `/skeptic on|off`    Turn it on or off for the session.
@@ -1347,7 +1280,7 @@ Requires:
         `reasoning_effort` (default: "none") is sent as the request's
         `reasoning_effort`; `false` leaves the field out of the request.
     `skeptics`            table[]
-        One `{ provider = "pi", model = "<provider>/<id>" }` per skeptic.
+        One `{ model = "<provider>/<id>" }` per skeptic.
     `turn_timeout_ms`     integer (default: 300000)
         Per skeptic turn, and for a skeptic to start.
     `max_refusals`        integer (default: 3)
@@ -1518,9 +1451,7 @@ limit that reset to file buffers, add this once snacks is loaded:
 `debug` prints debug messages, readable with |:messages|. `log` appends them
 to `agentic/agentic.log` under |stdpath()| `log`, e.g.
 `~/.local/state/nvim/agentic/agentic.log`; at 10 MB the file moves to
-`agentic.log.1`, replacing the previous one. The two are independent. With
-`log` set, the Claude provider writes its own log, `agent.log`, to the same
-folder, unless `CLAUDE_AGENT_LOGS` is set.
+`agentic.log.1`, replacing the previous one. The two are independent.
 
 Text the provider process writes outside the protocol shows as a warning, once
 per distinct message. With `log` set, the full text is in `agentic.log`.

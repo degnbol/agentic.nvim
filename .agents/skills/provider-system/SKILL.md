@@ -20,13 +20,9 @@ description:
 ## Clients
 
 Session code sees a provider only through `agentic.AgentClient`
-(`lua/agentic/agent_client.lua`): `ACPClient` runs one process per provider
-(plus one for unattended sessions), `PiClient` one per session. `ADAPTERS` in
-`lua/agentic/acp/agent_instance.lua` maps a provider to its client class.
-Supported providers and their CLI requirements live in `Config.acp_providers`
-(`lua/agentic/config_default.lua`). A session's provider is
-`agent.provider_name`; `SessionRegistry.create` defaults it to the current
-session's, else `Config.provider`. Only `on_prompt_taken` reports that a
+(`lua/agentic/agent_client.lua`). The only client is `PiClient`, one pi
+process per session, configured by `Config.pi`; `AgentInstance` holds one
+client for attended sessions and one for unattended sessions. Only `on_prompt_taken` reports that a
 prompt was taken in, and only `on_turn_state` that a turn ended.
 
 ## ACP Providers

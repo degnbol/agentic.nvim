@@ -9,33 +9,23 @@ describe("agentic.SessionRegistry", function()
 
     --- @type table Mock for SessionManager module
     local session_manager_mock
-    --- @type table Mock for ACPHealth module
-    local acp_health_mock
     --- @type table Stub for Logger module
     local logger_stub
     --- @type table Mock for Config module
     local config_mock
 
-    --- @type TestStub|nil
-    local ui_select_stub
-
-    --- Provider argument of each `SessionManager:new` call
+    --- Messages of each `Logger.notify` call
     --- @type string[]
-    local new_providers
-    --- Provider argument of each `check_configured_provider` call
-    --- @type string[]
-    local checked_providers
+    local notified
 
     local next_id = 0
 
-    --- @param provider string|nil Default: "claude-agent-acp"
     --- @return table mock_session
-    local function create_mock_session(provider)
+    local function create_mock_session()
         next_id = next_id + 1
         local session = {
             id = next_id,
             is_mock = true,
-            agent = { provider_name = provider or "claude-agent-acp" },
         }
         function session:destroy()
             self.destroyed = true
@@ -44,46 +34,28 @@ describe("agentic.SessionRegistry", function()
     end
 
     session_manager_mock = {
-        new = function(_self, provider)
-            return create_mock_session(provider)
-        end,
-    }
-
-    acp_health_mock = {
-        check_configured_provider = function()
-            return true
-        end,
-        get_default_provider_names = function()
-            return {}
-        end,
-        is_command_available = function()
-            return false
+        new = function()
+            return create_mock_session()
         end,
     }
 
     logger_stub = {
         debug = function() end,
-        notify = function() end,
+        notify = function(message)
+            table.insert(notified, message)
+        end,
     }
 
-    config_mock = {
-        provider = "claude-agent-acp",
-        acp_providers = {
-            ["claude-agent-acp"] = { command = "claude-agent-acp" },
-            ["gemini-acp"] = { command = "gemini" },
-        },
-    }
+    config_mock = { pi = { command = "true" } }
 
     local original_loaded = {
         ["agentic.config"] = package.loaded["agentic.config"],
-        ["agentic.acp.acp_health"] = package.loaded["agentic.acp.acp_health"],
         ["agentic.utils.logger"] = package.loaded["agentic.utils.logger"],
         ["agentic.session_manager"] = package.loaded["agentic.session_manager"],
         ["agentic.session_registry"] = package.loaded["agentic.session_registry"],
     }
 
     package.loaded["agentic.config"] = config_mock
-    package.loaded["agentic.acp.acp_health"] = acp_health_mock
     package.loaded["agentic.utils.logger"] = logger_stub
     package.loaded["agentic.session_manager"] = session_manager_mock
     package.loaded["agentic.session_registry"] = nil
@@ -97,28 +69,11 @@ describe("agentic.SessionRegistry", function()
     before_each(function()
         package.loaded["agentic.session_manager"] = session_manager_mock
 
-        new_providers = {}
-        checked_providers = {}
-        acp_health_mock.check_configured_provider = function(provider)
-            table.insert(checked_providers, provider)
-            return true
-        end
-        acp_health_mock.get_default_provider_names = function()
-            return {}
-        end
-        acp_health_mock.is_command_available = function()
-            return false
-        end
+        notified = {}
+        config_mock.pi = { command = "true" }
 
-        config_mock.provider = "claude-agent-acp"
-        config_mock.acp_providers = {
-            ["claude-agent-acp"] = { command = "claude-agent-acp" },
-            ["gemini-acp"] = { command = "gemini" },
-        }
-
-        session_manager_mock.new = function(_self, provider)
-            table.insert(new_providers, provider)
-            return create_mock_session(provider)
+        session_manager_mock.new = function()
+            return create_mock_session()
         end
     end)
 
@@ -129,22 +84,14 @@ describe("agentic.SessionRegistry", function()
         package.loaded["agentic.session_manager"] =
             original_loaded["agentic.session_manager"]
         package.loaded["agentic.config"] = original_loaded["agentic.config"]
-        package.loaded["agentic.acp.acp_health"] =
-            original_loaded["agentic.acp.acp_health"]
         package.loaded["agentic.utils.logger"] =
             original_loaded["agentic.utils.logger"]
-
-        if ui_select_stub then
-            ui_select_stub:revert()
-            ui_select_stub = nil
-        end
     end)
 
     --- Register a new mock session.
-    --- @param provider string|nil See `create_mock_session`
     --- @return table session
-    local function install(provider)
-        local session = create_mock_session(provider)
+    local function install()
+        local session = create_mock_session()
         SessionRegistry.by_id[session.id] = session
         return session
     end
@@ -167,34 +114,13 @@ describe("agentic.SessionRegistry", function()
             assert.equal(first, SessionRegistry.by_id[first.id])
         end)
 
-        it("creates on the provider it is given", function()
-            SessionRegistry.create("gemini-acp")
-
-            assert.same({ "gemini-acp" }, new_providers)
-            assert.same({ "gemini-acp" }, checked_providers)
-        end)
-
-        it("defaults to the provider of the current session", function()
-            SessionRegistry.set_active(install("gemini-acp"))
-
-            SessionRegistry.create()
-
-            assert.same({ "gemini-acp" }, new_providers)
-        end)
-
-        it("defaults to Config.provider with no session", function()
-            SessionRegistry.create()
-
-            assert.same({ "claude-agent-acp" }, new_providers)
-        end)
-
-        it("returns nil when no provider is configured", function()
-            acp_health_mock.check_configured_provider = function()
-                return false
-            end
+        it("returns nil with a notify when pi is not executable", function()
+            config_mock.pi = { command = "/nonexistent/pi" }
 
             assert.is_nil(SessionRegistry.create())
             assert.same({}, SessionRegistry.by_id)
+            assert.equal(1, #notified)
+            assert.truthy(notified[1]:find("/nonexistent/pi", 1, true))
         end)
 
         it("returns nil when SessionManager:new returns nil", function()
@@ -427,165 +353,6 @@ describe("agentic.SessionRegistry", function()
 
             install_owner(4242)
             assert.equal(4242, SessionRegistry.target_win())
-        end)
-    end)
-
-    describe("select_provider", function()
-        --- @type table[]|nil
-        local captured_items
-        --- @type table|nil
-        local captured_opts
-        --- @type function|nil
-        local captured_on_choice
-
-        before_each(function()
-            captured_items = nil
-            captured_opts = nil
-            captured_on_choice = nil
-
-            ui_select_stub = spy.stub(vim.ui, "select")
-            ui_select_stub:invokes(function(items, opts, on_choice)
-                captured_items = items
-                captured_opts = opts
-                captured_on_choice = on_choice
-            end)
-        end)
-
-        it("sorts installed providers before not-installed", function()
-            acp_health_mock.get_default_provider_names = function()
-                return { "claude-agent-acp", "gemini-acp" }
-            end
-            acp_health_mock.is_command_available = function(cmd)
-                return cmd == "gemini"
-            end
-
-            SessionRegistry.select_provider("claude-agent-acp", function() end)
-
-            assert.is_not_nil(captured_items)
-            assert.equal(2, #captured_items)
-            assert.equal("gemini-acp", captured_items[1].name)
-            assert.is_true(captured_items[1].installed)
-            assert.equal("claude-agent-acp", captured_items[2].name)
-            assert.is_false(captured_items[2].installed)
-        end)
-
-        it("marks provider without config as not-installed", function()
-            acp_health_mock.get_default_provider_names = function()
-                return { "unknown-acp" }
-            end
-
-            SessionRegistry.select_provider("claude-agent-acp", function() end)
-
-            assert.equal(1, #captured_items)
-            assert.equal("unknown-acp", captured_items[1].name)
-            assert.is_false(captured_items[1].installed)
-        end)
-
-        it("calls on_selected with provider name on selection", function()
-            acp_health_mock.get_default_provider_names = function()
-                return { "claude-agent-acp" }
-            end
-
-            local result = nil
-            SessionRegistry.select_provider("claude-agent-acp", function(name)
-                result = name
-            end)
-
-            captured_on_choice({ name = "claude-agent-acp", installed = true })
-
-            assert.equal("claude-agent-acp", result)
-        end)
-
-        it("calls on_selected with nil on cancellation", function()
-            acp_health_mock.get_default_provider_names = function()
-                return { "claude-agent-acp" }
-            end
-
-            local called = false
-            local result = nil
-            SessionRegistry.select_provider("claude-agent-acp", function(name)
-                called = true
-                result = name
-            end)
-
-            captured_on_choice(nil)
-
-            assert.is_true(called)
-            assert.is_nil(result)
-        end)
-
-        describe("format_item labels", function()
-            before_each(function()
-                acp_health_mock.get_default_provider_names = function()
-                    return { "claude-agent-acp", "gemini-acp" }
-                end
-                acp_health_mock.is_command_available = function(cmd)
-                    return cmd == "claude-agent-acp"
-                end
-            end)
-
-            it("appends '(current)' for the current argument", function()
-                config_mock.provider = "gemini-acp"
-
-                SessionRegistry.select_provider(
-                    "claude-agent-acp",
-                    function() end
-                )
-
-                local label = captured_opts.format_item({
-                    name = "claude-agent-acp",
-                    installed = true,
-                })
-                assert.equal("claude-agent-acp (current) ✓ available", label)
-            end)
-
-            it("appends '(default)' for Config.provider", function()
-                config_mock.provider = "claude-agent-acp"
-
-                SessionRegistry.select_provider("gemini-acp", function() end)
-
-                local label = captured_opts.format_item({
-                    name = "claude-agent-acp",
-                    installed = true,
-                })
-                assert.equal("claude-agent-acp (default) ✓ available", label)
-            end)
-
-            it("appends availability suffix based on installed flag", function()
-                config_mock.provider = "none"
-
-                SessionRegistry.select_provider("none", function() end)
-
-                local installed_label = captured_opts.format_item({
-                    name = "claude-agent-acp",
-                    installed = true,
-                })
-                local missing_label = captured_opts.format_item({
-                    name = "gemini-acp",
-                    installed = false,
-                })
-
-                assert.equal("claude-agent-acp ✓ available", installed_label)
-                assert.equal("gemini-acp ✗ not installed", missing_label)
-            end)
-
-            it("appends '(current, default)' when both match", function()
-                config_mock.provider = "claude-agent-acp"
-
-                SessionRegistry.select_provider(
-                    "claude-agent-acp",
-                    function() end
-                )
-
-                local label = captured_opts.format_item({
-                    name = "claude-agent-acp",
-                    installed = true,
-                })
-                assert.equal(
-                    "claude-agent-acp (current, default) ✓ available",
-                    label
-                )
-            end)
         end)
     end)
 end)
