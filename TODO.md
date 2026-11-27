@@ -37,17 +37,21 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 
 ### Tracks
 
-**Failed execute block body offset**
-1. P2 [FIX-silent-errors.md](notes/FIX-silent-errors.md): no error reported only through `Logger.debug` — reviewed — blocked on open questions 2 and 3 (items 1 and 7 wait on them); items 2-6, 8-9 ready
-2. P3 [FIX-failed-execute-body-offset.md](notes/FIX-failed-execute-body-offset.md): Failed execute block body offset — reviewed (open questions); the offset is fixed, open question 2 stays; may retire: a rejected call no longer draws the deny-rule merged body, its only reachable case (after 1)
+**reviewer-choice context**
+1. P2 [FEAT-cross-lab-review.md](notes/FEAT-cross-lab-review.md): the main agent asks LiteLLM models for a review — spec
+2. P2 [FEAT-review-choice-context.md](notes/FEAT-review-choice-context.md): reviewer-choice context — spec (after 1)
 
-**Guard a heading whole when the adapter knows it is a command**
-1. P2 [FIX-placeholder-titles.md](notes/FIX-placeholder-titles.md): Claude tool call heads from rawInput, not the bridge title — reviewed (open questions)
-2. P3 [FIX-heading-command-flag.md](notes/FIX-heading-command-flag.md): Guard a heading whole when the adapter knows it is a command — reviewed spec — on hold, no reproducer (after 1)
+**markdown only inside prompts and agent messages**
+1. P3 [REFACTOR-pi-only.md](notes/REFACTOR-pi-only.md): pi as the only provider; remove the ACP layer — draft
+2. P3 [FEAT-diff-line-numbers.md](notes/FEAT-diff-line-numbers.md): file line numbers on diff rows — draft (after 1)
+3. P3 [FEAT-tool-body-placement.md](notes/FEAT-tool-body-placement.md): tool call bodies in their own buffers, with a placement per kind — draft (after 1, 2)
+4. P3 [FEAT-inline-tool-body.md](notes/FEAT-inline-tool-body.md): inline and float_inline tool call bodies, without folds — draft (after 3)
+5. P3 [REFACTOR-chat-item-shape.md](notes/REFACTOR-chat-item-shape.md): one shape for every collapsible chat item; no fold markers — draft (after 4)
+6. P3 [REFACTOR-chat-markdown-regions.md](notes/REFACTOR-chat-markdown-regions.md): markdown only inside prompts and agent messages — draft (after 5)
 
-**opencode subagents in their own transcripts**
-1. P2 [FIX-opencode-child-title-prefix.md](notes/FIX-opencode-child-title-prefix.md): opencode child-call titles without the subagent prefix — reviewed spec
-2. P2 [FEAT-opencode-subagent-transcripts.md](notes/FEAT-opencode-subagent-transcripts.md): opencode subagents in their own transcripts — reviewed spec (after 1)
+**mlr options that run commands or load code ask**
+1. P3 [FEAT-any-positionals-gate.md](notes/FEAT-any-positionals-gate.md): `any_positionals` gate field (match a glob against any positional) — spec
+2. P3 [FIX-mlr-code-options.md](notes/FIX-mlr-code-options.md): mlr options that run commands or load code ask — reviewed spec (after 1)
 
 **one approve walk; the tally is that walk with no effects pinned**
 1. P3 [REFACTOR-leaf-classification.md](notes/REFACTOR-leaf-classification.md): one structured classification and one leaf front per command leaf — spec
@@ -68,7 +72,8 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 - P1 [FIX-tripwire-uncalled-opencode-call.md](notes/FIX-tripwire-uncalled-opencode-call.md): Mark an opencode call that failed before it got its input as not run — spec
 - P2 [FIX-cancel-request-handler.md](notes/FIX-cancel-request-handler.md): Handle `$/cancel_request` for permission requests — spec
 - P2 [FIX-deny-gate-flag-cap.md](notes/FIX-deny-gate-flag-cap.md): exact multi-element positional matching (remove the flag cap) — reviewed (open questions)
-- P2 [FIX-v2-edit-write-gaps.md](notes/FIX-v2-edit-write-gaps.md): ACP v2 Edit/Write diffs — every hunk, and the patch facts — draft
+- P2 [FIX-held-authored-prompts.md](notes/FIX-held-authored-prompts.md): send held authored prompts when the hold clears — spec
+- P2 [FIX-silent-errors.md](notes/FIX-silent-errors.md): no error reported only through `Logger.debug` — reviewed — blocked on open questions 2 and 3 (items 1 and 7 wait on them); items 2-6, 8-9 ready
 - P3 [BUG-glob-redirect-as-argument.md](notes/BUG-glob-redirect-as-argument.md): a redirect with no space before a glob or brace target auto-approves
 - P3 [BUG-tripwire-display-path.md](notes/BUG-tripwire-display-path.md): the background-session tripwire judges an edit by its display path
 - P3 [FIX-context-highlight-parser-gate.md](notes/FIX-context-highlight-parser-gate.md): check that a parser exists before context highlighting — reviewed spec
@@ -76,7 +81,6 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 - P3 [FIX-model-selector-order.md](notes/FIX-model-selector-order.md): Model selector order — reviewed spec
 - [BUG-bd-panel-loses-state.md](notes/BUG-bd-panel-loses-state.md): main panels lose buffer options, b-vars and keymaps after `:bd`
 - [BUG-child-todowrite-overwrites-todos.md](notes/BUG-child-todowrite-overwrites-todos.md): a subagent's TodoWrite list replaces the main agent's todos
-- [BUG-create-fold-never-fires.md](notes/BUG-create-fold-never-fires.md): `create_max_lines` folds a created file only on the streaming path
 - [BUG-ctrl-c-reject-continues.md](notes/BUG-ctrl-c-reject-continues.md): `<C-c>` at a permission prompt rejects, and the agent continues
 - [BUG-duplicate-unordered-effect.md](notes/BUG-duplicate-unordered-effect.md): an unordered walk lists a write effect twice — draft
 - [BUG-error-classification-structured-errorkind.md](notes/BUG-error-classification-structured-errorkind.md): Usage-limit errors without a reset clause are not classified
@@ -104,21 +108,17 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 ### Plans
 
 - P1 [TRACK-token-usage.md](notes/TRACK-token-usage.md): Reduce token usage — reviewed
-- P2 [FEAT-auto-mode-integration.md](notes/FEAT-auto-mode-integration.md): deterministic permission ladder as a PreToolUse hook, classifier as fallback
-- P2 [FEAT-claude-hooks-opencode.md](notes/FEAT-claude-hooks-opencode.md): run Claude command hooks for opencode sessions — reviewed spec
-- P2 [FEAT-cross-lab-review.md](notes/FEAT-cross-lab-review.md): the main agent asks two models from different labs for a review — reviewed spec
 - P2 [FEAT-stale-read-warning.md](notes/FEAT-stale-read-warning.md): stale-read warning on Edit/Write
-- P3 [FEAT-context-usage.md](notes/FEAT-context-usage.md): tell the agent its context usage past a threshold — reviewed spec
-- P3 [FEAT-diff-line-numbers.md](notes/FEAT-diff-line-numbers.md): line numbers in Edit tool diff previews
+- P3 [FEAT-ask-tool.md](notes/FEAT-ask-tool.md): questions to the user as a tool with a panel — draft
+- P3 [FEAT-context-usage.md](notes/FEAT-context-usage.md): tell the agent its context usage past a threshold — spec
 - P3 [FEAT-gutter-identity.md](notes/FEAT-gutter-identity.md): gutter identity glyphs — reviewed (open questions)
-- P3 [FEAT-permission-always-allow-wording.md](notes/FEAT-permission-always-allow-wording.md): per-kind wording for the "Allow always" permission option
+- P3 [FEAT-permission-always-allow-wording.md](notes/FEAT-permission-always-allow-wording.md): name the file in the "always" options of a file change — spec
 - P3 [FEAT-permission-resolve-known-vars.md](notes/FEAT-permission-resolve-known-vars.md): resolve known-literal vars before the safety check
+- P3 [FEAT-sed-in-place-grant.md](notes/FEAT-sed-in-place-grant.md): `sed -i` operands as grant-scoped write effects — reviewed spec
 - P3 [FEAT-single-word-dynamic.md](notes/FEAT-single-word-dynamic.md): a quoted dynamic word that cannot be an option — reviewed spec
 - P3 [FEAT-to-chat-key.md](notes/FEAT-to-chat-key.md): key from a subagent to its chat — spec
-- P3 [FEAT-updated-input-display.md](notes/FEAT-updated-input-display.md): show when a hook rewrote a tool call's input — reviewed (open questions)
 - P3 [PERF-append-session-log.md](notes/PERF-append-session-log.md): append finished messages to the session file — reviewed (open questions)
 - P3 [REFACTOR-acp-kind-normalisation.md](notes/REFACTOR-acp-kind-normalisation.md): make lowercase an invariant of a tool-call `kind`
-- P3 [REFACTOR-acp-tool-call-builders.md](notes/REFACTOR-acp-tool-call-builders.md): adapters extend the base tool-call builders — reviewed spec
 - P3 [REFACTOR-agent-chunk-filter.md](notes/REFACTOR-agent-chunk-filter.md): `ResponseBoundary:filter_chunk` takes any agent chunk — spec
 - P3 [REFACTOR-agent-config-lookup.md](notes/REFACTOR-agent-config-lookup.md): AgentConfigOptions — one entry lookup, and callbacks given once — spec
 - P3 [REFACTOR-agent-scoped-lookups.md](notes/REFACTOR-agent-scoped-lookups.md): one side-record drain and one transcript lookup per agent — reviewed spec
@@ -146,7 +146,8 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 ### Ideas and audits
 
 - [AUDIT-edge-cases.md](notes/AUDIT-edge-cases.md): edge-case code (2026-10-26)
-- P2 [AUDIT-reviewer-models.md](notes/AUDIT-reviewer-models.md): can an opencode model replace Opus as reviewer — draft
+- P2 [AUDIT-hooks-pi.md](notes/AUDIT-hooks-pi.md): what each Claude Code hook becomes under pi — draft
+- P2 [AUDIT-reviewer-models.md](notes/AUDIT-reviewer-models.md): which reviewers to use for a review — draft
 - [IDEA-archive-pre-compaction-sessions.md](notes/IDEA-archive-pre-compaction-sessions.md): archive sessions from before a compaction
 - [IDEA-auto-allow-non-zsh.md](notes/IDEA-auto-allow-non-zsh.md): auto-allow beyond zsh
 - [IDEA-background-processes-window.md](notes/IDEA-background-processes-window.md): background processes window
@@ -155,13 +156,10 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 - [IDEA-login-service-check.md](notes/IDEA-login-service-check.md): check the provider service before offering a login
 - [IDEA-lsp-rename-tooling.md](notes/IDEA-lsp-rename-tooling.md): LSP rename and lookup tools for the agent
 - [IDEA-permission-arity.md](notes/IDEA-permission-arity.md): permission rules with arity
-- [IDEA-pi-support.md](notes/IDEA-pi-support.md): Pi coding agent support in agentic.nvim
-- [IDEA-provider-drift-detection.md](notes/IDEA-provider-drift-detection.md): detect provider drift
 - [IDEA-queue-overlooked-question.md](notes/IDEA-queue-overlooked-question.md): a queued message answers a question that was never seen
-- [IDEA-scoped-cancel-subagents.md](notes/IDEA-scoped-cancel-subagents.md): Scoping `<C-c>` — sparing subagents from the interrupt
 - [IDEA-session-retention.md](notes/IDEA-session-retention.md): session retention
 - [IDEA-session-stats-logging.md](notes/IDEA-session-stats-logging.md): a usage panel, and session logging
 - [IDEA-token-cost-profiler.md](notes/IDEA-token-cost-profiler.md): per-message token cost and session profiler
-- [IDEA-tui-parity.md](notes/IDEA-tui-parity.md): slash command parity with the Claude Code TUI
+- P3 [IDEA-transcript-blame.md](notes/IDEA-transcript-blame.md): blame a line to the agent turn that wrote it — draft
 
 <!-- END plan-index -->

@@ -18,7 +18,7 @@ Not covered: `lua/agentic/utils/permission_rules.lua` (its reviewer did not fini
 
 Reports, each getting a plan:
 - 0.2, 0.3 (git fails open; same-second cache) → fixed
-- 0.9 (failed execute row offset) → `FIX-failed-execute-body-offset.md`
+- 0.9 (failed execute row offset) → dropped: its only case was an ACP deny-rule body
 - 0.12 (`$5 and $10` as math) → `FIX-inline-math-dollar-pairing.md`
 - 0.13 (deny gate over the flag cap) → `FIX-deny-gate-flag-cap.md`
 - 0.14 (completion reads the current buffer) → fixed: `lsp_server.lua` takes the buffer from the request's `textDocument.uri`.

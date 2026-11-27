@@ -76,12 +76,6 @@ A finished prose region folds on `zc`, open by default.
   `_queue_fold(first_row, true)`, as `_decorate_collapsed_region` does for an
   open region.
 
-### Blocking-hook feedback
-
-Remaining from unit 6: feedback from a blocking hook arrives as a real
-`agent_message_chunk` and renders as prose. A bridge-generated severity prefix
-identifies it. No note owns it yet.
-
 ## Non-goals
 
 - Prose regions in a replayed chat. `SessionResume.replay_messages` writes

@@ -1,10 +1,10 @@
 # Plan: questions to the user as a tool with a panel
 Status: draft
 Priority: P3
-Depends: FEAT-pi-provider.md, REFACTOR-pi-only.md (§ Claude on pi, for Claude chats)
+Depends:
 
 ## Relevant files
-- `pi/agentic.ts` — the pi extension from `FEAT-pi-provider.md`; registers the tool
+- `pi/agentic.ts` — the plugin's pi extension; registers the tool
 - `lua/agentic/pi/` — `pi_tool_calls.lua` (tool call → block)
 - `lua/agentic/ui/agents_panel.lua` — a panel with per-row actions (`Actions`) and `dd` as an operator; prior art for the panel
 - `lua/agentic/ui/todo_list.lua` — prior art for a panel that opens with entries and closes when empty
@@ -39,8 +39,8 @@ Alternatives that were rejected:
   guess what is a question.
 - The same tool over ACP: Claude Code takes a custom tool only through an
   MCP server (`session/new` `mcpServers`). `REFACTOR-pi-only.md` removes
-  that path, so the work is not done twice. Until that plan lands, only
-  pi-model chats get the tool.
+  that path, so the work is not done twice. Until that plan lands, ACP
+  chats do not get the tool.
 
 The existing pi ask packages are modal copies of
 `AskUserQuestion`: the turn stops until the user answers in a form. Most
@@ -72,7 +72,7 @@ A sketch. The open questions below decide the details.
    quotes. A hit gives one reminder per session ("use the ask tool").
    Misses are acceptable.
 9. The guidance on when to use the tool is in the tool description, not in
-   `CLAUDE.md`, because only agentic.nvim has the tool.
+   `AGENTS.md`, because only agentic.nvim has the tool.
 
 ## Expected outcome
 - The agent asks through the tool; each question has one number, assigned
@@ -108,13 +108,11 @@ A sketch. The open questions below decide the details.
   survives reload and, for `pi-goals`, compaction.
 
 ## To verify
-1. `pi-claude-bridge` gives Claude the tools that a pi extension registers.
-   If it does not, Claude cannot use the tool.
-2. A pi extension can add text to the context after compaction (read
+1. A pi extension can add text to the context after compaction (read
    `pi-goals` and pi `extensions.md`).
-3. A pi extension can add text to the next user prompt without showing it
+2. A pi extension can add text to the next user prompt without showing it
    as typed text.
-4. pi extensions share one tool namespace: `@arhen/pi-core-ask` states that
+3. pi extensions share one tool namespace: `@arhen/pi-core-ask` states that
    only one extension can register `ask_user_question` in a session.
 
 ## Open questions
@@ -147,7 +145,7 @@ A sketch. The open questions below decide the details.
     label?
 11. Reminder delivery for a question in prose: in the next prompt, or a
     follow-up turn (like a blocking stop hook)?
-12. Tool name: `ask` or other, given point 4 of To verify.
+12. Tool name: `ask` or other, given point 3 of To verify.
 13. Store owner. Change 1 needs the number in the extension; change 2 puts
     the store in the plugin. One owner:
     - the extension, in pi's session tree (`pi-goals`, `supi-ask-user`),

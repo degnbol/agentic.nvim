@@ -10,7 +10,8 @@ Status: reviewed spec
   `agentic.utils.ShellParse.Shell`, `agentic.ShellCommand` (`cwd`),
   `cd_target`, `command_cwds`, `extract_commands`
 - `lua/agentic/utils/shell_parse.test.lua` — "stdin and cwd"
-- Consumer (separate repo): hook module `rm_targets.lua`
+- Consumer (dotfiles, a Claude Code hook that moves to a pi extension per
+  `AUDIT-hooks-pi.md` § Code and prose rules): hook module `rm_targets.lua`
   (`locate`, `changes_dir_after`, `DIR_CHANGES`, header doc),
   `rm-refs-remind.sh` (resolves `?` against the end cwd); tests
   `tests/test-guard-runner.zsh`, `tests/test-rm-refs-remind.zsh`
@@ -48,10 +49,6 @@ zsh's `command` runs an external command, never a builtin or function
 directory). So `collect`'s fresh `Shell` for it is right, and
 `shell_command`'s `or name == "command"` is wrong: `command_cwds` reads
 `command cd /x` as entering `/x`.
-
-Claude Code writes the end cwd with `eval <cmd> && pwd -P >| <file>`: after
-`exit`, `exec <cmd>` or a non-zero exit it reports a cwd other than the
-shell's end directory.
 
 ## Changes
 `shell_parse.lua`:
@@ -162,11 +159,10 @@ passes.
 - Functions defined inside an `eval`ed or `-c` string: their calls do not
   count as a change.
 - Functions and aliases the shell has before the command runs (startup
-  files, Claude Code's shell snapshot, e.g. zoxide's `z`), and aliases the
+  files, e.g. zoxide's `z`), and aliases the
   command defines: their calls do not count as a change.
 - `setopt autocd` bare-directory commands, traps set by `trap`.
-- A non-zero exit status, and a cwd Claude Code resets to the project
-  directory: the hook resolves `?` against the cwd it is given.
+- A non-zero exit status: the hook resolves `?` against the cwd it is given.
 
 ## Open questions
 None.
