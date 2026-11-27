@@ -18,8 +18,7 @@ Priority: P3
   `_chunk_start_line` is nil after the flush
 - `.claude/skills/session-lifecycle/SKILL.md` — cross-turn table, row
   `_chunk_start_line`
-- Skills: `rendering`, `follow`, `session-lifecycle`, `neovim`
-  (`references/rendering.md` § extmarks under `set_lines`)
+- Skills: `rendering`, `follow`, `session-lifecycle`
 - Notes touching the same functions: `notes/BUG-streamed-code-lines-get-hard-wrapped.md`
   (the streaming fence clamp), `notes/FEAT-gutter-identity.md` (a
   prose-fold range placed in `_end_prose_run`)
@@ -46,7 +45,7 @@ The rows stay integers. Extmarks would not save the hand-shifting:
 - `_chunk_start_line` is set again after every streaming reflow
   (`start + #wrapped`), so a mark would gain nothing there.
 - The pin sits inside the streaming reflow's replaced range, and a mark
-  there collapses to an edge (neovim skill `references/rendering.md`). It
+  there collapses to an edge (`:help extmarks`). It
   would need to be placed again after each reflow, which is the same manual
   handling the integer gets now.
 

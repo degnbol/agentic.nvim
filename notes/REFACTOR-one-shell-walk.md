@@ -16,8 +16,7 @@ Depends: REFACTOR-leaf-classification.md, REFACTOR-redirect-effect.md
   code unchanged)
 - `notes/REFACTOR-leaf-classification.md`, `notes/REFACTOR-redirect-effect.md`
   (land first, see Dependencies)
-- Skills: `permissions` (§ Shell command parsing, `references/parsing.md`),
-  `implement`, `neovim`
+- Skills: `permissions` (§ Shell command parsing, `references/parsing.md`)
 
 ## Background
 `permission_rules.lua` walks the parse tree twice with one handler per node

@@ -25,8 +25,7 @@ Depends:
   read a dynamic value word as a path
 - `notes/FEAT-any-positionals-gate.md` — its `every_parse_has_positional`
   stops at `ctx.n_static`, which keeps its meaning here
-- Skills: `permissions` (`references/parsing.md` § Token expansion),
-  `implement`, `neovim`, `treesitter-config` (zsh grammar node shapes)
+- Skills: `permissions` (`references/parsing.md` § Token expansion)
 
 ## Background
 A leaf with any dynamic word cannot satisfy an option condition:

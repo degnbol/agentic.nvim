@@ -14,7 +14,7 @@ Priority: P2
 - `lua/agentic/skeptic/turn.lua` (`unified_diff`)
 - `tests/fixtures/acp_v2_turn.jsonl`
 - Bridge 0.97.0: `dist/diff.js` (`previewPatchContent`, `v2UpdateFromDiffToolResponse`, `v2DiffContent`, `hunkRange`), `dist/tool-calls/reporters/file-edit.js`, `dist/acp-agent.js` `previewFileChange`
-- Skills: `provider-system` § "Edit diffs come from `content[]`"; global `acp` → `references/claude-agent.md` § PostToolUse update
+- Skills: `provider-system` § "Edit diffs come from `content[]`"
 
 ## Background
 On v2 an Edit/Write diff is a git patch of the whole-file change, 3 context
@@ -146,10 +146,3 @@ at the first render (`cached_diff_blocks` included); only tracker data updates.
   lines each side, as a v1 `old_string`'s anchor lines were claimed; not
   narrowed here.
 - Recording owned ranges for multi-hunk edits (needs several records per call).
-
-## Open questions
-1. Permission Q: add a v2 note to the global `acp` skill's
-   `references/claude-agent.md` § PostToolUse update (a v2 client gets a
-   `diff` with `changes` and a git `patch`, 3 context lines, no
-   `toolResponse`; the preview sends it first and the hook re-sends only when
-   it differs)? Yes / no.

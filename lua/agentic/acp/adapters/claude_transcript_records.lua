@@ -361,7 +361,7 @@ local function attachment_records(entry)
                 command = command,
                 -- The CLI never writes the prefix: the user's own hooks write
                 -- it on a deny only, as a deny leaves no run record that names
-                -- them (`_emit_context` in the dotfiles' hooks/lib/core.zsh).
+                -- them.
                 outcome = command and "denied" or nil,
             }
         end, type(content) == "table" and content or { content })

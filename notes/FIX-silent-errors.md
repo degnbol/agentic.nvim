@@ -4,7 +4,7 @@ Priority: P2
 
 ## Relevant files
 - `notes/AUDIT-edge-cases.md` (4.1, 4.28)
-- `~/.claude/rules/lang-lua.md` ("pcall requires visible error handling"; silent `pcall` only for cleanup of already-invalid state)
+- Rule: `pcall` requires visible error handling; silent `pcall` only for cleanup of already-invalid state
 - `lua/agentic/utils/ansi.lua`, `lua/agentic/ui/chat_widget.lua`, `lua/agentic/ui/chat_buffer.lua`, `lua/agentic/utils/file_system.lua`, `lua/agentic/acp/acp_client.lua`, `lua/agentic/utils/grep_regex.lua`, `lua/agentic/ui/permission_manager.lua`, `lua/agentic/ui/tool_call_renderer.lua`, `lua/agentic/ui/message_writer.lua`, `lua/agentic/ui/floating_message.lua`, `lua/agentic/ui/status_indicator.lua`, `lua/agentic/utils/git_files.lua`, `lua/agentic/bootstrap.lua`, `lua/agentic/utils/buf_helpers.lua`, `lua/agentic/ui/subagent_transcript.lua`
 - `notes/FIX-failed-execute-body-offset.md`
 - Tests: `lua/agentic/ui/permission_manager.test.lua`

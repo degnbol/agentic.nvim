@@ -11,7 +11,7 @@ Priority: P3
   `_show_selector` and `AgentModels:show_model_selector` into
   `OptionSelector.show`; the ordered list becomes its `items`. Either plan
   can land first; the second rebases.
-- `.claude/rules/tests.md`, skills: `implement`, `lua-class`
+- `.claude/rules/tests.md`, skills: `lua-class`
 - Provider source (read-only): claude-agent-acp `dist/session-model.js`
   (`buildModelConfigOption` keeps the SDK's order; duplicate display names
   fall back to labels such as `Opus 4.6 (claude-opus-4-6)`, near line 512)

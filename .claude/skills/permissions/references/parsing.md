@@ -303,5 +303,4 @@ allow on the leaf skips both.
 ## Command-source fallback
 
 If `request.toolCall.rawInput.command` is nil and the tracker kind is
-`"execute"`, read from `tracker.argument` instead (opencode quirk — see acp
-skill `references/opencode.md` finding 3).
+`"execute"`, read from `tracker.argument` instead (opencode quirk).

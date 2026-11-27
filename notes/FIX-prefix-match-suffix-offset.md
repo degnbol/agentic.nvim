@@ -5,7 +5,6 @@ Status: spec
 - `lua/agentic/utils/text_matcher.lua` — `PREFIX_STRATEGIES`, `find_all_prefix_boundary_matches`, `_try_find_prefix_boundary_matches`, `trim_trailing`, `trim_space`
 - `lua/agentic/utils/text_matcher.test.lua` — `describe("find_all_prefix_boundary_matches")`
 - `lua/agentic/ui/tool_call_diff.lua` — `match_or_substring_fallback` appends `match.suffix` to the last OLD and NEW lines (the only consumer of `suffix`)
-- Skills: `implement`, `neovim`
 
 ## Background
 When OLD ends in a partial line, `find_all_prefix_boundary_matches` matches the last OLD line (`last_target`) as a prefix of the file line and returns the rest as `suffix`. `match_or_substring_fallback` appends `suffix` to the last OLD and NEW lines so the diff shows whole lines. The blocks are display-only; the file is not written from them.

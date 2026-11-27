@@ -81,8 +81,7 @@ an `IDEA-` note in `notes/`.
   prompt because `reads_value` sees letters; they are numbers.
 - **Status label from permission state**: show "pending" while a permission
   request is open for a `toolCallId`, instead of the opencode adapter's
-  `in_progress` → `pending` relabel (acp skill `references/opencode.md` §
-  "Premature `in_progress`"). Needs PermissionManager → renderer plumbing or
+  `in_progress` → `pending` relabel (`opencode_acp_adapter.lua`). Needs PermissionManager → renderer plumbing or
   a per-tracker `awaiting_permission` flag.
 - **`/grant` for `git rm`**: without `-f`, it is the same recoverable delete
   as `rm` of a tracked, clean file, but emits no delete effect. Maybe a

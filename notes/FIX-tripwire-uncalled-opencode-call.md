@@ -12,7 +12,7 @@ Depends:
 - `lua/agentic/background_session.lua` — `_check_tripwire` (read only)
 - `lua/agentic/skeptic/init.lua` — `_on_agent_destroyed` (read only)
 - opencode v2.2.5: `packages/cli/src/acp/translate.ts` (`session.tool.input.started`, `session.tool.called`, `session.tool.failed`, `newTool`), `packages/cli/src/acp/tool.ts` (`errorToolUpdate`, `rawInput`), `packages/core/src/session/runner/step.ts` (`TOOLS_INTERRUPTED`), `packages/core/src/session/runner/publish-llm-event.ts` (`failTools`, `asRecord`)
-- Skills: `implement`, `provider-system`, `subagents`
+- Skills: `provider-system`, `subagents`
 
 ## Background
 A background session's turn timeout sends `session/cancel`. If opencode is

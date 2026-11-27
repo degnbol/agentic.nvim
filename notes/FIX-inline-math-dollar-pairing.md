@@ -10,10 +10,10 @@ Priority: P3
 - Renderer (parent config, read-only here):
   - `~/.local/share/nvim/site/pack/core/opt/nvim-treesitter/runtime/queries/markdown_inline/injections.scm` — `(latex_block)` injected as `latex`
   - `~/.local/share/nvim/site/pack/core/opt/snacks.nvim/queries/latex/images.scm` — every `inline_formula` becomes a math image
-  - `~/dotfiles/config/nvim/lua/plugins/pickers.lua` — `doc.transforms.latex` and `doc.find_visible` overrides; neither filters `$` pairs
-  - `~/dotfiles/config/nvim/lua/plugins/pickers.lua` `first_line_range`, applied in `doc.find_visible`: an inline span that crosses a buffer line renders as one image on its first line; the rest stays literal source
+  - `lua/plugins/pickers.lua` — `doc.transforms.latex` and `doc.find_visible` overrides; neither filters `$` pairs
+  - `lua/plugins/pickers.lua` `first_line_range`, applied in `doc.find_visible`: an inline span that crosses a buffer line renders as one image on its first line; the rest stays literal source
   - markdown_inline scanner (source copy, `~/.local/share/nvim/tree-sitter-markdown_inline-tmp/tree-sitter-markdown-split_parser/tree-sitter-markdown-inline/src/scanner.c`) — `parse_leaf_delimiter`, shared by `parse_backtick` and `parse_dollar`
-- Skills: `math-images` (parent config), `rendering` (this repo)
+- Skills: `rendering`
 
 ## Background
 In `wrap_line`, a `$` run opens a span and

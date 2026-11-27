@@ -21,7 +21,7 @@ skill.
 
 ## Debugging
 
-For any bug or regression, load the `issues` skill with `debug`.
+For any bug or regression, load the `issues` skill.
 
 ## Session isolation
 
@@ -59,8 +59,7 @@ extmarks, status footer writes, fold-anchor scheduling, priority numbers) lives
 in docstrings at the relevant functions in `tool_call_{layout,renderer}.lua`,
 `message_writer.lua`, `extmark_block.lua`, `theme.lua`, and the
 `queries/agentic/*.scm` files. The chat buffer always has folds; any viewport,
-scroll, or cursor math must be fold-aware (see neovim skill § "Common
-arithmetic pitfall").
+scroll, or cursor math must be fold-aware (`:help nvim_win_text_height()` counts screen rows).
 
 ## Session lifecycle, cross-turn state, and header pipeline
 

@@ -125,7 +125,6 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 - P3 [REFACTOR-ansi-parse-copies.md](notes/REFACTOR-ansi-parse-copies.md): one extended-colour parse and one text emit in `Ansi` — spec
 - P3 [REFACTOR-blocking-stopped-name.md](notes/REFACTOR-blocking-stopped-name.md): name the blocking-subagent stop by the plugin's mode — spec
 - P3 [REFACTOR-chat-replay.md](notes/REFACTOR-chat-replay.md): one replay of the history into the main chat — spec
-- P3 [REFACTOR-claude-agent-reference.md](notes/REFACTOR-claude-agent-reference.md): tidy the `acp` skill's claude-agent-acp reference — draft
 - P3 [REFACTOR-fence-parse.md](notes/REFACTOR-fence-parse.md): one fence-line parse in `TextWrap` — spec
 - P3 [REFACTOR-file-scan-result.md](notes/REFACTOR-file-scan-result.md): one handler for a file scan's output in `FilePicker` — spec
 - P3 [REFACTOR-grant-target.md](notes/REFACTOR-grant-target.md): one per-path grant step for Bash effects and file tool calls — spec

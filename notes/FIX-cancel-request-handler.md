@@ -10,7 +10,7 @@ Depends:
 - `lua/agentic/acp/acp_client.test.lua`, `lua/agentic/ui/permission_manager.test.lua`
 - `notes/BUG-unknown-jsonrpc-method-handling.md` — the dispatch this plan adds a branch to
 - ACP SDK: `@agentclientprotocol/sdk` `dist/core/jsonrpc.js` (`$/cancel_request`, `-32800`); opencode v2.2.5 `packages/cli/src/acp/connection.ts` (`cancellationSignal` on `requestPermission`)
-- Skills: `implement`, `permissions`, `provider-system`, `lua-class`
+- Skills: `permissions`, `provider-system`, `lua-class`
 
 ## Background
 An agent sends `$/cancel_request { requestId }` when it stops waiting for

@@ -12,9 +12,7 @@ description:
   `lua/agentic/acp/` (adapters, transport, client), `lua/agentic/pi/`,
   `lua/agentic/agent_client.lua` or `lua/agentic/session_manager.lua`'s
   update routing, or debugging provider-specific
-  bridge quirks (claude-agent-acp, opencode, pi, gemini, codex). Distinct
-  from the global `acp` skill which covers the ACP protocol spec
-  itself.
+  bridge quirks (claude-agent-acp, opencode, pi, gemini, codex).
 ---
 
 # Provider System
@@ -179,9 +177,7 @@ update (`SDKPermissionDeniedMessage` in `claude-agent-sdk/sdk.d.ts`).
 
 ### What each update carries
 
-A provider may leave unchanged fields out of an update; claude-agent-acp does
-(global `acp` skill → `references/claude-agent.md` § Updates carry only
-changed fields). `ACPClient` fills `kind` from the call's earlier
+A provider may leave unchanged fields out of an update; claude-agent-acp does. `ACPClient` fills `kind` from the call's earlier
 notifications (`ToolCallKinds`) until the call reports `completed` or
 `failed`. Other fields stay absent, so an adapter must read an absent `title`
 as unchanged, not as empty.
@@ -436,8 +432,7 @@ difference.
 
 ### opencode kind remapping
 
-opencode gives a subagent call kind `think` and several tools kind `other`
-(global `acp` skill → `references/opencode.md` § Tools › Kinds).
+opencode gives a subagent call kind `think` and several tools kind `other`.
 `__handle_tool_call` and `__handle_tool_call_update` both turn `think` into
 `SubAgent`; `__handle_tool_call` also re-kinds by tool `name`
 (`KIND_BY_NAME`), and updates keep that kind. It keys on `name` because a

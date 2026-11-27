@@ -5,7 +5,6 @@ Status: spec
 - `lua/agentic/utils/ansi.lua` — `process_line` (the escape scan), module docstring
 - `lua/agentic/utils/ansi.test.lua` — `describe("process_lines")`
 - `notes/REFACTOR-ansi-parse-copies.md` — also edits `process_line`
-- Skills: `implement`, `neovim`
 
 ## Background
 `process_line` strips a CSI sequence only when its parameters are digits and

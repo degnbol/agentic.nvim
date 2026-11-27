@@ -8,7 +8,7 @@ Priority: P2
 - `lua/agentic/utils/permission_rules.lua` — `command_is_denied`, `should_auto_reject`, the approve walk's `decide_leaf` call
 - `lua/agentic/ui/permission_manager.lua` — `PermissionManager:decide` returns `"deny"` on `should_auto_reject` before any prompt
 - `.claude/skills/permissions/references/parsing.md` — § "Arity — absorption parses", existential bullet
-- Skills: `permissions` (project), `implement`
+- Skills: `permissions`
 
 ## Background
 `gate_matches_existential` returns `true` for a gate with 2+ `positionals` when `absorbable_flag_count` exceeds `MULTI_ELEMENT_FLAG_CAP = 24`. The cap's docstring says this "only over-prompts". That holds for `decide_leaf` and `classify_leaf` (highlight only): the approve walk collapses `"deny"` and `"ask"` to "not approved → prompt" (comment at the `decide_leaf` call in `permission_rules.lua`). It does not hold for `deny_leaf`, which uses the same existential matcher in the reject pass: `should_auto_reject` → `PermissionManager:decide` returns `"deny"` with no prompt.

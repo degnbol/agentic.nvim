@@ -36,7 +36,7 @@ Depends: REFACTOR-tool-block-rows.md
   under its call", the thought-run and notice tests); `folds.test.lua`
 - `.claude/skills/rendering/SKILL.md` § Body folding
 - `notes/FEAT-gutter-identity.md` (names the replaced methods)
-- Skills: `rendering`, `follow`, `neovim` (`references/folding.md`)
+- Skills: `rendering`, `follow`
 
 ## Background
 `Folds.levels` forms a fold only when it spans more than one row, because

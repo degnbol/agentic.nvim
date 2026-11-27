@@ -441,8 +441,7 @@ end
 --- each taken only when it names an executable bash or zsh.
 ---
 --- Replicates the precedence of the SDK's `findSuitableShell()`
---- (`src/utils/Shell.ts`, see the `claude` skill's
---- `references/execute-tool.md` § Shell). Its last branch, a path search
+--- (`src/utils/Shell.ts`). Its last branch, a path search
 --- preferring zsh then bash, cannot be proven client-side.
 --- @param env table<string,string>|nil Provider env, overlaid on the editor's environment
 --- @return "bash"|"zsh"|nil shell Nil when the SDK falls through to its path search

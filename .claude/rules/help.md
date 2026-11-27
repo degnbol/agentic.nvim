@@ -25,5 +25,4 @@ It does not:
 
 Any exception requires express permission.
 
-Also applies here: the global `writing` skill and the `neovim` skill's
-`references/vimdoc.md`.
+Also applies here: `:help help-writing`.

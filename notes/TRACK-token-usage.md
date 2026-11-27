@@ -17,8 +17,8 @@ Master plan. Each part below gets its own plan; link it in the part's
 - `lua/agentic/background_session.lua`, `lua/agentic/skeptic/init.lua`,
   `config_default.lua` (skeptic defaults)
 - `~/dotfiles/config/opencode/opencode.base.json`, `opencode.json.sh`
-- Skills: `claude` (+ `references/skills.md`, `hooks.md`, `subagents.md`),
-  `learning`, `plan`
+- Skills: `learning`, `plan`; docs: `~/dotfiles/agents/docs/claude/` (`configuration.md`,
+  `skills.md`, `hooks.md`, `subagents.md`)
 - Docs: https://code.claude.com/docs/en/costs, `/env-vars`, `/sub-agents`,
   `/llm-gateway-protocol`
 
@@ -53,7 +53,7 @@ Duplicates: the first two paragraphs of `rules/context7.md` (always loaded)
 are the context7 MCP server instructions word for word; its `## Steps`
 section is not. "~/.config is a symlink to ~/dotfiles/config" is in 5
 places (dotfiles CLAUDE.md, dotfiles-guard, git_repo.lua, dotfiles skill,
-claude skill § Dotfiles Layout).
+`~/dotfiles/agents/docs/claude/configuration.md` § Dotfiles Layout).
 
 ### External tools
 - rtk (rewrites `git status`, test and build output through a PreToolUse

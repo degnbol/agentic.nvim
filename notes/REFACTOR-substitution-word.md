@@ -6,7 +6,7 @@ Priority: P3
 - `lua/agentic/utils/permission_rules.lua` — `extract_args`
 - `lua/agentic/utils/permission_rules.test.lua` — the `$(…)` argument cases
   in "should_auto_approve (treesitter walker)" and "tally_unapproved"
-- Skills: `permissions` (`references/parsing.md` § Pipeline), `implement`
+- Skills: `permissions` (`references/parsing.md` § Pipeline)
 
 ## Background
 `extract_args` handles a bare `$(cmd)` argument (its `command_substitution`

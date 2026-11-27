@@ -25,7 +25,7 @@ Priority: P3
   no-op callbacks and needs no change.
 - `notes/FIX-model-selector-order.md` — edits `show_model_selector` and
   `_show_selector`
-- Skills: `lua-class`, `implement`
+- Skills: `lua-class`
 
 ## Background
 Two independent accretions in one class.

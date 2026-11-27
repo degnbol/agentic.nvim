@@ -9,8 +9,7 @@ Priority: P3
 - `lua/agentic/utils/grant_safety.lua` — `stat_snapshot`, `stat_unchanged`,
   `safe_for_kind`, `is_scratch`, `KindArgs`, `StatSnapshot`
 - `lua/agentic/ui/permission_manager.test.lua` — "grant scopes"
-- Skills: `permissions` (§ Grant scopes, safety properties 1, 3, 5),
-  `implement`
+- Skills: `permissions` (§ Grant scopes, safety properties 1, 3, 5)
 
 ## Background
 Two producers feed one grant policy (`permissions` skill § Grant scopes):

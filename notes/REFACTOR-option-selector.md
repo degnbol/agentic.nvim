@@ -10,7 +10,7 @@ Priority: P3
 - Tests: `lua/agentic/acp/agent_modes.test.lua`, `agent_models.test.lua`,
   `agent_config_options.test.lua` (`show_*_selector` blocks, unchanged)
 - `notes/FIX-model-selector-order.md`, `notes/REFACTOR-agent-config-lookup.md`
-- Skills: `lua-class`, `implement`
+- Skills: `lua-class`
 
 ## Background
 Three functions open the same picker: `AgentConfigOptions:_show_selector`,

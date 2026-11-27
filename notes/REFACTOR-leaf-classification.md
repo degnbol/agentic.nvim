@@ -20,8 +20,7 @@ Priority: P3
   "decision sources")
 - `lua/agentic/ui/permission_manager.test.lua` (approval causes)
 - `notes/FIX-deny-gate-flag-cap.md` (names `decide_leaf`/`classify_leaf`)
-- Skills: `permissions` (§ Shell command parsing, `references/parsing.md`),
-  `implement`, `neovim`
+- Skills: `permissions` (§ Shell command parsing, `references/parsing.md`)
 
 ## Background
 `classify_leaf` was added beside `decide_leaf` for the prompt highlight

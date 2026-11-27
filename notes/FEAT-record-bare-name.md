@@ -11,8 +11,6 @@ Status: spec
   `grep_invocations_in`
 - `lua/agentic/utils/grep_highlights.test.lua` — `for_command` tests
 - `lua/agentic/utils/grep_args.lua` — `M.parse(name, …)`, `TOOL_OF_COMMAND`
-- `~/dotfiles/config/claude/hooks/lib/checks/helpers.lua` — `command_name`, and
-  every module in that directory that calls it
 
 ## Background
 `ShellCommand.name` comes from `strip_command_path`, which strips only a system
@@ -46,8 +44,6 @@ then; `M.leading_path` already gives it for the first command.
 - `grep_highlights.test.lua` (`for_command`): `./rg foo` and `./git grep foo`
   highlight like `rg foo` and `git grep foo`. `grep_highlights.lua` itself is
   unchanged.
-- `~/dotfiles/config/claude/hooks` (separate repo, separate commit, after this
-  lands): modules compare `rec.name`; delete `helpers.command_name`.
 
 ## Expected outcome
 - `./rg pat` and `/opt/x/rg pat` get the same pattern highlighting as `rg pat`.

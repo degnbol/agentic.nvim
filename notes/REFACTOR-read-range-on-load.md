@@ -13,7 +13,6 @@ Priority: P3
   `lua/agentic/acp/canonical_tool_call.test.lua` (`split_read_range`)
 - Notes: `notes/PERF-append-session-log.md` deletes `from_data` and does not
   read old `.json` files
-- Skills: `implement`
 
 ## Background
 Tool call records saved before ingress normalisation (4af0d60) hold a read's

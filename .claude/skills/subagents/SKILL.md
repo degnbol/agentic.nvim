@@ -34,12 +34,9 @@ vocabulary and the cross-file map.
 | open (running) | The subagent is working. A turn's end does not close it | `Subagents:update`, `close_all`, `forget` |
 
 "foreground" is not a plugin mode. It is the SDK's word for blocking (the
-`requestShape` of its spawn record, global `acp` skill →
-`references/claude-agent.md` § Mode sidecar). Plugin code and docs say
+`requestShape` of its spawn record). Plugin code and docs say
 `blocking`, except `Subagents:mark_foreground_stopped`. A test on
-`mode ~= "background"` covers blocking, predicted or confirmed. Engine-side
-differences between the two modes (abort linkage, tool set, permission
-prompts): `claude` skill → `references/subagents.md`.
+`mode ~= "background"` covers blocking, predicted or confirmed.
 
 User-facing behaviour of modes, transcripts and inputs: `:h agentic-subagents`
 in `doc/agentic.txt`.
@@ -57,8 +54,7 @@ subagent context as a `BackgroundSession`.
 ## Providers
 
 The plugin advertises `clientCapabilities.subagents` to every provider; only
-claude-agent-acp announces child sessions over ACP (wire format: global `acp`
-skill → `references/claude-agent.md` § Native subagent sessions). opencode and
+claude-agent-acp announces child sessions over ACP. opencode and
 mistral-vibe subagent calls are plain `SubAgent` blocks, with no transcript.
 Override points: `provider-system` skill § Adapter override points.
 

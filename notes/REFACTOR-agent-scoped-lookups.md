@@ -23,7 +23,7 @@ Priority: P3
 - Notes: `notes/REFACTOR-tool-call-record-lookup.md` shares code with this
   plan (`Subagents:record_writer`, the `_sync_job_stop` test session table).
   Either order works.
-- Skills: `subagents`, `implement`
+- Skills: `subagents`
 
 ## Background
 ### Drains

@@ -26,8 +26,7 @@ survive auto mode — so it never reaches the classifier and needs no hook.
 
 Under auto mode the classifier lives *inside* the SDK permission resolver: an
 SDK-internal classifier resolves each otherwise-`ask` call to allow/deny
-*before* `canUseTool` runs (`acp` skill `references/claude-agent.md` §
-"Permission flow"). The plugin's existing client-side ladder runs at
+*before* `canUseTool` runs. The plugin's existing client-side ladder runs at
 `canUseTool` (ACP `request_permission`), which auto mode reaches **only when the
 classifier abstains** — i.e. *after* the paid call. So the client path cannot
 run first. The one interposition point ahead of the resolver is a **PreToolUse
@@ -44,9 +43,9 @@ settings-file `{type:"command",…}` shape verbatim. Verified end-to-end
 ## Decision mapping (ladder verdict → hook output)
 
 The hook runs the same deterministic ladder and maps its verdict onto the
-PreToolUse `permissionDecision`, exploiting the `ev6` merge asymmetry (`claude`
-skill `references/internals.md` § "PreToolUse decision vs the permission
-resolver"):
+PreToolUse `permissionDecision`, exploiting the `ev6` merge asymmetry
+(a hook `deny` always holds; a hook `allow` can still fall through to the
+resolver):
 
 | ladder verdict | hook `permissionDecision` | effect under auto mode |
 |----------------|---------------------------|------------------------|

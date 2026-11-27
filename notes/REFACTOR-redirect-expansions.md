@@ -7,7 +7,7 @@ Priority: P3
   `agentic.utils.ShellParse.RedirectedParts`, `heredoc_body`,
   `collect_redirected`, `flow_redirected` (inside the cwd flow)
 - `lua/agentic/utils/shell_parse.test.lua` — `describe("ShellParse.redirected_parts")`
-- Skills: `permissions` (`references/parsing.md`), `implement`
+- Skills: `permissions` (`references/parsing.md`)
 
 ## Background
 `collect_redirected` and `flow_redirected` (inside the cwd flow) both loop over `parts.redirects` and take, for each, the node

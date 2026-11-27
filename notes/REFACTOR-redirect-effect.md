@@ -15,7 +15,7 @@ Priority: P3
   `evaluate: … redirect` effect cases
 - `lua/agentic/utils/shell_parse.test.lua` — new `redirect_effect` describe
 - Skills: `permissions` (`references/parsing.md` § Pipeline, step 3
-  "Classify"; names no function, no edit expected), `implement`
+  "Classify"; names no function, no edit expected)
 
 ## Background
 `redirect_is_safe(fr, src)` and `redirect_write_dest(fr, src)` take the same
@@ -67,7 +67,7 @@ Export `M.redirect_effect`; drop the two old exports.
 - File-head locals: one `redirect_effect`.
 
 No other callers: `rg 'redirect_is_safe|redirect_write_dest'` over the repo
-and `~/dotfiles/config/claude` hits only these two files. Comments naming the
+hits only these two files. Comments naming the
 old functions are updated: the `redirect_write_dest` docstring (goes with
 it), the `redirects_safe` and `walk_substitution_inner` docstrings, and the
 tally-walk header comment in `permission_rules.lua`.

@@ -30,8 +30,8 @@ with git-recoverability gates.
 For the claude provider, a PreToolUse hook (`permission_hook.lua`, matcher
 `Bash|Write|Edit`) also runs `decide` before the SDK's check, which in auto
 mode is an LLM classifier in place of the `canUseTool` prompt. Its `deny`
-always holds; its `allow` can still fall through to the SDK (`claude` skill
-`references/hooks.md` § permissionDecision is not always final). In auto
+always holds; its `allow` can still fall through to the SDK (in auto mode, or when a settings deny/ask rule
+or `requireCanUseTool` applies). In auto
 mode it answers `ask` for an undecided call with an `ask` cause (§ Causes),
 which sends the call to the plugin's prompt instead of the classifier. It also reports the directory
 each Bash call starts in (§ Executed code in `references/parsing.md`).
@@ -76,8 +76,7 @@ otherwise prompts for paths outside `additionalDirectories` even for reads.
 ### 2. Shell command parsing (always on)
 
 Each `Bash`/`execute` command is parsed with the **zsh treesitter grammar**
-(commands execute in zsh — see the `claude` skill's `references/execute-tool.md`
-§ Shell) and every leaf classified independently, so pipelines, loops,
+(commands execute in zsh) and every leaf classified independently, so pipelines, loops,
 conditionals, redirects, and env-prefixes are all checked structurally.
 `auto_approve_tier = nil`
 approves no shell command; deny/ask still apply.

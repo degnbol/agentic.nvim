@@ -10,7 +10,7 @@ Status: reviewed spec
   `agentic.utils.ShellParse.Shell`, `agentic.ShellCommand` (`cwd`),
   `cd_target`, `command_cwds`, `extract_commands`
 - `lua/agentic/utils/shell_parse.test.lua` — "stdin and cwd"
-- Consumer (dotfiles repo): `~/dotfiles/config/claude/hooks/lib/checks/rm_targets.lua`
+- Consumer (separate repo): hook module `rm_targets.lua`
   (`locate`, `changes_dir_after`, `DIR_CHANGES`, header doc),
   `rm-refs-remind.sh` (resolves `?` against the end cwd); tests
   `tests/test-guard-runner.zsh`, `tests/test-rm-refs-remind.zsh`
@@ -136,7 +136,7 @@ in a loop whose body changes directory, in the outermost shell
 `() { cd /y }; rm x` give `rm` `cwd = "/y"`. `command_cwds` tests:
 `command cd /x` leaves the set unchanged.
 
-Hook side (dotfiles repo, separate commit): `locate` returns `?path` for a
+Hook side (separate repo, separate commit): `locate` returns `?path` for a
 `cwd = false` record only when `cwd_final` and no record is `exit`,
 `logout` or `bye` or has `exec` in `via`; else nil. `changes_dir_after` and
 `DIR_CHANGES` go; the header says "when the command ends in its

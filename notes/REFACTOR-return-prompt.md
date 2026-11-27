@@ -18,7 +18,6 @@ Priority: P3
   `return_limited_prompt`, `restore_refused_prompt`),
   `lua/agentic/session_manager.test.lua` (the `restore_stub`,
   `requeue_stub`, `draft_stub` cases)
-- Skills: `implement`
 
 ## Background
 A returned prompt goes back to the user in one of three ways:

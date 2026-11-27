@@ -36,11 +36,10 @@ compared against its `tool_use` input:
 | Hook | Tool | Records | Change |
 |---|---|---|---|
 | `hooks/subagent_hook.lua` (this plugin, `subagents.force_background`) | Agent | 512, plus 88 no-ops | sets `run_in_background = true` |
-| `~/.config/claude/hooks/shell-guard.sh` | Bash | 83 | prefix `PYTHONUNBUFFERED=1 `; drops `description` (and `timeout` in 19) |
+| a user hook, `shell-guard.sh` | Bash | 83 | prefix `PYTHONUNBUFFERED=1 `; drops `description` (and `timeout` in 19) |
 
-- The shell-guard rewrite no longer exists: dotfiles commit 523fa358 removed
-  it, and `config/claude/settings.json` sets `PYTHONUNBUFFERED` instead. No
-  hook in `config/claude/` returns `updatedInput`.
+- The shell-guard rewrite no longer exists. No user hook returns
+  `updatedInput`.
 - All Bash rewrites were pure prefixes. The dropped `description`/`timeout`
   show `updatedInput` replaces the object, it does not merge.
 - The only live rewriter is this plugin's `subagent_hook.lua`. The chat does
