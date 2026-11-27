@@ -1,5 +1,6 @@
 # Plan: one draft return for a returned prompt
 Status: reviewed spec
+Priority: P3
 
 ## Relevant files
 - `lua/agentic/session_recovery.lua` — `restore_refused_prompt`,

@@ -1,31 +1,41 @@
 ---
 name: provider-system
 description:
-  agentic.nvim provider/ACP plumbing — how this plugin handles ACP
-  messages. Event pipeline (Transport → ACPClient → SessionManager →
+  agentic.nvim provider clients (`AgentClient`: ACP and pi) and ACP
+  plumbing. Event pipeline (Transport → ACPClient → SessionManager →
   MessageWriter), session update routing, tool call lifecycle (two-phase
   tool_call / tool_call_update flow and the MessageWriter tracker),
   execute-tool rendering, adapter override points
   (`__handle_tool_call`, `__build_tool_call_update`,
   `__handle_request_permission`), and known ACP limitations as they
-  affect this plugin. Use when editing `lua/agentic/acp/` (adapters,
-  transport, client) or `lua/agentic/session_manager.lua`'s update
-  routing, or debugging provider-specific
-  bridge quirks (claude-agent-acp, opencode, gemini, codex). Distinct
+  affect this plugin. Use when editing
+  `lua/agentic/acp/` (adapters, transport, client), `lua/agentic/pi/`,
+  `lua/agentic/agent_client.lua` or `lua/agentic/session_manager.lua`'s
+  update routing, or debugging provider-specific
+  bridge quirks (claude-agent-acp, opencode, pi, gemini, codex). Distinct
   from the global `acp` skill which covers the ACP protocol spec
   itself.
 ---
 
 # Provider System
 
+## Clients
+
+Session code sees a provider only through `agentic.AgentClient`
+(`lua/agentic/agent_client.lua`): `ACPClient` runs one process per provider
+(plus one for unattended sessions), `PiClient` one per session. `ADAPTERS` in
+`lua/agentic/acp/agent_instance.lua` maps a provider to its client class.
+Supported providers and their CLI requirements live in `Config.acp_providers`
+(`lua/agentic/config_default.lua`). A session's provider is
+`agent.provider_name`; `SessionRegistry.create` defaults it to the current
+session's, else `Config.provider`. Only `on_prompt_taken` reports that a
+prompt was taken in, and only `on_turn_state` that a turn ended.
+
 ## ACP Providers
 
-The plugin spawns external CLI tools as subprocesses and talks ACP over stdio.
-Supported providers and their CLI requirements live in
-`Config.acp_providers` (`lua/agentic/config_default.lua`). A session's provider
-is `agent.provider_name`; `SessionRegistry.create` defaults it to the current
-session's, else `Config.provider`. An adapter in `lua/agentic/acp/adapters/`
-absorbs per-provider quirks. Install instructions live in `doc/agentic.txt`
+The plugin spawns ACP providers as subprocesses and talks ACP over stdio. An
+adapter in `lua/agentic/acp/adapters/` absorbs per-provider quirks. Install
+instructions live in `doc/agentic.txt`
 § Requirements, whose pinned `claude-agent-acp` version is the single record of
 which bridge the plugin is developed against — bump it on `dev` when updating
 the bridge, and let the merge to `main` mark that the pin survived real use.
@@ -64,6 +74,21 @@ Adapters and `SessionManager` see the v1 shapes the bridge sends a v1
 client, except `state_update` and `user_message`, which only v2 has, and
 `notice` and `compaction_*`, which a v1 client gets only by asking. What each
 v1 shape comes from: the codec's docstrings.
+
+## pi (`lua/agentic/pi/`)
+
+pi speaks its own JSONL RPC (`pi --mode rpc`). `PiClient` emits the
+ACP-shaped updates `SessionManager` consumes.
+
+- **Turns.** Every prompt goes with `streamingBehavior = "followUp"`.
+  `PiTurns` derives `on_prompt_taken` and `on_turn_state` from events: a
+  user `message_start` takes the oldest untaken prompt, a second one ends
+  the turn `idle` with `more`, `agent_settled` ends it. A prompt an
+  extension command handles has no run: `PiTurns:on_answer` takes it in,
+  and when no turn runs, reports a turn that starts and ends at once.
+- **Permissions.** `pi/agentic.ts` asks about every tool call through an
+  extension dialog (`PiPermission`). An edit's diff is read from disk
+  (`PiToolCalls.edit_diff`) before the request.
 
 ## Session update routing
 

@@ -5,8 +5,8 @@ paths: "lua/agentic/init.lua,lua/agentic/bootstrap.lua,lua/agentic/session_regis
 # Session isolation
 
 Sessions are keyed by `SessionManager.id` in `SessionRegistry.by_id`. One
-shared subprocess per provider (and one more for background sessions), one
-ACP session ID per session, full UI
+subprocess per ACP provider, shared by its sessions; pi runs one per session.
+One provider session ID per session, full UI
 isolation. A session is tied to no tabpage: its chat can show in any window
 of any tab.
 

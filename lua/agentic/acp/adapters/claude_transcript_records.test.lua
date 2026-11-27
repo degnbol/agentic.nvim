@@ -169,6 +169,45 @@ describe("ClaudeTranscriptRecords", function()
 
             assert.same({ '{"not":"parsed"}' }, record.body)
         end)
+
+        it("names the hook and the deny from a command prefix", function()
+            local record = decode_one(line({
+                type = "hook_additional_context",
+                content = { "[/h/guard.sh]: Load /x first." },
+                hookEvent = "PreToolUse",
+            }))
+
+            assert.equal("/h/guard.sh", record.command)
+            assert.equal("denied", record.outcome)
+            assert.same({ "Load /x first." }, record.body)
+        end)
+
+        it("leaves an unprefixed element unnamed", function()
+            local record = decode_one(line({
+                type = "hook_additional_context",
+                content = { "Load /x first." },
+                hookEvent = "PreToolUse",
+            }))
+
+            assert.is_nil(record.command)
+            assert.is_nil(record.outcome)
+            assert.same({ "Load /x first." }, record.body)
+        end)
+
+        it("names each merged element from its own prefix", function()
+            local records = decode(line({
+                type = "hook_additional_context",
+                content = { "[/h/guard.sh]: denied", "plain" },
+                hookEvent = "PreToolUse",
+            }))
+
+            assert.equal(2, #records)
+            assert.equal("/h/guard.sh", records[1].command)
+            assert.equal("denied", records[1].outcome)
+            assert.is_nil(records[2].command)
+            assert.is_nil(records[2].outcome)
+            assert.same({ "plain" }, records[2].body)
+        end)
     end)
 
     describe("completed hooks", function()

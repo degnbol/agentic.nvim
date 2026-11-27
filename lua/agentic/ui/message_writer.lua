@@ -3,6 +3,7 @@ local BufferNames = require("agentic.utils.buffer_names")
 local CanonicalToolCall = require("agentic.acp.canonical_tool_call")
 local ChatBuffer = require("agentic.ui.chat_buffer")
 local Config = require("agentic.config")
+local Duration = require("agentic.utils.duration")
 local ErrorReport = require("agentic.acp.error_report")
 local ExtmarkBlock = require("agentic.utils.extmark_block")
 local FenceRows = require("agentic.ui.fence_rows")
@@ -49,13 +50,6 @@ end
 --- callback-less `parse(range)` runs to completion with no time budget, so the
 --- injection child trees are created deterministically.
 ---
---- Called after every content `set_lines`, not just on a finalised block, so a
---- block that is rewritten mid-stream is re-highlighted with each version of
---- its content. After a `set_lines` the range is dirty, so this is a real
---- range-parse (one per block update); `parse` short-circuits only when the
---- range is already valid. Folds do not depend on this — `agentic.ui.folds`
---- reads the root tree only.
----
 --- Also parses the rows on view in every window showing `bufnr`, each taken
 --- as `TSHighlighter._on_start` takes them. A range parse replaces each
 --- injected tree's regions with the injections found in its range, so a parse
@@ -63,16 +57,26 @@ end
 --- would parse them again. The ranges are joined where they overlap: core
 --- injects a row once per range that holds it, and treats a range that only
 --- overlaps a parsed one as not parsed.
+---
+--- A no-op for a buffer that no window shows. When a window first draws the
+--- buffer, only the highlighter's async parse covers the rows on view; an
+--- unfinished parse there has not been seen. A range parse costs O(buffer) in
+--- core's injection pass whatever the range, so in a large hidden buffer each
+--- call would block the main loop.
 --- @param bufnr integer
 --- @param start_row integer 0-indexed first row of the block
 --- @param end_row integer 0-indexed last row of the block
 local function materialize_injections(bufnr, start_row, end_row)
+    local winids = vim.fn.win_findbuf(bufnr)
+    if #winids == 0 then
+        return
+    end
     local ok, parser = pcall(vim.treesitter.get_parser, bufnr)
     if not (ok and parser) then
         return
     end
     local ranges = { { start_row, end_row } }
-    for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
+    for _, winid in ipairs(winids) do
         table.insert(ranges, {
             vim.fn.line("w0", winid) - 1,
             vim.fn.line("w$", winid) + 1,
@@ -82,20 +86,38 @@ local function materialize_injections(bufnr, start_row, end_row)
 end
 
 --- The status footer note of a tool call: the distinct words of its causes,
---- in order, or nil when it has none. A cause's word is its code, or the kind
---- it names for a `kind` cause.
+--- in order, then its run time when that is at or above the clocks'
+--- threshold, joined by ` · `. Nil when it has neither. A cause's word is its
+--- code, or the kind it names for a `kind` cause. The run time is
+--- `duration_ms`, else the running clock's time, in whole seconds below a
+--- minute.
 --- @param block agentic.ui.MessageWriter.ToolCallBase
+--- @param run_clocks agentic.ui.RunClocks|nil nil shows no run time
 --- @return string|nil note
-local function footer_note(block)
+local function footer_note(block, run_clocks)
     local words = vim.iter(block.causes or {})
         :map(function(cause)
             return cause.code == "kind" and cause.subject or cause.code
         end)
         :totable()
-    if #words == 0 then
+    local parts = {}
+    if #words > 0 then
+        table.insert(parts, table.concat(vim.list.unique(words), ", "))
+    end
+
+    if run_clocks then
+        local running = not block.duration_ms
+        local time = block.duration_ms or run_clocks:elapsed(block.tool_call_id)
+        if time and time >= run_clocks.threshold_ms then
+            -- A running time is shown once a second.
+            table.insert(parts, Duration.format_ms(time, running))
+        end
+    end
+
+    if #parts == 0 then
         return nil
     end
-    return table.concat(vim.list.unique(words), ", ")
+    return table.concat(parts, " · ")
 end
 
 --- The word a tool call's status footer shows: `stopped` when the call
@@ -181,14 +203,14 @@ end
 --- @field stopped_job_output_file? string `output_file` of the job this call stops
 --- @field stopped_by? string Tool call id of the call that stopped this call's background job
 --- @field provider_note? agentic.ui.MessageWriter.ProviderNote
-
+--- @field duration_ms? integer How long the call ran, from its allow answer when the client gave one
 --- @class agentic.ui.MessageWriter.ToolCallBlock : agentic.ui.MessageWriter.ToolCallBase
 --- @field kind agentic.acp.ToolKind
 --- @field argument string
 --- @field extmark_id? integer Range extmark spanning the block
 --- @field decoration_extmark_ids? integer[] IDs of decoration extmarks from ExtmarkBlock
 --- @field cached_diff_blocks? agentic.ui.ToolCallDiff.DiffBlock[] Captured at render time so navigation (diff_jump) survives a later file refresh that breaks OLD-based matching
---- @field task_id? string Task id the call is tagged with (`ACPClient:subagent_task_id`); nil for main-agent calls
+--- @field task_id? string Task id the call is tagged with (`AgentClient:subagent_task_id`); nil for main-agent calls
 --- @field placed? agentic.ui.MessageWriter.Placed What was placed beneath the block after it was written
 --- @field folds? agentic.ui.MessageWriter.BlockFold[] The block's folds, outermost first.
 --- @field output_tail? string[] Last rows of `output_file`, as last read
@@ -222,6 +244,7 @@ end
 --- @class agentic.ui.MessageWriter
 --- @field bufnr integer
 --- @field tool_call_blocks table<string, agentic.ui.MessageWriter.ToolCallBlock>
+--- @field run_clocks? agentic.ui.RunClocks nil shows and stamps no run times
 --- @field _thought_run? string Thinking streamed since the last flush, held back until the run ends because its fence has to reach the buffer in one write (see `flush_thought_run`). Dropped rather than rendered when the widget closes mid-run; the text is in `chat_history`.
 --- @field _rebuild_armed boolean True while a ModeChanged autocmd waits for insert mode to end to rebuild the chat windows' folds. Guards against arming a second one.
 --- @field _augroup integer The writer's autocmd group, deleted with the buffer
@@ -296,8 +319,9 @@ function MessageWriter:reset()
 end
 
 --- @param bufnr integer
+--- @param run_clocks agentic.ui.RunClocks|nil
 --- @return agentic.ui.MessageWriter
-function MessageWriter:new(bufnr)
+function MessageWriter:new(bufnr, run_clocks)
     if not vim.api.nvim_buf_is_valid(bufnr) then
         error("Invalid buffer number: " .. tostring(bufnr))
     end
@@ -305,6 +329,7 @@ function MessageWriter:new(bufnr)
     local instance = setmetatable({
         bufnr = bufnr,
         tool_call_blocks = {},
+        run_clocks = run_clocks,
         _thought_run = nil,
         _rebuild_armed = false,
         _replay_held = {},
@@ -374,6 +399,7 @@ function MessageWriter:new(bufnr)
                         winid,
                         change.width ~= 0 or change.height ~= 0
                     )
+                    instance:cursor_onto_drawn_row(winid)
                 end
             end
         end,
@@ -603,7 +629,8 @@ end
 --- the difference from the last view seen there, and sets its mode by the
 --- direction:
 ---
---- - Cursor on the last line, or on a closed fold that ends there → following.
+--- - Cursor moved onto the last line, or onto a closed fold that ends there
+---   → following.
 --- - Up: more rows of text from the topline to the end, or as many with the
 ---   cursor moved up → user control.
 --- - View down, with the last line now in view → following.
@@ -632,12 +659,81 @@ function MessageWriter:on_view_change(winid, resized)
     local down_to_end = not up
         and view.topline > before.topline
         and view.shows_end
-    if view.on_last_line or down_to_end then
+    if (view.on_last_line and view.lnum ~= before.lnum) or down_to_end then
         self._user_controlled[winid] = nil
     elseif up then
         self._user_controlled[winid] = true
         self._newly_shown[winid] = nil
+        self:_own_change(function() end)
     end
+end
+
+--- Whether `winid` holds a Visual selection.
+--- @param winid integer
+--- @return boolean
+local function selecting(winid)
+    return winid == vim.api.nvim_get_current_win()
+        and vim.api.nvim_get_mode().mode:find("^[vV\22]") ~= nil
+end
+
+--- Move the cursor of `winid` from a zero-height row to the nearest line that
+--- is drawn and at least 'scrolloff' screen rows from each window edge. Does
+--- nothing in a window with a Visual selection. With the cursor on a
+--- zero-height row, the 'scrolloff' correction of vim undoes each `<C-y>`.
+--- Public so the autocmd closure can reach it without tripping LuaLS's
+--- invisible-field check.
+--- @param winid integer A window showing the buffer
+function MessageWriter:cursor_onto_drawn_row(winid)
+    local lnum = vim.api.nvim_win_get_cursor(winid)[1]
+    local rows = vim.api.nvim_win_text_height(winid, {
+        start_row = lnum - 1,
+        end_row = lnum - 1,
+    }).all
+    if rows > 0 or selecting(winid) then
+        return
+    end
+    self:_own_change(function()
+        -- Raw: `line("w0")` would correct the topline first.
+        local topline = vim.fn.getwininfo(winid)[1].topline
+        vim.api.nvim_win_set_cursor(
+            winid,
+            { BufHelpers.fitting_cursor_line(winid, topline), 0 }
+        )
+    end)
+end
+
+--- Move the cursor of `winid` off the last line (or a closed fold that ends
+--- there) to `BufHelpers.drawn_line_above`, so that a later move onto the
+--- last line (`G`, mapped or not) is a motion. Not where the move would
+--- scroll the view ('scrolloff'), nor in a window with a Visual selection.
+--- @param winid integer A window showing the buffer
+function MessageWriter:_cursor_off_last_line(winid)
+    if selecting(winid) then
+        return
+    end
+    vim.api.nvim_win_call(winid, function()
+        local last = vim.api.nvim_buf_line_count(self.bufnr)
+        local lnum = vim.api.nvim_win_get_cursor(winid)[1]
+        if math.max(lnum, vim.fn.foldclosedend(lnum)) ~= last then
+            return
+        end
+        local above = BufHelpers.drawn_line_above(winid, lnum)
+        local topline = vim.fn.line("w0")
+        if not above or above < topline then
+            return
+        end
+        local rows_above = vim.api.nvim_win_text_height(winid, {
+            start_row = topline - 1,
+            end_row = above - 1,
+        }).all - vim.api.nvim_win_text_height(winid, {
+            start_row = above - 1,
+            end_row = above - 1,
+        }).all
+        if topline > 1 and rows_above < vim.wo[winid].scrolloff then
+            return
+        end
+        vim.api.nvim_win_set_cursor(winid, { above, 0 })
+    end)
 end
 
 --- Put `winid` in following, with its cursor on the last line and that line
@@ -654,14 +750,18 @@ function MessageWriter:go_to_bottom(winid)
     end)
 end
 
---- Run `fn` and record the view it leaves in each window showing the buffer,
---- so the view events it causes read as no motion.
+--- Run `fn`, move the cursor of each window in user control off the last line
+--- (`_cursor_off_last_line`), and record the view this leaves in each window
+--- showing the buffer, so the view events it causes read as no motion.
 --- @generic T
 --- @param fn fun(): T|nil
 --- @return T|nil result What `fn` returned
 function MessageWriter:_own_change(fn)
     local result = fn()
     for _, winid in ipairs(vim.fn.win_findbuf(self.bufnr)) do
+        if self._user_controlled[winid] then
+            self:_cursor_off_last_line(winid)
+        end
         self._views[winid] = view_of(winid)
     end
     return result
@@ -934,7 +1034,7 @@ end
 --- @return integer row `first_row` when nothing below it draws, and less than
 ---         that for a range past the end of the buffer — both leave the caller's
 ---         one-drawn-row check to reject the region
-local function last_drawn_row(bufnr, fence_rows, first_row, last_row)
+local function last_text_row(bufnr, fence_rows, first_row, last_row)
     local rows =
         vim.api.nvim_buf_get_lines(bufnr, first_row, last_row + 1, false)
     local concealed = ChatBuffer.conceallevel(bufnr) >= 2
@@ -973,7 +1073,7 @@ end
 --- is, when the rows hold more than one paragraph.
 ---
 --- Only the interior counts. A run's leading and trailing breaks are stripped by
---- `first_prose_row` and `last_drawn_row` before this sees the range, and say
+--- `first_prose_row` and `last_text_row` before this sees the range, and say
 --- nothing about how much the run holds.
 --- @param bufnr integer
 --- @param from_row integer 0-indexed first row of the range
@@ -1009,7 +1109,7 @@ end
 --- @param last_row integer 0-indexed last row of the region, inclusive
 --- @return integer[] decoration_extmark_ids Empty for a region drawing one row
 local function render_region_rail(bufnr, fence_rows, identity_row, last_row)
-    local end_row = last_drawn_row(bufnr, fence_rows, identity_row, last_row)
+    local end_row = last_text_row(bufnr, fence_rows, identity_row, last_row)
     if end_row <= identity_row then
         return {}
     end
@@ -1053,7 +1153,7 @@ local function render_prose_region(bufnr, fence_rows, run_start)
         return nil
     end
 
-    local end_row = last_drawn_row(bufnr, fence_rows, first_row, buf_end)
+    local end_row = last_text_row(bufnr, fence_rows, first_row, buf_end)
     if not has_paragraph_break(bufnr, first_row, end_row) then
         return nil
     end
@@ -1083,7 +1183,7 @@ local function render_collapsed_region(
     last_row,
     sign
 )
-    local end_row = last_drawn_row(bufnr, fence_rows, first_row, last_row)
+    local end_row = last_text_row(bufnr, fence_rows, first_row, last_row)
     ExtmarkBlock.render_block(bufnr, Renderer.NS_DECORATIONS, {
         header_line = first_row,
         header_sign = sign,
@@ -1140,7 +1240,7 @@ function MessageWriter:_extend_prose_region(bufnr)
         return
     end
 
-    local end_row = last_drawn_row(
+    local end_row = last_text_row(
         bufnr,
         self._fence_rows,
         closer_row,
@@ -1245,9 +1345,10 @@ function MessageWriter:_decorate_collapsed_region(
         Renderer.set_dim_range(bufnr, body_start, body_end)
     end
     mark_table_row_ends(bufnr, body_start, opts.table_row_ends or {})
-    -- Same measure `collapsed_region_lines` folds on: a one-row body has no
-    -- fence, and so no fold to set.
-    if body_end > body_start then
+    -- `Folds.levels` forms no fold over fewer than two drawn rows.
+    local body =
+        vim.api.nvim_buf_get_lines(bufnr, body_start, body_end + 1, false)
+    if FenceRows.drawn_count(body) > 1 then
         local fence_row = body_start - 1
         if opts.titled then
             vim.api.nvim_buf_set_extmark(
@@ -1829,7 +1930,7 @@ end
 --- @class agentic.ui.MessageWriter.NoticeLayout
 --- @field lines string[] Heading and body, without a trailing blank
 --- @field fold_offset? integer 0-indexed offset of the fenced body's first row in `lines`; nil without a fenced body
---- @field fold_rows integer Rows of the fenced body
+--- @field fold_rows integer Rows of the fenced body through its last drawn row (`FenceRows.drawn_count`)
 --- @field table_row_ends integer[] Rows of the fenced body that end a wrapped table row (`_wrap_prose`)
 
 --- The rows of a notice.
@@ -1859,7 +1960,7 @@ function MessageWriter:_notice_layout(notice)
     local layout = {
         lines = lines,
         fold_offset = fold_offset,
-        fold_rows = #fold_body,
+        fold_rows = FenceRows.drawn_count(fold_body),
         table_row_ends = table_row_ends,
     }
     return layout
@@ -1900,7 +2001,7 @@ function MessageWriter:_decorate_notice(heading_row, notice, layout)
             layout.table_row_ends
         )
     end
-    -- Vim cannot close a one-line fold.
+    -- `Folds.levels` forms no fold over fewer than two drawn rows.
     if fold_offset and layout.fold_rows > 1 then
         self:_queue_fold(heading_row + fold_offset, false)
     end
@@ -2195,7 +2296,7 @@ end
 ---
 --- Opens a response group directly under the region, outside its rail, and
 --- closes any earlier error's group.
---- @param err agentic.acp.ACPError
+--- @param err agentic.AgentClient.Error
 --- @return string|nil error_type Error class for caller to dispatch on (errorKind-first)
 --- @return number|nil reset_epoch Epoch seconds when usage resets (for usage_limit errors)
 function MessageWriter:write_error_message(err)
@@ -3009,12 +3110,7 @@ end
 --- @param footer_row integer 0-indexed footer row
 --- @param folds agentic.ui.ToolCallLayout.Fold[] fold states for a final status
 function MessageWriter:_write_status_and_settle_folds(block, footer_row, folds)
-    Renderer.apply_status_footer(
-        self.bufnr,
-        footer_row,
-        footer_status(block),
-        footer_note(block)
-    )
+    self:_write_footer(block, footer_row)
     if is_final_status(block.status) then
         self:_settle_block_folds(block, folds)
     end
@@ -3207,14 +3303,40 @@ function MessageWriter:_paint_tool_call_block(block, start_row, layout)
         table.insert(block.decoration_extmark_ids, dim_id)
     end
 
-    Renderer.apply_status_footer(
-        bufnr,
-        end_row,
-        footer_status(block),
-        footer_note(block)
-    )
+    self:_write_footer(block, end_row)
 
     materialize_injections(bufnr, start_row, end_row)
+end
+
+--- Write a block's status footer: its status word and footer note.
+--- @param block agentic.ui.MessageWriter.ToolCallBlock
+--- @param footer_row integer 0-indexed footer row
+function MessageWriter:_write_footer(block, footer_row)
+    Renderer.apply_status_footer(
+        self.bufnr,
+        footer_row,
+        footer_status(block),
+        footer_note(block, self.run_clocks)
+    )
+end
+
+--- Rewrite a tracked block's status footer, so its running time shows the
+--- clock's current value. No-op for an untracked block or one whose rows
+--- are gone.
+--- @param tool_call_id string
+function MessageWriter:refresh_status(tool_call_id)
+    local block = self.tool_call_blocks[tool_call_id]
+    if not block then
+        return
+    end
+    local _, footer_row = self:_block_rows(block)
+    if not footer_row then
+        return
+    end
+    self:_schedule_follow()
+    self:_own_edit(function()
+        self:_write_footer(block, footer_row)
+    end)
 end
 
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBlock
@@ -3318,6 +3440,8 @@ local function shift_across_block(row, start_row, old_end_row, new_end_row)
     return new_end_row + 1
 end
 
+--- Apply an update to its tracked block, and stamp `duration_ms` on the
+--- given update when it ends the call: the time its run clock measured.
 --- @param tool_call_block agentic.ui.MessageWriter.ToolCallBase
 function MessageWriter:update_tool_call_block(tool_call_block)
     local tracker = self.tool_call_blocks[tool_call_block.tool_call_id]
@@ -3330,6 +3454,15 @@ function MessageWriter:update_tool_call_block(tool_call_block)
             { title = "Agentic sync: missing tracker" }
         )
         return
+    end
+
+    if
+        self.run_clocks
+        and is_final_status(tool_call_block.status)
+        and not is_final_status(tracker.status)
+    then
+        tool_call_block.duration_ms =
+            self.run_clocks:finish(tool_call_block.tool_call_id)
     end
 
     -- Some ACP providers don't send the diff on the first tool_call
@@ -3430,6 +3563,9 @@ function MessageWriter:_rerender_tool_call_block(tracker, diff_frozen)
             )
         end
         self.tool_call_blocks[tracker.tool_call_id] = nil
+        if self.run_clocks then
+            self.run_clocks:drop(tracker.tool_call_id)
+        end
         return
     end
 
@@ -3467,12 +3603,7 @@ function MessageWriter:_rerender_tool_call_block(tracker, diff_frozen)
             -- Decorations (kind glyph, │, ╰─) are stable — leave them in place.
             -- A non-failed diff's fold state does not depend on the status,
             -- so the state stored at render still holds.
-            Renderer.apply_status_footer(
-                bufnr,
-                old_end_row,
-                footer_status(tracker),
-                footer_note(tracker)
-            )
+            self:_write_footer(tracker, old_end_row)
             return false
         end
 

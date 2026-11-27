@@ -214,6 +214,7 @@ end
 --- @field body string[]
 --- @field outcome? agentic.acp.HookOutcome
 --- @field detail? string
+--- @field command? string the hook's command, when the text names it
 
 --- @param attachment table any hook attachment but `hook_additional_context`
 --- @return agentic.acp.ClaudeHookClassification|nil classification nil when the attachment is not a hook record
@@ -315,10 +316,20 @@ local function hook_identity(attachment)
     return command, string_or_nil(attachment.hookName) or event
 end
 
+--- Split a `[<command>]: <text>` entry into its parts.
+--- @param text string
+--- @return string|nil command nil when `text` lacks the prefix
+--- @return string body `text` after the prefix, or all of it
+local function split_command(text)
+    local command, body = text:match("^%[(.-)%]: (.*)$")
+    return command, body or text
+end
+
 --- The hook records a transcript entry carries as its attachment. A
 --- `hook_additional_context` gives one record per `content` element: the CLI
 --- merges the context of several hooks on one event into one attachment, one
---- element per hook.
+--- element per hook. An element that starts with `[<command>]: ` gives a
+--- `denied` record of hook `<command>`, with the prefix removed from its body.
 --- @param entry table one decoded transcript line
 --- @return agentic.acp.ClaudeHookRecord[] records empty when the entry is not a hook attachment
 local function attachment_records(entry)
@@ -340,7 +351,19 @@ local function attachment_records(entry)
     if attachment.type == "hook_additional_context" then
         local content = attachment.content
         classifications = vim.tbl_map(function(element)
-            return { group = "context", body = body_lines(element) }
+            local command, body = nil, element
+            if type(element) == "string" then
+                command, body = split_command(element)
+            end
+            return {
+                group = "context",
+                body = body_lines(body),
+                command = command,
+                -- The CLI never writes the prefix: the user's own hooks write
+                -- it on a deny only, as a deny leaves no run record that names
+                -- them (`_emit_context` in the dotfiles' hooks/lib/core.zsh).
+                outcome = command and "denied" or nil,
+            }
         end, type(content) == "table" and content or { content })
     else
         classifications = { classify(attachment) }
@@ -355,7 +378,7 @@ local function attachment_records(entry)
             outcome = classification.outcome,
             detail = classification.detail,
             timestamp = entry.timestamp,
-            command = command,
+            command = classification.command or command,
             hook_name = hook_name,
             hook_event = attachment.hookEvent,
             duration_ms = attachment.durationMs,
@@ -363,15 +386,6 @@ local function attachment_records(entry)
         })
     end
     return records
-end
-
---- Split a `[<command>]: <text>` entry into its parts.
---- @param text string
---- @return string|nil command nil when `text` lacks the prefix
---- @return string body `text` after the prefix, or all of it
-local function split_command(text)
-    local command, body = text:match("^%[(.-)%]: (.*)$")
-    return command, body or text
 end
 
 --- One `context` record per Stop hook that blocked the turn's end, carrying the

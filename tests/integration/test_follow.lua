@@ -405,15 +405,13 @@ _G.s.widget.input_dispatch:submit()
         assert.is_true(shows_held_block())
     end)
 
-    it("a submit clears idle and leaves waiting", function()
-        local header = child.lua_get([[(function()
+    it("a submit clears idle", function()
+        local idle = child.lua_get([[(function()
 _G.s.widget:set_idle(true)
-_G.s.widget:set_waiting(true)
 _G.s:on_user_submit()
-local header = require("agentic.ui.window_decoration").get_header(_G.chat)
-return { idle = header.idle, waiting = header.waiting }
+return require("agentic.ui.window_decoration").get_header(_G.chat).idle
 end)()]])
 
-        assert.same({ waiting = true }, header)
+        assert.equal(vim.NIL, idle)
     end)
 end)

@@ -245,7 +245,7 @@ describe("agentic.Subagents", function()
                 buf_nrs = {},
                 open_panel = open_panel,
                 buffer_name = function(_, child_id)
-                    return "agentic://c1/" .. child_id
+                    return "agentic://c1/subagent/" .. child_id
                 end,
             }
             return Subagents:new(widget, {}, host), spies, open_panel
@@ -281,23 +281,23 @@ describe("agentic.Subagents", function()
                     {
                         child_id = "c",
                         state = "ended",
-                        name = "agentic://c1/c",
+                        name = "agentic://c1/subagent/c",
                     },
                     {
                         child_id = "a",
                         state = "working",
-                        name = "agentic://c1/a",
+                        name = "agentic://c1/subagent/a",
                     },
                     {
                         child_id = "b",
                         state = "interrupted",
                         subagent = info,
-                        name = "agentic://c1/b",
+                        name = "agentic://c1/subagent/b",
                     },
                     {
                         child_id = "e",
                         state = "working",
-                        name = "agentic://c1/e",
+                        name = "agentic://c1/subagent/e",
                     },
                 }, entries)
             end)

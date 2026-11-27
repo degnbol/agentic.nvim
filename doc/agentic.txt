@@ -66,8 +66,8 @@ This is a fork of carlos-algms/agentic.nvim.
 2. REQUIREMENTS                                         *agentic-requirements*
 
 - Neovim >= 0.12.0
-- An ACP provider binary on PATH. `provider` takes the config key; the
-  binary is what must be installed:
+- An ACP provider binary, or pi, on PATH. `provider` takes the config key;
+  the binary is what must be installed:
 
   Config key          Binary            Provider ~
   claude-agent-acp    claude-agent-acp  Claude (default)
@@ -77,6 +77,7 @@ This is a fork of carlos-algms/agentic.nvim.
   cursor-acp          cursor-agent-acp  Cursor Agent
   auggie-acp          auggie            Auggie (--acp)
   mistral-vibe-acp    vibe-acp          Mistral Vibe
+  pi                  pi                pi
 
 Install claude-agent-acp:
 >
@@ -253,9 +254,9 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     when the call did not fail and is a search or a command that structured
     `read_only` rules alone approve (|agentic-permissions-shell|).
 
-    The thresholds do not apply to a rejected call: its command or diff is
-    folded closed, and the text the agent was sent is folded closed under
-    the reason it was rejected.
+    The thresholds do not apply to a rejected call: its command or diff and
+    the reason it was rejected are one closed fold. The text the agent was
+    sent is folded closed under the reason.
 
     `search_max_lines`         integer (default: 8)
         Lines before a search block's output fold closes.
@@ -276,6 +277,11 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     `background_tail_lines`    integer (default: 10)
         Last lines of a background command's output file to show, never
         folded.
+    `elapsed_threshold_ms`     integer | false (default: 5000)
+        A tool call that runs at least this many milliseconds shows its
+        run time in its footer, and the next prompt tells the agent that
+        time. A call whose permission request the plugin answered is timed
+        from the answer. `false` shows and tells no times.
 
 ------------------------------------------------------------------------------
 4.5 PERMISSIONS                                   *agentic-config-permissions*
@@ -315,7 +321,8 @@ All options with defaults are in `lua/agentic/config_default.lua`.
                                             *agentic-config-permission_float*
 `permission_float` table
     Floating window that renders permission prompts, anchored to a corner
-    of the window showing the tool call.
+    of a window in the current tabpage: the tool call's, else the chat's,
+    else the first.
 
     `anchor`       `"NE"` | `"NW"` | `"SE"` | `"SW"` (default: `"SE"`)
     `width`        integer (default: 30)
@@ -583,6 +590,13 @@ budget.pace({window}, {now})
     exhausted. Above 1 the limit is hit before the reset. nil when less than
     5% of that span has known usage.
 
+                                                  *agentic.budget.limit_in()*
+budget.limit_in({window}, {now})
+    Seconds from {now} until {window} is used up, at the usage rate that
+    |agentic.budget.pace()| projects. Less than |agentic.budget.resets_in()|
+    when the pace is above 1. nil when the pace is nil, {window} is used up,
+    or no further use is projected.
+
                                                  *agentic.budget.resets_in()*
 budget.resets_in({window}, {now})
     Seconds from {now} until {window} refills, 0 once `resets_at` has passed.
@@ -685,8 +699,9 @@ opens one below the current window.
 ------------------------------------------------------------------------------
 6.4 PERMISSION KEYMAPS                            *agentic-keymaps-permission*
 
-Mapped in every widget buffer of a session while its permission float is
-shown in the current tabpage. Set with `keymaps.permission`, keyed by
+Mapped in every widget buffer of a session and in the float, which
+|CTRL-W_w| and the mouse enter, while its permission float is shown. Set
+with `keymaps.permission`, keyed by
 option kind. A permission key shadows a key with the same lhs while the
 prompt is active. What each option does is in |agentic-permissions-prompt|.
 
@@ -701,20 +716,22 @@ prompt is active. What each option does is in |agentic-permissions-prompt|.
 An option whose kind has no key, or whose kind's key an earlier option
 took, gets `<localLeader>` and its position, for example `<localLeader>3`.
 
-While a subagent's prompt shows on the chat (|agentic-permissions-prompt|),
-the `keymaps.permission_open` keys open its transcript. The prompt stays
-pending and moves to the transcript's window. `false` disables a key.
+While a prompt shows away from its tool call (|agentic-permissions-prompt|),
+the `keymaps.permission_open` keys open the tool call's buffer. The prompt
+stays pending and moves to that buffer's window. `false` disables a key.
 
-    Key              Field    Opens the transcript in ~
+    Key              Field    Opens the buffer in ~
     `<localLeader>e`   `edit`     The current window (*)
     `<localLeader>s`   `split`    A split
     `<localLeader>v`   `vsplit`   A vertical split
     `<localLeader>t`   `tab`      A new last tabpage
 
 (*) From an input or a widget panel other than the chat: the chat's window.
+From the float: the previous window.
 
 The float's footer lists the enabled keys, with a shared prefix written once:
-`\{e,s,v,t}`. Without a border, the list is the float's last line.
+`\{e,s,v,t}`. Without a border, the list is the float's last line and the
+title its first.
 
 ------------------------------------------------------------------------------
 6.5 PLUG MAPPINGS                                      *agentic-plug-mappings*
@@ -765,8 +782,8 @@ A command line dispatches as its own prompt; see |agentic-queue|.
 ------------------------------------------------------------------------------
 7.2 FORWARDED COMMANDS                            *agentic-commands-forwarded*
 
-Slash commands the provider advertises over ACP are passed through and
-appear in completion.
+Slash commands the provider advertises are passed through and appear in
+completion. pi skills run as `/skill:<name>`.
 
 ------------------------------------------------------------------------------
 7.3 COMMAND NOTICES                                          *agentic-notices*
@@ -804,11 +821,11 @@ notices as well as prompts (|agentic-keymaps-agent|).
 8.1 THE PERMISSION PROMPT                         *agentic-permissions-prompt*
 
 A tool call the agent is not cleared to make raises a prompt in a float
-(|agentic-config-permission_float|) on the window showing that tool call's
-buffer: the chat, or the subagent's transcript. While no window shows the
-transcript, the float shows on the chat, titled with the transcript's name,
-and the open keys (|agentic-keymaps-permission|) open the transcript. A float
-outside the current tabpage counts as hidden (|agentic-attention|). The
+(|agentic-config-permission_float|) in the current tabpage, on the window
+showing that tool call's buffer: the chat, or the subagent's transcript.
+While no window there shows it, the float shows on the chat's window, else
+on the first window, titled with the session and subagent, and the open keys
+(|agentic-keymaps-permission|) open the tool call's buffer. The
 options come from the provider; the plugin inserts "Reject all" ahead of the
 provider's
 "Reject always", or appends it when there is none. When the agent leaves
@@ -859,7 +876,8 @@ with no word was decided by the provider.
 8.3 GRANTS                                         *agentic-permissions-grant*
 
 `/grant` adds a path to the session's grants. Under a granted path, file
-tool calls (edit, write, create, delete, move), shell redirects (`>`, `>>`)
+tool calls (edit, write, create, delete, move), shell redirects (`>`, `>>`),
+the files a `writes` option names (`curl -o`, |agentic-permissions-shell|)
 and `rm` auto-approve when the change is recoverable. Grants last until the
 session ends.
 
@@ -887,10 +905,11 @@ A change is recoverable when:
 A delete needs a tracked file with no uncommitted change.
 
 An untracked file under `/tmp` or `$TMPDIR` can always be written, created
-or edited. An `rm` of one needs the file redirected to earlier in the same
+or edited. An `rm` of one needs the file written earlier in the same
 command, and `permissions.tmp_cleanup` on.
 
-A redirect or `rm` target must be an absolute path with no `..` segment.
+A redirect, `writes` option or `rm` target must be an absolute path with no
+`..` segment.
 
 `permissions.default_grant` is granted at session start. An entry naming an
 unset variable is skipped.
@@ -956,6 +975,12 @@ A token is a letter (`-x`, also inside a cluster) or a long name
 the first positional, a literal first positional (`config`) is after it,
 and `"*"` is every scope. A missing hint only adds prompts; a wrong hint
 can auto-approve a write.
+A command's optional `writes` field lists gates `{ options = {...},
+not_files = {...}, opaque = {...} }`. The value of a listed option is a
+file the command writes, checked as a redirect target is
+(|agentic-permissions-grant|). A value that matches a `not_files` glob
+(`-`, `/dev/null`) names no file. A value that matches an `opaque` glob
+(`#1`) withholds approval.
 
 A command's optional `runs` field lists config files that make it load code.
 While an item matches, after an earlier part of the command may have changed
@@ -980,7 +1005,7 @@ An item with neither `keys` nor `except_keys` matches when the file exists. A
 file that does not parse as `format`, or is larger than 64 KB, matches.
 
 `permissions.structured` is deep-merged over the bundled defaults: a kind-array
-replaces the bundled array of that kind, kinds you omit stay bundled, `arity`
+or `writes` replaces the bundled one, fields you omit stay bundled, `arity`
 merges per scope and field, `runs` adds to the bundled items, and `vim.NIL`
 disables the bundled entry. >lua
     require("agentic").setup({
@@ -1042,18 +1067,19 @@ chat.
                                                        *agentic-buffer-names*
 Buffers are named after the chat id, `<cid>`, the name of the chat's
 session file, kept across a provider switch and a restart.
-`<agent key>` and `<background key>` are 8 hex digits standing for the
-subagent's or the background session's ACP session:
+`<agent key>` and `<skeptic key>` are 8 hex digits standing for the
+subagent's or the skeptic's ACP session:
 
-    Buffer                         Name ~
-    Chat                           `agentic://<cid>`
-    Panel                          `agentic://<cid>/<panel>`
-    Subagent transcript            `agentic://<cid>/<agent key>`
-    Subagent message input         `agentic://<cid>/<agent key>/input`
-    Background session             `agentic://<background key>/background`
+    Buffer                    Name ~
+    Chat                      `agentic://<cid>`
+    Panel                     `agentic://<cid>/<panel>`
+    Subagent transcript       `agentic://<cid>/subagent/<agent key>`
+    Subagent message input    `agentic://<cid>/subagent/<agent key>/input`
+    Skeptic transcript        `agentic://<cid>/skeptic/<skeptic key>`
 
 |:edit|, |:split|, |:tabedit|, |gf|, |CTRL-W_f| and |CTRL-W_gf| on a name
-show that buffer, made again if it was wiped. On the name of a chat no
+show that buffer, made again if it was wiped, except a skeptic transcript.
+On the name of a chat no
 session holds, they resume the saved chat (|agentic-commands-resume|) in the
 window they open.
 
@@ -1069,9 +1095,7 @@ panels open while they list something. The input opens on the first
 activity panel, `toggle_info` the session info panel, `toggle_agents` the
 agents panel.
 
-When the chat's window closes or shows another buffer, its panels close.
-|:q| in the chat's window closes its panels first; when vim refuses the
-quit, they open again.
+When the chat's window shows another buffer, its panels close.
 
 A panel window can show any buffer. While it shows a buffer that is not its
 panel's, it is not a panel window.
@@ -1115,12 +1139,6 @@ next submit. While a later turn runs, the header shows 󰔟 in its place.
 
 When a permission float is shown, the bell rings if the chat window is not
 the current window.
-
-When the float is not in the current tabpage, once per prompt, the bell
-rings, the header of the tool call's buffer (the chat, or a transcript; the
-chat while no window shows the transcript) shows `?` after its title, and a
-notification names the session and the tool call's buffer. `?` stays until
-the prompt is answered.
 
 Auto-approved requests do none of this.
 
@@ -1254,8 +1272,8 @@ of the spawn confirms it; the type shows once that record is read.
 A provider crash and a session switch end every running subagent. A cancel
 ends the subagents that the provider then reports ended.
 
-A permission prompt from a subagent whose transcript has no window shows on
-the chat (|agentic-permissions-prompt|).
+A permission prompt from a subagent whose transcript has no window in the
+current tabpage shows on the chat (|agentic-permissions-prompt|).
 
 A `to_input` key in a background subagent's transcript opens its message
 input. `:w` there sends the text to the subagent through the main agent, as
@@ -1303,10 +1321,11 @@ a call that stops a background job, it jumps to that job's block.
 9.9 SKEPTIC                                                  *agentic-skeptic*
 
 After each turn that ends normally, skeptic agents on other models check the
-claims the main agent made in it, read-only. Claims the skeptics refute, as
-`reporting_criteria` sets, go to the main agent as one prompt marked with the
-skeptic's sign. A skeptic's prompt is not checked again. A stopped or failed
-turn is checked with the next turn that ends normally.
+claims the main agent made in it, read-only. Claims a skeptic refutes with
+evidence go to the main agent as one prompt marked with the skeptic's sign,
+unless another skeptic shows with evidence that the refutation is wrong. A
+skeptic's prompt is not checked again. A stopped or failed turn is checked
+with the next turn that ends normally.
 
 Each skeptic has a transcript, opened like a subagent's (|agentic-subagents|).
 A skeptic agent whose provider disconnects is started again; one that fails
@@ -1315,7 +1334,7 @@ turns off.
 
 Requires:
 - `text_model.url`, for the model that extracts the claims.
-- The `opencode-acp` provider.
+- The `pi` provider.
 
     `/skeptic`           Report whether the skeptic is on.
     `/skeptic on|off`    Turn it on or off for the session.
@@ -1323,22 +1342,19 @@ Requires:
 `skeptic` table:
     `enabled`             boolean (default: false)
         On in every new session.
-    `reporting_criteria`  "agree" | "either" (default: "agree")
-        "agree" forwards a claim every skeptic refuted, "either" one any
-        skeptic refuted with evidence.
     `extractor`           table
         `model` is the `text_model` model that extracts the claims.
         `reasoning_effort` (default: "none") is sent as the request's
         `reasoning_effort`; `false` leaves the field out of the request.
     `skeptics`            table[]
-        One `{ provider = "opencode-acp", model = "..." }` per skeptic.
+        One `{ provider = "pi", model = "<provider>/<id>" }` per skeptic.
     `turn_timeout_ms`     integer (default: 300000)
         Per skeptic turn, and for a skeptic to start.
     `max_refusals`        integer (default: 3)
-        Refusal prompts per check before a skeptic gives up.
+        Refusal prompts per skeptic prompt before a skeptic gives up.
     `prompts`             table (default: `{}`)
         Texts that replace the defaults in `lua/agentic/skeptic/prompts.lua`,
-        keyed `extract`, `verify`, `deliver` or `refusal`.
+        keyed `extract`, `verify`, `attack`, `deliver` or `refusal`.
 
 ==============================================================================
 10. HIGHLIGHT GROUPS                                      *agentic-highlights*
@@ -1444,8 +1460,8 @@ User AgenticHeadersChanged
     contains `buf`. Read the state, `header`, with
     `require("agentic.ui.window_decoration").get_header(buf)`, which falls
     back to the panel's default: a table with a `title` string, optional
-    `icon` and `context` strings, and optional `running`, `waiting` and
-    `idle` booleans.
+    `icon` and `context` strings, and optional `running` and `idle`
+    booleans.
     `require("agentic.ui.window_decoration").header_chunks(header)` gives
     it as a list of `{ text, hl_group }` chunks, `hl_group` nil or a group
     from |agentic-highlights|. The texts concatenate to the header text

@@ -1,5 +1,6 @@
 # Plan: adapters extend the base tool-call builders
 Status: reviewed spec
+Priority: P3
 
 ## Relevant files
 - `lua/agentic/acp/acp_client.lua` — `__build_tool_call_message`,
@@ -24,8 +25,8 @@ Status: reviewed spec
   `gemini_acp_adapter.test.lua`, `tests/integration/fast_event_tool_call.test.lua`
 - `.luarc.json` (`need-check-nil: Error`), `.claude/rules/provider-specific.md`
 - Notes: `notes/FIX-placeholder-titles.md`,
-  `notes/feature-provider-drift-detection.md`,
-  `notes/refactor-acp-kind-normalisation.md`
+  `notes/IDEA-provider-drift-detection.md`,
+  `notes/REFACTOR-acp-kind-normalisation.md`
 - Skills: `provider-system` (§ "Adapter override points", § "Edit diffs come
   from `content[]`"), `lua-class`
 
@@ -201,10 +202,10 @@ its `body`.
 ### Notes
 - `notes/FIX-placeholder-titles.md` change 1 says where its line goes if
   this plan lands first.
-- `notes/feature-provider-drift-detection.md`: its mode-switch check
+- `notes/IDEA-provider-drift-detection.md`: its mode-switch check
   (`update.kind == "switch_mode"` with no `MODE_SWITCH_TOOLS` row) sits in
   `__apply_tool_identity` after this plan.
-- `notes/refactor-acp-kind-normalisation.md` § "Where a protocol kind
+- `notes/REFACTOR-acp-kind-normalisation.md` § "Where a protocol kind
   enters": the adapter block sites become the base builder plus the
   adapters' kind remaps. Whichever plan lands second updates that list.
 

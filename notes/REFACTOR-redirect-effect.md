@@ -1,5 +1,6 @@
 # Plan: one classifier for what a file redirect does
 Status: spec
+Priority: P3
 
 ## Relevant files
 - `lua/agentic/utils/shell_parse.lua` — `redirect_target`,

@@ -3,8 +3,8 @@ name: follow
 description:
   Maintenance map for follow (the chat view tracking streamed output, also
   called auto-scroll — per-window user control vs following, the prose pin,
-  scroll-to-bottom) and attention signals (terminal bell, header idle and
-  waiting states). Use when editing `_schedule_follow`, `on_view_change`,
+  scroll-to-bottom) and attention signals (terminal bell, header idle
+  state). Use when editing `_schedule_follow`, `on_view_change`,
   `_own_change`, `BufHelpers.scroll_down`, `BufHelpers.show_rows`, the tool
   call hold, `_notify_attention`, or adding any
   method that writes to the chat buffer (it must call `_schedule_follow`).
@@ -33,9 +33,11 @@ Each window showing the chat is in one of two modes:
 The user's motion changes the mode, never the window's position:
 `on_view_change` reads it as the difference from the last view seen
 (`_views[win]`), for keys and mouse alike: rows of text from the topline to
-the end, and the cursor line. Up takes control; the cursor on the last line
-(or a closed fold ending there), or the view down with the last line in
-view, hands it back. Besides, `go_to_bottom` (`<localLeader>G`),
+the end, and the cursor line. Up takes control; the cursor moving onto the
+last line (or a closed fold ending there), or the view down with the last
+line in view, hands it back. `_own_change` moves the cursor of a window in
+user control off the last line where it can without scrolling, so a later
+move onto it (`G`, mapped or not) is a motion. Besides, `go_to_bottom` (`<localLeader>G`),
 `resume_follow` (submit) and `follow_in` (a permission open key) hand windows
 back, and a pin
 that held the view short of the last line (`_pin_held`) puts its window in
@@ -61,5 +63,3 @@ handed it over (`hand_next_window_to_user`).
 
 `SessionManager:_notify_attention` marks the chat idle only when no chat window
 follows (`any_following`). Following again does not clear it; a submit does.
-A hidden permission prompt's waiting state goes on its request's
-`badge_bufnr`: the chat while the float shows there in place of a transcript.

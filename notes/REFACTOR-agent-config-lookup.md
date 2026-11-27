@@ -1,5 +1,6 @@
 # Plan: AgentConfigOptions — one entry lookup, and callbacks given once
 Status: spec
+Priority: P3
 
 ## Relevant files
 - `lua/agentic/acp/agent_config_options.lua` — `new`, `bind_keymaps`,

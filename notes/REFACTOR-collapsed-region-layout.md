@@ -1,5 +1,7 @@
 # Plan: one-row fold rule and collapsed-region layout
 Status: spec
+Priority: P3
+Depends: REFACTOR-tool-block-rows.md
 
 ## Relevant files
 - `lua/agentic/ui/folds.lua` — `ranges_in`: a fold forms only when

@@ -619,19 +619,21 @@ end
     end)
 
     it(
-        "a prompt not in the current tab is hidden until its tab is entered, and rings once",
+        "a prompt follows the current tab to the transcript, and rings once",
         function()
             child.lua([[
 _G.show(_G.transcript("c1").bufnr)
+vim.api.nvim_set_current_win(_G.s.widget:input_win())
 _G.request()
 ]])
             child.flush()
-            assert.is_true(child.lua_get("_G.s.permission_manager._hidden"))
+            local float = "_G.s.permission_manager.permission_float"
+            assert.equal("chat", child.lua_get(float .. ":get_host()"))
             assert.equal(1, child.lua_get("_G.bells"))
 
             child.lua([[vim.cmd("tabnext 2")]])
             child.flush()
-            assert.is_false(child.lua_get("_G.s.permission_manager._hidden"))
+            assert.equal("anchor", child.lua_get(float .. ":get_host()"))
             assert.equal(
                 "Select permission option allow",
                 child.lua_get(
@@ -648,23 +650,6 @@ end)]]
             assert.equal(1, child.lua_get("_G.bells"))
         end
     )
-
-    it("the waiting state stays until the prompt is answered", function()
-        child.lua([[
-_G.waiting = function()
-    return require("agentic.ui.window_decoration").get_header(_G.transcript("c1").bufnr).waiting
-end
-_G.show(_G.transcript("c1").bufnr)
-_G.request()
-]])
-        child.flush()
-        child.lua([[vim.cmd("tabnext 2")]])
-        child.flush()
-        assert.is_true(child.lua_get("_G.waiting()"))
-
-        child.lua([[_G.s.permission_manager:_complete_request("allow")]])
-        assert.equal(vim.NIL, child.lua_get("_G.waiting()"))
-    end)
 
     describe("whose transcript has no window", function()
         before_each(function()
@@ -710,7 +695,6 @@ end
             )
             assert.equal("find it", child.lua_get("_G.label()"))
             assert.equal("find it", child.lua_get("_G.title()"))
-            assert.is_false(child.lua_get("_G.s.permission_manager._hidden"))
             assert.equal(
                 "c1",
                 child.lua_get("_G.s.message_writer._held_tool_call_id")
@@ -825,39 +809,34 @@ vim.cmd.bwipeout({ args = { tostring(_G.old) }, bang = true })
         )
 
         it(
-            "hidden with the chat in another tab, marks the chat waiting",
+            "with the chat in another tab, shows on the current tab titled, holding nothing",
             function()
                 child.lua([[
-_G.waiting = function()
-    return require("agentic.ui.window_decoration").get_header(_G.s.widget.buf_nrs.agent).waiting
-end
+_G.s.chat_history.title = "Fix parser"
 vim.cmd("tabnew")
 _G.request()
 ]])
                 child.flush()
 
-                assert.is_true(child.lua_get("_G.s.permission_manager._hidden"))
-                assert.is_true(child.lua_get("_G.waiting()"))
-                assert.is_true(
-                    child.lua_get(
-                        "_G.notices[#_G.notices]:find('subagent ' .. _G.label(), 1, true) ~= nil"
-                    )
+                assert.equal(
+                    child.lua_get("vim.api.nvim_get_current_win()"),
+                    child.lua_get("_G.float_win()")
                 )
-
-                child.lua(
-                    [[_G.s.permission_manager:_complete_request("allow")]]
+                assert.equal(
+                    "Fix parser · " .. child.lua_get("_G.label()"),
+                    child.lua_get("_G.title()")
                 )
-                assert.equal(vim.NIL, child.lua_get("_G.waiting()"))
+                assert.equal(
+                    vim.NIL,
+                    child.lua_get("_G.s.message_writer._held_tool_call_id")
+                )
             end
         )
 
         it(
-            "with the chat not shown, marks the chat waiting and shows when :Agentic shows it",
+            "with the chat not shown, shows on the current window, then on the chat once :Agentic shows it",
             function()
                 child.lua([[
-_G.waiting = function()
-    return require("agentic.ui.window_decoration").get_header(_G.s.widget.buf_nrs.agent).waiting
-end
 -- A message keeps the session alive while its chat is not shown.
 table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
 vim.api.nvim_set_current_win(_G.chat_win())
@@ -865,7 +844,10 @@ vim.cmd("enew")
 _G.request()
 ]])
                 child.flush()
-                assert.is_true(child.lua_get("_G.waiting()"))
+                assert.equal(
+                    child.lua_get("vim.api.nvim_get_current_win()"),
+                    child.lua_get("_G.float_win()")
+                )
 
                 child.cmd("Agentic")
                 child.flush()

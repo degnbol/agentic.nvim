@@ -56,7 +56,7 @@ end
 _G.s:new_session()
 _G.cbs["session/new"]({ sessionId = "sid-live" }, nil)
 _G.live = "agentic://" .. _G.s.chat_history.chat_id
-_G.c1 = _G.live .. "/" .. _G.key("c1")
+_G.c1 = _G.live .. "/subagent/" .. _G.key("c1")
 ]])
         child.flush()
         -- A used session: an unused one closes when its chat leaves the
@@ -127,7 +127,9 @@ _G.tabs = #vim.api.nvim_list_tabpages()
     end
 
     it("notifies an error for a closed chat's transcript name", function()
-        child.lua([[vim.cmd("edit agentic://sid-saved/" .. _G.key("c1"))]])
+        child.lua(
+            [[vim.cmd("edit agentic://sid-saved/subagent/" .. _G.key("c1"))]]
+        )
 
         assert.equal(1, child.lua_get("vim.tbl_count(_G.Registry.by_id)"))
         assert.equal(
@@ -257,7 +259,18 @@ vim.cmd("edit " .. _G.c1 .. "/input")
     )
 
     it("notifies an error for an unknown subagent of a live session", function()
-        child.lua([[vim.cmd("edit " .. _G.live .. "/" .. _G.key("c9"))]])
+        child.lua(
+            [[vim.cmd("edit " .. _G.live .. "/subagent/" .. _G.key("c9"))]]
+        )
+
+        assert.equal(
+            child.lua_get("vim.log.levels.ERROR"),
+            child.lua_get("_G.notes[1].level")
+        )
+    end)
+
+    it("notifies an error for a skeptic transcript no buffer holds", function()
+        child.lua([[vim.cmd("edit " .. _G.live .. "/skeptic/" .. _G.key("x"))]])
 
         assert.equal(
             child.lua_get("vim.log.levels.ERROR"),

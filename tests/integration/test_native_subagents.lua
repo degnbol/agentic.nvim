@@ -1911,7 +1911,7 @@ _G.new_cb({ sessionId = "sid-live" }, nil)
             )
             -- The history keeps its chat id into the new ACP session.
             assert.equal(
-                "agentic://sid-x/"
+                "agentic://sid-x/subagent/"
                     .. child.lua_get(
                         [[require("agentic.utils.buffer_names").short_key("c1")]]
                     ),

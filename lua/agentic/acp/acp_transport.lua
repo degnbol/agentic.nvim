@@ -7,7 +7,7 @@ local Logger = require("agentic.utils.logger")
 local M = {}
 
 --- @class agentic.acp.TransportCallbacks
---- @field on_state_change fun(state: agentic.acp.ClientConnectionState): nil The transport state like "connecting", "connected", "disconnected", "error"
+--- @field on_state_change fun(state: agentic.AgentClient.ClientConnectionState): nil The transport state like "connecting", "connected", "disconnected", "error"
 --- @field on_message fun(message: agentic.acp.ResponseRaw): nil
 --- @field on_reconnect fun(): nil
 --- @field on_stdout_line fun(line: string): nil A non-blank stdout line that is not JSON, untrimmed. Called in the luv read callback.
@@ -17,6 +17,7 @@ local M = {}
 --- @field command string Command to spawn agent
 --- @field args? string[] Arguments for agent command
 --- @field env? table<string, string|nil> Environment variables
+--- @field cwd? string Working directory of the process. Nil: nvim's working directory
 --- @field enable_reconnect? boolean Enable auto-reconnect
 --- @field max_reconnect_attempts? number Maximum reconnection attempts
 
@@ -105,6 +106,7 @@ function M.create_stdio_transport(config, callbacks)
         local handle, pid = vim.uv.spawn(config.command, {
             args = args,
             env = final_env,
+            cwd = config.cwd,
             stdio = { stdin, stdout, stderr },
             detached = false,
         }, function(code, signal)

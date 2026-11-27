@@ -7,7 +7,7 @@ STYLUA   ?= $(shell which stylua 2>/dev/null || echo "$(HOME)/.local/share/nvim/
 PROJECT ?= .
 LOGDIR  ?= .luals-log
 
-.PHONY: luals selene selene-file format-check format format-file check test validate helptags install-git-hooks
+.PHONY: luals selene selene-file format-check format format-file check test validate helptags install-git-hooks plan-index plan-index-check
 
 # Each test file runs in a fresh nvim process so module-level state, stubs,
 # autocmds, and `vim.schedule`-queued callbacks cannot leak between files.
@@ -24,7 +24,7 @@ LOGDIR  ?= .luals-log
 # back and printed in file order once all have finished. An interrupt lists
 # the files that started but did not finish, to name a hung one.
 # `-i NONE` keeps concurrent runs from writing the user's shada.
-TEST_FILES := $(shell find lua tests hooks -name "*.test.lua") $(shell find tests -name "*_test.lua" -o -name "test_*.lua" 2>/dev/null)
+TEST_FILES := $(shell find lua tests hooks scripts -name "*.test.lua") $(shell find tests -name "*_test.lua" -o -name "test_*.lua" 2>/dev/null)
 JOBS ?= $(shell echo $$(( ($$(getconf _NPROCESSORS_ONLN || echo 2) + 1) / 2 )))
 
 test:
@@ -44,6 +44,13 @@ test-verbose: test
 
 test-file:
 	$(NVIM) --headless -i NONE -u tests/init.lua -c "lua require('tests.runner').run_file('$(FILE)')"
+
+# Plan index in TODO.md, generated from the headers of notes/*.md
+plan-index:
+	@$(NVIM) --clean -l scripts/plan_index.lua
+
+plan-index-check:
+	@$(NVIM) --clean -l scripts/plan_index.lua --check
 
 # Lua Language Server headless diagnosis report
 luals:
@@ -110,8 +117,12 @@ validate:
 	make test > .local/agentic_test_output.log 2>&1; \
 	rc_test=$$?; \
 	echo "test: $$rc_test (took $$(($$(date +%s) - start))s) - log: .local/agentic_test_output.log"; \
+	start=$$(date +%s); \
+	make plan-index-check > .local/agentic_plans_output.log 2>&1; \
+	rc_plans=$$?; \
+	echo "plans: $$rc_plans (took $$(($$(date +%s) - start))s) - log: .local/agentic_plans_output.log"; \
 	echo "Total: $$(($$(date +%s) - total_start))s"; \
-	if [ $$rc_format -ne 0 ] || [ $$rc_luals -ne 0 ] || [ $$rc_selene -ne 0 ] || [ $$rc_helptags -ne 0 ] || [ $$rc_test -ne 0 ]; then \
+	if [ $$rc_format -ne 0 ] || [ $$rc_luals -ne 0 ] || [ $$rc_selene -ne 0 ] || [ $$rc_helptags -ne 0 ] || [ $$rc_test -ne 0 ] || [ $$rc_plans -ne 0 ]; then \
 		echo "Validation failed! Check log files for details."; \
 		exit 1; \
 	fi

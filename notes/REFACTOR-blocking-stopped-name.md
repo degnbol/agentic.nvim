@@ -1,5 +1,6 @@
 # Plan: name the blocking-subagent stop by the plugin's mode
 Status: spec
+Priority: P3
 
 ## Relevant files
 - `lua/agentic/subagents.lua` (`mark_foreground_stopped`)

@@ -1,5 +1,6 @@
 # Plan: one shift rule for prose-run rows, one end-of-run reflow
 Status: spec
+Priority: P3
 
 ## Relevant files
 - `lua/agentic/ui/message_writer.lua` — fields `_chunk_start_line`,
@@ -19,7 +20,7 @@ Status: spec
   `_chunk_start_line`
 - Skills: `rendering`, `follow`, `session-lifecycle`, `neovim`
   (`references/rendering.md` § extmarks under `set_lines`)
-- Notes touching the same functions: `notes/bug-streamed-code-lines-get-hard-wrapped.md`
+- Notes touching the same functions: `notes/BUG-streamed-code-lines-get-hard-wrapped.md`
   (the streaming fence clamp), `notes/FEAT-gutter-identity.md` (a
   prose-fold range placed in `_end_prose_run`)
 
@@ -148,7 +149,7 @@ function, with no mode flag.
 ## Non-goals
 - Prose rows tracked by extmarks (see Background).
 - The streamed-code hard-wrap bug
-  (`notes/bug-streamed-code-lines-get-hard-wrapped.md`). It changes the
+  (`notes/BUG-streamed-code-lines-get-hard-wrapped.md`). It changes the
   streaming clamp, which this plan moves unchanged. If it lands later, it
   edits `_reflow_complete_paragraphs`.
 - `FEAT-gutter-identity.md`'s prose fold. If it lands later, it adds its range

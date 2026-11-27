@@ -1,5 +1,6 @@
 # Plan: inline-math dollar pairing in prose wrap
 Status: reviewed (open questions)
+Priority: P3
 
 ## Relevant files
 - `lua/agentic/utils/text_wrap.lua` — `wrap_line` word scanner (atomic `` ` `` and `$` spans); `wrap_prose` and `wrap_single_line` both reach it
@@ -15,7 +16,7 @@ Status: reviewed (open questions)
 - Skills: `math-images` (parent config), `rendering` (this repo)
 
 ## Background
-Bug report: `notes/bug-inline-math-dollar-pairing.md`. In `wrap_line`, a `$` run opens a span and
+In `wrap_line`, a `$` run opens a span and
 `line:find(delim, run_end, true)` closes it at the next
 `$`, with no flanking rule. `wrap_single_line("costs $5 and $10 more words here", 8)`
 gives `{ "costs", "$5 and $10", "more", "words", "here" }`.

@@ -1,5 +1,6 @@
 # Plan: the widget clears only the chat buffer
 Status: reviewed spec
+Priority: P3
 
 ## Relevant files
 - `lua/agentic/ui/chat_widget.lua` — `ChatWidget:clear`

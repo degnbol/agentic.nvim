@@ -1,5 +1,5 @@
 local AcpKind = require("agentic.utils.acp_kind")
-local ClaudeUtils = require("agentic.acp.adapters.claude_utils")
+local AgentClient = require("agentic.agent_client")
 local Config = require("agentic.config")
 local FileSystem = require("agentic.utils.file_system")
 local Json = require("agentic.utils.json")
@@ -15,28 +15,6 @@ local UsageLimit = require("agentic.acp.usage_limit")
 CRITICAL: Type annotations in this file are essential for Lua Language Server support.
 DO NOT REMOVE them. Only update them if the underlying types change.
 --]]
-
---- @alias agentic.acp.ClientConnectionState
---- | "disconnected"
---- | "connecting"
---- | "connected"
---- | "initializing"
---- | "ready"
---- | "error"
-
---- @alias agentic.acp.ClientHandlers.on_session_update fun(update: agentic.acp.SessionUpdateMessage, source_session_id: string|nil): nil
---- @alias agentic.acp.ClientHandlers.on_request_permission fun(request: agentic.acp.RequestPermission, callback: fun(option_id: string | nil)): nil
-
---- Handlers for a specific session. Each session subscribes with its own handlers.
---- @class agentic.acp.ClientHandlers
---- @field on_session_update agentic.acp.ClientHandlers.on_session_update
---- @field on_request_permission agentic.acp.ClientHandlers.on_request_permission
---- @field on_tool_call fun(tool_call: agentic.ui.MessageWriter.ToolCallBlock, source_session_id: string|nil): nil
---- @field on_tool_call_update fun(tool_call: agentic.ui.MessageWriter.ToolCallBase, source_session_id: string|nil): nil
---- @field on_disconnect? fun(): nil The provider process died or failed
---- @field on_usage_lifted? fun(): nil The provider account's usage limit lifted
---- @field on_turn_state? fun(state: agentic.acp.TurnState): nil The root session's foreground work changed state
---- @field on_prompt_taken? fun(): nil The agent took in the oldest prompt sent to the root session and not yet taken
 
 --- @class agentic.acp.ACPProviderConfig
 --- @field name? string Provider name
@@ -56,7 +34,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @class agentic.acp.ACPClientData
 --- @field provider_config agentic.acp.ACPProviderConfig
 --- @field id_counter number
---- @field state agentic.acp.ClientConnectionState
+--- @field state agentic.AgentClient.ClientConnectionState
 --- @field protocol_version number The ACP version `initialize` asks for, then the one the agent answered with
 --- @field client_info agentic.acp.ClientInfo
 --- @field capabilities agentic.acp.ClientCapabilities
@@ -65,11 +43,11 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field auth_methods? agentic.acp.AuthMethod[]
 --- @field login_job? vim.SystemObj|table The running login: a terminal method's process, or a token while an authenticate request is out
 --- @field auth_status? agentic.acp.AuthStatus Identity the agent process authenticates with; nil while none is reported, which is distinct from a reported `kind = "none"`
---- @field callbacks table<number, fun(result: table|nil, err: agentic.acp.ACPError|nil)>
+--- @field callbacks table<number, fun(result: table|nil, err: agentic.AgentClient.Error|nil)>
 --- @field transport? agentic.acp.ACPTransportInstance
---- @field subscribers table<string, agentic.acp.ClientHandlers>
+--- @field subscribers table<string, agentic.AgentClient.ClientHandlers>
 
---- @class agentic.acp.ACPClient : agentic.acp.ACPClientData
+--- @class agentic.acp.ACPClient : agentic.AgentClient, agentic.acp.ACPClientData
 --- @field provider_name agentic.UserConfig.ProviderName Config key of the provider this client runs
 --- @field usage_limit agentic.acp.UsageLimit This process's usage limit. A restart keeps it
 --- @field _on_ready fun(client: agentic.acp.ACPClient) Ready callback passed to `new`, run again when a reconnect of a client that was ready reaches ready
@@ -86,18 +64,7 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field v2_codec? agentic.acp.ClaudeV2Codec The ACP v2 codec of the class's provider. A client whose class has one asks for v2 in `initialize`, and translates every message it then gets and sends
 local ACPClient = {}
 ACPClient.__index = ACPClient
-
---- ACP Error codes
-ACPClient.ERROR_CODES = {
-    -- ACP / JSON-RPC codes
-    AUTH_REQUIRED = -32000,
-    INVALID_PARAMS = -32602,
-    INTERNAL_ERROR = -32603,
-    REQUEST_CANCELLED = -32800,
-    -- Client-side only, never sent: outside the JSON-RPC reserved range
-    TRANSPORT_ERROR = -1,
-    PROTOCOL_ERROR = -2,
-}
+setmetatable(ACPClient, { __index = AgentClient })
 
 --- Set up a child adapter class with proper ACPClient inheritance chain.
 --- The child inherits ACPClient:new() — no need to override unless adding
@@ -168,7 +135,7 @@ function ACPClient:_setup_usage_limit()
 end
 
 --- @param session_id string
---- @param handlers agentic.acp.ClientHandlers
+--- @param handlers agentic.AgentClient.ClientHandlers
 function ACPClient:_subscribe(session_id, handlers)
     self.subscribers[session_id] = handlers
 end
@@ -176,7 +143,7 @@ end
 --- Route this session's notifications to `handlers`, and record the
 --- directories its skill names resolve against. `unsubscribe` undoes it.
 --- @param session_id string
---- @param handlers agentic.acp.ClientHandlers
+--- @param handlers agentic.AgentClient.ClientHandlers
 --- @param cwd string Working directory of the session
 --- @param additional_dirs string[] Directories the session may reach beyond its cwd
 function ACPClient:_attach_session(session_id, handlers, cwd, additional_dirs)
@@ -218,165 +185,11 @@ function ACPClient:unsubscribe(session_id)
     end
 end
 
---- What a provider recorded about a subagent's spawn.
---- @class agentic.acp.SubagentRecord
---- @field agent_type string Subagent type the agent was spawned as
---- @field background boolean The agent runs in the background rather than blocking its spawner
---- @field task_id string Id of the tool call that spawned the agent
-
---- What the provider recorded about a subagent's spawn. Adapters for
---- providers that keep such a record override this.
---- @param _session_id string The root session
---- @param _child_id string The subagent's child session id
---- @return agentic.acp.SubagentRecord|nil record Nil while there is none
-function ACPClient:subagent_record(_session_id, _child_id)
-    return nil
-end
-
---- The provider's name for the session. Adapters for providers that name
---- sessions override this.
---- @param _session_id string
---- @return string|nil name Nil when the provider has none for the session
-function ACPClient:name(_session_id)
-    return nil
-end
-
---- @alias agentic.acp.HookRecordGroup
---- | "context" context a hook delivered to the model
---- | "passed" ran to completion with nothing to report; the body is empty
---- | "stray" stdout the model did not see
---- | "message" text the hook addressed to the user, which the model did not receive
---- | "failure" timed out, exited non-zero with an error, or its output was rejected
---- | "verbatim" the provider's own record of it did not parse; the body is that record
-
---- Where a record the provider wrote outside the ACP feed belongs: right
---- after what it happened with. None set: nowhere in particular.
---- @class agentic.acp.Anchor
---- @field tool_call_id? string After this tool call; may name a call the client never saw
---- @field after_prompt? boolean After the last prompt
---- @field after_compaction? boolean After the last compaction
-
---- Hook activity a provider recorded outside the ACP feed.
---- @class agentic.acp.HookRecord : agentic.acp.Anchor
---- @field group agentic.acp.HookRecordGroup
---- @field body string[]
---- @field hook_name? string The hook's configured name, e.g. `PreToolUse:Bash`
---- @field command? string The hook's invocation, when the record is of one run
---- @field duration_ms? number How long that run took
---- @field outcome? agentic.acp.HookOutcome What the hook did, when it did more than report
-
---- @alias agentic.acp.HookOutcome
---- | "blocked" the hook returned a blocking error; the model received its reason
---- | "stopped" the hook ended the turn
---- | "allowed" the hook approved the tool call
---- | "denied" the hook refused the tool call
---- | "asked" the hook sent the tool call to a permission prompt
---- | "deferred" the hook deferred the tool call to the host
-
---- A file the provider added to the model's context without a tool call.
---- @class agentic.acp.LoadedFile : agentic.acp.Anchor
---- @field path string Absolute
-
---- Skills the provider made available to the model during the session.
---- @class agentic.acp.DiscoveredSkills : agentic.acp.Anchor
---- @field title string The row announcing the skills
---- @field body string[] One row per skill
-
---- A message the session received from another session or a subagent.
---- @class agentic.acp.ReceivedMessage
---- @field message_id string
---- @field text string
---- @field sender_id? string The sending subagent's id, as the provider names it
---- @field sender_name? string The display name the provider gave the sender
-
---- `tool_call` carries fields of a tool call that the ACP feed left out.
----
---- Stored in the chat history as drained, so renaming a field needs a
---- migration in `ChatHistory.from_data`.
---- @alias agentic.acp.SideRecord
---- | { kind: "hook", hook: agentic.acp.HookRecord }
---- | { kind: "loaded_file", loaded_file: agentic.acp.LoadedFile }
---- | { kind: "discovered_skills", discovered_skills: agentic.acp.DiscoveredSkills }
---- | { kind: "tool_call", tool_call: agentic.ui.MessageWriter.ToolCallBase }
---- | { kind: "received_message", received_message: agentic.acp.ReceivedMessage }
-
---- Records the provider wrote outside the ACP feed since the last call, for
---- the session or for one of its subagents. Adapters for providers that keep
---- such records override this.
---- @param _session_id string The root session
---- @param _child_id string|nil A subagent's child session id
---- @return agentic.acp.SideRecord[]
-function ACPClient:drain_side_records(_session_id, _child_id)
-    return {}
-end
-
---- The subagent that sent a received message.
---- @param sender_id string The sender's id, as the provider names it
---- @param child_ids string[] Child session ids of the session's subagents
---- @return string|nil child_id nil when none of them sent it
-function ACPClient:sender_session(sender_id, child_ids)
-    return vim.tbl_contains(child_ids, sender_id) and sender_id or nil
-end
-
---- The task id an update is tagged with: the id of the tool call that gave
---- its subagent its current work, the one that spawned it or one that
---- resumed it. Adapters for providers that tag subagent updates override this.
---- @param _update agentic.acp.SessionUpdateMessage
---- @return string|nil task_id Nil for an update that is not a subagent's
-function ACPClient:subagent_task_id(_update)
-    return nil
-end
-
---- The task id of the launch a session message replies to. Nil by default: a
---- launch's reply and a subagent's hand-back both go from child to parent,
---- and only a provider's message ids can tell them apart.
---- @param _update agentic.acp.SessionMessage
---- @return string|nil task_id Nil when it is not a launch's reply
-function ACPClient:launch_reply_task(_update)
-    return nil
-end
-
 --- A message id without its `:reply` suffix.
 --- @param message_id string
 --- @return string|nil task_id Nil without the suffix
 function ACPClient.strip_reply_suffix(message_id)
     return message_id:match("^(.+):reply$")
-end
-
---- Whether a replayed prompt is one the provider adds itself during a
---- session/load replay, not one the user sent.
---- @param _text string
---- @return boolean
-function ACPClient:is_replay_only_prompt(_text)
-    return false
-end
-
---- The shell the provider's execute tool runs commands in, when the client
---- can prove it. Reaches only blocks built by the base `__build_tool_call_message`.
---- @return "bash"|"zsh"|nil
-function ACPClient:exec_shell()
-    return nil
-end
-
---- One usage-limit window the provider reported.
---- @class agentic.acp.BudgetWindow
---- @field label string Short name of the window, e.g. "5h", "7d"
---- @field utilization number Fraction 0-1 of the window used
---- @field resets_at number Epoch seconds when the window refills
---- @field window_s number Length of the window in seconds
---- @field state "ok"|"warning"|"exhausted"
-
---- The usage-limit windows a usage update reports, shortest window first.
---- @param _update agentic.acp.UsageUpdate
---- @return agentic.acp.BudgetWindow[]|nil windows Nil when the update reports none
-function ACPClient:budget_windows(_update)
-    return nil
-end
-
---- Whether to send "continue" once a usage limit resets.
---- @return boolean
-function ACPClient:auto_continue_on_usage_limit()
-    return false
 end
 
 --- Provider-specific `_meta` for session/new and session/load.
@@ -403,48 +216,6 @@ function ACPClient:capability_meta()
     return nil
 end
 
---- The env entries that make the provider leave every tool call's permission
---- to the client, over any rule of the user's that allows it. Called on the
---- class, not an instance. The default has none to give.
---- @param _env table<string, string|nil> The env the process starts with
---- @return table<string, string>|nil env
---- @return string|nil err Why no env could be built
-function ACPClient:unattended_env(_env)
-    return nil, "no way to send every tool call for a permission decision"
-end
-
---- Claude's config directory for the environment this client runs with:
---- the directory whose settings.json holds the permission rules.
---- @return string
-function ACPClient:claude_config_dir()
-    return ClaudeUtils.config_dir(self.provider_config.env)
-end
-
---- The plan file a permission request asks approval for.
---- @param _request agentic.acp.RequestPermission
---- @return string|nil path Absolute path; nil when the request names none
-function ACPClient:plan_file(_request)
-    return nil
-end
-
---- The mode a subagent is expected to run in until the provider's record of
---- its spawn confirms one. Adapters for providers that can force a mode
---- override this.
---- @return "background"|"blocking"
-function ACPClient:subagent_predicted_mode()
-    return "blocking"
-end
-
---- A prompt for the main agent to pass a message to a background subagent.
---- Adapters for providers whose main agent can message one override this.
---- @param _agent_id string Id addressing the subagent
---- @param _label string Display name of the subagent
---- @param _message string Text for the subagent to receive
---- @return string|nil instruction Nil when the main agent cannot message it
-function ACPClient:subagent_message_instruction(_agent_id, _label, _message)
-    return nil
-end
-
 --- The subscribed session a session belongs to: the root that spawned a child
 --- session, else the session itself.
 --- @protected
@@ -460,7 +231,7 @@ end
 --- child session's updates from its own.
 --- @protected
 --- @param session_id string
---- @param callback fun(sub: agentic.acp.ClientHandlers): nil
+--- @param callback fun(sub: agentic.AgentClient.ClientHandlers): nil
 function ACPClient:__with_subscriber(session_id, callback)
     local subscriber = self.subscribers[self:__root_session(session_id)]
 
@@ -479,7 +250,7 @@ function ACPClient:__with_subscriber(session_id, callback)
         on_tool_call_update = function(tool_call_update)
             subscriber.on_tool_call_update(tool_call_update, session_id)
         end,
-    }, { __index = subscriber }) --[[@as agentic.acp.ClientHandlers]]
+    }, { __index = subscriber }) --[[@as agentic.AgentClient.ClientHandlers]]
 
     vim.schedule(function()
         local ok, err = pcall(callback, handlers)
@@ -577,7 +348,7 @@ function ACPClient:_setup_transport()
     end
 end
 
---- @param state agentic.acp.ClientConnectionState
+--- @param state agentic.AgentClient.ClientConnectionState
 function ACPClient:_set_state(state)
     self.state = state
 
@@ -609,7 +380,7 @@ end
 
 --- Fail all pending request callbacks with a transport error.
 --- Called when the provider subprocess exits or the connection breaks.
---- @param state agentic.acp.ClientConnectionState
+--- @param state agentic.AgentClient.ClientConnectionState
 function ACPClient:_fail_pending_callbacks(state)
     local pending = self.callbacks
     if not next(pending) then
@@ -635,7 +406,7 @@ end
 --- @param code number
 --- @param message string
 --- @param data any|nil
---- @return agentic.acp.ACPError
+--- @return agentic.AgentClient.Error
 function ACPClient:__create_error(code, message, data)
     return {
         code = code,
@@ -666,10 +437,10 @@ end
 --- the request went out in v2 form, without the v1 capabilities.
 --- @param method string
 --- @param params table
---- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil)
+--- @param callback fun(result: table|nil, err: agentic.AgentClient.Error|nil)
 --- @return string method
 --- @return table params
---- @return fun(result: table|nil, err: agentic.acp.ACPError|nil) callback
+--- @return fun(result: table|nil, err: agentic.AgentClient.Error|nil) callback
 function ACPClient:_encode_v2_request(method, params, callback)
     local codec = self.v2_codec --[[@as agentic.acp.ClaudeV2Codec]]
     -- Not `_v2_state`: a request leaves nothing to decode later, so a
@@ -696,7 +467,7 @@ end
 
 --- @param method string
 --- @param params table|nil
---- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil)
+--- @param callback fun(result: table|nil, err: agentic.AgentClient.Error|nil)
 function ACPClient:_send_request(method, params, callback)
     params = params or {}
     if self.protocol_version == 2 then
@@ -1461,18 +1232,6 @@ function ACPClient:_startup_auth_method()
     return nil
 end
 
---- How an auth method runs: in the agent through `authenticate`, or in the
---- client as an interactive process.
---- @param method agentic.acp.AuthMethod
---- @return "agent"|"terminal"|nil kind Nil for a type this client does not run
-function ACPClient.auth_method_kind(method)
-    local kind = method.type or "agent"
-    if kind == "agent" or kind == "terminal" then
-        return kind
-    end
-    return nil
-end
-
 --- Record what the agent reported about itself in the initialize response.
 ---
 --- `agent_info.version` is the provider binary's own version (for
@@ -1490,7 +1249,7 @@ end
 
 --- Ask the agent to authenticate with one of its `agent` methods.
 --- @param method_id string
---- @param callback fun(err: agentic.acp.ACPError|nil)
+--- @param callback fun(err: agentic.AgentClient.Error|nil)
 function ACPClient:authenticate(method_id, callback)
     self:_send_request("authenticate", {
         methodId = method_id,
@@ -1498,11 +1257,6 @@ function ACPClient:authenticate(method_id, callback)
         callback(err)
     end)
 end
-
---- An interactive process that runs a terminal auth method.
---- @class agentic.acp.TerminalAuthInvocation
---- @field cmd string[] The provider command, its configured args, then the method's args
---- @field env table<string, string> Variables to add to nvim's environment: the provider env with the method's env on top
 
 --- How to run a terminal auth method: the configured agent invocation
 --- with the method's args and env added.
@@ -1523,8 +1277,8 @@ function ACPClient:terminal_auth_invocation(method)
 end
 
 --- @param cwd string Working directory of the session
---- @param handlers agentic.acp.ClientHandlers
---- @param callback fun(result: agentic.acp.SessionCreationResponse|nil, err: agentic.acp.ACPError|nil)
+--- @param handlers agentic.AgentClient.ClientHandlers
+--- @param callback fun(result: agentic.acp.SessionCreationResponse|nil, err: agentic.AgentClient.Error|nil)
 function ACPClient:create_session(cwd, handlers, callback)
     local additional_dirs =
         PermissionRules.get_additional_directories(self:claude_config_dir())
@@ -1577,8 +1331,8 @@ end
 --- @param session_id string
 --- @param cwd string
 --- @param mcp_servers table[]|nil
---- @param handlers agentic.acp.ClientHandlers
---- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil)
+--- @param handlers agentic.AgentClient.ClientHandlers
+--- @param callback fun(result: table|nil, err: agentic.AgentClient.Error|nil)
 function ACPClient:load_session(
     session_id,
     cwd,
@@ -1643,8 +1397,8 @@ end
 --- @param session_id string
 --- @param cwd string Working directory of the new session
 --- @param response_id string
---- @param handlers agentic.acp.ClientHandlers
---- @param callback fun(result: agentic.acp.ForkSessionResponse|nil, err: agentic.acp.ACPError|nil)
+--- @param handlers agentic.AgentClient.ClientHandlers
+--- @param callback fun(result: agentic.acp.ForkSessionResponse|nil, err: agentic.AgentClient.Error|nil)
 function ACPClient:fork_session(
     session_id,
     cwd,
@@ -1703,7 +1457,7 @@ end
 --- are still unanswered.
 --- @param session_id string A root session
 --- @param prompt agentic.acp.Content[]
---- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil) Gets the answer. ACP v2 answers `{messageId}` once the prompt is taken in, or an error when it never is (`REQUEST_CANCELLED` when a cancel ended it before)
+--- @param callback fun(result: table|nil, err: agentic.AgentClient.Error|nil) Gets the answer. ACP v2 answers `{messageId}` once the prompt is taken in, or an error when it never is (`REQUEST_CANCELLED` when a cancel ended it before)
 function ACPClient:send_prompt(session_id, prompt, callback)
     local params = {
         sessionId = session_id,
@@ -1755,7 +1509,7 @@ end
 --- Set the agent mode for a session
 --- @param session_id string
 --- @param mode_id string
---- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil)
+--- @param callback fun(result: table|nil, err: agentic.AgentClient.Error|nil)
 function ACPClient:set_mode(session_id, mode_id, callback)
     local params = {
         sessionId = session_id,
@@ -1769,7 +1523,7 @@ end
 --- @param session_id string
 --- @param config_id string
 --- @param config_value string
---- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil)
+--- @param callback fun(result: table|nil, err: agentic.AgentClient.Error|nil)
 function ACPClient:set_config_option(
     session_id,
     config_id,
@@ -1788,7 +1542,7 @@ end
 --- Set the provided model to the session
 --- @param session_id string
 --- @param model_id string
---- @param callback fun(result: table|nil, err: agentic.acp.ACPError|nil)
+--- @param callback fun(result: table|nil, err: agentic.AgentClient.Error|nil)
 function ACPClient:set_model(session_id, model_id, callback)
     local params = {
         sessionId = session_id,

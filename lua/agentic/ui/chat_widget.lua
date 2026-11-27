@@ -19,7 +19,6 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field context? string Dynamic info (managed internally)
 --- @field session_name? string Custom session name (set by /rename or first message)
 --- @field running? boolean The agent works
---- @field waiting? boolean A permission prompt waits unseen
 --- @field idle? boolean A turn ended unseen
 
 --- @alias agentic.ui.ChatWidget.BufNrs table<agentic.ui.ChatWidget.PanelNames, integer>
@@ -40,7 +39,6 @@ local WidgetLayout = require("agentic.ui.widget_layout")
 --- @field on_goto_bottom? fun(winid: integer) external callback that moves a window showing the chat or a transcript to its last line
 --- @field on_panel_buf? fun(panel: agentic.ui.ChatWidget.StackPanel, bufnr: integer) external callback for a buffer `panel_buf` made in place of a wiped one, already in `buf_nrs`
 --- @field _home_win? integer The window the panels attach to
---- @field _home_closed_autocmd? integer The WinClosed autocmd of `_home_win`
 local ChatWidget = {}
 ChatWidget.__index = ChatWidget
 
@@ -83,8 +81,7 @@ function ChatWidget:home_win()
 end
 
 --- Make `winid` home, closing the panels of a previous home, and sync the
---- content panels. When `winid` closes, its panels close and the home clears.
---- No-op for a floating window.
+--- content panels. No-op for a floating window.
 --- @param winid integer
 function ChatWidget:_adopt_home(winid)
     -- A float has no column to stack panels in.
@@ -94,21 +91,6 @@ function ChatWidget:_adopt_home(winid)
     if self._home_win ~= winid then
         self:close_panels()
         self._home_win = winid
-        if self._home_closed_autocmd then
-            pcall(vim.api.nvim_del_autocmd, self._home_closed_autocmd)
-        end
-        self._home_closed_autocmd = vim.api.nvim_create_autocmd("WinClosed", {
-            pattern = tostring(winid),
-            once = true,
-            callback = function()
-                self._home_closed_autocmd = nil
-                -- WinClosed does not nest: a panel closed in here would not
-                -- run its own WinClosed.
-                vim.schedule(function()
-                    self:_release_home(winid)
-                end)
-            end,
-        })
     end
     self:sync_panels()
 end
@@ -311,14 +293,6 @@ function ChatWidget:close_panels()
     WidgetLayout.close(self.win_nrs, self.buf_nrs)
 end
 
---- The panels with an open window.
---- @return agentic.ui.ChatWidget.StackPanel[]
-function ChatWidget:_open_panels()
-    return vim.tbl_filter(function(panel)
-        return self:panel_win(panel) ~= nil
-    end, Config.windows.stack)
-end
-
 --- Open the `panel` window below the home window, unless it is open. No-op
 --- without a home window.
 --- @param panel agentic.ui.ChatWidget.StackPanel
@@ -384,10 +358,6 @@ end
 --- The chat is wiped on the next tick, so this can run from the chat's own
 --- `BufDelete`, where wiping the chat raises E937.
 function ChatWidget:destroy()
-    if self._home_closed_autocmd then
-        pcall(vim.api.nvim_del_autocmd, self._home_closed_autocmd)
-        self._home_closed_autocmd = nil
-    end
     self._home_win = nil
     -- Clear the chat first: `panel_buf` then gives nil, so an autocmd that
     -- the deletes below trigger makes no new panel buffer.
@@ -458,9 +428,8 @@ function ChatWidget:input_win()
 end
 
 --- Buffer-local autocmds on the chat that tie the home window to it: a
---- window the chat enters becomes home while there is none, a home that
---- shows another buffer loses its panels, and `:q` on the home closes its
---- panels first, so it quits as on a single window.
+--- window the chat enters becomes home while there is none, and a home that
+--- shows another buffer loses its panels.
 --- @param chat integer
 function ChatWidget:_track_home(chat)
     vim.api.nvim_create_autocmd("BufWinEnter", {
@@ -486,32 +455,6 @@ function ChatWidget:_track_home(chat)
                     and not self:home_win()
                 then
                     self:_release_home(home)
-                end
-            end)
-        end,
-    })
-
-    vim.api.nvim_create_autocmd("QuitPre", {
-        buffer = chat,
-        callback = function()
-            local home = self:home_win()
-            if vim.api.nvim_get_current_win() ~= home then
-                return
-            end
-            local open_panels = self:_open_panels()
-            self:close_panels()
-            -- The home is still open when vim refused the quit (E37, E162).
-            vim.schedule(function()
-                if self:home_win() ~= home then
-                    return
-                end
-                for _, panel in ipairs(open_panels) do
-                    WidgetLayout.open_panel(
-                        self.win_nrs,
-                        self.buf_nrs,
-                        home,
-                        panel
-                    )
                 end
             end)
         end,
@@ -881,12 +824,14 @@ function ChatWidget:_create_new_buf(panel, listed)
 end
 
 --- The name of one of the session's buffers.
---- @param sub_id string|nil A subagent's session id, for its transcript or its message input
+--- @param sub_id string|nil The session id of a `kind` session, for its transcript or a subagent's message input
 --- @param part string|nil See `agentic.BufferNames.Parts`
+--- @param kind agentic.BufferNames.Kind|nil Of the `sub_id` session, default `subagent`
 --- @return string
-function ChatWidget:buffer_name(sub_id, part)
+function ChatWidget:buffer_name(sub_id, part, kind)
     return BufferNames.format({
         key = self._name_key,
+        kind = sub_id and (kind or "subagent"),
         sub_id = sub_id and BufferNames.short_key(sub_id),
         part = part,
     })
@@ -955,19 +900,12 @@ end
 
 --- Set a state fact of a buffer's header.
 --- @param bufnr integer|nil Nil is a no-op
---- @param fact "running"|"waiting"|"idle"
+--- @param fact "running"|"idle"
 --- @param value boolean
 local function set_header_fact(bufnr, fact, value)
     if bufnr then
         WindowDecoration.set_header_fact(bufnr, fact, value)
     end
-end
-
---- Mark a buffer's header as waiting on a hidden permission prompt, or clear it.
---- @param waiting boolean
---- @param bufnr integer|nil The buffer to mark; nil = the chat
-function ChatWidget:set_waiting(waiting, bufnr)
-    set_header_fact(bufnr or self.buf_nrs.agent, "waiting", waiting)
 end
 
 --- Mark the chat's header as having ended a turn unseen, or clear it.

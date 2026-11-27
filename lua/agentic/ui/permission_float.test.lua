@@ -99,7 +99,7 @@ describe("agentic.ui.PermissionFloat", function()
             end)
         end)
 
-        it("open() creates a non-focusable float window and buffer", function()
+        it("open() creates a focusable float window and buffer", function()
             local mapping = float:open(make_options())
 
             assert.is_not_nil(mapping)
@@ -112,7 +112,8 @@ describe("agentic.ui.PermissionFloat", function()
 
             local cfg = vim.api.nvim_win_get_config(winid)
             assert.equal("win", cfg.relative)
-            assert.is_false(cfg.focusable)
+            assert.is_true(cfg.focusable)
+            assert.equal(bufnr, float:get_bufnr())
         end)
 
         it("open() maps each option's kind key to its id", function()
@@ -148,23 +149,20 @@ describe("agentic.ui.PermissionFloat", function()
             end
         )
 
-        it("is visible in the current tab only while there", function()
-            float:open(make_options())
-            assert.is_true(float:is_visible_in_current_tab())
+        it(
+            "with no window showing the chat, shows on the first window of the tab",
+            function()
+                vim.api.nvim_win_close(chat_winid --[[@as integer]], true)
 
-            vim.cmd("tabnew")
-            assert.is_false(float:is_visible_in_current_tab())
-            vim.cmd("tabclose")
-        end)
+                float:open(make_options())
 
-        it("with no window showing the chat, is not shown", function()
-            vim.api.nvim_win_close(chat_winid --[[@as integer]], true)
-
-            local mapping = float:open(make_options())
-
-            assert.equal("allow-once", mapping["<localLeader>y"])
-            assert.is_false(float:is_shown())
-        end)
+                assert.equal("tab", float:get_host())
+                assert.equal(
+                    vim.api.nvim_tabpage_list_wins(0)[1],
+                    vim.api.nvim_win_get_config(float._winid).win
+                )
+            end
+        )
 
         it("place() shows the float once the chat is shown", function()
             vim.api.nvim_win_close(chat_winid --[[@as integer]], true)
@@ -176,6 +174,7 @@ describe("agentic.ui.PermissionFloat", function()
             local cfg = vim.api.nvim_win_get_config(float._winid)
             assert.equal("win", cfg.relative)
             assert.equal(vim.api.nvim_get_current_win(), cfg.win)
+            assert.equal("anchor", float:get_host())
         end)
 
         it("anchors to the chat in the current tab first", function()
@@ -193,15 +192,15 @@ describe("agentic.ui.PermissionFloat", function()
             vim.cmd("tabclose")
         end)
 
-        it("anchors to the chat in any tab", function()
-            vim.cmd("tabnew")
-
+        it("follows into a tab without the chat", function()
             float:open(make_options())
+            vim.cmd("tabnew")
+            local tab_win = vim.api.nvim_get_current_win()
 
-            assert.equal(
-                chat_winid,
-                vim.api.nvim_win_get_config(float._winid).win
-            )
+            float:place()
+
+            assert.equal("tab", float:get_host())
+            assert.equal(tab_win, vim.api.nvim_win_get_config(float._winid).win)
             float:close()
             vim.cmd("tabclose")
         end)
@@ -258,14 +257,21 @@ describe("agentic.ui.PermissionFloat", function()
             end)
         end)
 
-        it("place() hides the float once its chat window closes", function()
-            float:open(make_options())
+        it(
+            "place() moves the float to the tab's first window once its chat window closes",
+            function()
+                float:open(make_options())
 
-            vim.api.nvim_win_close(chat_winid --[[@as integer]], true)
-            float:place()
+                vim.api.nvim_win_close(chat_winid --[[@as integer]], true)
+                float:place()
 
-            assert.is_false(float:is_shown())
-        end)
+                assert.equal("tab", float:get_host())
+                assert.equal(
+                    vim.api.nvim_tabpage_list_wins(0)[1],
+                    vim.api.nvim_win_get_config(float._winid).win
+                )
+            end
+        )
 
         it("reopen replaces the previous float", function()
             float:open(make_options())
@@ -316,7 +322,7 @@ describe("agentic.ui.PermissionFloat", function()
             it("shows on the chat, titled with the anchor's title", function()
                 float:open(make_options(), anchor_bufnr, "finder")
 
-                assert.is_true(float:is_on_fallback())
+                assert.equal("chat", float:get_host())
                 local cfg = vim.api.nvim_win_get_config(float._winid)
                 assert.equal(chat_winid, cfg.win)
                 assert.equal("finder", chunk_text(cfg.title))
@@ -371,6 +377,23 @@ describe("agentic.ui.PermissionFloat", function()
             )
 
             it(
+                "without a border, shows the title as the first body line",
+                function()
+                    Config.permission_float.border = "none"
+
+                    float:open(make_options(), anchor_bufnr, "finder")
+
+                    local lines =
+                        vim.api.nvim_buf_get_lines(float._bufnr, 0, -1, false)
+                    assert.same(
+                        { "finder", "\\{e,s,v,t}" },
+                        { lines[1], lines[5] }
+                    )
+                    assert.equal(5, vim.api.nvim_win_get_height(float._winid))
+                end
+            )
+
+            it(
                 "on a border with no top edge, shows the hint as a body line",
                 function()
                     Config.permission_float.border = "shadow"
@@ -401,7 +424,7 @@ describe("agentic.ui.PermissionFloat", function()
                     )
                     float:place()
 
-                    assert.is_false(float:is_on_fallback())
+                    assert.equal("anchor", float:get_host())
                     local cfg = vim.api.nvim_win_get_config(float._winid)
                     assert.equal(anchor_win, cfg.win)
                     assert.is_nil(chunk_text(cfg.title))
@@ -413,14 +436,52 @@ describe("agentic.ui.PermissionFloat", function()
                 end
             )
 
-            it("is not shown while no window shows the chat either", function()
-                vim.api.nvim_win_close(chat_winid --[[@as integer]], true)
+            it(
+                "shows titled on the tab's first window while no window shows the chat either",
+                function()
+                    vim.api.nvim_win_close(chat_winid --[[@as integer]], true)
 
-                float:open(make_options(), anchor_bufnr)
+                    float:open(make_options(), anchor_bufnr, "finder")
 
-                assert.is_true(float:is_on_fallback())
-                assert.is_false(float:is_shown())
-            end)
+                    assert.equal("tab", float:get_host())
+                    local cfg = vim.api.nvim_win_get_config(float._winid)
+                    assert.equal(vim.api.nvim_tabpage_list_wins(0)[1], cfg.win)
+                    assert.equal("finder", chunk_text(cfg.title))
+                    assert.equal("\\{e,s,v,t}", chunk_text(cfg.footer))
+                end
+            )
+
+            it(
+                "prefers a window showing the anchor, then the chat, in the current tab",
+                function()
+                    float:open(make_options(), anchor_bufnr)
+                    vim.cmd("tabnew")
+                    local first = vim.api.nvim_get_current_win()
+                    vim.cmd("vsplit")
+                    local second = vim.api.nvim_get_current_win()
+
+                    float:place()
+                    assert.equal("tab", float:get_host())
+
+                    vim.api.nvim_win_set_buf(first, chat_bufnr)
+                    float:place()
+                    assert.equal("chat", float:get_host())
+                    assert.equal(
+                        first,
+                        vim.api.nvim_win_get_config(float._winid).win
+                    )
+
+                    vim.api.nvim_win_set_buf(second, anchor_bufnr)
+                    float:place()
+                    assert.equal("anchor", float:get_host())
+                    assert.equal(
+                        second,
+                        vim.api.nvim_win_get_config(float._winid).win
+                    )
+                    float:close()
+                    vim.cmd("tabclose")
+                end
+            )
         end)
     end)
 end)

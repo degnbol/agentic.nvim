@@ -124,10 +124,6 @@ describe("agentic.ui.WindowDecoration", function()
 
         it("is each fact alone", function()
             assert.equal(
-                "permission",
-                WindowDecoration.header_state({ title = "", waiting = true })
-            )
-            assert.equal(
                 "running",
                 WindowDecoration.header_state({ title = "", running = true })
             )
@@ -137,16 +133,7 @@ describe("agentic.ui.WindowDecoration", function()
             )
         end)
 
-        it("prefers permission, then running, then idle", function()
-            assert.equal(
-                "permission",
-                WindowDecoration.header_state({
-                    title = "",
-                    waiting = true,
-                    running = true,
-                    idle = true,
-                })
-            )
+        it("prefers running to idle", function()
             assert.equal(
                 "running",
                 WindowDecoration.header_state({
@@ -164,13 +151,13 @@ describe("agentic.ui.WindowDecoration", function()
                 {
                     { "󰚩" },
                     { " #3 Fix" },
-                    { " ?", "AgenticHeaderAttention" },
+                    { " 󰂞", "AgenticHeaderAttention" },
                     { " · 12k" },
                 },
                 WindowDecoration.header_chunks({
                     icon = "󰚩",
                     title = "#3 Fix",
-                    waiting = true,
+                    idle = true,
                     context = "12k",
                 })
             )
@@ -209,15 +196,11 @@ describe("agentic.ui.WindowDecoration", function()
             )
         end)
 
-        it("colour permission and idle, not running", function()
+        it("colour idle, not running", function()
             local function state_hl(parts)
                 local chunks = WindowDecoration.header_chunks(parts)
                 return chunks[#chunks][2]
             end
-            assert.equal(
-                "AgenticHeaderAttention",
-                state_hl({ title = "", waiting = true })
-            )
             assert.equal(
                 "AgenticHeaderAttention",
                 state_hl({ title = "", idle = true })

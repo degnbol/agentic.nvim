@@ -94,14 +94,6 @@ Key reference: [opencode permissions](https://opencode.ai/docs/permissions).
 
 If you want to guard against prompt injection through fetched web content (a returned page persuading the agent to execute follow-up actions), also add `{ "action": "webfetch", "resource": "*", "effect": "ask" }`.
 
-### OpenCode SubAgent limitation
-
-OpenCode's SubAgent tool (`task`) is broken through ACP — the subagent session's
-permission requests are filtered inside opencode's ACP bridge before reaching
-the plugin, causing the turn to hang indefinitely. See
-`notes/opencode-subagent-fix.md` for the full analysis and upstream fix. This
-cannot be worked around from the plugin side.
-
 ## Setup
 
 The plugin works without a setup call. To change options, call `setup()` before the first session:

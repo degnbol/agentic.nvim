@@ -1,5 +1,6 @@
 # Plan: one structured classification and one leaf front per command leaf
 Status: spec
+Priority: P3
 
 ## Relevant files
 - `lua/agentic/utils/permission_structured.lua` — `decide_leaf`,
@@ -172,8 +173,8 @@ Then:
   signatures and about 350 test calls.
 - Merging the three walkers.
 - Matcher changes (`FIX-deny-gate-flag-cap.md`,
-  `bug-reject-pass-value-words.md`, `bug-tar-bundle-ask.md`,
-  `bug-matcher-depth-overflow.md`). They edit gate matching under
+  `BUG-reject-pass-value-words.md`, `BUG-tar-bundle-ask.md`,
+  `BUG-matcher-depth-overflow.md`). They edit gate matching under
   `classify_leaf`/`deny_leaf`, not this layer; after this lands, read their
   `decide_leaf` mentions as `classify_leaf` + `allow_kind`.
 

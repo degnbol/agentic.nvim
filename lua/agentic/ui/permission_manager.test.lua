@@ -217,15 +217,16 @@ describe("agentic.ui.PermissionManager", function()
             pm.proxy_tool_call = function()
                 return "tc-task"
             end
-            local fallback_stub =
-                spy.stub(pm.permission_float, "is_on_fallback")
-            fallback_stub:returns(true)
+            local host_stub = spy.stub(pm.permission_float, "get_host")
+            host_stub:returns("chat")
             local own_hold = spy.stub(anchor_writer, "hold_tool_call")
             local proxy_hold = spy.stub(writer, "hold_tool_call")
+            local release = spy.on(writer, "release_hold")
             require("mini.test").finally(function()
                 own_hold:revert()
                 proxy_hold:revert()
-                fallback_stub:revert()
+                release:revert()
+                host_stub:revert()
                 vim.api.nvim_buf_delete(anchor_buf, { force = true })
             end)
 
@@ -249,6 +250,11 @@ describe("agentic.ui.PermissionManager", function()
                 { "tc-task", false },
                 { proxy_hold.calls[1][2], proxy_hold.calls[1][3] }
             )
+
+            -- On the tab's first window, the chat holds nothing.
+            host_stub:returns("tab")
+            pm:refresh_float()
+            assert.equal(1, release.call_count)
             pm:_complete_request("allow-once")
         end)
 
@@ -346,7 +352,7 @@ describe("agentic.ui.PermissionManager", function()
 
     describe("option keys", function()
         --- @type TestStub
-        local visible_stub
+        local host_stub
 
         --- @return boolean
         local function key_mapped()
@@ -354,9 +360,8 @@ describe("agentic.ui.PermissionManager", function()
         end
 
         before_each(function()
-            visible_stub =
-                spy.stub(pm.permission_float, "is_visible_in_current_tab")
-            visible_stub:returns(true)
+            host_stub = spy.stub(pm.permission_float, "get_host")
+            host_stub:returns("anchor")
             pm:add_request({
                 sessionId = "test-session",
                 toolCall = { toolCallId = "tc-keys", kind = "edit" },
@@ -372,22 +377,30 @@ describe("agentic.ui.PermissionManager", function()
 
         after_each(function()
             pm:clear()
-            visible_stub:revert()
+            host_stub:revert()
         end)
 
-        it("bind while the float is visible in the current tab", function()
+        it("bind while the float shows, on its buffer too", function()
+            local float_buf = vim.api.nvim_create_buf(false, true)
+            local bufnr_stub = spy.stub(pm.permission_float, "get_bufnr")
+            bufnr_stub:returns(float_buf)
+            pm:refresh_float()
+            bufnr_stub:revert()
+
             assert.is_true(key_mapped())
+            assert.is_true(vim.api.nvim_buf_call(float_buf, key_mapped))
+            vim.api.nvim_buf_delete(float_buf, { force = true })
         end)
 
         it("follow the float across tab switches", function()
             schedule_stub:invokes(function(fn)
                 fn()
             end)
-            visible_stub:returns(false)
+            host_stub:returns(nil)
             vim.api.nvim_exec_autocmds("TabEnter", {})
             assert.is_false(key_mapped())
 
-            visible_stub:returns(true)
+            host_stub:returns("anchor")
             vim.api.nvim_exec_autocmds("TabEnter", {})
             assert.is_true(key_mapped())
         end)
@@ -403,43 +416,6 @@ describe("agentic.ui.PermissionManager", function()
             assert.is_true(vim.api.nvim_buf_call(companion, key_mapped))
             vim.api.nvim_buf_delete(companion, { force = true })
         end)
-
-        it(
-            "report a request with no float in the current tab once, and its end",
-            function()
-                pm:clear()
-                visible_stub:returns(false)
-                local reports = {}
-                pm.on_hidden = function()
-                    table.insert(reports, "hidden")
-                end
-                pm.on_hidden_resolved = function()
-                    table.insert(reports, "resolved")
-                end
-                pm:add_request({
-                    sessionId = "test-session",
-                    toolCall = { toolCallId = "tc-hidden", kind = "edit" },
-                    options = {
-                        {
-                            optionId = "allow-once",
-                            name = "Allow",
-                            kind = "allow_once",
-                        },
-                    },
-                }, function() end)
-                pm:refresh_float()
-                visible_stub:returns(true)
-                pm:refresh_float()
-                visible_stub:returns(false)
-                pm:refresh_float()
-
-                pm:_complete_request("allow-once")
-                pm.on_hidden = nil
-                pm.on_hidden_resolved = nil
-
-                assert.same({ "hidden", "resolved" }, reports)
-            end
-        )
 
         it("unbind and stop following on resolve", function()
             pm:_complete_request("allow-once")
@@ -500,9 +476,7 @@ describe("agentic.ui.PermissionManager", function()
                 local Config = require("agentic.config")
                 local saved = vim.deepcopy(Config.keymaps.permission_open)
                 Config.keymaps.permission_open.edit = "<localLeader>1"
-                local fallback_stub =
-                    spy.stub(pm.permission_float, "is_on_fallback")
-                fallback_stub:returns(true)
+                host_stub:returns("chat")
                 pm.open_anchor = function() end
 
                 pm:add_request({
@@ -523,7 +497,6 @@ describe("agentic.ui.PermissionManager", function()
                 pm:_complete_request("allow-once")
 
                 pm.open_anchor = nil
-                fallback_stub:revert()
                 Config.keymaps.permission_open = saved
                 assert.equal(
                     "own",
@@ -1951,6 +1924,50 @@ describe("agentic.ui.PermissionManager", function()
                 end
             )
 
+            it(
+                "a granted option value write is decided by its command and the grant",
+                function()
+                    grant(tmp)
+                    local verdict = pm:decide("execute", {
+                        toolCallId = "tc-grant-option",
+                        kind = "execute",
+                        rawInput = {
+                            command = "curl -o " .. tmp .. "/x https://x",
+                        } --[[@as agentic.acp.RawInput]],
+                    }, nil)
+                    assert.same({
+                        allow = true,
+                        causes = {
+                            { code = "read-only" },
+                            { code = "grant", subject = tmp .. "/x" },
+                        },
+                    }, verdict)
+                end
+            )
+
+            it(
+                "an option value write to a dirty file does not clear",
+                function()
+                    grant(repo)
+                    local verdict = pm:decide("execute", {
+                        toolCallId = "tc-grant-option-dirty",
+                        kind = "execute",
+                        rawInput = {
+                            command = "curl -o " .. dirty_md .. " https://x",
+                        } --[[@as agentic.acp.RawInput]],
+                    }, nil)
+                    assert.same({
+                        causes = {
+                            {
+                                code = "grant",
+                                subject = dirty_md,
+                                detail = "file has unstaged changes",
+                            },
+                        },
+                    }, verdict)
+                end
+            )
+
             it("a delete clears nothing when git diff fails", function()
                 diff_hunks_stub:returns(nil)
                 grant(repo)
@@ -2154,6 +2171,32 @@ describe("agentic.ui.PermissionManager", function()
             assert.is_not_nil(pm.current_request)
             pm:_complete_request("reject-once")
         end)
+
+        -- The PreToolUse hook reads an `ask` cause as "only the user may
+        -- approve", so it must mark a concrete ask match and nothing else.
+        for command, codes in pairs({
+            ["git commit -m x"] = { "ask" },
+            ["timeout 5 git commit -m x"] = { "ask" },
+            ["git $x -m x"] = { "dynamic" },
+            ["some-unknown-tool"] = { "no-allow" },
+        }) do
+            it(
+                "gives " .. command .. " the causes it is undecided by",
+                function()
+                    local verdict = pm:decide(
+                        "execute",
+                        make_execute_request(command, "t").toolCall
+                    )
+                    assert.is_nil(verdict.allow)
+                    assert.same(
+                        codes,
+                        vim.tbl_map(function(cause)
+                            return cause.code
+                        end, verdict.causes)
+                    )
+                end
+            )
+        end
 
         describe("bash cwds", function()
             --- @type string

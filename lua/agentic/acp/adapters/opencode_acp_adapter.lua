@@ -85,6 +85,27 @@ local KIND_BY_NAME = {
     todowrite = "TodoWrite",
 }
 
+local SCANNER_REFUSAL = "Portable shell scanner cannot analyze command: "
+
+--- The rejection line for a failed tool call, if opencode refused the call
+--- before it ran. ACP carries no flag for whether a call ran, so only two
+--- error texts match: a declined call (also each
+--- sibling opencode cancels with it) and a command its shell scanner cannot
+--- analyse. Other errors, e.g. `Tool execution aborted`, also come from calls
+--- that ran.
+--- @param err string Error text of the failed call
+--- @return string|nil line `Rejected`, or `Rejected: ` and the scanner error joined to one line. nil for any other error
+local function pre_run_rejection(err)
+    if err == "The user declined this tool call" then
+        -- Not the provider's text: it is false for a cancelled sibling.
+        return "Rejected"
+    end
+    if vim.startswith(err, SCANNER_REFUSAL) then
+        return "Rejected: " .. table.concat(vim.split(err, "\n"), " ")
+    end
+    return nil
+end
+
 --- @class agentic.acp.OpenCodeACPAdapter : agentic.acp.ACPClient
 local OpenCodeACPAdapter = ACPClient.extend()
 
@@ -153,6 +174,7 @@ end
 --- @class agentic.acp.OpenCodeToolCallUpdate : agentic.acp.ToolCallUpdate
 --- @field title? string
 --- @field rawInput? agentic.acp.OpenCodeToolCallRawInput
+--- @field rawOutput? { error?: string } `error` is set on a `failed` update
 
 --- @protected
 --- @param session_id string
@@ -197,7 +219,16 @@ function OpenCodeACPAdapter:__handle_tool_call_update(session_id, update)
     end
 
     if update.status == "completed" or update.status == "failed" then
-        if not message.diff then
+        local raw_output = update.rawOutput
+        if
+            update.status == "failed"
+            and type(raw_output) == "table"
+            and type(raw_output.error) == "string"
+        then
+            message.rejection = pre_run_rejection(raw_output.error)
+        end
+        -- The content repeats the error that the rejection line shows.
+        if not message.diff and not message.rejection then
             message.body = self:extract_content_body(update)
         end
     else

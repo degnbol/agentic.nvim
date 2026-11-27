@@ -46,6 +46,28 @@ describe("agentic.Budget", function()
         end)
     end)
 
+    describe("limit_in", function()
+        it("is the seconds until use reaches 1 at the pace's rate", function()
+            -- 90 % used in the 3 hours passed: the last 10 % in 20 minutes.
+            assert.equal(
+                20 * 60,
+                Budget.limit_in(five_hour(0.9, 2 * HOUR), NOW)
+            )
+        end)
+
+        it("is nil while the rate is not known", function()
+            assert.is_nil(Budget.limit_in(five_hour(0.1, 5 * HOUR - 1), NOW))
+        end)
+
+        it("is nil when used up", function()
+            assert.is_nil(Budget.limit_in(five_hour(1, 2 * HOUR), NOW))
+        end)
+
+        it("is nil at a rate of 0", function()
+            assert.is_nil(Budget.limit_in(five_hour(0, 2 * HOUR), NOW))
+        end)
+    end)
+
     describe("resets_in", function()
         it("counts the seconds before the reset", function()
             assert.equal(HOUR, Budget.resets_in(five_hour(0.5, HOUR), NOW))
@@ -204,7 +226,7 @@ describe("agentic.Budget", function()
         end)
     end)
 
-    describe("trailing_pace", function()
+    describe("trailing_rate", function()
         local L = 5 * HOUR
 
         --- A previous window resetting `reset_ago` seconds before `NOW`.
@@ -219,22 +241,18 @@ describe("agentic.Budget", function()
         --- @param actual number|nil
         local function near(expected, actual)
             assert.is_true(
-                actual ~= nil and math.abs(actual - expected) < 1e-9,
+                actual ~= nil
+                    and math.abs(actual - expected)
+                        < 1e-9 * math.abs(expected),
                 vim.inspect({ expected = expected, actual = actual })
             )
         end
 
-        it(
-            "is utilization ÷ fraction passed without previous or block",
-            function()
-                local window = five_hour(0.2, 4 * HOUR)
+        it("is utilization ÷ time passed without previous or block", function()
+            local window = five_hour(0.2, 4 * HOUR)
 
-                near(
-                    0.2 / Budget.elapsed(window, NOW),
-                    Budget.trailing_pace(window, nil, {}, NOW)
-                )
-            end
-        )
+            near(0.2 / HOUR, Budget.trailing_rate(window, nil, {}, NOW))
+        end)
 
         it(
             "counts a previous window that ended before the span as idle",
@@ -244,10 +262,7 @@ describe("agentic.Budget", function()
                     { t = NOW - 8 * HOUR, utilization = 0.9 },
                 })
 
-                near(
-                    0.2 + 0.2 / L * 4 * HOUR,
-                    Budget.trailing_pace(window, ended, {}, NOW)
-                )
+                near(0.2 / L, Budget.trailing_rate(window, ended, {}, NOW))
             end
         )
 
@@ -260,10 +275,7 @@ describe("agentic.Budget", function()
                 { t = NOW - 2 * HOUR, utilization = 0.6 },
             })
 
-            near(
-                0.1 + (0.1 + 0.4) / L * 4 * HOUR,
-                Budget.trailing_pace(window, prior, {}, NOW)
-            )
+            near((0.1 + 0.4) / L, Budget.trailing_rate(window, prior, {}, NOW))
         end)
 
         it(
@@ -276,8 +288,8 @@ describe("agentic.Budget", function()
                 })
 
                 near(
-                    0.1 + (0.1 + 0.1) / (3 * HOUR) * 4 * HOUR,
-                    Budget.trailing_pace(window, prior, {}, NOW)
+                    (0.1 + 0.1) / (3 * HOUR),
+                    Budget.trailing_rate(window, prior, {}, NOW)
                 )
             end
         )
@@ -289,22 +301,15 @@ describe("agentic.Budget", function()
             })
 
             assert.equal(
-                Budget.trailing_pace(window, nil, {}, NOW),
-                Budget.trailing_pace(window, overlapping, {}, NOW)
-            )
-        end)
-
-        it("is the utilization past the reset", function()
-            assert.equal(
-                0.5,
-                Budget.trailing_pace(five_hour(0.5, -HOUR), nil, {}, NOW)
+                Budget.trailing_rate(window, nil, {}, NOW),
+                Budget.trailing_rate(window, overlapping, {}, NOW)
             )
         end)
 
         it("is higher with a block inside the span", function()
             local window = five_hour(0.2, 2 * HOUR)
-            local unblocked = Budget.trailing_pace(window, nil, {}, NOW) --[[@as number]]
-            local blocked = Budget.trailing_pace(
+            local unblocked = Budget.trailing_rate(window, nil, {}, NOW) --[[@as number]]
+            local blocked = Budget.trailing_rate(
                 window,
                 nil,
                 { { NOW - 2 * HOUR, NOW - HOUR } },
@@ -316,7 +321,7 @@ describe("agentic.Budget", function()
 
         it("is nil when less than 5 % of the span is known", function()
             assert.is_nil(
-                Budget.trailing_pace(
+                Budget.trailing_rate(
                     five_hour(0.2, 2 * HOUR),
                     nil,
                     { { NOW - 3 * HOUR, NOW - 0.04 * L } },
@@ -412,8 +417,8 @@ describe("agentic.Budget", function()
             Fresh.record({ window }, NOW)
 
             assert.is_true(
-                Fresh.pace(window, NOW)
-                    ~= Fresh.trailing_pace(window, nil, {}, NOW)
+                Fresh.rate(window, NOW)
+                    ~= Fresh.trailing_rate(window, nil, {}, NOW)
             )
         end)
 

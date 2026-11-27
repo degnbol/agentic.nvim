@@ -223,21 +223,35 @@ local function drop_placeholder(bufnr)
     end
 end
 
+--- Whether `bufnr` is the live buffer of the name `parts` stand for. A
+--- skeptic transcript is the only buffer under its name with a buffer-local
+--- `BufReadCmd`.
+--- @param parts agentic.BufferNames.Parts
+--- @param bufnr integer
+--- @return boolean
+local function holds_name(parts, bufnr)
+    if parts.kind == "skeptic" then
+        local readers = vim.api.nvim_get_autocmds({
+            event = "BufReadCmd",
+            buffer = bufnr,
+        })
+        return #readers > 0
+    end
+    local session = SessionRegistry.session_for_key(parts.key)
+    return session ~= nil and session:buf_of(parts.sub_id, parts.part) == bufnr
+end
+
 --- `BufReadCmd` of `agentic://*` names (`agentic.BufferNames`): show the
 --- buffer the name stands for in the window reading it. A live session shows
---- its buffer, made again when wiped; a closed one is resumed when the name
---- is its chat's. Notifies an error for a name that stands for no such
---- buffer. Does nothing for a background transcript, for a session buffer
+--- its buffer, made again when wiped, except a skeptic transcript; a closed
+--- one is resumed when the name is its chat's. Notifies an error for a name
+--- that stands for no such buffer. Does nothing for a session buffer
 --- reloading after an unload (its own `BufReadCmd` refills it), and for a
 --- read in no window or the autocmd window (`bufload`).
 --- @param args vim.api.keyset.create_autocmd.callback_args
 function SessionResume.open_name(args)
     local parts = BufferNames.parse(args.match)
-    if not parts or parts.part == "background" then
-        return
-    end
-    local session = SessionRegistry.session_for_key(parts.key)
-    if session and session:buf_of(parts.sub_id, parts.part) == args.buf then
+    if not parts or holds_name(parts, args.buf) then
         return
     end
     local winid = vim.fn.bufwinid(args.buf)
@@ -245,7 +259,15 @@ function SessionResume.open_name(args)
     if winid == -1 or vim.fn.win_gettype(winid) == "autocmd" then
         return
     end
+    if parts.kind == "skeptic" then
+        Logger.notify(
+            "No skeptic transcript: " .. args.match,
+            vim.log.levels.ERROR
+        )
+        return
+    end
 
+    local session = SessionRegistry.session_for_key(parts.key)
     if session then
         local bufnr = session:open_buf(parts.sub_id, parts.part)
         if not bufnr then

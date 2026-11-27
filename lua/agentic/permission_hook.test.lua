@@ -17,17 +17,24 @@ describe("agentic.permission_hook", function()
     --- `allow` of the verdict the stubbed `decide` returns.
     --- @type boolean|nil
     local verdict_to_return
+    --- `causes` of the verdict the stubbed `decide` returns.
+    --- @type agentic.PermissionCause[]
+    local causes_to_return
 
     before_each(function()
         last_call = nil
         verdict_to_return = true
+        causes_to_return = {}
         SessionRegistry.session_for_acp_id = function(_)
             return {
                 permission_manager = {
                     decide = function(_, kind, tool_call, diff)
                         last_call =
                             { kind = kind, tool_call = tool_call, diff = diff }
-                        return { allow = verdict_to_return, causes = {} }
+                        return {
+                            allow = verdict_to_return,
+                            causes = causes_to_return,
+                        }
                     end,
                     record_causes = function() end,
                 },
@@ -90,6 +97,46 @@ describe("agentic.permission_hook", function()
                     tool_input = { command = "ls" },
                 }))
             )
+        end)
+
+        --- @param permission_mode string|nil
+        --- @return string verdict
+        local function evaluate_ask(permission_mode)
+            verdict_to_return = nil
+            causes_to_return = {
+                { code = "no-allow", subject = "make x" },
+                { code = "ask", subject = "git commit -m x" },
+            }
+            return PermissionHook.evaluate(encode({
+                session_id = "s1",
+                tool_name = "Bash",
+                tool_input = { command = "git commit -m x" },
+                permission_mode = permission_mode,
+            }))
+        end
+
+        it("maps an ask cause to ask in auto mode", function()
+            assert.equal("ask", evaluate_ask("auto"))
+        end)
+
+        it("maps an undecided verdict with no ask cause to empty", function()
+            verdict_to_return = nil
+            causes_to_return = { { code = "dynamic", subject = "git $x" } }
+            assert.equal(
+                "",
+                PermissionHook.evaluate(encode({
+                    session_id = "s1",
+                    tool_name = "Bash",
+                    tool_input = { command = "git $x" },
+                    permission_mode = "auto",
+                }))
+            )
+        end)
+
+        it("maps an ask cause to empty in another mode", function()
+            assert.equal("", evaluate_ask("default"))
+            assert.equal("", evaluate_ask("bypassPermissions"))
+            assert.equal("", evaluate_ask(nil))
         end)
     end)
 

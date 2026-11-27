@@ -140,7 +140,7 @@ describe("agentic.Bootstrap", function()
                     local lines = vim.api.nvim_buf_get_lines(
                         session.widget.buf_nrs.info, 0, -1, false)
                     return vim.iter(lines):any(function(line)
-                        return vim.startswith(line, "- 5h: 50% used")
+                        return vim.startswith(line, "- 5h  50% used")
                     end)
                 end, vim.tbl_values(require("agentic.session_registry").by_id))]]
                 )

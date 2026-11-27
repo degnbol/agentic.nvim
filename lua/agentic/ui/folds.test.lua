@@ -176,34 +176,50 @@ describe("agentic.ui.folds", function()
             end
         )
 
-        it(
-            "folds a one-row `-foldfence` body through its closing fence",
-            function()
-                local levels, skip = levels_of({
-                    "### block",
-                    "```zsh-foldfence",
-                    "rm -rf build",
-                    "```",
-                    "after",
-                })
-
-                assert.same({ "0", "0", ">1", "1", "0" }, levels)
-                assert.same({ [3] = 1 }, skip)
-            end
-        )
-
-        it("does not take a `-foldfence` fold as `-fold`", function()
+        it("ends a markdown fold above an inner closing fence", function()
             local levels = levels_of({
-                "```text-foldfence",
-                "a",
-                "b",
+                "### block",
+                "````markdown-fold",
+                "prose",
+                "```lua",
+                "x = 1",
                 "```",
-                "```console",
-                "out",
-                "```",
+                "````",
+                "after",
             })
 
-            assert.same({ "0", ">1", "1", "1", "0", "0", "0" }, levels)
+            assert.same({ "0", "0", ">1", "1", "1", "0", "0", "0" }, levels)
+        end)
+
+        it("ends a nested markdown fold above both closing fences", function()
+            local levels = levels_of({
+                "`````markdown-fold",
+                "prose",
+                "````markdown",
+                "inner prose",
+                "```lua",
+                "x",
+                "```",
+                "````",
+                "`````",
+            })
+
+            assert.same(
+                { "0", ">1", "1", "1", "1", "1", "0", "0", "0" },
+                levels
+            )
+        end)
+
+        it("forms no fold for a markdown body that ends on one row", function()
+            local levels = levels_of({
+                "````markdown-fold",
+                "prose",
+                "```lua",
+                "```",
+                "````",
+            })
+
+            assert.same({ "0", "0", "0", "0", "0" }, levels)
         end)
 
         it("forms no fold for a `-foldnext` fence alone", function()
@@ -502,6 +518,29 @@ describe("agentic.ui.folds", function()
                 append({ "```console-fold", "a", "b", "```" })
             end)
 
+            it(
+                "replaces the outer of two rows a markdown fold left out",
+                function()
+                    append({
+                        "`````markdown-fold",
+                        "prose",
+                        "````markdown",
+                        "inner prose",
+                        "```lua",
+                        "x",
+                        "```",
+                        "````",
+                        "`````",
+                    })
+                    local outer = row_of("````")
+                    vim.api.nvim_buf_set_lines(bufnr, outer - 1, outer, false, {
+                        "z",
+                    })
+                    assert_matches_full()
+                    assert.equal("1", foldexpr_levels()[outer])
+                end
+            )
+
             describe("of an execute transcript", function()
                 before_each(function()
                     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
@@ -774,32 +813,32 @@ describe("agentic.ui.folds", function()
         end)
 
         it(
-            "leads a one-row `-foldfence` fold with the row and counts 1",
+            "leads a `-foldnext` fold with the row under a titled fence in it",
             function()
                 levels_of({
                     "### block",
-                    "```zsh-foldfence",
+                    "```zsh-foldnext",
                     "rm -rf build",
+                    "```",
+                    "```console-fold",
+                    "rejected by user",
+                    "agent text",
                     "```",
                     "after",
                 })
+                vim.api.nvim_buf_set_extmark(bufnr, NS_TITLED, 4, 0, {})
                 vim.wo[winid].foldmethod = "expr"
                 vim.wo[winid].foldexpr =
                     'v:lua.require("agentic.ui.folds").foldexpr()'
                 vim.wo[winid].foldtext =
                     'v:lua.require("agentic.ui.folds").foldtext()'
                 local text = vim.api.nvim_win_call(winid, function()
-                    vim.cmd("3foldclose")
-                    return {
-                        closed = vim.fn.foldclosed(3),
-                        text = vim.fn.foldtextresult(3),
-                    }
+                    return vim.fn.foldtextresult(3)
                 end)
 
-                assert.equal(3, text.closed)
                 assert.equal(
-                    "    ··· rm -rf build · 1 lines ···",
-                    text.text
+                    "    ··· rejected by user · 3 lines ···",
+                    text
                 )
             end
         )
@@ -851,6 +890,84 @@ describe("agentic.ui.folds", function()
                 assert.equal(30, vim.fn.strdisplaywidth(text))
                 assert.is_not_nil(text:match("x… · 3 lines ···$"))
             end)
+        end)
+    end)
+
+    describe("under native scrolling", function()
+        --- Rows of a prose block whose body ends with a code block.
+        local BLOCK = {
+            "prose",
+            "````markdown-fold",
+            "a",
+            "b",
+            "```lua",
+            "x",
+            "```",
+            "````",
+        }
+
+        before_each(function()
+            local lines = {}
+            for _ = 1, 15 do
+                vim.list_extend(lines, BLOCK)
+            end
+            table.insert(lines, "end")
+            levels_of(lines)
+            require("agentic.ui.fence_rows"):new(bufnr):sync()
+            vim.api.nvim_win_set_height(winid, 22)
+            vim.wo[winid].scrolloff = 4
+            vim.wo[winid].wrap = false
+            vim.wo[winid].conceallevel = 2
+            vim.wo[winid].concealcursor = "n"
+            vim.wo[winid].foldminlines = 1
+            -- Unfocused, as a chat beside the input window.
+            vim.cmd("wincmd p")
+        end)
+
+        --- `<C-y>` steps from the last line that did not move the topline up
+        --- from below the first line.
+        --- @return integer
+        local function stalls()
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd("normal! G")
+            end)
+            vim.cmd("redraw")
+            local count = 0
+            for _ = 1, 10 do
+                local before = vim.fn.line("w0", winid)
+                vim.api.nvim_win_call(winid, function()
+                    vim.cmd("normal! \25")
+                end)
+                vim.cmd("redraw")
+                if before > 1 and vim.fn.line("w0", winid) >= before then
+                    count = count + 1
+                end
+            end
+            return count
+        end
+
+        it("scrolls by line past closed folds of prose", function()
+            -- The same folds through the inner closing fence stall.
+            vim.wo[winid].foldmethod = "manual"
+            vim.api.nvim_win_call(winid, function()
+                for first = 3, 15 * #BLOCK, #BLOCK do
+                    vim.cmd(string.format("%d,%dfold", first, first + 4))
+                end
+            end)
+            assert.is_true(stalls() > 0)
+
+            vim.wo[winid].foldmethod = "expr"
+            vim.wo[winid].foldexpr =
+                'v:lua.require("agentic.ui.folds").foldexpr()'
+            vim.wo[winid].foldlevel = 0
+            vim.cmd("redraw")
+            assert.equal(
+                6,
+                vim.api.nvim_win_call(winid, function()
+                    return vim.fn.foldclosedend(3)
+                end)
+            )
+            assert.equal(0, stalls())
         end)
     end)
 end)

@@ -22,7 +22,6 @@ Glyphs.AGENT = "󰚩"
 --- Header state glyphs, shown after the title while the state holds.
 --- @type table<agentic.ui.HeaderState, string>
 Glyphs.HEADER_STATE = {
-    permission = "?", -- plain text: the circled nf-md-help_circle is hard to read at text size
     running = "󰔟", -- nf-md-timer_sand
     idle = "󰂞", -- nf-md-bell_ring
 }

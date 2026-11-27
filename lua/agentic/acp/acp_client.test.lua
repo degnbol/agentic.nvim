@@ -486,7 +486,7 @@ describe("agentic.acp.ACPClient", function()
                 tool_call_updates = {},
                 permissions = 0,
             }
-            --- @type agentic.acp.ClientHandlers
+            --- @type agentic.AgentClient.ClientHandlers
             local handlers = {
                 on_session_update = function(update)
                     table.insert(recorded.session_updates, update)
@@ -729,7 +729,7 @@ describe("agentic.acp.ACPClient", function()
         end)
 
         --- A ready v1 client with `handlers` subscribed to session "s".
-        --- @param handlers agentic.acp.ClientHandlers
+        --- @param handlers agentic.AgentClient.ClientHandlers
         --- @return agentic.acp.ACPClient client
         local function make_client(handlers)
             --- @type agentic.acp.ACPClient
@@ -907,7 +907,7 @@ describe("agentic.acp.ACPClient", function()
         --- @type { method: string, params: table }[]
         local requests
         --- Answer to `authenticate`; overridden per case.
-        --- @type agentic.acp.ACPError|nil
+        --- @type agentic.AgentClient.Error|nil
         local authenticate_err
 
         before_each(function()

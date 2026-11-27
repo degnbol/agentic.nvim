@@ -1,5 +1,7 @@
 # Plan: one reader of a tool call block's rows; the diff freeze recorded on the block
 Status: reviewed spec
+Priority: P3
+Depends: REFACTOR-prose-run-rows.md
 
 ## Relevant files
 - `lua/agentic/ui/tool_call_renderer.lua` — `NS_TOOL_BLOCKS`

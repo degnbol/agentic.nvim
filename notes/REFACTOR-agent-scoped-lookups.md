@@ -1,5 +1,6 @@
 # Plan: one side-record drain and one transcript lookup per agent
 Status: reviewed spec
+Priority: P3
 
 ## Relevant files
 - `lua/agentic/session_manager.lua` — `_drain_side_records`,
@@ -19,6 +20,9 @@ Status: reviewed spec
   `_drain_subagent_side_records`, stubs of all three drains),
   `lua/agentic/subagents.test.lua` (`record_writer`),
   `tests/integration/test_native_subagents.lua`
+- Notes: `notes/REFACTOR-tool-call-record-lookup.md` shares code with this
+  plan (`Subagents:record_writer`, the `_sync_job_stop` test session table).
+  Either order works.
 - Skills: `subagents`, `implement`
 
 ## Background

@@ -242,8 +242,7 @@ function Theme.setup()
         { Theme.HL_GROUPS.BUDGET_WARNING, { link = "DiagnosticWarn" } },
         { Theme.HL_GROUPS.BUDGET_EXHAUSTED, { link = "DiagnosticError" } },
 
-        -- Header state glyphs asking for the user: a permission prompt, an
-        -- unseen turn end
+        -- Header state glyph asking for the user: an unseen turn end
         { Theme.HL_GROUPS.HEADER_ATTENTION, { link = "DiagnosticWarn" } },
     }
     -- stylua: ignore end

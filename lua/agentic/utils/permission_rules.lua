@@ -1019,6 +1019,38 @@ local function record_writes(written, paths, content, cwds)
     end
 end
 
+--- Add one `write` effect per path to `ctx.effects`, and set `ctx.taint`
+--- when `paths` is not empty.
+--- @param ctx agentic.utils.PermissionRules.WalkCtx
+--- @param paths string[] delivered paths
+local function add_write_effects(ctx, paths)
+    for _, path in ipairs(paths) do
+        table.insert(ctx.effects, { kind = "write", path = path })
+    end
+    ctx.taint.set = ctx.taint.set or #paths > 0
+end
+
+--- The paths a command writes through option values, per the `writes` gates
+--- of its structured entry.
+--- @param entries agentic.StructuredEntries
+--- @param parsed agentic.ParsedLeaf
+--- @param arg_nodes TSNode[]|nil parallel to `parsed.args`. Nil when the
+---        args are not words in `src`.
+--- @param src string source text the nodes index into
+--- @return string[]|nil paths delivered paths. Nil when a written path cannot
+---         be named (an opaque value or a dynamic word), or there is a write
+---         and no `arg_nodes`.
+local function option_writes(entries, parsed, arg_nodes, src)
+    local writes = PermissionStructured.write_values(entries, parsed)
+    if not writes or (#writes > 0 and not arg_nodes) then
+        return nil
+    end
+    local nodes = arg_nodes or {}
+    return vim.tbl_map(function(w)
+        return ShellParse.delivered_path(w.value, nodes[w.word], src)
+    end, writes)
+end
+
 --- A function giving the cwds after sourcing a file, from the bytes on disk:
 --- unknown for an unreadable or unparsable file, or past the nesting cap. A
 --- sourced file may `return` early, so every set inside it counts, not only
@@ -1424,6 +1456,21 @@ local function walk_command(node, src, ctx, known, funcs)
         then
             allow_kind = nil
         end
+        -- A user allow on the leaf is the user's choice over its writes, as
+        -- for `rm` above.
+        if allow_kind and not user_allowed then
+            local paths = option_writes(
+                ctx.structured_entries,
+                parsed,
+                not actions and arg_nodes or nil,
+                src
+            )
+            if not paths then
+                return false
+            end
+            record_writes(ctx.written, paths, nil, cwds_at(ctx, node))
+            add_write_effects(ctx, paths)
+        end
     end
 
     --- @type agentic.utils.PermissionRules.Source|nil
@@ -1645,10 +1692,7 @@ function walk_redirected(node, src, ctx, known)
                 return false
             end
         end
-        for _, path in ipairs(paths) do
-            table.insert(ctx.effects, { kind = "write", path = path })
-        end
-        ctx.taint.set = ctx.taint.set or #paths > 0
+        add_write_effects(ctx, paths)
         return vim.iter(parts.rest):all(function(statement)
             return walk(statement, src, ctx)
         end)
@@ -2002,6 +2046,7 @@ local tally_walk
 --- | "structure"       # a function definition, loop variable, assignment, argument or node the check does not model
 --- | "unparsed"        # the command, or code it runs, does not parse
 --- | "tier"            # a structured allow matches, of a kind the rules' tier does not admit
+--- | "opaque-write"    # an option value writes a file whose path the check cannot name
 
 --- A command part's range (0-indexed rows, byte cols, as `node:range()`) and
 --- why the part is not known-safe.
@@ -2020,6 +2065,7 @@ M.REASON_TEXT = {
     structure = "the check does not model this shell construct",
     unparsed = "the command, or code it runs, does not parse",
     tier = "the auto-approval tier does not cover commands of its kind",
+    ["opaque-write"] = "it writes a file whose path the check cannot name",
 }
 
 --- Append a node's `node:range()` and `reason` to `ranges`.
@@ -2372,6 +2418,27 @@ local function command_known_safe(node, src, ctx, known, funcs)
         elseif may_run_config_code(cmd_name, args, args_dynamic, ctx, node) then
             reason = "inner-code"
         else
+            -- Mirrors walk_command. An unmodelled write gives no leaf
+            -- signature, so allow-always keeps the whole command, as for an
+            -- ask leaf.
+            if not glob_safe then
+                local paths = option_writes(
+                    ctx.structured_entries,
+                    parsed,
+                    not actions and arg_nodes or nil,
+                    src
+                )
+                if not paths then
+                    ctx.taint.set = true
+                    return false,
+                        nil,
+                        nil,
+                        vim.list_contains(args_dynamic, true) and "dynamic"
+                            or "opaque-write"
+                end
+                record_writes(ctx.written, paths, nil, cwds_at(ctx, node))
+                ctx.taint.set = ctx.taint.set or #paths > 0
+            end
             struct_safe = true
         end
     else
@@ -3156,7 +3223,7 @@ end
 --- @param rules agentic.utils.PermissionRules.Rules
 --- @param cwd string|nil absolute directory the command starts in; nil when unknown
 --- @return boolean ok Structurally approvable
---- @return agentic.utils.PermissionRules.Effect[] effects Concrete file-mutating effects (redirect writes, `rm` operands), in order
+--- @return agentic.utils.PermissionRules.Effect[] effects Concrete file-mutating effects (redirect writes, `writes` option values, `rm` operands), in order
 --- @return table<agentic.utils.PermissionRules.Source, true> sources Every source that allowed a single command; empty unless ok
 function M.evaluate(command, rules, cwd)
     return run_walk(command, rules, cwd, true)

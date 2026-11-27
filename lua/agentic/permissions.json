@@ -17,7 +17,8 @@
   "bat":       { "read_only": [{}] },
   "mdfind":    { "read_only": [{}] },
   "locate":    { "read_only": [{}] },
-  "fc-list":   { "read_only": [{}] },
+  "fc-list":   { "safe_write": [{}] },
+  "fc-match":  { "safe_write": [{}] },
 
   "which":     { "read_only": [{}] },
   "whereis":   { "read_only": [{}] },
@@ -69,7 +70,29 @@
                     "to-command", "checkpoint-action",
                     "rmt-command", "rsh-command",
                     "index-file", "volno-file",
-                    "F", "info-script", "new-volume-script"] }
+                    "F", "info-script", "new-volume-script",
+                    "W"] }
+    ],
+    "arity": { "*": { "booleans": ["-v"] } }
+  },
+  "bsdtar": {
+    "read_only": [
+      { "options":     ["t", "list", "d", "diff", "compare"] },
+      { "positionals": ["t*"] }
+    ],
+    "ask": [
+      { "options": ["c", "create",
+                    "x", "extract", "get",
+                    "r", "append",
+                    "u", "update",
+                    "A", "catenate", "concatenate",
+                    "delete",
+                    "I", "use-compress-program",
+                    "to-command", "checkpoint-action",
+                    "rmt-command", "rsh-command",
+                    "index-file", "volno-file",
+                    "F", "info-script", "new-volume-script",
+                    "W"] }
     ],
     "arity": { "*": { "booleans": ["-v"] } }
   },
@@ -204,17 +227,19 @@
         "booleans": ["--no-pager"]
       },
       "config": { "booleans": ["--global"] }
-    }
+    },
+    "writes": [{ "options": ["output"],
+                 "not_files": ["/dev/null", "/dev/stdout", "/dev/stderr"] }]
   },
 
   "sort": {
     "read_only": [{}],
-    "ask":       [{ "options": ["o", "output"] }]
+    "writes":    [{ "options": ["o", "output"] }]
   },
 
   "shuf": {
     "read_only": [{}],
-    "ask":       [{ "options": ["o", "output"] }]
+    "writes":    [{ "options": ["o", "output"] }]
   },
 
   "uniq": { "read_only": [{}] },
@@ -246,7 +271,7 @@
 
   "base64": {
     "read_only": [{}],
-    "ask":       [{ "options": ["o", "output"] }]
+    "writes":    [{ "options": ["o", "output"] }]
   },
   "base32":  { "read_only": [{}] },
   "basenc":  { "read_only": [{}] },
@@ -315,8 +340,7 @@
   "launchctl": { "read_only": [{ "positionals": ["list"] }] },
 
   "sed": {
-    "read_only": [{}],
-    "ask":       [{ "options": ["i", "in-place"] }]
+    "read_only": [{ "unless": [{ "options": ["i", "in-place"] }] }]
   },
 
   "awk": {
@@ -369,11 +393,11 @@
   "javap": { "read_only": [{}] },
   "pkgconf": {
     "read_only": [{}],
-    "ask":       [{ "options": ["log-file"] }]
+    "writes":    [{ "options": ["log-file"] }]
   },
   "pkg-config": {
     "read_only": [{}],
-    "ask":       [{ "options": ["log-file"] }]
+    "writes":    [{ "options": ["log-file"] }]
   },
 
   "brew": {
@@ -829,20 +853,17 @@
   "col":   { "read_only": [{}] },
 
   "curl": {
-    "read_only": [{}],
-    "ask": [{ "options": ["O",
+    "read_only": [{ "unless": [{ "options": ["O",
                           "remote-name", "remote-name-all",
                           "remote-header-name", "J",
-                          "output-dir", "create-dirs",
-                          "trace", "trace-ascii",
+                          "output-dir", "create-dirs", "no-clobber",
                           "K", "config",
                           "T", "upload-file",
                           "d", "data", "data-ascii", "data-binary",
                           "data-raw", "data-urlencode",
                           "F", "form", "X", "request", "json",
-                          "c", "cookie-jar", "libcurl", "etag-save",
-                          "stderr", "hsts", "alt-svc", "ssl-sessions",
-                          "w", "write-out", "form-string", "Q", "quote",
+                          "hsts", "alt-svc", "ssl-sessions",
+                          "form-string", "Q", "quote",
                           "expand-output", "expand-output-dir",
                           "expand-dump-header", "expand-trace",
                           "expand-trace-ascii", "expand-config",
@@ -855,11 +876,20 @@
                           "expand-etag-save", "expand-stderr",
                           "expand-hsts", "expand-alt-svc",
                           "expand-ssl-sessions", "expand-write-out",
-                          "expand-quote"] },
-            { "options": ["o", "output", "D", "dump-header"],
-              "unless": [{ "option_values": {
-                "options": ["o", "output", "D", "dump-header"],
-                "values":  ["/dev/null", "-"] } }] }],
+                          "expand-quote"] }] }],
+    "writes": [
+      { "options": ["o", "output"],
+        "not_files": ["/dev/null", "/dev/stdout", "/dev/stderr", "-"],
+        "opaque": ["*#*"] },
+      { "options": ["D", "dump-header", "c", "cookie-jar", "stderr"],
+        "not_files": ["/dev/null", "/dev/stdout", "/dev/stderr", "-"] },
+      { "options": ["trace", "trace-ascii"],
+        "not_files": ["/dev/null", "/dev/stdout", "/dev/stderr", "-", "%"] },
+      { "options": ["libcurl", "etag-save"],
+        "not_files": ["/dev/null", "/dev/stdout", "/dev/stderr"] },
+      { "options": ["w", "write-out"],
+        "not_files": ["*"], "opaque": ["@*", "*%output{*"] }
+    ],
     "arity": {
       "*": {
         "takers": ["-o", "--output", "-D", "--dump-header", "-w", "--write-out",
@@ -874,10 +904,67 @@
     }
   },
 
+  "wget": {
+    "read_only": [{ "options": ["O", "output-document"],
+                    "unless": [{ "options": [
+                      "o", "output-file", "a", "append-output", "rejected-log",
+                      "b", "background", "P", "directory-prefix",
+                      "x", "force-directories", "r", "recursive", "m", "mirror",
+                      "p", "page-requisites", "k", "convert-links",
+                      "K", "backup-converted", "backups", "delete-after",
+                      "no-remove-listing", "save-cookies",
+                      "warc-file", "warc-cdx", "warc-tempdir",
+                      "e", "execute", "config", "use-askpass",
+                      "i", "input-file", "B", "base",
+                      "input-metalink", "metalink-over-http", "metalink-index",
+                      "preferred-location", "post-data", "post-file", "method",
+                      "body-data", "body-file", "hsts-file"] }] }],
+    "writes": [{ "options": ["O", "output-document"],
+                 "not_files": ["/dev/null", "/dev/stdout", "/dev/stderr", "-"] }],
+    "arity": {
+      "*": {
+        "takers": ["-e", "--execute", "-o", "--output-file",
+                   "-a", "--append-output", "--report-speed",
+                   "-i", "--input-file", "-B", "--base", "--config",
+                   "--rejected-log", "-t", "--tries", "--retry-on-http-error",
+                   "-O", "--output-document", "--start-pos", "--progress",
+                   "-T", "--timeout", "--dns-timeout", "--connect-timeout",
+                   "--read-timeout", "-w", "--wait", "--waitretry",
+                   "-Q", "--quota", "--bind-address", "--limit-rate",
+                   "--restrict-file-names", "--prefer-family",
+                   "--user", "--password", "--local-encoding",
+                   "--remote-encoding", "-n", "-P", "--directory-prefix",
+                   "--cut-dirs", "--http-user", "--http-password",
+                   "--default-page", "--header", "--compression",
+                   "--max-redirect", "--proxy-user", "--proxy-password",
+                   "--referer", "-U", "--user-agent", "--load-cookies",
+                   "--save-cookies", "--post-data", "--post-file", "--method",
+                   "--body-data", "--body-file", "--secure-protocol",
+                   "--certificate", "--certificate-type", "--private-key",
+                   "--private-key-type", "--ca-certificate", "--ca-directory",
+                   "--crl-file", "--pinnedpubkey", "--random-file", "--ciphers",
+                   "--hsts-file", "--ftp-user", "--ftp-password",
+                   "--warc-file", "--warc-header", "--warc-max-size",
+                   "--warc-dedup", "--warc-tempdir", "-l", "--level",
+                   "--backups", "-A", "--accept", "-R", "--reject",
+                   "--accept-regex", "--reject-regex", "--regex-type",
+                   "-D", "--domains", "--exclude-domains", "--follow-tags",
+                   "--ignore-tags", "-I", "--include-directories",
+                   "-X", "--exclude-directories"],
+        "booleans": ["-q", "--quiet", "-v", "--verbose", "-S",
+                     "--server-response", "-N", "--timestamping",
+                     "-c", "--continue", "-4", "-6", "--no-hsts", "--spider",
+                     "--no-check-certificate"]
+      }
+    }
+  },
+
   "http": {
     "read_only": [{}],
+    "writes": [{ "options": ["o", "output"],
+                 "not_files": ["/dev/null", "/dev/stdout", "/dev/stderr", "-"] }],
     "ask": [
-      { "options": ["o", "output", "d", "download"] },
+      { "options": ["d", "download"] },
       { "positionals": ["POST"] },
       { "positionals": ["post"] },
       { "positionals": ["PUT"] },

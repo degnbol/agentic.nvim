@@ -292,33 +292,21 @@ table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
         assert.same({ "AgenticChat", "AgenticCode" }, get_tabpage_filetypes(0))
     end)
 
-    it("closing the chat window closes its panels", function()
-        child.cmd("enew")
-        child.cmd("vsplit")
+    it(":q on the chat window closes only that window", function()
         open()
         add_code()
-        child.type_keys("i")
-        child.flush()
-        child.cmd("stopinsert")
+        child.lua([[
+table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
+]])
 
-        child.api.nvim_win_close(child.lua_get("_G.s.widget:home_win()"), true)
+        child.cmd("q")
         child.flush()
 
-        assert.same({ "" }, get_tabpage_filetypes(0))
+        assert.same({ "AgenticCode" }, get_tabpage_filetypes(0))
+        assert.equal(vim.NIL, child.lua_get("_G.s.widget:home_win()"))
     end)
 
-    it(":q on a full-view chat quits", function()
-        open()
-        add_code()
-
-        local ok, err = pcall(child.cmd, "q")
-
-        assert.is_false(ok)
-        -- The child exited.
-        assert.truthy(tostring(err):find("closed by the peer", 1, true))
-    end)
-
-    it(":q with an unsent draft is refused and the input comes back", function()
+    it(":q on the chat window keeps the input's unsent draft", function()
         open()
         child.type_keys("i")
         child.flush()
@@ -326,11 +314,11 @@ table.insert(_G.s.chat_history.messages, { type = "user", text = "hi" })
         child.flush()
         child.cmd("wincmd k")
 
-        local ok = pcall(child.cmd, "q")
+        child.cmd("q")
         child.flush()
 
-        assert.is_false(ok)
-        assert.same({ "AgenticChat", "AgenticInput" }, get_tabpage_filetypes(0))
+        assert.same({ "AgenticInput" }, get_tabpage_filetypes(0))
+        assert.same({ "draft" }, child.api.nvim_buf_get_lines(0, 0, -1, false))
     end)
 
     it(":Agentic in another tabpage shows the last active session", function()

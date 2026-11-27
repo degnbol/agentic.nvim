@@ -72,16 +72,13 @@ local CAUSE_TEXT = vim.tbl_extend("error", PermissionRules.REASON_TEXT, {
 --- @field _keymap_restores fun()[] One per option or open key bound on a buffer, in binding order. Each unbinds its key and puts back the map it shadowed
 --- @field _layout_autocmd? integer Autocmd re-placing the float and its keys on layout changes while a request is shown
 --- @field permission_float agentic.ui.PermissionFloat
---- @field on_hidden? fun(badge_bufnr: integer, anchor_bufnr: integer) Called the first time a request waits with its float not visible in the current tabpage. `anchor_bufnr` is the buffer of its tool call. `badge_bufnr` is the chat while the float shows there in place of `anchor_bufnr`, else `anchor_bufnr`
---- @field on_hidden_resolved? fun(badge_bufnr: integer) Called when a request `on_hidden` reported ends, with the `badge_bufnr` it reported
---- @field open_anchor? fun(bufnr: integer, how: agentic.ui.OpenHow): integer|nil Opens `bufnr` and returns its window, or nil when nothing opened. Called by the open keys, which are bound while a request's float shows on the chat in place of its tool call's buffer
---- @field title_for? fun(anchor_bufnr: integer): string|nil The float's title while it shows on the chat in place of `anchor_bufnr`; nil for none
+--- @field open_anchor? fun(bufnr: integer, how: agentic.ui.OpenHow): integer|nil Opens `bufnr` and returns its window, or nil when nothing opened. Called by the open keys, which are bound while a request's float is on a fallback host
+--- @field title_for? fun(anchor_bufnr: integer): string|nil The float's title while it is on a fallback host; nil for none
 --- @field proxy_tool_call? fun(anchor_bufnr: integer): string|nil The id of the tool call in the chat that stands for the owner of `anchor_bufnr`, or nil when there is none
 --- @field companion_bufs? fun(anchor: integer): integer[] Buffers besides the session's own that also get the option keys of a request whose tool call is in `anchor`
 --- @field on_decided? fun(tool_call_id: string, causes: agentic.PermissionCause[]) Called on a later event loop tick after causes are recorded for a tool call
 --- @field _causes table<string, agentic.PermissionCause[]> Recorded causes not yet taken, keyed by tool call id
 --- @field _bash_cwds table<string, string> Directory each Bash call starts in, keyed by tool call id
---- @field _hidden boolean Whether the current request waits with its float hidden
 --- @field _always_cache table<string, "allow"|"reject"> Client-side cache for allow_always/reject_always decisions
 --- @field _execute_leaf_allow table<string, boolean> Session-remembered execute leaves vouched for via allow_always
 --- @field _grant_scopes agentic.utils.GrantSafety.Scope[] Active grant scopes (set by /grant)
@@ -113,7 +110,6 @@ function PermissionManager:new(
         queue = {},
         current_request = nil,
         _keymap_restores = {},
-        _hidden = false,
         _always_cache = {},
         _execute_leaf_allow = {},
         _grant_scopes = {},
@@ -496,6 +492,7 @@ end
 --- Known field usage by provider:
 ---   - claude-agent-acp, auggie-acp: `file_path` (snake_case)
 ---   - opencode-acp: `path` (`filePath` in sessions migrated from 1.x)
+---   - pi: `path` (absolute)
 ---   - gemini-acp, codex-acp, mistral-vibe-acp: path arrives via
 ---     `update.locations[]` or `update.content[]`, not `rawInput` — these
 ---     providers will return nil here and rely on the adapter to surface
@@ -1060,14 +1057,12 @@ function PermissionManager:_process_next()
 
     ---@class agentic.ui.PermissionManager.PermissionRequest
     ---@field writer agentic.ui.MessageWriter The writer of the tool call's buffer
-    ---@field badge_bufnr? integer The buffer `on_hidden` was given to badge
     ---@field proxy_held boolean Whether the chat holds the tool call that stands for the owner of the tool call's buffer (see `proxy_tool_call`)
     self.current_request = {
         toolCallId = toolCallId,
         request = request,
         callback = callback,
         option_mapping = option_mapping,
-        was_hidden = false,
         writer = writer,
         proxy_held = false,
     }
@@ -1076,39 +1071,18 @@ function PermissionManager:_process_next()
     self:_sync_proxy_hold()
     self:_watch_layout()
     self:_sync_keymaps()
-    self:_set_hidden(not self.permission_float:is_visible_in_current_tab())
-end
-
---- Record whether the current request waits with its float hidden, and run
---- `on_hidden` the first time it does: tabpage switches flip the state back
---- and forth.
---- @param hidden boolean
-function PermissionManager:_set_hidden(hidden)
-    self._hidden = hidden
-    local request = self.current_request
-    if not hidden or not request or request.was_hidden then
-        return
-    end
-    request.was_hidden = true
-    local anchor = request.writer.bufnr
-    request.badge_bufnr = self.permission_float:is_on_fallback()
-            and self.message_writer.bufnr
-        or anchor
-    if self.on_hidden then
-        self.on_hidden(request.badge_bufnr, anchor)
-    end
 end
 
 --- Make the chat hold the tool call standing for the current request's
 --- anchor owner (see `proxy_tool_call`) while the float shows on the chat in
---- place of the anchor, and release it once a window shows the anchor.
+--- place of the anchor, and release it once it does not.
 function PermissionManager:_sync_proxy_hold()
     local request = self.current_request
     if not request then
         return
     end
-    local on_fallback = self.permission_float:is_on_fallback()
-    if on_fallback and not request.proxy_held then
+    local on_chat = self.permission_float:get_host() == "chat"
+    if on_chat and not request.proxy_held then
         local id = self.proxy_tool_call
             and self.proxy_tool_call(request.writer.bufnr)
         if id then
@@ -1117,19 +1091,23 @@ function PermissionManager:_sync_proxy_hold()
             self.message_writer:hold_tool_call(id, false)
             request.proxy_held = true
         end
-    elseif not on_fallback and request.proxy_held then
+    elseif not on_chat and request.proxy_held then
         self.message_writer:release_hold()
         request.proxy_held = false
     end
 end
 
---- Open the current request's anchor buffer with `open_anchor`, and follow
---- in the window it opens. Leaves the request pending.
+--- Open the current request's anchor buffer with `open_anchor`, from the
+--- previous window when the float is current, and follow in the window it
+--- opens. Leaves the request pending.
 --- @param how agentic.ui.OpenHow
 function PermissionManager:_open_anchor(how)
     local request = self.current_request
     if not request or not self.open_anchor then
         return
+    end
+    if vim.api.nvim_get_current_buf() == self.permission_float:get_bufnr() then
+        vim.cmd.wincmd("p")
     end
     self:_sync_anchor()
     local winid = self.open_anchor(request.writer.bufnr, how)
@@ -1411,28 +1389,25 @@ function PermissionManager:remove_request_by_tool_call_id(toolCallId)
     end
 end
 
---- Bind the current request's option keys on the session's buffers, on the
---- buffer owning the request's tool call and on its `companion_bufs`, while
---- its float is visible in the current tabpage, and unbind them otherwise:
---- the keys are buffer-local, and the buffers can be shown in a tabpage the
---- float is not in. While the float shows on the chat in place of that
---- buffer, the open keys (`PermissionFloat.open_keys`) are bound there too.
---- A key shadows any buffer-local map of the same lhs until unbound.
+--- Bind the current request's option keys on the session's buffers, the
+--- float's buffer, the buffer owning the request's tool call and its
+--- `companion_bufs` while its float shows, and unbind them otherwise.
+--- While the float is on a fallback host, the open keys
+--- (`PermissionFloat.open_keys`) are bound there too. A key shadows any
+--- buffer-local map of the same lhs until unbound.
 function PermissionManager:_sync_keymaps()
     self:_remove_keymaps()
 
     local option_mapping = self.current_request
         and self.current_request.option_mapping
-    if
-        not option_mapping
-        or not self.permission_float:is_visible_in_current_tab()
-    then
+    local host = self.permission_float:get_host()
+    if not option_mapping or not host then
         return
     end
 
     local bufnrs = vim.tbl_values(self._buf_nrs)
     local anchor = self.current_request.writer.bufnr
-    local extra = { anchor }
+    local extra = { anchor, self.permission_float:get_bufnr() }
     if self.companion_bufs then
         vim.list_extend(extra, self.companion_bufs(anchor))
     end
@@ -1459,7 +1434,7 @@ function PermissionManager:_sync_keymaps()
         })
     end
 
-    if self.permission_float:is_on_fallback() and self.open_anchor then
+    if host ~= "anchor" and self.open_anchor then
         for _, key in ipairs(PermissionFloat.open_keys()) do
             self:_shadow_keymap(bufnrs, key.lhs, function()
                 self:_open_anchor(key.how)
@@ -1507,7 +1482,6 @@ function PermissionManager:refresh_float()
     self.permission_float:place()
     self:_sync_proxy_hold()
     self:_sync_keymaps()
-    self:_set_hidden(not self.permission_float:is_visible_in_current_tab())
 end
 
 --- Keep the float and its option keys in step with the layout for as long as
@@ -1531,16 +1505,14 @@ function PermissionManager:_watch_layout()
     )
 end
 
---- Unbind the option keys, stop following the layout, end the holds of the
---- request being resolved, and end its hidden state, running
---- `on_hidden_resolved` if it was ever hidden.
+--- Unbind the option keys, stop following the layout, and end the holds of
+--- the request being resolved.
 function PermissionManager:_release_request()
     self:_remove_keymaps()
     if self._layout_autocmd then
         pcall(vim.api.nvim_del_autocmd, self._layout_autocmd)
         self._layout_autocmd = nil
     end
-    self._hidden = false
     local request = self.current_request
     if not request then
         return
@@ -1548,9 +1520,6 @@ function PermissionManager:_release_request()
     request.writer:release_hold()
     if request.proxy_held then
         self.message_writer:release_hold()
-    end
-    if request.was_hidden and self.on_hidden_resolved then
-        self.on_hidden_resolved(request.badge_bufnr --[[@as integer]])
     end
 end
 

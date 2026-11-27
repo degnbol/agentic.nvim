@@ -491,6 +491,24 @@ describe("ClaudeTranscriptReader", function()
             assert.equal("/hooks/big.sh", hooks(reader:drain())[1].command)
         end)
 
+        it("leaves the run to the unprefixed context of a call", function()
+            local reader = reader_at(transcript)
+            local pre = { toolUseID = "toolu_1" }
+            append({
+                json_run("h-1", "/hooks/ctx.sh", "a large context", pre),
+                merged("c-1", {
+                    "[/hooks/deny.sh]: Load /x first.",
+                    "<persisted-output>…",
+                }, pre),
+            })
+
+            local commands = vim.tbl_map(function(record)
+                return record.command
+            end, hooks(reader:drain()))
+
+            assert.same({ "/hooks/deny.sh", "/hooks/ctx.sh" }, commands)
+        end)
+
         it("leaves a run of another event unpaired", function()
             local reader = reader_at(transcript)
             append({

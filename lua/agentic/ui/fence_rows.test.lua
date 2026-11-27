@@ -94,6 +94,22 @@ describe("agentic.ui.FenceRows", function()
         assert.same({ 0, 4 }, marked_rows())
     end)
 
+    it("marks again only the fenced block an edit meets", function()
+        local fence_rows = FenceRows:new(bufnr)
+        set_lines(
+            0,
+            -1,
+            { "```lua", "x", "```", "", "```bash", "a", "b", "```" }
+        )
+        fence_rows:sync()
+        vim.api.nvim_buf_clear_namespace(bufnr, FenceRows.NS, 0, -1)
+
+        set_lines(6, 7, { "c" })
+        fence_rows:sync()
+
+        assert.same({ 4, 7 }, marked_rows())
+    end)
+
     describe("in a markdown body", function()
         local lines = {
             "````markdown-fold",
@@ -129,6 +145,23 @@ describe("agentic.ui.FenceRows", function()
                 assert.same({ 0, 2, 6, 7 }, marked_rows())
             end
         )
+    end)
+
+    describe("drawn_count", function()
+        it("leaves out trailing fence rows", function()
+            assert.equal(
+                3,
+                FenceRows.drawn_count({ "prose", "```lua", "x", "```" })
+            )
+        end)
+
+        it("counts no rows for a body of fence rows", function()
+            assert.equal(0, FenceRows.drawn_count({ "```lua", "```" }))
+        end)
+
+        it("counts fence rows above a drawn row", function()
+            assert.equal(3, FenceRows.drawn_count({ "```", "```", "prose" }))
+        end)
     end)
 
     describe("marked", function()

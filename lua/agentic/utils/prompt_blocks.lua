@@ -15,10 +15,11 @@ local M = {}
 --- The command word text begins with, or nil when it is prose.
 ---
 --- The boundary is the one `syntax/AgenticChat.vim` highlights: a leading `/`,
---- a word of `[%w_-]`, then whitespace or the end of the line. Requiring that
---- boundary is what keeps paths out — `/usr/bin/env` ends its word at `/`, so
---- it is prose. Leading whitespace disqualifies a line too, which is the
---- escape hatch for sending a `/`-leading line to the model.
+--- a word of `[%w_:-]` (namespaced commands like `skill:<name>`), then
+--- whitespace or the end of the line. Requiring that boundary is what keeps
+--- paths out — `/usr/bin/env` ends its word at `/`, so it is prose. Leading
+--- whitespace disqualifies a line too, which is the escape hatch for sending
+--- a `/`-leading line to the model.
 ---
 --- Multi-line text is never a command, so an argument cannot absorb the line
 --- below it.
@@ -26,7 +27,7 @@ local M = {}
 --- @return string|nil word Without the leading slash
 --- @return string arg Trimmed; empty when the command took none
 function M.command(text)
-    local word, rest = text:match("^/([%w_-]+)([^\n]*)$")
+    local word, rest = text:match("^/([%w_:-]+)([^\n]*)$")
     if not word or (rest ~= "" and not rest:match("^%s")) then
         return nil, ""
     end

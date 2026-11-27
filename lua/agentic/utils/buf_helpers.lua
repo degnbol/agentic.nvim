@@ -607,21 +607,166 @@ local function text_room(winid, padding)
     return math.max(1, vim.api.nvim_win_get_height(winid) - padding)
 end
 
+--- The line for the cursor of `winid` if `topline` is at the top of the view.
+--- This is the cursor line if it is drawn and at least 'scrolloff' screen
+--- rows from each edge, else the nearest line that is.
+---
+--- A closed fold is one row at its first line; a cursor inside a fold that
+--- obeys both edges stays. A zero-height line is the result only when all
+--- lines from `topline` to the end are zero-height. The 'scrolloff' value is
+--- limited to `(height - 1) / 2`, and does not apply at an edge that shows
+--- the first or last buffer line. If no line obeys both edges, the result is
+--- the last line that obeys the bottom edge, as `cursor_correct` in vim's
+--- `move.c` does. The result is never `topline` while the window skips part
+--- of it ('smoothscroll' skipcol).
+--- @param winid integer
+--- @param topline integer 1-indexed
+--- @return integer lnum 1-indexed
+function BufHelpers.fitting_cursor_line(winid, topline)
+    local height = vim.api.nvim_win_get_height(winid)
+    local so = math.min(
+        vim.api.nvim_get_option_value("scrolloff", { win = winid }),
+        math.floor((height - 1) / 2)
+    )
+    local last_line =
+        vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
+
+    return vim.api.nvim_win_call(winid, function()
+        local view = vim.fn.winsaveview()
+        local skipped = view.topline == topline and view.skipcol > 0
+
+        -- One unit per line or closed fold from `topline` to the bottom edge.
+        -- `above`: screen rows above the unit. `rows`: its screen rows.
+        -- `below`: the sum of `rows` for the units below it that fit fully in
+        -- the window.
+        --- @type { lnum: integer, above: integer, rows: integer, below: integer }[]
+        local units = {}
+        local lnum, above = topline, 0
+        while lnum <= last_line and above < height do
+            local fold_end = vim.fn.foldclosedend(lnum)
+            local unit_end = fold_end > 0 and fold_end or lnum
+            local rows = (skipped and lnum == topline)
+                    and vim.api.nvim_win_text_height(winid, {
+                        start_row = lnum - 1,
+                        end_row = lnum - 1,
+                        start_vcol = view.skipcol,
+                    }).all
+                or screen_rows(winid, lnum, unit_end, height + 1)
+            units[#units + 1] = {
+                lnum = lnum,
+                above = above,
+                rows = rows,
+                below = 0,
+            }
+            above = above + rows
+            lnum = unit_end + 1
+        end
+        local below = 0
+        for i = #units, 1, -1 do
+            units[i].below = below
+            if units[i].above + units[i].rows <= height then
+                below = below + units[i].rows
+            end
+        end
+        local drawn = vim.tbl_filter(function(unit)
+            return unit.rows > 0
+        end, units)
+        if #drawn == 0 then
+            return topline
+        end
+
+        local top_so = (topline == 1 and not skipped) and 0 or so
+        local bottom_so = (lnum > last_line and above <= height) and 0 or so
+        --- @param line { above: integer, rows: integer, below: integer }
+        --- @return boolean
+        local function above_bottom_bound(line)
+            return line.above + line.rows <= height and line.below >= bottom_so
+        end
+        --- @type integer|nil
+        local first_fit
+        --- @type integer|nil
+        local last_fit
+        for _, line in ipairs(drawn) do
+            if
+                line.above >= top_so
+                and not (skipped and line.lnum == topline)
+                and above_bottom_bound(line)
+            then
+                first_fit = first_fit or line.lnum
+                last_fit = line.lnum
+            end
+        end
+        if not first_fit then
+            -- The bounds cross: the last line above the bottom bound.
+            local bottom = drawn[1].lnum
+            for _, line in ipairs(drawn) do
+                if above_bottom_bound(line) then
+                    bottom = line.lnum
+                end
+            end
+            return bottom
+        end
+
+        local cursor = vim.api.nvim_win_get_cursor(winid)[1]
+        local fold_start = vim.fn.foldclosed(cursor)
+        local start = fold_start > 0 and fold_start or cursor
+        if start < first_fit then
+            return first_fit
+        end
+        if start > last_fit then
+            return last_fit
+        end
+        -- Inside the band: the cursor line, or the nearest drawn line.
+        local nearest = first_fit
+        for _, line in ipairs(drawn) do
+            if line.lnum == start then
+                return cursor
+            end
+            if
+                line.lnum <= last_fit
+                and math.abs(line.lnum - start) < math.abs(nearest - start)
+            then
+                nearest = line.lnum
+            end
+        end
+        return nearest
+    end)
+end
+
+--- The nearest line above `lnum` (above its closed fold, if in one) that
+--- `winid` draws, at the start of its closed fold if in one.
+--- @param winid integer
+--- @param lnum integer 1-indexed
+--- @return integer|nil lnum 1-indexed; nil when every line above is zero-height
+function BufHelpers.drawn_line_above(winid, lnum)
+    return vim.api.nvim_win_call(winid, function()
+        local start = vim.fn.foldclosed(lnum)
+        local above = (start > 0 and start or lnum) - 1
+        while above >= 1 do
+            local fold_start = vim.fn.foldclosed(above)
+            above = fold_start > 0 and fold_start or above
+            if screen_rows(winid, above, above, 1) > 0 then
+                return above
+            end
+            above = above - 1
+        end
+        return nil
+    end)
+end
+
 --- Bring rows `start_row` through `end_row` of `winid`'s buffer into view. A
 --- span that fits is centred, moved down as far as needed to show no empty
 --- rows past the end of the buffer; a taller one starts at the top. May
 --- scroll up or down.
 ---
---- Fold-aware: closed folds count as one row. A cursor that would not stay
---- `scrolloff` rows inside the new view moves to the first line that does
---- (to the start of a closed fold there), so vim does not move the view to
+--- Fold-aware: closed folds count as one row. The cursor moves to
+--- `fitting_cursor_line` for the new view, so vim does not move the view to
 --- fit the cursor.
 --- @param winid integer
 --- @param padding integer Rows to keep empty below the buffer's last line
 --- @param start_row integer 0-indexed
 --- @param end_row integer 0-indexed, inclusive
 function BufHelpers.show_rows(winid, padding, start_row, end_row)
-    local height = vim.api.nvim_win_get_height(winid)
     local room = text_room(winid, padding)
     local first, last = start_row + 1, end_row + 1
     local span = screen_rows(winid, first, last, room + 1)
@@ -634,35 +779,14 @@ function BufHelpers.show_rows(winid, padding, start_row, end_row)
         topline = math.min(centre, bottom_topline(winid, 1, room))
     end
 
-    local so = math.min(
-        vim.api.nvim_get_option_value("scrolloff", { win = winid }),
-        math.floor((height - 1) / 2)
-    )
-    local last_line =
-        vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(winid))
+    local lnum = BufHelpers.fitting_cursor_line(winid, topline)
+    --- @type vim.fn.winrestview.dict
+    local view = { topline = topline }
+    if lnum ~= vim.api.nvim_win_get_cursor(winid)[1] then
+        view.lnum = lnum
+        view.col = 0
+    end
     vim.api.nvim_win_call(winid, function()
-        local function fold_start(lnum)
-            local start = vim.fn.foldclosed(lnum)
-            return start > 0 and start or lnum
-        end
-        local cursor = fold_start(vim.api.nvim_win_get_cursor(winid)[1])
-        local inside = cursor >= topline
-            and screen_rows(winid, topline, cursor - 1, so + 1) >= so
-            and screen_rows(winid, topline, cursor, height + 1)
-                <= height - so
-        --- @type vim.fn.winrestview.dict
-        local view = { topline = topline }
-        if not inside then
-            local lnum, rows = topline, 0
-            while rows < so and lnum < last_line do
-                local fold_end = vim.fn.foldclosedend(lnum)
-                local next_lnum = (fold_end > 0 and fold_end or lnum) + 1
-                rows = rows + screen_rows(winid, lnum, next_lnum - 1, so + 1)
-                lnum = next_lnum
-            end
-            view.lnum = fold_start(lnum)
-            view.col = 0
-        end
         vim.fn.winrestview(view)
     end)
 end

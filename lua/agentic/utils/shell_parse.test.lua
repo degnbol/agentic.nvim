@@ -578,6 +578,42 @@ describe("ShellParse.extract_commands", function()
             assert.equal("/a", record("cd /a; (python3)", "python3").cwd)
         end)
 
+        it("marks a cwd that a child shell's cd set as detached", function()
+            for _, src in ipairs({
+                "(cd x; python3)",
+                "(cd x; (python3))",
+                "(cd x; eval python3)",
+                "(cd x; { python3; })",
+                "(cd x; python3 | cat)",
+                "(cd x && python3) | cat",
+                "f() { cd x; python3; }",
+                "echo $(cd x; python3)",
+                "cat <(cd x; python3)",
+                "{ cd x; python3; } & b",
+                "zsh -c 'cd x; python3'",
+                "(popd; python3)",
+                "find . -execdir python3 {} +",
+            }) do
+                assert.equal(true, record(src, "python3").cwd_detached)
+            end
+        end)
+
+        it("keeps a cwd the top-level shell shares attached", function()
+            for _, src in ipairs({
+                "cd x; python3",
+                "cd x | cat; python3",
+                "(cd x); python3",
+                "echo | cd x; python3",
+                "cd x; (python3)",
+                "cd x; python3 | cat",
+                "cd x; timeout 5 python3",
+                "cd x; python3 & b",
+                "find . -exec python3 {} +",
+            }) do
+                assert.equal(nil, record(src, "python3").cwd_detached)
+            end
+        end)
+
         it("walks a cd's own substitutions with the cwd before it", function()
             assert.equal("/a", record("cd /a; cd $(cat f)", "cat").cwd)
         end)

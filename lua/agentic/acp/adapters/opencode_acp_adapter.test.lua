@@ -342,6 +342,59 @@ describe("agentic.acp.adapters.OpenCodeACPAdapter", function()
 
             assert.same({ "boom" }, msg.body)
         end)
+
+        --- @param status string
+        --- @param err string
+        --- @return table message
+        local function shell_end(status, err)
+            return handle({
+                toolCallId = "tc-shell",
+                status = status,
+                kind = "execute",
+                title = "shell",
+                rawOutput = { error = err, metadata = {} },
+                content = {
+                    {
+                        type = "content",
+                        content = { type = "text", text = err },
+                    },
+                },
+            })
+        end
+
+        it("rejects a call the user declined", function()
+            local msg = shell_end("failed", "The user declined this tool call")
+
+            assert.equal("Rejected", msg.rejection)
+            assert.is_nil(msg.body)
+        end)
+
+        it("rejects a command the shell scanner refused", function()
+            local msg = shell_end(
+                "failed",
+                "Portable shell scanner cannot analyze command: unterminated-quote"
+            )
+
+            assert.equal(
+                "Rejected: Portable shell scanner cannot analyze command: unterminated-quote",
+                msg.rejection
+            )
+            assert.is_nil(msg.body)
+        end)
+
+        it("keeps a failed call with another error as run", function()
+            local msg = shell_end("failed", "Tool execution aborted")
+
+            assert.is_nil(msg.rejection)
+            assert.same({ "Tool execution aborted" }, msg.body)
+        end)
+
+        it("rejects no completed call", function()
+            local msg =
+                shell_end("completed", "The user declined this tool call")
+
+            assert.is_nil(msg.rejection)
+        end)
     end)
 
     describe("unattended_env", function()

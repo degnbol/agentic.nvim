@@ -1,5 +1,6 @@
 # Plan: gutter identity glyphs
 Status: reviewed (open questions)
+Priority: P3
 
 ## Background
 

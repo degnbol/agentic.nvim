@@ -1,4 +1,5 @@
 local DirtyRows = require("agentic.utils.dirty_rows")
+local FenceRows = require("agentic.ui.fence_rows")
 local Intervals = require("agentic.utils.intervals")
 local MarkdownGuard = require("agentic.utils.markdown_guard")
 local TextWrap = require("agentic.utils.text_wrap")
@@ -17,28 +18,33 @@ local TextWrap = require("agentic.utils.text_wrap")
 --- below it for the rest of the session. That is how a heredoc's fold ends up
 --- swallowing the rest of the transcript.
 ---
---- The injected trees exist here regardless — `MessageWriter`'s
---- `materialize_injections` creates them on every content write. What excludes
---- them is iterating `parser:parse()`'s return value, which is this
---- LanguageTree's own trees only (`LanguageTree:trees()` — "Does not include
---- child languages"). Core reaches the children because `_fold.lua` walks
---- `parser:for_each_tree` instead.
+--- What excludes the injected trees is iterating `parser:parse()`'s return
+--- value, which is this LanguageTree's own trees only
+--- (`LanguageTree:trees()` — "Does not include child languages"). Core
+--- reaches the children because `_fold.lua` walks `parser:for_each_tree`
+--- instead.
 ---
 --- So folds here come only from `queries/agentic/folds.scm` — one per
---- writer-marked `*-fold` body, one from each `*-foldnext`
+--- writer-marked `*-fold` body, and one from each `*-foldnext`
 --- body through the `console` body right after it, which encloses that
---- body's own fold, and one from each `*-foldfence` body through its closing
---- fence row. The writer always appends a body with both its fences in a
+--- body's own fold. The writer always appends a body with both its fences in a
 --- single `nvim_buf_set_lines`, so such a fold is never transiently
 --- unterminated.
+---
+--- A fold never ends on a zero-height row, the fence delimiter rows
+--- `agentic.ui.FenceRows` hides: a markdown body that ends with a code block
+--- folds through its last drawn row. Vim's 'scrolloff' check (`botline_forw`
+--- in `move.c`) counts a closed fold whose last line is zero-height as no
+--- screen row, though the window draws one, and so undoes a `<C-y>`.
 ---
 --- Levels are kept per buffer and recomputed only where an edit can change
 --- them. A row's level is the number of fold ranges covering it, with no level
 --- seeded from the row above as core does, and folds nest only by containment
 --- (a command fold around its output fold). Whether a fold exists also depends
 --- on its opening fence row, whose info string the query reads; call a fold's
---- rows plus that row its footprint. Footprints nest or are disjoint, so after
---- an edit only these rows can change level:
+--- rows, the zero-height rows below them up to the end of its match, and that
+--- fence row its footprint. Footprints nest or are disjoint, so after an edit
+--- only these rows can change level:
 ---
 --- 1. the rows the edit replaced (`on_bytes`),
 --- 2. the rows whose root tree changed (`on_changedtree`), which reach far
@@ -51,7 +57,7 @@ local M = {}
 
 --- @class agentic.ui.Folds.State
 --- @field levels string[] Foldexpr value per 1-indexed line
---- @field skip table<integer, integer> By 1-indexed first line of a fold, the fence rows it holds that the foldtext count leaves out: 2 for one ending at a `@fold.end` capture, 1 for one ending at a `@fold.fence` capture
+--- @field skip table<integer, integer> By 1-indexed first line of a fold, the fence rows it holds that the foldtext count leaves out: 2 for one ending at a `@fold.end` capture
 --- @field dirty agentic.utils.DirtyRows Rows whose level is unknown
 
 -- Not a field of `M`: `v:lua.require(…).foldexpr()` converts the module to a
@@ -104,28 +110,29 @@ function M.levels_of_ranges(ranges, line_count)
     return levels
 end
 
---- Fold ranges of every `folds` match whose footprint (the fold's rows and the
---- opening fence row above them) meets rows `first`..`last`, each over its
---- whole extent. Matches come from the root tree only, so injected languages
---- contribute nothing. A match folds from the start of its `@fold` capture to
---- the end of its `@fold.end` or `@fold.fence` capture. A match with a
---- `@fold.end` capture forms no fold unless that fence opens on the row after
---- `@fold`'s fence closes.
+--- The rows a `folds` match spans: from the start of its `@fold` capture to
+--- the end of its `@fold.end` capture, else of `@fold`.
+--- @class agentic.ui.Folds.Span
+--- @field first integer 1-indexed, the row under the opening fence row
+--- @field last integer 1-indexed, inclusive, the last row of the footprint
+--- @field joined boolean Whether the span ends at a `@fold.end` capture
+
+--- Spans of every `folds` match whose footprint meets rows `first`..`last`,
+--- each over its whole extent. Matches come from the root tree only, so
+--- injected languages contribute nothing. A match with a `@fold.end` capture
+--- counts only when that fence opens on the row after `@fold`'s fence closes.
 --- @param bufnr integer
 --- @param first integer 1-indexed first row
 --- @param last integer 1-indexed last row, inclusive
---- @return [integer, integer][] ranges 1-indexed first and last line
---- @return table<integer, integer> skip by first line of a range, its fence rows the foldtext count leaves out (`State.skip`)
-local function ranges_in(bufnr, first, last)
-    --- @type [integer, integer][]
-    local ranges = {}
-    --- @type table<integer, integer>
-    local skip = {}
+--- @return agentic.ui.Folds.Span[]
+local function spans_in(bufnr, first, last)
+    --- @type agentic.ui.Folds.Span[]
+    local spans = {}
 
     local parser = vim.treesitter.get_parser(bufnr, nil, { error = false })
     local query = parser and vim.treesitter.query.get(parser:lang(), "folds")
     if not parser or not query then
-        return ranges, skip
+        return spans
     end
 
     for _, tree in pairs(parser:parse() or {}) do
@@ -146,24 +153,55 @@ local function ranges_in(bufnr, first, last)
                 "a folds.scm pattern lacks a @fold capture"
             )
             local tail = captured["fold.end"]
-            local fence = captured["fold.fence"]
             -- The `.` anchor skips blank lines, which form no node, so a
             -- second fence joins only when it opens on the row right after
             -- the first one closes. A closing fence row always follows its
             -- content directly.
             local adjacent = not tail or tail[1] == last_row(start) + 2
-            local fold_first = start[1] + 1
-            local fold_last = last_row(tail or fence or start)
-            local meets = fold_first - 1 <= last and fold_last >= first
-            -- Vim cannot close a one-line fold at 'foldminlines' = 1,
-            -- which `chat_win_opts` pins for exactly this reason.
-            if meets and adjacent and fold_last > fold_first then
-                table.insert(ranges, { fold_first, fold_last })
-                skip[fold_first] = tail and 2 or fence and 1 or nil
+            --- @type agentic.ui.Folds.Span
+            local span = {
+                first = start[1] + 1,
+                last = last_row(tail or start),
+                joined = tail ~= nil,
+            }
+            if adjacent and span.first - 1 <= last and span.last >= first then
+                table.insert(spans, span)
             end
         end
     end
 
+    return spans
+end
+
+--- Fold ranges of the `folds` matches whose footprint meets rows
+--- `first`..`last`. A fold ends on the last row of its match that
+--- `agentic.ui.FenceRows` does not hide. A match forms no fold unless that row
+--- is below its first row.
+--- @param bufnr integer
+--- @param first integer 1-indexed first row
+--- @param last integer 1-indexed last row, inclusive
+--- @return [integer, integer][] ranges 1-indexed first and last line
+--- @return table<integer, integer> skip by first line of a range, its fence rows the foldtext count leaves out (`State.skip`)
+local function ranges_in(bufnr, first, last)
+    --- @type [integer, integer][]
+    local ranges = {}
+    --- @type table<integer, integer>
+    local skip = {}
+    for _, span in ipairs(spans_in(bufnr, first, last)) do
+        -- `spans_in` found the parser.
+        local parser = assert(vim.treesitter.get_parser(bufnr))
+        local fold_last = FenceRows.last_drawn_row(
+            parser,
+            span.first - 1,
+            span.last - 1
+        ) + 1
+        -- Vim cannot close a one-line fold at 'foldminlines' = 1, which
+        -- `chat_win_opts` pins for exactly this reason.
+        if fold_last > span.first then
+            table.insert(ranges, { span.first, fold_last })
+            skip[span.first] = span.joined and 2 or nil
+        end
+    end
     return ranges, skip
 end
 
@@ -178,9 +216,8 @@ function M.levels(bufnr)
     return M.levels_of_ranges(ranges, line_count), skip
 end
 
---- Rows `first`..`last` widened to the footprints (a fold's rows and the
---- opening fence row above them) of the folds meeting them, and the fold
---- ranges meeting the widened rows.
+--- Rows `first`..`last` widened to the footprints of the folds meeting them,
+--- and the fold ranges meeting the widened rows.
 --- @param bufnr integer
 --- @param first integer 1-indexed first row
 --- @param last integer 1-indexed last row, inclusive
@@ -190,9 +227,9 @@ end
 --- @return table<integer, integer> skip by first line of a range, its fence rows the foldtext count leaves out (`State.skip`)
 local function fold_span(bufnr, first, last)
     local span_first, span_last = first, last
-    for _, range in ipairs((ranges_in(bufnr, first, last))) do
-        span_first = math.min(span_first, range[1] - 1)
-        span_last = math.max(span_last, range[2])
+    for _, span in ipairs(spans_in(bufnr, first, last)) do
+        span_first = math.min(span_first, span.first - 1)
+        span_last = math.max(span_last, span.last)
     end
     -- Footprints nest or are disjoint, so this finds every range the widened
     -- rows need and widens nothing further.
@@ -398,25 +435,9 @@ function M.foldexpr()
     return state.levels[vim.v.lnum] or "0"
 end
 
---- Namespace in which a writer marks a fold's opening fence row to have the
---- foldtext lead with the first body row.
+--- Namespace of fence row marks that set the row `foldtext` leads with: the
+--- row under the mark.
 M.NS_TITLED = vim.api.nvim_create_namespace("agentic_fold_titled")
-
---- Whether a 0-indexed row carries a mark in `ns`.
---- @param bufnr integer
---- @param ns integer
---- @param row integer
---- @return boolean
-local function is_marked(bufnr, ns, row)
-    local marks = vim.api.nvim_buf_get_extmarks(
-        bufnr,
-        ns,
-        { row, 0 },
-        { row, -1 },
-        { limit = 1 }
-    )
-    return #marks > 0
-end
 
 --- `row` with the code span it starts with shortened to the filename, when
 --- the span's text holds a `/`. The span keeps its delimiters and pad, which
@@ -451,13 +472,14 @@ local FOLDTEXT_HL = "Comment"
 --- content `zo` shows: it leaves out the fence rows a fold holds
 --- (`State.skip`).
 ---
---- A fold holding fence rows, and one whose opening fence row is marked in
---- `NS_TITLED`, lead with their first row, cut so the fold text fits the
---- window's text width: a closed execute block shows its command, and
---- a titled body what it is. A titled row led by a code span holding a path
---- shows only the path's filename in it. The line count is read back out of
---- the folded rows rather than recorded at write time, so it describes what
---- `zo` will actually show.
+--- A fold leads with a row, cut so the fold text fits the window's text
+--- width: the row under the first fence row marked in `NS_TITLED` among its
+--- opening fence row and the rows it holds, else, when it holds fence rows,
+--- its first row. So a titled body shows what it is, and a closed execute
+--- block its command. A titled row led by a code span holding a path shows
+--- only the path's filename in it. The line count is read back out of the
+--- folded rows rather than recorded at write time, so it describes what `zo`
+--- will actually show.
 --- @return {[1]: string, [2]: string}[] chunks
 function M.foldtext()
     local bufnr = vim.api.nvim_get_current_buf()
@@ -466,12 +488,19 @@ function M.foldtext()
     local skip = state and state.skip[first]
     local summary = string.format("%d lines", last - first + 1 - (skip or 0))
 
-    -- `first` is 1-indexed, so the 0-indexed fence row above it is first - 2.
-    local fence_row = first - 2
-    local titled = is_marked(bufnr, M.NS_TITLED, fence_row)
-    if skip or titled then
+    -- 0-indexed: the fence row above the fold through its last row.
+    local titled = vim.api.nvim_buf_get_extmarks(
+        bufnr,
+        M.NS_TITLED,
+        { math.max(first - 2, 0), 0 },
+        { last - 1, -1 },
+        { limit = 1 }
+    )[1]
+    --- @type integer|nil 0-indexed
+    local lead = titled and titled[2] + 1 or skip and first - 1
+    if lead then
         local row = vim.trim(
-            vim.api.nvim_buf_get_lines(bufnr, first - 1, first, false)[1]
+            vim.api.nvim_buf_get_lines(bufnr, lead, lead + 1, false)[1]
         )
         if titled then
             row = shorten_leading_path(row)

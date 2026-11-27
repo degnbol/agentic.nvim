@@ -21,8 +21,7 @@ skill.
 
 ## Debugging
 
-For runtime debugging (logging, diagnostics) and recurring misdiagnosed
-symptoms (freezes/hangs, chat display desync), load the `issues` skill.
+For any bug or regression, load the `issues` skill with `debug`.
 
 ## Session isolation
 

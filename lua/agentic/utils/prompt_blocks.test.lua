@@ -28,6 +28,7 @@ describe("agentic.utils.PromptBlocks", function()
 
         it("accepts digits, dashes and underscores in the word", function()
             assert.equal("a-b_c1", (PromptBlocks.command("/a-b_c1")))
+            assert.equal("skill:a-b", (PromptBlocks.command("/skill:a-b x")))
         end)
 
         it("rejects a path: the word never ends at whitespace", function()

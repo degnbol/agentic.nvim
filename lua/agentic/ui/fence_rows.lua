@@ -1,6 +1,5 @@
 local DirtyRows = require("agentic.utils.dirty_rows")
 local Intervals = require("agentic.utils.intervals")
-local ToolCallLayout = require("agentic.ui.tool_call_layout")
 local Treesitter = require("agentic.utils.treesitter")
 
 --- Zero-height fence delimiter rows of one markdown-grammar buffer: a
@@ -39,6 +38,15 @@ local function blocks_in(parser, first, last)
     )
 end
 
+--- Whether fence info-string `word` resolves to markdown once its fold marker
+--- (`-fold`, `-foldnext`) is stripped.
+--- @param word string
+--- @return boolean
+local function is_markdown(word)
+    local base = word:gsub("%-foldnext$", ""):gsub("%-fold$", "")
+    return Treesitter.resolve_lang(base) == "markdown"
+end
+
 --- Content of `block` when its info string's language resolves to markdown.
 --- @param block TSNode A `fenced_code_block`
 --- @param source integer|string
@@ -55,13 +63,38 @@ local function markdown_content(block, source)
     if not (lang and content) then
         return nil
     end
-    local word = vim.treesitter.get_node_text(lang, source)
-    if
-        Treesitter.resolve_lang(ToolCallLayout.base_lang(word)) ~= "markdown"
-    then
+    if not is_markdown(vim.treesitter.get_node_text(lang, source)) then
         return nil
     end
     return content
+end
+
+--- Memo of `text_delimiter_rows` results, inserted newest first.
+--- @type { text: string, rows: integer[] }[]
+local measured = {}
+
+--- Entries `measured` keeps. One edit measures the same body a few times.
+local MEASURED_MAX = 4
+
+local delimiter_rows
+
+--- 0-indexed rows of the fence delimiters of markdown `text`, and of the
+--- delimiters in each markdown body in it. Do not modify the result: it is
+--- shared with later calls.
+--- @param text string
+--- @return integer[]
+local function text_delimiter_rows(text)
+    for _, entry in ipairs(measured) do
+        if entry.text == text then
+            return entry.rows
+        end
+    end
+    local body = vim.treesitter.get_string_parser(text, "markdown")
+    local body_last = select(3, body:parse()[1]:root():range())
+    local rows = delimiter_rows(body, 0, body_last)
+    table.insert(measured, 1, { text = text, rows = rows })
+    measured[MEASURED_MAX + 1] = nil
+    return rows
 end
 
 --- 0-indexed rows of the fence delimiters in rows `first`..`last` of the root
@@ -70,7 +103,7 @@ end
 --- @param first integer 0-indexed
 --- @param last integer 0-indexed, inclusive
 --- @return integer[]
-local function delimiter_rows(parser, first, last)
+delimiter_rows = function(parser, first, last)
     local rows = vim.tbl_map(
         function(node)
             return (node:start())
@@ -86,14 +119,49 @@ local function delimiter_rows(parser, first, last)
         local content = markdown_content(block, parser:source())
         if content then
             local text = vim.treesitter.get_node_text(content, parser:source())
-            local body = vim.treesitter.get_string_parser(text, "markdown")
-            local body_last = select(3, body:parse()[1]:root():range())
-            for _, row in ipairs(delimiter_rows(body, 0, body_last)) do
+            for _, row in ipairs(text_delimiter_rows(text)) do
                 table.insert(rows, content:start() + row)
             end
         end
     end
     return rows
+end
+
+--- Last row in `first`..`last` that is not in `rows`.
+--- @param rows integer[]
+--- @param first integer
+--- @param last integer inclusive
+--- @return integer row `first - 1` when every row is in `rows`
+local function last_row_outside(rows, first, last)
+    --- @type table<integer, true>
+    local set = {}
+    for _, row in ipairs(rows) do
+        set[row] = true
+    end
+    while last >= first and set[last] do
+        last = last - 1
+    end
+    return last
+end
+
+--- Last row in `first`..`last` that `FenceRows` does not hide: not a fence
+--- delimiter row of the root tree of `parser`, nor of a markdown body there.
+--- @param parser vim.treesitter.LanguageTree A parsed markdown-grammar tree
+--- @param first integer 0-indexed
+--- @param last integer 0-indexed, inclusive
+--- @return integer row 0-indexed, `first - 1` when every row is a delimiter
+function FenceRows.last_drawn_row(parser, first, last)
+    return last_row_outside(delimiter_rows(parser, first, last), first, last)
+end
+
+--- Number of rows of a markdown fence body from its first row through its
+--- last row that `FenceRows` does not hide.
+--- @param rows string[]
+--- @return integer count
+function FenceRows.drawn_count(rows)
+    -- As the body's `code_fence_content` text reads, which ends in a newline.
+    local text = table.concat(rows, "\n") .. "\n"
+    return last_row_outside(text_delimiter_rows(text), 0, #rows - 1) + 1
 end
 
 --- Watch `bufnr`. The first `sync` marks the whole buffer.
@@ -124,7 +192,7 @@ function FenceRows:sync()
     local widened = vim.tbl_map(function(span)
         local first, last = span[1], span[2]
         for _, block in ipairs(blocks_in(parser, first, last)) do
-            first = math.min(first, block:start())
+            first = math.min(first, (block:start()))
             last = math.max(last, Treesitter.last_row(block))
         end
         return { first, last }

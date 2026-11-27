@@ -4,7 +4,7 @@
 -- When the user switches the provider, the SessionManager should handle the transition smoothly,
 -- ensuring that the new session is properly set up and all the previous messages are sent to the new agent provider without duplicating them in the chat widget
 
-local ACPClient = require("agentic.acp.acp_client")
+local AgentClient = require("agentic.agent_client")
 local ACPPayloads = require("agentic.acp.acp_payloads")
 local AcpKind = require("agentic.utils.acp_kind")
 local AgentConfigOptions = require("agentic.acp.agent_config_options")
@@ -29,8 +29,10 @@ local Json = require("agentic.utils.json")
 local Listeners = require("agentic.utils.listeners")
 local Logger = require("agentic.utils.logger")
 local MessageWriter = require("agentic.ui.message_writer")
+local PermissionOptions = require("agentic.acp.permission_options")
 local PromptBlocks = require("agentic.utils.prompt_blocks")
 local Recovery = require("agentic.session_recovery")
+local RunClocks = require("agentic.ui.run_clocks")
 local SessionRegistry = require("agentic.session_registry")
 local SessionResume = require("agentic.session_resume")
 local SequenceTail = require("agentic.utils.sequence_tail")
@@ -39,8 +41,8 @@ local SideRecords = require("agentic.ui.side_records")
 local SlashCommands = require("agentic.acp.slash_commands")
 local States = require("agentic.states")
 local Subagents = require("agentic.subagents")
+local ToolTimings = require("agentic.tool_timings")
 local WidgetLayout = require("agentic.ui.widget_layout")
-local WindowDecoration = require("agentic.ui.window_decoration")
 
 --- @class agentic._SessionManagerPrivate
 local P = {}
@@ -107,13 +109,14 @@ end
 --- @field _is_first_message boolean Whether this is the first message in the session, used to add system info only once
 --- @field is_generating boolean The running state the chat header shows
 --- @field widget agentic.ui.ChatWidget
---- @field agent agentic.acp.ACPClient
+--- @field agent agentic.AgentClient
 --- @field main_view agentic.ui.AgentView The chat's. Its response boundary is never reset: every session starts with the writer's prose run closed and history ending on a user message, where a stale verdict writes no break
 --- @field message_writer agentic.ui.MessageWriter `main_view.writer`
 --- @field permission_manager agentic.ui.PermissionManager
 --- @field _grant_command agentic.GrantCommand
 --- @field tail_lines agentic.ui.TailLines `main_view.tail_lines`
 --- @field _subagents agentic.Subagents
+--- @field _run_clocks? agentic.ui.RunClocks How long each live tool call runs. Nil when `tool_call_display.elapsed_threshold_ms` is false
 --- @field _output_tails table<string, agentic.utils.FileTail> toolCallId -> tail of the output file of a command still running
 --- @field _held_tool_call_updates table<string, { update: agentic.ui.MessageWriter.ToolCallBase, child_id?: string }> toolCallId -> fields a side record gave a call the chat does not show yet, and the subagent whose records gave them. Dropped at the turn's end for the main agent, at the subagent's end for a subagent
 --- @field file_list agentic.ui.FileList
@@ -175,36 +178,18 @@ function SessionManager:_notify_attention(mark_idle)
     end
 end
 
---- Signal a permission request waiting with its float hidden, not visible in
---- the current tabpage: bell, the waiting state in the header of
---- `badge_bufnr`, and a notification naming the session and `anchor_bufnr`,
---- the buffer the request belongs to. The state stays until the request ends.
---- @param badge_bufnr integer
---- @param anchor_bufnr integer
-function SessionManager:_on_permission_hidden(badge_bufnr, anchor_bufnr)
-    SessionManager._ring_bell()
-    self.widget:set_waiting(true, badge_bufnr)
-    local title = self.chat_history.title
-    local label = self:_subagent_label(anchor_bufnr)
-    local where = label and "subagent " .. label
-        or string.format("its %s buffer", vim.b[anchor_bufnr].agentic_window)
-    Logger.notify(
-        string.format(
-            "%s is waiting for a permission in %s",
-            title ~= "" and title or "An Agentic session",
-            where
-        ),
-        vim.log.levels.INFO,
-        { title = "Agentic" }
-    )
-end
-
---- The label of the subagent whose transcript is `bufnr`.
+--- The session title and the label of the subagent whose transcript is
+--- `bufnr`, joined by " · ", or the one of them that is set.
 --- @param bufnr integer
---- @return string|nil label Nil for a buffer that is no transcript
-function SessionManager:_subagent_label(bufnr)
+--- @return string|nil title Nil when neither is set
+function SessionManager:_buf_title(bufnr)
+    local title = self.chat_history.title ~= "" and self.chat_history.title
     local child_id = self._subagents:child_of_buf(bufnr)
-    return child_id and self._subagents:agent_label(child_id)
+    local label = child_id and self._subagents:agent_label(child_id)
+    if title and label then
+        return title .. " · " .. label
+    end
+    return title or label or nil
 end
 
 --- Generate the welcome header for a new session
@@ -434,7 +419,15 @@ function SessionManager:new(provider)
         end
     end
 
-    self.main_view = AgentView:new(self.widget.buf_nrs.agent)
+    local threshold_ms = Config.tool_call_display.elapsed_threshold_ms
+    if threshold_ms then
+        self._run_clocks = RunClocks:new(threshold_ms, function(ids)
+            for _, id in ipairs(ids) do
+                self:_refresh_status(id)
+            end
+        end)
+    end
+    self.main_view = AgentView:new(self.widget.buf_nrs.agent, self._run_clocks)
     self.tail_lines = self.main_view.tail_lines
     self.message_writer = self.main_view.writer
     self._subagents =
@@ -460,23 +453,11 @@ function SessionManager:new(provider)
             return self:_turn_open()
         end
     )
-    self.permission_manager.on_hidden = function(badge_bufnr, anchor_bufnr)
-        self:_on_permission_hidden(badge_bufnr, anchor_bufnr)
-    end
-    self.permission_manager.on_hidden_resolved = function(bufnr)
-        -- A marked transcript the user wiped took its header with it.
-        if
-            vim.api.nvim_buf_is_valid(bufnr)
-            and WindowDecoration.get_header(bufnr).waiting
-        then
-            self.widget:set_waiting(false, bufnr)
-        end
-    end
     self.permission_manager.open_anchor = function(bufnr, how)
         return WidgetLayout.open_buf(bufnr, how, self.widget:target_win())
     end
     self.permission_manager.title_for = function(anchor)
-        return self:_subagent_label(anchor)
+        return self:_buf_title(anchor)
     end
     self.permission_manager.proxy_tool_call = function(anchor)
         return self._subagents:child_of_buf(anchor)
@@ -1062,6 +1043,16 @@ function SessionManager:_view_for(tool_call_id)
     return self.main_view
 end
 
+--- Rewrite a tool call's status footer, where its buffer is loaded. Loads
+--- no transcript: one loaded later renders the call from the history.
+--- @param tool_call_id string
+function SessionManager:_refresh_status(tool_call_id)
+    local writer = self._subagents:loaded_writer_of(tool_call_id)
+    if writer then
+        writer:refresh_status(tool_call_id)
+    end
+end
+
 --- The id of the main chat's block for a tool call: the id itself when the
 --- call has a block of its own, else the child id of the subagent the id
 --- delegated to, else the id itself.
@@ -1147,6 +1138,7 @@ function SessionManager:_subagents_host()
                 self:render_agents()
             end
         end,
+        run_clocks = self._run_clocks,
         return_prompt = function(text, bufnr, reason)
             local return_prompt = reason == "refusal"
                     and Recovery.restore_refused_prompt
@@ -1588,9 +1580,9 @@ end
 
 --- Build the ACP client handlers table. Conversation updates of a session/load
 --- replay are held or dropped instead of handled.
---- @return agentic.acp.ClientHandlers
+--- @return agentic.AgentClient.ClientHandlers
 function SessionManager:_build_handlers()
-    --- @type agentic.acp.ClientHandlers
+    --- @type agentic.AgentClient.ClientHandlers
     return {
         on_session_update = function(update, source_session_id)
             if
@@ -1824,6 +1816,13 @@ function SessionManager:_on_tool_call(tool_call, source_session_id)
         self.permission_manager:take_causes(id),
         agent_key
     )
+    if
+        self._run_clocks
+        and not self:_replaying()
+        and not has_ended(tool_call.status)
+    then
+        self._run_clocks:start(id, child_id == nil)
+    end
     self:_sync_job_stop(id)
     if agent_key then
         self:_sync_modified(self.chat_history)
@@ -2193,6 +2192,14 @@ function SessionManager:_on_request_permission(request, callback)
             return
         end
 
+        -- The tool runs from the answer on.
+        local kind = PermissionOptions.option_kind(request.options, option_id)
+        if
+            self._run_clocks
+            and (kind == "allow_once" or kind == "allow_always")
+        then
+            self._run_clocks:restart(tool_call_id)
+        end
         callback(option_id)
     end
 
@@ -2205,15 +2212,15 @@ function SessionManager:_on_request_permission(request, callback)
         self.permission_manager:add_request(request, wrapped_callback)
 
     if prompted then
+        if self._run_clocks then
+            self._run_clocks:wait(tool_call_id)
+            self:_refresh_status(tool_call_id)
+        end
+
         -- Notifications and hooks are non-essential UI; a throw here must not
         -- escape (add_request has already run, so the callback is safe).
         local ok, err = pcall(function()
-            -- A hidden float is signalled by `_on_permission_hidden`.
-            if
-                self.permission_manager.permission_float:is_visible_in_current_tab()
-            then
-                self:_notify_attention(false)
-            end
+            self:_notify_attention(false)
 
             P.invoke_hook("on_permission_request", {
                 session_id = self.session_id,
@@ -3349,6 +3356,17 @@ function SessionManager:_handle_input_submit_inner(input_text)
         })
     end
 
+    local timings = not is_command
+        and self._run_clocks
+        and ToolTimings.prompt_text(
+            self._run_clocks:take_reports(),
+            self.message_writer.tool_call_blocks,
+            self._run_clocks.threshold_ms
+        )
+    if timings then
+        table.insert(prompt, { type = "text", text = timings })
+    end
+
     --- Display-only lines appended after the prompt body in the chat widget
     --- (heading and region signs are owned by MessageWriter:write_user_prompt)
     local extra_lines = {}
@@ -3593,7 +3611,7 @@ function SessionManager:_dispatch_turn(prompt, sent)
         if self.destroyed or not err or not self:_drop_untaken(sent) then
             return
         end
-        if err.code ~= ACPClient.ERROR_CODES.REQUEST_CANCELLED then
+        if err.code ~= AgentClient.ERROR_CODES.REQUEST_CANCELLED then
             self.message_writer:write_error_message(err)
             if not self:_turn_open() then
                 self.message_writer:finalize_turn()
@@ -3665,7 +3683,7 @@ end
 
 --- Apply a change of the agent's foreground work. An `idle` ends the turn
 --- running, if one runs; an `idle` while idle is a snapshot and ends nothing.
---- @param state agentic.acp.TurnState
+--- @param state agentic.AgentClient.TurnState
 function SessionManager:_on_turn_state(state)
     local was = self._foreground
     self._foreground = state.state
@@ -3685,7 +3703,7 @@ end
 --- the refusal is reported), or when the usage limit turns it away before any
 --- reply (`"usage_limit"`). A turned-away prompt and the limit's notice are
 --- removed from the chat history.
---- @param state agentic.acp.TurnState
+--- @param state agentic.AgentClient.TurnState
 function SessionManager:_end_turn(state)
     local sent = table.remove(self._taken, 1)
     local user_msg = sent and sent.user_msg
@@ -3738,7 +3756,7 @@ function SessionManager:_end_turn(state)
             )
             self._transient_attempt = 0
         end
-        if err.code == ACPClient.ERROR_CODES.AUTH_REQUIRED then
+        if err.code == AgentClient.ERROR_CODES.AUTH_REQUIRED then
             Recovery.offer_login(self)
         elseif error_type == "usage_limit" then
             -- claude-agent-acp reuses a stalled query after this error,
@@ -4285,12 +4303,17 @@ end
 --- The one place those three come apart safely. Clearing the text alone leaves
 --- every extmark collapsed on row 0, where a stale tracker resolves to the top
 --- of the next conversation.
+---
+--- The run clocks of its calls go too: no update ends them now.
 function SessionManager:clear_chat()
     self:_stop_output_tails(false)
     self.widget:clear()
     self.message_writer:reset()
     self._subagents:reset()
     self._held_tool_call_updates = {}
+    if self._run_clocks then
+        self._run_clocks:clear()
+    end
 end
 
 --- Return the session to an empty conversation with no ACP session. Sends
@@ -4493,6 +4516,9 @@ function SessionManager:destroy()
 
     self:_cancel_session()
     self.widget:destroy()
+    if self._run_clocks then
+        self._run_clocks:destroy()
+    end
 end
 
 --- Replace the conversation with `history` in a new ACP session: clear the
@@ -4643,7 +4669,7 @@ end
 --- Start the session of a fork. A fork holding no prompt is a new session
 --- without links. Otherwise the fork's history gets its link to the source,
 --- and the provider cuts its own copy of the conversation where it can
---- (`ACPClient:can_fork`); else, or when the cut fails, the history is sent
+--- (`AgentClient:can_fork`); else, or when the cut fails, the history is sent
 --- as text with the first prompt.
 --- @param fork agentic.SessionManager.ForkStart
 function SessionManager:_do_start_fork(fork)
@@ -4696,7 +4722,10 @@ function SessionManager:_do_start_fork(fork)
                     .. " — sending the history with the first prompt"
                 -- A response the provider has not recorded: one stopped
                 -- early, or one still streaming.
-                if err and err.code == ACPClient.ERROR_CODES.INVALID_PARAMS then
+                if
+                    err
+                    and err.code == AgentClient.ERROR_CODES.INVALID_PARAMS
+                then
                     Logger.debug(message)
                 else
                     Logger.notify(message, vim.log.levels.WARN)

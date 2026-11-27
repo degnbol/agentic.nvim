@@ -212,6 +212,39 @@ describe("agentic.ui.MessageWriter", function()
         end
     end
 
+    describe("range parse of a tool call block", function()
+        --- Writes a completed tool call block and counts the `parse` calls
+        --- the write runs that process injections: those with a row range
+        --- or `true`.
+        --- @return integer
+        local function n_range_parses()
+            local parser = vim.treesitter.get_parser(bufnr) --[[@as vim.treesitter.LanguageTree]]
+            local parse = spy.on(parser, "parse")
+            MiniTest.finally(function()
+                parse:revert()
+            end)
+            writer:write_tool_call_block(
+                make_tool_call_block("t1", "completed")
+            )
+            return #vim.tbl_filter(function(call)
+                return call[2] ~= nil and call[2] ~= false
+            end, parse.calls)
+        end
+
+        it("runs in a buffer a window shows", function()
+            as_chat()
+
+            assert.is_true(n_range_parses() > 0)
+        end)
+
+        it("is skipped in a buffer no window shows", function()
+            as_chat()
+            vim.api.nvim_win_close(winid, true)
+
+            assert.equal(0, n_range_parses())
+        end)
+    end)
+
     describe("wrap_width", function()
         local PARAGRAPH = string.rep("word ", 30) .. "end"
 
@@ -2769,6 +2802,57 @@ describe("agentic.ui.MessageWriter", function()
             end
         )
 
+        it(
+            "a view move up with the cursor kept on the last line puts the window in user control, and G follows again",
+            function()
+                start_at({ topline = 32, lnum = 50 })
+
+                move({ topline = 31, lnum = 50 })
+                writer:on_view_change(winid, false)
+
+                assert.is_true(writer._user_controlled[winid])
+                assert.equal(49, vim.api.nvim_win_get_cursor(winid)[1])
+
+                vim.api.nvim_win_call(winid, function()
+                    vim.cmd("normal! G")
+                end)
+                writer:on_view_change(winid, false)
+
+                assert.is_nil(writer._user_controlled[winid])
+            end
+        )
+
+        it(
+            "a write that makes the cursor line the last moves it off in user control",
+            function()
+                writer._user_controlled[winid] = true
+                start_at({ topline = 31, lnum = 49 })
+
+                writer:_own_change(function()
+                    vim.api.nvim_buf_set_lines(bufnr, 49, 50, false, {})
+                end)
+
+                assert.equal(48, vim.api.nvim_win_get_cursor(winid)[1])
+            end
+        )
+
+        it(
+            "a view move up on a closed fold that ends on the last line moves the cursor above it",
+            function()
+                vim.api.nvim_win_call(winid, function()
+                    vim.wo.foldmethod = "manual"
+                    vim.cmd("45,50fold")
+                end)
+                start_at({ topline = 27, lnum = 45 })
+
+                move({ topline = 26, lnum = 45 })
+                writer:on_view_change(winid, false)
+
+                assert.is_true(writer._user_controlled[winid])
+                assert.equal(44, vim.api.nvim_win_get_cursor(winid)[1])
+            end
+        )
+
         it("a view move down onto the last line follows again", function()
             writer._user_controlled[winid] = true
             start_at({ topline = 1, lnum = 1 })
@@ -2895,6 +2979,66 @@ describe("agentic.ui.MessageWriter", function()
                 writer:on_view_change(winid, false)
 
                 assert.is_true(writer._user_controlled[winid])
+            end
+        )
+
+        it(
+            "a scroll that leaves the cursor on a zero-height row moves it to a drawn row",
+            function()
+                setup_buffer(120, 120)
+                local ns = vim.api.nvim_create_namespace("message_writer_test")
+                for lnum = 3, 115, 7 do
+                    vim.api.nvim_buf_set_extmark(bufnr, ns, lnum - 1, 0, {
+                        conceal_lines = "",
+                    })
+                end
+                vim.api.nvim_win_set_height(winid, 22)
+                vim.wo[winid].scrolloff = 4
+                vim.wo[winid].wrap = false
+                vim.wo[winid].conceallevel = 2
+                vim.wo[winid].concealcursor = "n"
+                -- Unfocused, as a chat beside the input window.
+                vim.cmd("wincmd p")
+
+                --- Native `<C-y>` in the chat window.
+                --- @return integer topline after it
+                local function scroll_up()
+                    vim.api.nvim_win_call(winid, function()
+                        vim.cmd("normal! \25")
+                    end)
+                    vim.cmd("redraw")
+                    return vim.fn.line("w0", winid)
+                end
+                --- @return boolean
+                local function cursor_hidden()
+                    local lnum = vim.api.nvim_win_get_cursor(winid)[1]
+                    return vim.api.nvim_win_text_height(winid, {
+                        start_row = lnum - 1,
+                        end_row = lnum - 1,
+                    }).all == 0
+                end
+
+                vim.cmd("redraw")
+                local stalled = vim.fn.line("w0", winid)
+                for _ = 1, 30 do
+                    local before = stalled
+                    stalled = scroll_up()
+                    if stalled >= before then
+                        break
+                    end
+                end
+                assert.is_true(cursor_hidden())
+
+                -- What the WinScrolled hook runs after each scroll.
+                local topline = stalled
+                for _ = 1, 5 do
+                    writer:on_view_change(winid, false)
+                    writer:cursor_onto_drawn_row(winid)
+                    assert.is_false(cursor_hidden())
+                    local before = topline
+                    topline = scroll_up()
+                    assert.is_true(topline < before)
+                end
             end
         )
 
@@ -3815,6 +3959,124 @@ describe("agentic.ui.MessageWriter", function()
         )
     end)
 
+    describe("run time in the footer", function()
+        local RunClocks = require("agentic.ui.run_clocks")
+        local now_ms
+        --- @type TestStub
+        local schedule_stub
+        --- @type agentic.ui.RunClocks
+        local clocks
+
+        before_each(function()
+            schedule_stub = spy.stub(vim, "schedule")
+            now_ms = 0
+            clocks = RunClocks:new(5000, function() end)
+            -- Each running clock reads `now_ms`.
+            function clocks:elapsed(id)
+                return RunClocks.elapsed(self, id) and now_ms
+            end
+            writer.run_clocks = clocks
+        end)
+
+        after_each(function()
+            clocks:destroy()
+            schedule_stub:revert()
+        end)
+
+        --- @param id string
+        --- @return string footer The tracked block's footer row
+        local function footer(id)
+            local _, end_row = writer:_block_rows(writer.tool_call_blocks[id])
+            local row = end_row --[[@as integer]]
+            return vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
+        end
+
+        it("shows no time below the threshold", function()
+            clocks:start("t", true)
+            writer:write_tool_call_block(make_tool_call_block("t", "pending"))
+            now_ms = 4999
+            writer:refresh_status("t")
+            assert.truthy(footer("t"):find(" pending $"))
+        end)
+
+        it(
+            "shows whole seconds at and above the threshold while running",
+            function()
+                clocks:start("t", true)
+                writer:write_tool_call_block(
+                    make_tool_call_block("t", "pending")
+                )
+                now_ms = 7900
+                writer:refresh_status("t")
+                assert.truthy(footer("t"):find("pending · 7 s $"))
+            end
+        )
+
+        it("follows the causes", function()
+            clocks:start("t", true)
+            writer:write_tool_call_block(make_tool_call_block("t", "pending"))
+            now_ms = 6000
+            writer:update_tool_call_block({
+                tool_call_id = "t",
+                status = "in_progress",
+                causes = { { code = "grant", subject = "/a" } },
+            })
+            assert.truthy(footer("t"):find("in_progress · grant · 6 s $"))
+        end)
+
+        it("shows tenths once the call ends", function()
+            clocks:start("t", true)
+            writer:write_tool_call_block(make_tool_call_block("t", "pending"))
+            now_ms = 6340
+            writer:update_tool_call_block({
+                tool_call_id = "t",
+                status = "completed",
+            })
+            assert.truthy(footer("t"):find("completed · 6.3 s $"))
+        end)
+
+        it("stamps duration_ms on the ending update and keeps it", function()
+            clocks:start("t", true)
+            writer:write_tool_call_block(make_tool_call_block("t", "pending"))
+            now_ms = 192500
+            --- @type agentic.ui.MessageWriter.ToolCallBase
+            local update = { tool_call_id = "t", status = "completed" }
+            writer:update_tool_call_block(update)
+            assert.equal(192500, update.duration_ms)
+            now_ms = 999999
+            writer:update_tool_call_block({
+                tool_call_id = "t",
+                status = "completed",
+                body = { "late" },
+            })
+            assert.truthy(footer("t"):find("completed · 3m12s $"))
+        end)
+
+        it("stamps the calls stamp_open_calls ends", function()
+            clocks:start("t", true)
+            writer:write_tool_call_block(make_tool_call_block("t", "pending"))
+            now_ms = 8000
+            local updates = writer:stamp_open_calls("interrupted", "failed")
+            assert.equal(8000, updates[1].duration_ms)
+        end)
+
+        it("shows a written block's saved time without a clock", function()
+            local block = make_tool_call_block("t", "completed")
+            block.duration_ms = 61000
+            writer:write_tool_call_block(block)
+            assert.truthy(footer("t"):find("completed · 1m01s $"))
+            assert.is_nil(clocks:elapsed("t"))
+        end)
+
+        it("shows no time without clocks", function()
+            writer.run_clocks = nil
+            local block = make_tool_call_block("t", "completed")
+            block.duration_ms = 61000
+            writer:write_tool_call_block(block)
+            assert.truthy(footer("t"):find(" completed $"))
+        end)
+    end)
+
     describe("status footer as direct buffer text", function()
         --- @type TestStub
         local schedule_stub
@@ -4667,7 +4929,7 @@ describe("agentic.ui.MessageWriter", function()
         it(
             "writes heading and body to buffer and returns error_type",
             function()
-                --- @type agentic.acp.ACPError
+                --- @type agentic.AgentClient.Error
                 local err = {
                     code = -32000,
                     message = "Authentication required",
@@ -4685,7 +4947,7 @@ describe("agentic.ui.MessageWriter", function()
         )
 
         it("returns parsed error_type from embedded JSON", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "Internal error: API Error: 401\n"
@@ -4701,7 +4963,7 @@ describe("agentic.ui.MessageWriter", function()
         it("applies error heading extmark on Error text", function()
             local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32000,
                 message = "Authentication required",
@@ -4728,7 +4990,7 @@ describe("agentic.ui.MessageWriter", function()
         it("applies error body extmarks on non-empty lines", function()
             local NS_ERROR = vim.api.nvim_create_namespace("agentic_error")
 
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "Internal error: API Error: 401\n"
@@ -4763,7 +5025,7 @@ describe("agentic.ui.MessageWriter", function()
                 { "previous message", "" }
             )
 
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "Internal error: API Error: 529\n"
@@ -4793,7 +5055,7 @@ describe("agentic.ui.MessageWriter", function()
         it("wraps the body at wrap_width", function()
             Config.windows.wrap_width = 58
 
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "You've hit your individual spend limit · run"
@@ -6700,12 +6962,12 @@ describe("agentic.ui.MessageWriter", function()
             end)
 
             it(
-                "re-lays out with the diff closed and a reason section",
+                "re-lays out the diff and a reason section in one closed fold",
                 function()
                     local fence = diff_fence_line()
                     local lines =
                         vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-                    assert.is_not_nil(lines[fence]:match("^`+text%-foldfence$"))
+                    assert.is_not_nil(lines[fence]:match("^`+text%-foldnext$"))
                     local reason_fence = closing_fence_after(fence) + 1
                     assert.is_not_nil(lines[reason_fence]:match("^`+console$"))
                     assert.equal(
@@ -6716,7 +6978,7 @@ describe("agentic.ui.MessageWriter", function()
 
                     deferred.drain()
                     assert.equal(fence + 1, vim.fn.foldclosed(fence + 1))
-                    assert.equal(-1, vim.fn.foldclosed(reason_fence + 1))
+                    assert.equal(fence + 1, vim.fn.foldclosed(reason_fence + 1))
                 end
             )
 

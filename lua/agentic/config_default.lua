@@ -7,6 +7,7 @@
 --- | "cursor-acp"
 --- | "auggie-acp"
 --- | "mistral-vibe-acp"
+--- | "pi"
 
 --- @alias agentic.UserConfig.HeaderRenderFn fun(parts: agentic.ui.ChatWidget.HeaderParts): string|nil
 
@@ -144,6 +145,13 @@ local ConfigDefault = {
             name = "OpenCode ACP",
             command = "opencode",
             args = { "acp" },
+            env = {},
+        },
+
+        pi = {
+            name = "pi",
+            command = "pi",
+            args = {},
             env = {},
         },
 
@@ -442,10 +450,10 @@ local ConfigDefault = {
     },
 
     --- Floating window that renders permission prompts. Anchored to a corner
-    --- of the chat window so it stays in view regardless of where the
-    --- streaming content currently is.
+    --- of a window in the current tabpage (the tool call's, else the chat's,
+    --- else the first) so it stays in view.
     --- @class agentic.UserConfig.PermissionFloat
-    --- @field anchor "NE"|"NW"|"SE"|"SW" Chat-window corner to anchor to
+    --- @field anchor "NE"|"NW"|"SE"|"SW" Window corner to anchor to
     --- @field width integer Content width in columns (border drawn around)
     --- @field row_offset integer Inset from the anchored corner (positive = down for N*, up for S*)
     --- @field col_offset integer Inset from the anchored corner (positive = right for *W, left for *E)
@@ -502,6 +510,7 @@ local ConfigDefault = {
     --- @field diff_context_max_lines integer Skip context-aware diff highlighting when the target file exceeds this many lines (each Edit render reparses the whole file). Set to 0 to disable the feature entirely.
     --- @field create_max_lines integer Fold a created-file diff closed when it exceeds this many lines (0 = always open). An edit diff stays open unless the edit failed.
     --- @field background_tail_lines integer Last lines of a background command's output file shown under its block
+    --- @field elapsed_threshold_ms integer|false A tool call that runs at least this long shows its run time in its footer, and the agent gets the time with the next prompt. false shows and tells no times.
     tool_call_display = {
         search_max_lines = 8,
         execute_max_lines = 25,
@@ -510,6 +519,7 @@ local ConfigDefault = {
         diff_context_max_lines = 10000,
         create_max_lines = 50,
         background_tail_lines = 10,
+        elapsed_threshold_ms = 5000,
     },
 
     --- Notification settings
@@ -594,29 +604,27 @@ local ConfigDefault = {
     },
 
     --- @class agentic.UserConfig.SkepticModel
-    --- @field provider string Only "opencode-acp"
-    --- @field model string Model value id, e.g. "litellm/glm-5.3"
+    --- @field provider string Only "pi"
+    --- @field model string Model value id, `<provider>/<id>`, e.g. "litellm/glm-5.3"
 
     --- Background checks of the main agent's claims after each turn. Needs
     --- `text_model.url`. `:h agentic-skeptic`
     --- @class agentic.UserConfig.Skeptic
     --- @field enabled boolean On in every new session; `/skeptic on|off` sets one session
-    --- @field reporting_criteria "agree"|"either" Forward a claim when every skeptic refutes it, or when any skeptic refutes it with evidence
     --- @field extractor { model: string, reasoning_effort?: string|false } The `text_model` model that extracts claims, and the request's `reasoning_effort`. `false` leaves the field out of the request, since nil cannot unset the default
     --- @field skeptics agentic.UserConfig.SkepticModel[]
     --- @field turn_timeout_ms integer Per skeptic turn, and for a skeptic session to become ready
-    --- @field max_refusals integer Refusal prompts per check before a skeptic gives up
-    --- @field prompts table<string, string> Overrides of the prompt texts, keyed `extract`, `verify`, `deliver` or `refusal`
+    --- @field max_refusals integer Refusal prompts per skeptic prompt before a skeptic gives up
+    --- @field prompts table<string, string> Overrides of the prompt texts, keyed `extract`, `verify`, `attack`, `deliver` or `refusal`
     skeptic = {
         enabled = false,
-        reporting_criteria = "agree",
         extractor = {
             model = "nebius-deepseek-v4.1-flash-1017",
             reasoning_effort = "none",
         },
         skeptics = {
-            { provider = "opencode-acp", model = "litellm/glm-5.3" },
-            { provider = "opencode-acp", model = "litellm/kimi-k3" },
+            { provider = "pi", model = "litellm/glm-5.3" },
+            { provider = "pi", model = "litellm/kimi-k3" },
         },
         turn_timeout_ms = 300000,
         max_refusals = 3,

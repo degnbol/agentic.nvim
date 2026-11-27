@@ -3,7 +3,7 @@
 
 local Config = require("agentic.config")
 
---- @alias agentic.skeptic.PromptKey "extract"|"verify"|"deliver"|"refusal"
+--- @alias agentic.skeptic.PromptKey "extract"|"verify"|"attack"|"deliver"|"refusal"
 
 --- @class agentic.skeptic.Prompts
 local M = {}
@@ -37,6 +37,21 @@ For each claim decide:
 
 End with one fenced json block: an array of objects with the keys "claim"
 (its number), "verdict" and "evidence".
+
+%s]],
+
+    -- `%s`: the other skeptics' objections, numbered.
+    attack = [[
+Other skeptics object to claims you checked. Find holes in each objection.
+You may only modify tmp.
+
+Each verdict is about the objection, not the claim: "refuted" means the
+objection is wrong. List only the objections you show to be wrong, each with
+the evidence: file and line, or what you ran and saw.
+
+End with one fenced json block: an array of objects with the keys "claim"
+(the objection's number), "verdict" and "evidence". The array is empty when
+you show no objection to be wrong.
 
 %s]],
 

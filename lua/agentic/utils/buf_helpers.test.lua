@@ -855,6 +855,212 @@ describe("BufHelpers", function()
 
             assert.equal(16, vim.api.nvim_win_get_cursor(winid)[1])
         end)
+
+        it("leaves a cursor on the last line when the end shows", function()
+            vim.wo[winid].scrolloff = 4
+            vim.api.nvim_win_set_cursor(winid, { 50, 0 })
+
+            BufHelpers.show_rows(winid, 1, 44, 46)
+            assert.equal(50, vim.api.nvim_win_get_cursor(winid)[1])
+
+            local more = {}
+            for i = 51, 70 do
+                more[#more + 1] = "line " .. i
+            end
+            vim.api.nvim_buf_set_lines(bufnr, -1, -1, false, more)
+            BufHelpers.scroll_down(winid, 1, 45)
+
+            assert.equal(45, topline())
+        end)
+    end)
+
+    describe("fitting_cursor_line", function()
+        --- @type integer
+        local bufnr
+        --- @type integer
+        local winid
+
+        --- @param height integer
+        local function open(height)
+            bufnr = vim.api.nvim_create_buf(false, true)
+            local lines = {}
+            for i = 1, 50 do
+                lines[i] = "line " .. i
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            winid = vim.api.nvim_open_win(bufnr, true, {
+                relative = "editor",
+                width = 40,
+                height = height,
+                row = 0,
+                col = 0,
+            })
+            vim.wo[winid].scrolloff = 4
+            vim.wo[winid].wrap = false
+            vim.wo[winid].conceallevel = 2
+            vim.wo[winid].foldmethod = "manual"
+        end
+
+        --- @param topline integer
+        --- @param cursor integer
+        --- @return integer lnum
+        local function fit(topline, cursor)
+            vim.api.nvim_win_set_cursor(winid, { cursor, 0 })
+            return BufHelpers.fitting_cursor_line(winid, topline)
+        end
+
+        after_each(function()
+            vim.api.nvim_win_close(winid, true)
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        it("keeps a drawn cursor inside the band", function()
+            open(20)
+            assert.equal(20, fit(10, 20))
+        end)
+
+        it("moves a cursor above the band to its top", function()
+            open(20)
+            assert.equal(14, fit(10, 5))
+        end)
+
+        it("moves a cursor below the band to its bottom", function()
+            open(20)
+            -- Lines 10 to 29 fill the 20 rows. 26 to 29 are 'scrolloff' rows.
+            assert.equal(25, fit(10, 40))
+        end)
+
+        it("passes over a zero-height line at the bound", function()
+            open(20)
+            local ns = vim.api.nvim_create_namespace("buf_helpers_test")
+            vim.api.nvim_buf_set_extmark(bufnr, ns, 13, 0, {
+                conceal_lines = "",
+            })
+
+            assert.equal(15, fit(10, 5))
+        end)
+
+        it("counts a closed fold as one row", function()
+            open(20)
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd("10,15fold")
+            end)
+
+            assert.equal(19, fit(10, 5))
+        end)
+
+        it("keeps a cursor inside a closed fold in the band", function()
+            open(20)
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd("18,22fold")
+            end)
+
+            assert.equal(20, fit(10, 20))
+        end)
+
+        it(
+            "counts only the rows the window shows of a skipped topline",
+            function()
+                open(12)
+                vim.wo[winid].wrap = true
+                vim.wo[winid].smoothscroll = true
+                vim.api.nvim_buf_set_lines(bufnr, 0, 1, false, {
+                    string.rep("x", 200),
+                })
+                vim.api.nvim_win_call(winid, function()
+                    vim.fn.winrestview({ topline = 1, skipcol = 160, lnum = 8 })
+                end)
+
+                -- Line 1 shows 1 of its 5 rows: line 8 is on row 8.
+                assert.equal(8, BufHelpers.fitting_cursor_line(winid, 1))
+            end
+        )
+
+        it("drops the band at the buffer's first line", function()
+            open(20)
+            assert.equal(1, fit(1, 1))
+        end)
+
+        it("drops the band at the buffer's last line", function()
+            open(20)
+            assert.equal(50, fit(31, 50))
+        end)
+
+        it("takes the bottom bound when the bounds cross", function()
+            open(9)
+            vim.wo[winid].wrap = true
+            vim.api.nvim_buf_set_lines(bufnr, 13, 14, false, {
+                string.rep("x", 100),
+            })
+
+            -- Line 14 takes 3 rows: the top bound is 14, the bottom 13.
+            assert.equal(13, fit(10, 5))
+        end)
+    end)
+
+    describe("drawn_line_above", function()
+        --- @type integer
+        local bufnr
+        --- @type integer
+        local winid
+
+        before_each(function()
+            bufnr = vim.api.nvim_create_buf(false, true)
+            local lines = {}
+            for i = 1, 20 do
+                lines[i] = "line " .. i
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            winid = vim.api.nvim_open_win(bufnr, true, {
+                relative = "editor",
+                width = 40,
+                height = 10,
+                row = 0,
+                col = 0,
+            })
+            vim.wo[winid].conceallevel = 2
+            vim.wo[winid].foldmethod = "manual"
+        end)
+
+        after_each(function()
+            vim.api.nvim_win_close(winid, true)
+            vim.api.nvim_buf_delete(bufnr, { force = true })
+        end)
+
+        it("is the line above", function()
+            assert.equal(19, BufHelpers.drawn_line_above(winid, 20))
+        end)
+
+        it("passes over zero-height lines", function()
+            local ns = vim.api.nvim_create_namespace("buf_helpers_test")
+            for _, row in ipairs({ 17, 18 }) do
+                vim.api.nvim_buf_set_extmark(bufnr, ns, row, 0, {
+                    conceal_lines = "",
+                })
+            end
+
+            assert.equal(17, BufHelpers.drawn_line_above(winid, 20))
+        end)
+
+        it("is the start of a closed fold above", function()
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd("15,19fold")
+            end)
+
+            assert.equal(15, BufHelpers.drawn_line_above(winid, 20))
+        end)
+
+        it("starts above the closed fold `lnum` is in", function()
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd("15,20fold")
+            end)
+
+            assert.equal(14, BufHelpers.drawn_line_above(winid, 20))
+        end)
+
+        it("is nil above the first line", function()
+            assert.is_nil(BufHelpers.drawn_line_above(winid, 1))
+        end)
     end)
 
     describe("scroll_down", function()

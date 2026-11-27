@@ -1,5 +1,6 @@
 # Plan: key from a subagent to its chat
 Status: spec
+Priority: P3
 
 ## Relevant files
 - `lua/agentic/config_default.lua` (`keymaps.agent` and its heading comment)

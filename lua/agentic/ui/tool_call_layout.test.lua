@@ -51,18 +51,6 @@ describe("agentic.ui.ToolCallLayout", function()
         path_stub:revert()
     end)
 
-    describe("base_lang", function()
-        it("strips each fold marker", function()
-            assert.equal("console", Layout.base_lang("console-fold"))
-            assert.equal("zsh", Layout.base_lang("zsh-foldnext"))
-            assert.equal("bash", Layout.base_lang("bash-foldfence"))
-        end)
-
-        it("keeps a word without a fold marker", function()
-            assert.equal("markdown", Layout.base_lang("markdown"))
-        end)
-    end)
-
     describe("context-aware diff highlights", function()
         it(
             "tags edits inside a multi-line string with a string capture",
@@ -802,6 +790,12 @@ describe("agentic.ui.ToolCallLayout", function()
             assert.equal("rg -n foo lua/", lines[3])
         end)
 
+        it("escapes a newline in a multi-line pattern", function()
+            local lines = search_lines("foo\n|bar", 80)
+
+            assert.equal("### `foo\\n|bar`", lines[1])
+        end)
+
         it("leaves a search block without a pattern bare", function()
             local lines = search_lines(nil, 80)
 
@@ -1465,7 +1459,7 @@ describe("agentic.ui.ToolCallLayout", function()
     describe("rejected call", function()
         local REJECTED = { { code = "prompt-reject" } }
 
-        it("folds a one-row command closed by its fence", function()
+        it("folds a one-row command closed through the reason", function()
             local layout = Layout.build({
                 tool_call_id = "rej",
                 kind = "execute",
@@ -1478,7 +1472,7 @@ describe("agentic.ui.ToolCallLayout", function()
 
             assert.same({
                 "###",
-                "```zsh-foldfence",
+                "```zsh-foldnext",
                 "rm -rf build",
                 "```",
                 "```console-fold",
@@ -1495,7 +1489,7 @@ describe("agentic.ui.ToolCallLayout", function()
             assert.same({ 5, 6 }, layout.dim)
         end)
 
-        it("folds a three-row command closed by its fence", function()
+        it("folds a three-row command closed through the reason", function()
             local layout = Layout.build({
                 tool_call_id = "rej",
                 kind = "execute",
@@ -1505,7 +1499,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 causes = REJECTED,
             }, 0)
 
-            assert.equal("```zsh-foldfence", layout.lines[2])
+            assert.equal("```zsh-foldnext", layout.lines[2])
             assert.same({ anchor = 2, state = "closed" }, layout.folds[1])
         end)
 
@@ -1520,7 +1514,7 @@ describe("agentic.ui.ToolCallLayout", function()
 
             assert.same({
                 "###",
-                "```bash-foldfence",
+                "```bash-foldnext",
                 "rm x",
                 "```",
                 "```console",
@@ -1551,7 +1545,7 @@ describe("agentic.ui.ToolCallLayout", function()
             assert.same({ line_i - 1 }, layout.titled)
         end)
 
-        it("folds a rejected search's command by its fence", function()
+        it("folds a rejected search's command through the reason", function()
             local layout = Layout.build({
                 tool_call_id = "rej",
                 kind = "search",
@@ -1560,11 +1554,11 @@ describe("agentic.ui.ToolCallLayout", function()
                 rejection = "Rejected by the permission mode",
             }, 0)
 
-            assert.equal("```bash-foldfence", layout.lines[2])
+            assert.equal("```bash-foldnext", layout.lines[2])
             assert.equal("Rejected by the permission mode", layout.lines[6])
         end)
 
-        it("folds a rejected edit's diff alone, the reason outside", function()
+        it("folds a rejected edit's diff closed through the reason", function()
             read_stub:returns({ "a", "old", "c" })
             local layout = Layout.build({
                 tool_call_id = "rej",
@@ -1576,7 +1570,7 @@ describe("agentic.ui.ToolCallLayout", function()
                 failure_reason = { "Denied." },
             }, 0)
 
-            local fence_i = vim.fn.index(layout.lines, "```text-foldfence")
+            local fence_i = vim.fn.index(layout.lines, "```text-foldnext")
             assert.is_true(fence_i > 0)
             local line_i = vim.fn.index(layout.lines, "Rejected at the prompt")
             assert.equal("```console-fold", layout.lines[line_i])
@@ -2587,6 +2581,10 @@ describe("agentic.ui.ToolCallLayout", function()
 
         it("leaves a one-row switch_mode body unfolded", function()
             assert.same({}, layout_of("switch_mode", { "line 1" }).folds)
+        end)
+
+        it("leaves a body of only fence rows unfolded", function()
+            assert.same({}, layout_of("switch_mode", { "```lua", "```" }).folds)
         end)
 
         it("folds a flat JSON table past other_max_lines", function()

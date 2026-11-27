@@ -1,5 +1,6 @@
 # Plan: one fence-line parse in `TextWrap`
 Status: spec
+Priority: P3
 
 ## Relevant files
 - `lua/agentic/utils/text_wrap.lua` — `unclosed_fence`, `is_fence_delimiter`,

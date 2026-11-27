@@ -4,7 +4,7 @@ local ErrorReport = require("agentic.acp.error_report")
 describe("agentic.acp.ErrorReport", function()
     describe("format", function()
         it("parses auth error with embedded JSON", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "Internal error: Failed to authenticate. API Error: 401\n"
@@ -22,7 +22,7 @@ describe("agentic.acp.ErrorReport", function()
         end)
 
         it("parses overloaded error with embedded JSON", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "Internal error: API Error: 529\n"
@@ -42,7 +42,7 @@ describe("agentic.acp.ErrorReport", function()
         end)
 
         it("falls back to raw message when no JSON present", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32000,
                 message = "Authentication required",
@@ -56,7 +56,7 @@ describe("agentic.acp.ErrorReport", function()
         end)
 
         it("falls back to the message when JSON is invalid", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "Internal error: {not valid json}",
@@ -69,7 +69,7 @@ describe("agentic.acp.ErrorReport", function()
         end)
 
         it("strips the bridge wrapper prefix off a usage limit", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "Internal error: You've hit your limit"
@@ -86,7 +86,7 @@ describe("agentic.acp.ErrorReport", function()
         end)
 
         it("uses error type as fallback when message is empty", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = 'API Error: 500\n{"type":"error","error":'
@@ -99,7 +99,7 @@ describe("agentic.acp.ErrorReport", function()
         end)
 
         it("handles error without HTTP code in prefix", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = 'Something went wrong\n{"type":"error","error":'
@@ -112,7 +112,7 @@ describe("agentic.acp.ErrorReport", function()
         end)
 
         it("handles missing message field", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = nil, --- @diagnostic disable-line: assign-type-mismatch
@@ -124,7 +124,7 @@ describe("agentic.acp.ErrorReport", function()
         end)
 
         it("detects usage limit error with 12h time format", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "Internal error: You're out of extra usage · resets 5pm (Europe/London)",
@@ -143,7 +143,7 @@ describe("agentic.acp.ErrorReport", function()
         end)
 
         it("detects usage limit error with 24h time format", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "Internal error: You're out of extra usage · resets 17:00 (Europe/London)",
@@ -156,7 +156,7 @@ describe("agentic.acp.ErrorReport", function()
         end)
 
         it("detects usage limit error with minutes in 12h format", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "Internal error: You're out of extra usage · resets 5:30pm (US/Eastern)",
@@ -169,7 +169,7 @@ describe("agentic.acp.ErrorReport", function()
         end)
 
         it("returns nil error_type for non-usage-limit plain errors", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 message = "Internal error: Something else went wrong",
@@ -181,7 +181,7 @@ describe("agentic.acp.ErrorReport", function()
         end)
 
         it("classifies billing_error from errorKind with a hint", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 data = { errorKind = "billing_error" },
@@ -206,7 +206,7 @@ describe("agentic.acp.ErrorReport", function()
         end)
 
         it("maps authentication_failed errorKind to auth class", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 data = { errorKind = "authentication_failed" },
@@ -219,7 +219,7 @@ describe("agentic.acp.ErrorReport", function()
         end)
 
         it("errorKind is authoritative over embedded JSON class", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 data = { errorKind = "authentication_failed" },
@@ -238,7 +238,7 @@ describe("agentic.acp.ErrorReport", function()
         it(
             "mapped kind keeps its hint when embedded JSON is present",
             function()
-                --- @type agentic.acp.ACPError
+                --- @type agentic.AgentClient.Error
                 local err = {
                     code = -32603,
                     data = { errorKind = "billing_error" },
@@ -262,7 +262,7 @@ describe("agentic.acp.ErrorReport", function()
         -- hint, the status code is the only thing the line says, so stripping
         -- it would leave a `## Error` with an empty body.
         it("keeps the API Error status on an unclassified body", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = { code = -32603, message = "API Error: 401" }
 
             local lines = ErrorReport.format(err)
@@ -271,7 +271,7 @@ describe("agentic.acp.ErrorReport", function()
         end)
 
         it("strips the API Error prefix from a mapped-kind body", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 data = { errorKind = "authentication_failed" },
@@ -286,7 +286,7 @@ describe("agentic.acp.ErrorReport", function()
         it(
             "returns reset_epoch nil for a mapped kind over a reset clause",
             function()
-                --- @type agentic.acp.ACPError
+                --- @type agentic.AgentClient.Error
                 local err = {
                     code = -32603,
                     data = { errorKind = "billing_error" },
@@ -302,7 +302,7 @@ describe("agentic.acp.ErrorReport", function()
         )
 
         it("unmapped errorKind falls through to text classification", function()
-            --- @type agentic.acp.ACPError
+            --- @type agentic.AgentClient.Error
             local err = {
                 code = -32603,
                 data = { errorKind = "server_error" },

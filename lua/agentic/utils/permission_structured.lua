@@ -85,6 +85,15 @@ local M = {}
 --- @field arity?      agentic.PermArity
 --- @field runs?       agentic.PermRunsItem[] -- config files that make the
 ---        command load code. One that matches withholds the allow gates.
+--- @field writes?     agentic.PermWriteGate[] -- options whose values are
+---        files the command writes
+
+--- Options whose values are files written. A value is a literal path
+--- unless it matches one of the globs (`*` crosses `/`).
+--- @class agentic.PermWriteGate
+--- @field options string[] dashless identifiers
+--- @field not_files? string[] value globs that name no file (`-`, `/dev/null`)
+--- @field opaque? string[] value globs that hide the path written (`#1`, `%output{f}`). Checked before `not_files`.
 
 --- A config file that may make a command load code. It matches when it
 --- exists and holds a key path under one of `keys`, or one under none of
@@ -137,6 +146,16 @@ local M = {}
 function M.glob_to_lua_pattern(glob)
     local pieces = vim.tbl_map(vim.pesc, vim.split(glob, "*", { plain = true }))
     return "^" .. table.concat(pieces, ".*") .. "$"
+end
+
+--- Whether `text` matches some glob, in the syntax of `M.glob_to_lua_pattern`.
+--- @param text string
+--- @param globs string[]
+--- @return boolean
+local function matches_some_glob(text, globs)
+    return vim.iter(globs):any(function(glob)
+        return text:match(M.glob_to_lua_pattern(glob)) ~= nil
+    end)
 end
 
 -- ponytail: fixed cap, raise it if a legitimate command ever trips it.
@@ -533,6 +552,7 @@ end
 --- @field dashdash_value boolean `--` may be the value of the flag before it
 --- @field has_dynamic boolean
 --- @field flag_cands_at table<integer, string[]> option candidates of each word that is a flag in some parse, by word index
+--- @field takers table<string, true> short letters that take a value in every scope (`o` for `-o`)
 --- @field leading_cands string[]
 --- @field leading_dynamic boolean
 --- @field subcommand_idx table<integer, boolean>
@@ -966,11 +986,8 @@ local function option_values_must(cond, exist, forall)
     if exist.has_dynamic then
         return false
     end
-    local value_patterns = vim.tbl_map(M.glob_to_lua_pattern, cond.values)
     local function allowed(value)
-        return vim.iter(value_patterns):any(function(pattern)
-            return value:match(pattern) ~= nil
-        end)
+        return matches_some_glob(value, cond.values)
     end
     local hit = false
     for i, cands in pairs(exist.flag_cands_at) do
@@ -1104,6 +1121,7 @@ local function build_exist_ctx(words, dynamic, dashdash_value, takers)
         dashdash_value = dashdash_value,
         has_dynamic = has_dynamic,
         flag_cands_at = flag_candidates_at(words, dashdash_value, takers),
+        takers = takers,
         leading_cands = candidates_at(words, leading_flag_idx, takers),
         leading_dynamic = any_dynamic(subcommand_idx, dynamic)
             or any_dynamic(leading_flag_idx, dynamic),
@@ -1312,6 +1330,107 @@ function M.deny_leaf(entries, parsed)
         end
     end
     return false
+end
+
+--- @alias agentic.PermStructured.WordValue { value: string, word: integer } an option value and the index of the word holding it
+
+--- Every value a listed option may get in some parse, abbreviations
+--- included. `--name=v` gives `v`. `--name` and a one-dash long name
+--- (`-name`) give the next word. In a cluster, each listed letter up to and
+--- including the first letter in `exist.takers` gives the rest of the word,
+--- also without a leading `=`, or the next word when it is the last letter.
+--- @param options string[] dashless identifiers
+--- @param exist agentic.PermStructured.ExistCtx
+--- @return agentic.PermStructured.WordValue[] values in word order
+local function possible_values(options, exist)
+    local words = exist.words
+    --- @type agentic.PermStructured.WordValue[]
+    local values = {}
+    --- @param i integer index of the word whose next word is the value
+    local function add_next(i)
+        if words[i + 1] then
+            table.insert(values, { value = words[i + 1], word = i + 1 })
+        end
+    end
+    for i, word in ipairs(words) do
+        local cands = exist.flag_cands_at[i]
+        if cands and M.match_options(cands, options) then
+            if word:sub(1, 2) == "--" then
+                local eq = word:find("=", 3, true)
+                if eq then
+                    table.insert(values, { value = word:sub(eq + 1), word = i })
+                else
+                    add_next(i)
+                end
+            else
+                local long_names = vim.tbl_filter(function(cand)
+                    return #cand > 1
+                end, cands)
+                if M.match_options(long_names, options) then
+                    add_next(i)
+                end
+                for j = 2, #word do
+                    local letter = word:sub(j, j)
+                    if vim.list_contains(options, letter) then
+                        local rest = word:sub(j + 1)
+                        if rest == "" then
+                            add_next(i)
+                        else
+                            table.insert(values, { value = rest, word = i })
+                            if rest:sub(1, 1) == "=" then
+                                table.insert(
+                                    values,
+                                    { value = rest:sub(2), word = i }
+                                )
+                            end
+                        end
+                    end
+                    if exist.takers[letter] then
+                        break
+                    end
+                end
+            end
+        end
+    end
+    return values
+end
+
+--- The option values through which a leaf writes files, per the `writes`
+--- gates of its command's own entry: every value a listed option may get in
+--- some parse, except values that match a `not_files` glob.
+--- Over-approximate: a word that names a listed option in some parse gives a
+--- write whether or not the command reads it so.
+--- @param entries agentic.StructuredEntries
+--- @param parsed agentic.ParsedLeaf
+--- @return agentic.PermStructured.WordValue[]|nil writes in gate order, each gate's in word order. Nil when a candidate matches an `opaque` glob of its gate, or the leaf has a dynamic word (it may expand to an option) and its command has `writes`.
+function M.write_values(entries, parsed)
+    local entry = entries_at(entries, { parsed.cmd_name })[1]
+    local gates = entry and entry.writes or {}
+    --- @type agentic.PermStructured.WordValue[]
+    local writes = {}
+    if #gates == 0 then
+        return writes
+    end
+    local exist = build_exist_ctx(
+        parsed.args,
+        parsed.args_dynamic or {},
+        true,
+        every_scope_takers(entry.arity)
+    )
+    if exist.has_dynamic then
+        return nil
+    end
+    for _, gate in ipairs(gates) do
+        for _, candidate in ipairs(possible_values(gate.options, exist)) do
+            if matches_some_glob(candidate.value, gate.opaque or {}) then
+                return nil
+            end
+            if not matches_some_glob(candidate.value, gate.not_files or {}) then
+                table.insert(writes, candidate)
+            end
+        end
+    end
+    return writes
 end
 
 -- ── Loading ─────────────────────────────────────────────────────────────────
@@ -1649,13 +1768,73 @@ local function normalise_runs(runs, cmd)
     return items
 end
 
+--- Keys a `writes` gate may have.
+local WRITE_GATE_KEYS = { options = true, not_files = true, opaque = true }
+
+--- Copy of a `writes` gate with dashless options.
+--- @param gate any
+--- @return agentic.PermWriteGate|nil gate nil unless `gate` has only known
+---         keys, `options` is a non-empty list of strings and each glob list
+---         present is a list of strings
+local function normalise_write_gate(gate)
+    if type(gate) ~= "table" then
+        return nil
+    end
+    for key in pairs(gate) do
+        if not WRITE_GATE_KEYS[key] then
+            return nil
+        end
+    end
+    local options = string_list(gate.options)
+    local not_files = gate.not_files and string_list(gate.not_files)
+    local opaque = gate.opaque and string_list(gate.opaque)
+    if
+        not (options and #options > 0)
+        or (gate.not_files ~= nil and not not_files)
+        or (gate.opaque ~= nil and not opaque)
+    then
+        return nil
+    end
+    --- @type agentic.PermWriteGate
+    local copy = {
+        options = vim.tbl_map(normalise_option, options),
+        not_files = not_files,
+        opaque = opaque,
+    }
+    return copy
+end
+
+--- The valid gates of a `writes` value, warning about each other element.
+--- @param writes any one gate or a list of gates
+--- @param cmd string command whose entry holds the list, for the warning
+--- @return agentic.PermWriteGate[] gates
+local function normalise_writes(writes, cmd)
+    local gates = {}
+    for _, gate in ipairs(is_list(writes) and writes or { writes }) do
+        local copy = normalise_write_gate(gate)
+        if copy then
+            table.insert(gates, copy)
+        else
+            Logger.notify(
+                "Structured permission writes of "
+                    .. cmd
+                    .. ": ignoring malformed gate "
+                    .. vim.inspect(gate),
+                vim.log.levels.WARN,
+                { title = "Agentic" }
+            )
+        end
+    end
+    return gates
+end
+
 --- Deep-copy a cmd-keyed structured-entries table, normalising every option
 --- string to the dashless form. A `vim.NIL` value (the user's "disable a
 --- bundled cmd" marker) is preserved so it survives the merge in
---- `get_entries`. `arity` is dropped on `"*"`: an unknown
---- command's arity is unknowable. Each `runs` keeps its valid items. The
---- output is owned by the caller (safe to mutate) so this caches the
---- normalised view rather than mutating the input.
+--- `get_entries`. `arity` and `writes` are dropped on `"*"`: an unknown
+--- command's options are unknowable. Each `runs` keeps its valid items and
+--- each `writes` its valid gates. The output is owned by the caller (safe to
+--- mutate) so this caches the normalised view rather than mutating the input.
 --- @param entries any
 --- @return agentic.StructuredEntries
 local function normalise_structured_entries(entries)
@@ -1688,6 +1867,9 @@ local function normalise_structured_entries(entries)
                 end
                 if cmd ~= "*" then
                     copy.arity = normalise_arity(entry.arity, cmd)
+                    if entry.writes ~= nil then
+                        copy.writes = normalise_writes(entry.writes, cmd)
+                    end
                 end
                 if entry.runs ~= nil then
                     copy.runs = normalise_runs(entry.runs, cmd)
@@ -1702,7 +1884,7 @@ end
 --- Resolve the merged cmd-keyed structured-entries table from the bundled
 --- permissions.json plus any user additions in `Config.permissions.structured`.
 --- The two layers merge via `vim.tbl_deep_extend("force", bundled, user)`: a
---- user kind-array replaces the bundled array of that kind, other kinds and
+--- user kind-array or `writes` replaces the bundled one, other kinds and
 --- `arity` lists the user omits stay bundled, `runs` is the union of both
 --- lists, and a `vim.NIL` value disables the bundled cmd entirely (stripped
 --- before return).

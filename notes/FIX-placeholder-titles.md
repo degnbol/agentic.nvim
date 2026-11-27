@@ -1,5 +1,6 @@
 # Plan: Claude tool call heads from rawInput, not the bridge title
 Status: reviewed (open questions)
+Priority: P2
 
 ## Background
 
@@ -11,7 +12,7 @@ Status: reviewed (open questions)
 - `lua/agentic/ui/tool_call_layout.lua`: `search_title_flags`, `first_quoted_string` and their search-section consumer (not edited).
 - Bridge v0.97.0 `dist/tool-calls/`: `renderer.js` (`facts`, `toolCall`, `refinement`, `partialRefinement`, `permissionToolCall`, `memoryRecall`, `toolUseMeta`), `field-tracker.js` (`REPLACED_FIELDS`), `reporters/*.js`; `dist/acp-agent.js` (`isTaskTool`, `shouldEmitToolCall`).
 - Skills: `provider-system` § "Tool identity is `_meta.claudeCode.toolName`, not `title`"; `rendering` (the bare `###` paragraph).
-- Notes: `notes/bug-placeholder-titles.md`; `notes/audit-edge-cases.md` items 0.7, 3.18, 3.21.
+- Notes: `notes/AUDIT-edge-cases.md` items 0.7, 3.18, 3.21.
 
 ### Bridge facts
 1. Every title of a tool use is a function of the tool's input (plus cwd): `facts(toolUse)` → `reporterFor(name).toolUse(input)`. Two result paths also set a title, and neither reaches a Claude head: `ExitPlanModeReporter.toolResult` ("Exited Plan Mode"; the adapter heads mode switches by name, `MODE_SWITCH_TOOLS`) and the synthetic compaction call (`compaction.js`).
@@ -76,7 +77,7 @@ The bridge title carries information `rawInput` lacks only for synthetic calls (
 - `provider-system` skill § "Tool identity is `_meta.claudeCode.toolName`, not `title`": the last paragraph's reason (`__apply_tool_identity` stays out of the `rawInput` gate because the initial `tool_call` carries an empty `rawInput`) no longer holds; replace it, and state the rule above in one sentence.
 
 ### Notes
-- Delete `notes/bug-placeholder-titles.md` when this lands; mark `notes/audit-edge-cases.md` items 0.7, 3.18, 3.21 resolved.
+- When this lands, mark `notes/AUDIT-edge-cases.md` items 0.7, 3.18, 3.21 resolved.
 
 ## Additions
 
@@ -93,7 +94,7 @@ The bridge title carries information `rawInput` lacks only for synthetic calls (
 ## Non-goals
 - Other providers: `"unknown fetch"` in the shared `__resolve_fetch_fields` (auggie), `"unknown codex command"`, opencode's `"unknown skill"`.
 - Kind changes (e.g. kinding an Agent call `SubAgent` before `subagent_type` arrives).
-- `notes/bug-path-b-replay-empty-argument.md` (empty-argument history records); this plan only changes which text is in `argument`.
+- `notes/BUG-path-b-replay-empty-argument.md` (empty-argument history records); this plan only changes which text is in `argument`.
 
 ## Open questions
 - **Q1 — Grep and Glob heads.** Grep's title is a grep command line the adapter does not build; `tool_call_layout.lua` reads `-i`/`-P` from it (`search_title_flags`) and, without `search_pattern`, the first quoted word (`first_quoted_string`). Glob's is ``Find `path` `pattern` ``. Options:

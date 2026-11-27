@@ -1,6 +1,7 @@
 # PLAN: show when a hook rewrote a tool call's input
 
 Status: reviewed (open questions)
+Priority: P3
 
 ## Background
 

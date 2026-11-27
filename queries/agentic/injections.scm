@@ -4,7 +4,7 @@
 ; (`LanguageTree:_get_injections`). Never set injection.combined here.
 
 ; The MessageWriter encodes its fold decision into the fence info string with a
-; "-fold", "-foldnext" or "-foldfence" suffix on the base language
+; "-fold" or "-foldnext" suffix on the base language
 ; (```markdown-fold, ```console-fold, ```zsh-foldnext). That suffix is a fold
 ; signal, not a language, so strip it before resolving the injected parser —
 ; otherwise the sidecar markdown body would lose its markdown highlighting
@@ -14,7 +14,6 @@
   (info_string (language) @injection.language)
   (code_fence_content) @injection.content
   (#gsub! @injection.language "%-foldnext$" "")
-  (#gsub! @injection.language "%-foldfence$" "")
   (#gsub! @injection.language "%-fold$" ""))
 
 ; snacks.nvim's queries/markdown/injections.scm, an `; extends` that reaches

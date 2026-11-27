@@ -1,5 +1,6 @@
 # Plan: split old read ranges once, where a session file is read
 Status: reviewed spec
+Priority: P3
 
 ## Relevant files
 - `lua/agentic/session_resume.lua` — `SessionResume.replay_messages` (the
