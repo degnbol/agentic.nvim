@@ -5,7 +5,7 @@ Depends:
 
 ## Relevant files
 - `~/dotfiles/config/claude/settings.json` `hooks` (73 commands over 62 scripts, plus 7 test fixtures), `~/dotfiles/config/claude/hooks/` (`lib/core.zsh`, `lib/checks/`, `lib/skill-paths.zsh`, `lib/ref-paths.zsh`)
-- `notes/REFACTOR-pi-only.md` — step 8 (capabilities), step 9 (harness and UI, the plugin's pi package)
+- `notes/REFACTOR-pi-only.md` — step 9 (capabilities), step 10 (harness and UI, the plugin's pi package)
 - pi 1.6.1 docs: `extensions.md` (§ Events), `packages.md`; the pi package gallery
 - `pi-claude-bridge` README § Hooks written for Claude Code
 

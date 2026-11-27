@@ -8,7 +8,7 @@ Depends:
   in this repo)
 - `lua/agentic/pi/pi_client.lua` — `EXTENSION` and the `--extension`
   arguments in `PiClient:_open`, `_send_usage` (the header figure)
-- `REFACTOR-pi-only.md` step 9 — the plugin's pi package (`pi/package.json`)
+- `REFACTOR-pi-only.md` step 10 — the plugin's pi package (`pi/package.json`)
 - pi docs `extensions.md`: § `before_agent_start`, § `ctx.getContextUsage()`,
   § `pi.registerFlag`; `ContextUsage` in `dist/core/extensions/types.d.ts`
 - `~/dotfiles/config/pi/extensions/doc-hints/` — `node --test` setup to copy

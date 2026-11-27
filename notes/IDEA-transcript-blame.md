@@ -11,7 +11,7 @@ Depends:
   `path` and `content`. Claude turns through `pi-claude-bridge` are in
   these files too, as pi runs the tools.
 - Chat sessions: `~/.cache/nvim/agentic/sessions/<cwd>_<hash>/<chat-id>.json`.
-- `REFACTOR-pi-only.md` step 9 (harness and UI).
+- `REFACTOR-pi-only.md` step 10 (harness and UI).
 
 ## Background
 `git blame` names the commit of a line, not the session, turn and prompt

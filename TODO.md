@@ -37,6 +37,10 @@ note without one sorts last. Loose ideas: [`IDEAS.md`](IDEAS.md).
 
 ### Tracks
 
+**a configurable auto mode classifier for every model**
+1. P2 [FEAT-claude-auto-mode.md](notes/FEAT-claude-auto-mode.md): Claude Code auto mode verdict — draft
+2. P3 [FEAT-auto-mode-classifier.md](notes/FEAT-auto-mode-classifier.md): a configurable auto mode classifier for every model — draft (after 1)
+
 **reviewer-choice context**
 1. P2 [FEAT-cross-lab-review.md](notes/FEAT-cross-lab-review.md): the main agent asks LiteLLM models for a review — spec
 2. P2 [FEAT-review-choice-context.md](notes/FEAT-review-choice-context.md): reviewer-choice context — spec (after 1)

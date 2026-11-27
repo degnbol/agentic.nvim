@@ -28,7 +28,7 @@ The bridge uses Claude Code as the model client only. It starts Claude Code
 with `tools: []`, `permissionMode: "bypassPermissions"`, user settings only,
 and CLAUDE.md, AGENTS.md and `.claude/rules/**` excluded; pi supplies the
 tools, the context files and the skills. Each capability that Claude Code
-supplies today is therefore absent, or comes from somewhere else (step 8).
+supplies today is therefore absent, or comes from somewhere else (step 9).
 
 ## Changes
 
@@ -49,8 +49,17 @@ supplies today is therefore absent, or comes from somewhere else (step 8).
    entry in `permissions.json` stays: it gates the `opencode` CLI. Dotfiles:
    `config/opencode/`, after its guards are ported to pi extensions.
 
+### Tests
+7. A test stand-in for the pi process replaces
+   `tests/mocks/agent_client_mock.lua` (an ACP-shaped client that
+   `tests/helpers/child.lua` puts in place of `PiClient`) and
+   `tests/mocks/acp_transport_mock.lua`. It answers pi's RPC commands with
+   pi's events, so the integration tests run the real `PiClient`. After
+   steps 3–5, which delete code that many of these tests cover; before
+   step 8, which changes how `PiClient` calls the session manager.
+
 ### Rename
-7. ACP-named shapes that stay as the plugin's own vocabulary get neutral
+8. ACP-named shapes that stay as the plugin's own vocabulary get neutral
    names: `agentic.acp.*` types → `agentic.*`, `AcpKind` → `ToolKind`,
    the rest of `lua/agentic/acp/` out of `acp/` (the transport to
    `lua/agentic/pi/`). `PiClient` calls one handler
@@ -58,9 +67,10 @@ supplies today is therefore absent, or comes from somewhere else (step 8).
    `on_session_update` with a `sessionUpdate` string.
 
 ### Capabilities that came from Claude Code
-8. Each row gets one choice: a bridge option, a pi package, our own pi
+9. Each row gets one choice: a bridge option, a pi package, our own pi
    extension, or drop it. Each choice is harness work; how the UI shows
-   its result is designed in step 9. A pi package whose UI is TUI only
+   its result is designed in step 10. The permission check row is decided
+   first, before step 3. A pi package whose UI is TUI only
    (`custom()`, TUI components) shows nothing in the Neovim chat.
 
    | Capability | Under the bridge | Choices |
@@ -74,19 +84,19 @@ supplies today is therefore absent, or comes from somewhere else (step 8).
    | Path-triggered rules (`.claude/rules/*.md`) | Not loaded: the bridge excludes them, and pi has no rules | Own extension that adds a rule when a tool call's path matches; move into skills; drop |
    | Project skills (`.claude/skills/`) | Not loaded: pi's `skills` setting has the user skills folder only | A second pi `skills` path |
    | User instructions and skills (dotfiles `config/pi/AGENTS.md`, `agents/skills/`) | Loaded, but written for Claude Code: skills named as slash commands (`/implement`), and `debug`, `lit`, `review` and `plan` spawn subagents | Rewrite for pi (`/skill:name`); the subagent steps follow the Subagents row. No Claude Code form is kept |
-   | Claude Code's permission check (settings.json allow/deny/ask for every tool, the working-directory sandbox, path safety, the auto mode classifier for calls the rules leave undecided) | Off: `bypassPermissions`. The plugin's own checks still decide every call through the pi extension; an undecided call prompts | A pi package with a classifier; own classifier in the pi extension; prompt |
+   | Claude Code's permission check (settings.json allow/deny/ask for every tool, the working-directory sandbox, path safety, the auto mode classifier for calls the rules leave undecided) | Off: `bypassPermissions`. The plugin's own checks still decide every call through the pi extension; an undecided call prompts | `FEAT-claude-auto-mode.md` (Claude models: Claude Code's server-side verdict through the bridge); `FEAT-auto-mode-classifier.md` (any model) |
    | Claude Code hooks (`~/.claude/settings.json`) | Off: the user's hooks exit at once in a bridge turn | Per hook, `AUDIT-hooks-pi.md` |
    | MCP servers | Blocked (`strictMcpConfig` defaults to true) | pi's own MCP support; `strictMcpConfig: false` |
    | Auto-memory | Off | `autoMemoryEnabled: true`; a pi package; drop |
    | Plan usage limits | The bridge reports them as `anthropic-ratelimit-unified-*` headers on `after_provider_response` | Own extension that forwards them with `setStatus` to `PiClient.usage_limit`; drop |
    | Tool names and schemas | pi's tools, named `mcp__custom-tools__<name>` | pi's built-in tools; own extension tools with Claude Code's names and schemas (the prefix stays) |
    | System prompt | Claude Code's preset, then pi's prompt | Both; pi's only (`systemPromptPreset: false`); pi's base part replaced by `SYSTEM.md` |
-   | Session data the chat does not show | Claude Code's session file keeps the system prompt (`prompt_snapshot`) and the context it adds to each turn (`environment`, `date`, `total_tokens_reminder`, `thinking_drop` attachments). pi's session file keeps pi's prompt sections and each thinking block's `thinkingSignature` (the encrypted full reasoning, which no client can decrypt; its size measures the hidden reasoning) | Harness (step 9) |
+   | Session data the chat does not show | Claude Code's session file keeps the system prompt (`prompt_snapshot`) and the context it adds to each turn (`environment`, `date`, `total_tokens_reminder`, `thinking_drop` attachments). pi's session file keeps pi's prompt sections and each thinking block's `thinkingSignature` (the encrypted full reasoning, which no client can decrypt; its size measures the hidden reasoning) | Harness (step 10) |
    | Compaction that reads earlier reasoning | pi compacts by default: `serializeConversation` (`src/core/compaction/utils.ts`) sends the history to the summarizing model as plain text with thinking left out, so the summary cannot use earlier reasoning. Claude Code sends the conversation itself plus a summary instruction, so the summarizing model reads the replayed reasoning | Own extension on `session_before_compact` that sends the conversation with its thinking blocks plus a summary instruction (example: `examples/extensions/custom-compaction.ts`); a pi package that does the same; accept pi's default. Not verified: that the bridge sends thinking blocks back on a request from an extension |
    | Thinking across an instruction change | Measured through the bridge (pi 1.6.1, Haiku 5.5, one `pi -p` process per prompt): with an unchanged pi prompt, the bridge forks its Claude Code session each turn and every earlier thinking block is sent and kept. A changed pi prompt (context file, skill, tool set) makes the bridge import the history into a new Claude Code session; the API drops every earlier thinking block (`prefix_binding_mismatch`) and the turn misses the cache. Claude Code today keeps the session's first prompt (`prompt_snapshot` in the session file), so edits wait for a new chat | Own extension that freezes pi's prompt per session (`before_agent_start`, the first prompt kept with `pi.appendEntry`); accept the import |
 
 ### Harness and UI
-9. Two layers with one interface between them, designed separately:
+10. Two layers with one interface between them, designed separately:
    - **Harness**: pi, its packages and our own harness code (the permission
      decision, the prompt freeze, the usage-limit forwarding, the hooks
      from `AUDIT-hooks-pi.md`). Our harness code is TypeScript pi extensions, pi's own
@@ -98,7 +108,7 @@ supplies today is therefore absent, or comes from somewhere else (step 8).
      (`pi/agentic.ts`) stay out of the package manifest.
      It makes all session data available without a UI: messages, tool
      calls, thinking summaries with the signature size per block, the
-     system prompt, the per-turn context from step 8, usage, plan limits.
+     system prompt, the per-turn context from step 9, usage, plan limits.
    - **Interface**: pi's RPC mode (commands, events, extension UI
      requests), the data our extensions send over it (for example a
      `notify` with a fixed prefix), and pi's session files. Of pi's
@@ -117,17 +127,17 @@ supplies today is therefore absent, or comes from somewhere else (step 8).
 ## Expected outcome
 - Every chat runs on pi.
 - `lua/agentic/acp/` is gone; no code branches on a provider.
-- The harness gives every datum in step 9 to a client with no UI; the UI
+- The harness gives every datum in step 10 to a client with no UI; the UI
   reads nothing but the harness interface.
 
 ## Non-goals
 - Forking at a pi entry.
 
 ## Open questions
-1. The choice in each row of step 8. `subagents.lua` (1,270 lines) and the
+1. The choice in each row of step 9. `subagents.lua` (1,270 lines) and the
    transcript views are built on Claude's subagent updates, so every
    subagent choice except drop replaces them.
-2. Where the permission decision runs (step 9). The other harness code is
+2. Where the permission decision runs (step 10). The other harness code is
    new and goes in TypeScript pi extensions. The permission decision is Lua in
    Neovim today: `permission_rules.lua`, `permission_structured.lua`,
    `shell_parse.lua`, `zsh_parse.lua`, `grant_safety.lua`,
