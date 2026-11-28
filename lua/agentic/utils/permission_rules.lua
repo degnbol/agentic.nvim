@@ -2163,6 +2163,20 @@ local function translate_ranges(ranges, origin)
     return out
 end
 
+--- The reason for a leaf whose inner code has unapproved parts that the leaf
+--- cannot point at: `"ask"` when an ask or deny gate holds one of them back,
+--- else `"inner-code"`.
+--- @param ranges agentic.utils.PermissionRules.Range[] The inner code's unapproved parts
+--- @return agentic.utils.PermissionRules.Reason
+local function inner_reason(ranges)
+    for _, r in ipairs(ranges) do
+        if r[5] == "ask" then
+            return "ask"
+        end
+    end
+    return "inner-code"
+end
+
 --- Why the structured gates do not approve a leaf. `"dynamic"` when reading
 --- every dynamic word as written would clear its deny or ask gate, or, with no
 --- gate, would match a read_only or safe_write rule. Else `"ask"` for a
@@ -2316,7 +2330,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
         if origin then
             return false, translate_ranges(body_ranges, origin)
         end
-        return false, nil, nil, "inner-code"
+        return false, nil, nil, inner_reason(body_ranges)
     end
 
     local glob_safe = M.matches_any_pattern(leaf, ctx.allow_settings)
@@ -2359,7 +2373,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
         if #body_ranges == 0 then
             return true
         end
-        return false, nil, leaf, "inner-code"
+        return false, nil, leaf, inner_reason(body_ranges)
     end
 
     -- Action host (`find -exec`, `fd -x`): its actions must be known-safe, and
@@ -2388,7 +2402,7 @@ local function command_known_safe(node, src, ctx, known, funcs)
             body_ranges
         )
         if #body_ranges > 0 then
-            return false, nil, nil, "inner-code"
+            return false, nil, nil, inner_reason(body_ranges)
         end
         args, args_dynamic = actions.args, actions.args_dynamic
     end

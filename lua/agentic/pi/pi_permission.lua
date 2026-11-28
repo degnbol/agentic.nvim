@@ -24,6 +24,7 @@ local OPTION_NAMES = {
 --- @field toolCallId string
 --- @field toolName string
 --- @field input table The call's arguments after pi's normalisation
+--- @field safeguard? agentic.acp.Safeguard
 
 --- The call an extension UI request asks permission for.
 --- @param request table An `extension_ui_request`
@@ -74,6 +75,7 @@ function M.to_request(session_id, call, cwd)
             rawInput = input,
         },
         options = options,
+        safeguard = call.safeguard,
     }
     return request
 end

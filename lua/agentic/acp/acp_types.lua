@@ -359,10 +359,16 @@ DO NOT REMOVE them. Only update them if the underlying types change.
 --- @field name string
 --- @field kind "allow_once" | "allow_always" | "reject_once" | "reject_always"
 
+--- Claude Code's auto mode verdict on a tool call.
+--- @class agentic.acp.Safeguard
+--- @field outcome string `not_flagged`, `flagged`, or an outcome not yet seen
+--- @field citedRule? string The rule a flag cites
+
 --- @class agentic.acp.RequestPermission
 --- @field options agentic.acp.PermissionOption[]
 --- @field sessionId string
 --- @field toolCall agentic.acp.ToolCall
+--- @field safeguard? agentic.acp.Safeguard
 --- @field public _meta? table
 
 --- @class agentic.acp.RequestPermissionOutcome

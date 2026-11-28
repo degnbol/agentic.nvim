@@ -448,6 +448,7 @@ local ConfigDefault = {
     --- @field highlight_unapproved boolean Highlight the non-known-safe parts of an execute permission prompt while it is shown (independent of `auto_approve_tier`).
     --- @field tmp_cleanup boolean In a granted path under a tmp root, auto-approve a plain `rm` of an untracked tmp file redirected to earlier in the same Bash command.
     --- @field default_grant string[] Paths or globs granted at session start, as with `/grant`. `$VAR` and `~` expand (an entry naming an unset var is skipped), and a relative entry resolves against the session cwd. `{}` starts a session without grants.
+    --- @field auto_mode boolean Approve a call no rule decides and no ask rule matches when Claude Code's auto mode classifier does not flag it.
     permissions = {
         use_plugin_defaults = true,
         use_claude_settings = true,
@@ -457,6 +458,7 @@ local ConfigDefault = {
         highlight_unapproved = true,
         tmp_cleanup = true,
         default_grant = { "/tmp", "$TMPDIR", ".", "root" },
+        auto_mode = true,
     },
 
     --- Control various behaviors and features of the plugin

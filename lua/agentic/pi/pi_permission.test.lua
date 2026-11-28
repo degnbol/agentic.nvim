@@ -59,6 +59,18 @@ describe("agentic.pi.PiPermission", function()
                     return o.kind
                 end, request.options)
             )
+            assert.is_nil(request.safeguard)
+        end)
+
+        it("carries the call's auto mode verdict", function()
+            local call = PiPermission.parse(select_request({
+                toolCallId = "c1",
+                toolName = "bash",
+                input = { command = "ls" },
+                safeguard = { outcome = "not_flagged" },
+            })) --[[@as agentic.pi.PiPermission.Call]]
+            local request = PiPermission.to_request("s1", call, "/w")
+            assert.same({ outcome = "not_flagged" }, request.safeguard)
         end)
     end)
 

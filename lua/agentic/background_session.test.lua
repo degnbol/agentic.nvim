@@ -326,6 +326,26 @@ describe("agentic.BackgroundSession", function()
             assert.same({ "once" }, sent)
         end)
 
+        it("approves what the auto mode classifier does not flag", function()
+            local request = shell_request("t1", "git add x")
+            request.safeguard = { outcome = "not_flagged" }
+            local sent = {}
+            client.handlers.on_request_permission(request, function(option_id)
+                table.insert(sent, option_id)
+            end)
+            assert.same({ "once" }, sent)
+        end)
+
+        it("rejects what the auto mode classifier flags", function()
+            local request = shell_request("t1", "git add x")
+            request.safeguard = { outcome = "flagged" }
+            local sent = {}
+            client.handlers.on_request_permission(request, function(option_id)
+                table.insert(sent, option_id)
+            end)
+            assert.same({ "no" }, sent)
+        end)
+
         it("gives up after max_refusals", function()
             for _ = 1, 2 do
                 client.handlers.on_request_permission(

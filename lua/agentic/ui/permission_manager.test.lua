@@ -207,6 +207,157 @@ describe("agentic.ui.PermissionManager", function()
         end)
     end)
 
+    describe("auto mode verdict", function()
+        --- @type agentic.UserConfig
+        local Config
+        --- @type boolean
+        local original_auto_mode
+
+        before_each(function()
+            Config = require("agentic.config")
+            original_auto_mode = Config.permissions.auto_mode
+            Config.permissions.auto_mode = true
+        end)
+
+        after_each(function()
+            Config.permissions.auto_mode = original_auto_mode
+        end)
+
+        --- @param tool_call agentic.acp.ToolCall
+        --- @param outcome string|nil Nil for a request without a verdict
+        --- @return agentic.acp.RequestPermission
+        local function make_request(tool_call, outcome)
+            return {
+                sessionId = "test-session",
+                toolCall = tool_call,
+                options = {
+                    {
+                        optionId = "allow-once",
+                        name = "Allow",
+                        kind = "allow_once",
+                    },
+                    {
+                        optionId = "reject-once",
+                        name = "Reject",
+                        kind = "reject_once",
+                    },
+                },
+                safeguard = outcome and { outcome = outcome } or nil,
+            }
+        end
+
+        local edit = { toolCallId = "tc-auto-edit", kind = "edit" }
+
+        it("approves an undecided call the classifier does not flag", function()
+            local cb = spy.new(function() end)
+            local prompted = pm:add_request(
+                make_request(edit, "not_flagged"),
+                cb --[[@as function]]
+            )
+            assert.is_false(prompted)
+            assert.is_true(cb:called_with("allow-once"))
+            assert.same(
+                { { code = "auto-mode-allow" } },
+                pm:take_causes("tc-auto-edit")
+            )
+        end)
+
+        it("approves an undecided command", function()
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_request({
+                    toolCallId = "tc-auto-cmd",
+                    kind = "execute",
+                    rawInput = { command = "frobnicate x" },
+                }, "not_flagged"),
+                cb --[[@as function]]
+            )
+            assert.is_true(cb:called_with("allow-once"))
+        end)
+
+        it("prompts for an ask rule inside -c code", function()
+            local prompted = pm:add_request(
+                make_request({
+                    toolCallId = "tc-auto-inner",
+                    kind = "execute",
+                    rawInput = { command = [[sh -c "yq -i . f.yaml"]] },
+                }, "not_flagged"),
+                function() end --[[@as function]]
+            )
+            assert.is_true(prompted)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("keeps a cached reject", function()
+            local tool_call = {
+                toolCallId = "tc-auto-cached",
+                kind = "execute",
+                rawInput = { command = "frobnicate y" },
+            }
+            pm._always_cache[pm:_build_cache_key(tool_call)] = "reject"
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_request(tool_call, "not_flagged"),
+                cb --[[@as function]]
+            )
+            assert.is_true(cb:called_with("reject-once"))
+        end)
+
+        it("prompts for a flagged call", function()
+            local prompted = pm:add_request(
+                make_request(edit, "flagged"),
+                function() end --[[@as function]]
+            )
+            assert.is_true(prompted)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("prompts without a verdict", function()
+            local prompted = pm:add_request(
+                make_request(edit, nil),
+                function() end --[[@as function]]
+            )
+            assert.is_true(prompted)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("prompts with auto_mode off", function()
+            Config.permissions.auto_mode = false
+            local prompted = pm:add_request(
+                make_request(edit, "not_flagged"),
+                function() end --[[@as function]]
+            )
+            assert.is_true(prompted)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("prompts for a call an ask rule matches", function()
+            local prompted = pm:add_request(
+                make_request({
+                    toolCallId = "tc-auto-ask",
+                    kind = "execute",
+                    rawInput = { command = "yq -i . f.yaml" },
+                }, "not_flagged"),
+                function() end --[[@as function]]
+            )
+            assert.is_true(prompted)
+            pm:_complete_request("reject-once")
+        end)
+
+        it("does not override a rule's decision", function()
+            local cb = spy.new(function() end)
+            pm:add_request(
+                make_request({
+                    toolCallId = "tc-auto-deny",
+                    kind = "execute",
+                    rawInput = { command = "rm -rf /" },
+                }, "not_flagged"),
+                cb --[[@as function]]
+            )
+            assert.is_true(cb:called_with("reject-once"))
+        end)
+    end)
+
     describe("tool call holds", function()
         it("reveals the request's own block, not the proxy's", function()
             local anchor_buf = vim.api.nvim_create_buf(false, true)

@@ -38,6 +38,7 @@ local PERMISSION_KIND_PRIORITY = {
 --- | "prompt-allow"    # the user allowed at the prompt
 --- | "prompt-reject"   # the user rejected at the prompt
 --- | "prompt-cancel"   # the prompt was withdrawn unanswered
+--- | "auto-mode-allow" # Claude Code's auto mode classifier did not flag it
 --- | agentic.utils.PermissionRules.Reason
 
 --- @class agentic.PermissionCause
@@ -406,6 +407,39 @@ function PermissionManager:resolve_request(request)
         self:bash_cwd(tool_call.toolCallId)
 end
 
+--- Whether an ask or deny gate holds back a part of the call: any cause has
+--- code `ask`.
+--- @param verdict agentic.PermissionVerdict
+--- @return boolean
+function PermissionManager.asks(verdict)
+    return vim.iter(verdict.causes):any(function(cause)
+        return cause.code == "ask"
+    end)
+end
+
+--- Apply Claude Code's auto mode verdict to a permission verdict.
+--- An undecided verdict that does not ask (`asks`) becomes an allow verdict
+--- with the sole cause `auto-mode-allow` when `Config.permissions.auto_mode`
+--- is on and the classifier did not flag the call. Otherwise returns
+--- `verdict` itself.
+--- @param verdict agentic.PermissionVerdict
+--- @param safeguard agentic.acp.Safeguard|nil
+--- @return agentic.PermissionVerdict
+function PermissionManager.apply_safeguard(verdict, safeguard)
+    if
+        verdict.allow ~= nil
+        or not Config.permissions.auto_mode
+        or not safeguard
+        or safeguard.outcome ~= "not_flagged"
+        or PermissionManager.asks(verdict)
+    then
+        return verdict
+    end
+    --- @type agentic.PermissionVerdict
+    local allowed = { allow = true, causes = { { code = "auto-mode-allow" } } }
+    return allowed
+end
+
 --- Try to auto-approve/reject a permission request without user interaction.
 --- On an allow verdict calls `callback` with the request's allow_once option,
 --- on a deny verdict with its reject_once option. Not handled when the
@@ -418,7 +452,10 @@ function PermissionManager:_try_auto_approve(request, callback)
     if not tool_call then
         return false
     end
-    local verdict = self:decide(kind, tool_call, diff, cwd)
+    local verdict = PermissionManager.apply_safeguard(
+        self:decide(kind, tool_call, diff, cwd),
+        request.safeguard
+    )
     local handled = false
     if verdict.allow == true then
         handled = PermissionManager.approve(request, callback)

@@ -422,7 +422,11 @@ function BackgroundSession:_on_request_permission(request, callback)
     local id = request.toolCall.toolCallId
     self._asked[id] = true
     local kind, tool_call, diff, cwd = permissions:resolve_request(request)
-    local verdict = tool_call and permissions:decide(kind, tool_call, diff, cwd)
+    local verdict = tool_call
+            and PermissionManager.apply_safeguard(
+                permissions:decide(kind, tool_call, diff, cwd),
+                request.safeguard
+            )
         or { causes = {} }
     local approved = verdict.allow == true
     local sent, reasons

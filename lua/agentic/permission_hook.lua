@@ -1,4 +1,5 @@
 local Logger = require("agentic.utils.logger")
+local PermissionManager = require("agentic.ui.permission_manager")
 local SessionRegistry = require("agentic.session_registry")
 
 --- PreToolUse hook entry point: runs the deterministic permission ladder
@@ -95,12 +96,9 @@ function M.evaluate(b64)
         if verdict.allow ~= nil and tool_use_id then
             pm:record_causes(tool_use_id, verdict.causes)
         end
-        local asked = vim.iter(verdict.causes):any(function(cause)
-            return cause.code == "ask"
-        end)
         local decision = verdict.allow == true and "allow"
             or verdict.allow == false and "deny"
-            or asked and payload.permission_mode == "auto" and "ask"
+            or PermissionManager.asks(verdict) and payload.permission_mode == "auto" and "ask"
             or ""
         Logger.debug_to_file(
             "permission_hook:",

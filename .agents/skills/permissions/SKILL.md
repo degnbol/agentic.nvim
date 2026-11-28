@@ -2,7 +2,8 @@
 name: permissions
 description:
   Permission flow and client-side auto-approval — read-only tools, parse-tree
-  shell command matching, allow/reject-always cache, /grant path scopes. Use
+  shell command matching, allow/reject-always cache, /grant path scopes, the
+  Claude Code auto mode verdict for undecided calls. Use
   when editing PermissionManager, PermissionRules, GrantSafety, GitFiles,
   PermissionFloat, the permission keymaps, or anything in the
   request-permission code path. Per-function rationale lives in docstrings on
@@ -49,7 +50,8 @@ loads, and survives a stop, a renewal and a provider switch.
 ```
 Provider sends "session/request_permission"
   -> PermissionManager.add_request(request, callback)
-     -> _try_auto_approve -> decide() runs the checks below
+     -> _try_auto_approve -> decide() runs the checks in § Four auto-approval
+        mechanisms, then apply_safeguard() (§ Auto mode verdict)
         -> approved/rejected: callback fires immediately, skip UI
         -> otherwise: fall through to interactive prompt
      -> Queue request (sequential — one prompt at a time)
@@ -195,6 +197,17 @@ Bash effects clear only for absolute paths (`_bash_effects_clear`).
 6. **Cache precedence.** A cached `reject_always` wins over a would-be-safe
    grant check — both grant paths run *after* the cache.
 7. **Wide-scope WARN** — `GrantSafety.is_wide_scope`.
+
+## Auto mode verdict
+
+The fallback for a call the four mechanisms leave undecided:
+`PermissionManager.apply_safeguard` applies the verdict of Claude Code's auto
+mode classifier (`Config.permissions.auto_mode`), with the cause
+`auto-mode-allow`. A patched pi-claude-bridge emits the verdict on
+`claude-bridge:safeguard`, and `pi/agentic.ts` puts it in the permission
+request as `safeguard`. An `ask` cause (`PermissionManager.asks`) keeps the
+call undecided: a prompt, or a rejection in a background session, which
+otherwise applies the verdict as the main session does.
 
 ## Permission response keys
 

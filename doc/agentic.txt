@@ -256,6 +256,10 @@ All options with defaults are in `lua/agentic/config_default.lua`.
     `tmp_cleanup`           boolean (default: true)
         Auto-approve `rm` of a tmp file redirected to earlier in the same
         command. See |agentic-permissions-grant|.
+    `auto_mode`             boolean (default: true)
+        Approve a call that no rule decides and no `ask` rule matches when
+        Claude Code's auto mode classifier does not flag it. See
+        |agentic-permissions-auto|.
 
                                             *agentic-config-permission_float*
 `permission_float` table
@@ -800,6 +804,9 @@ each item is what the call's status footer shows (`✔ completed · grant`).
   (|agentic-permissions-prompt|). `session-allow`
 - It is a recoverable change under a granted path
   (|agentic-permissions-grant|). `grant`
+- No rule above decides it, no `ask` rule matches it, and Claude Code's auto
+  mode classifier does not flag it (`permissions.auto_mode`). Requires a
+  pi-claude-bridge that sends auto mode verdicts. `auto-mode-allow`
 
 Several words mean each was needed. `deny`, `glob-deny` and `session-reject`
 name what rejected a call. A prompted call shows `prompt-allow` or
